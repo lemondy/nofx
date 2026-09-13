@@ -238,8 +238,11 @@ func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *Time
 	return data
 }
 
-// calculatePriceChangeByBars calculates how many K-lines to look back for price change based on timeframe
-func calculatePriceChangeByBars(klines []Kline, timeframe string, targetMinutes int) float64 {
+// calculatePriceChangeByBars calculates how many K-lines to look back for price change based on timeframe.
+// currentPrice is the live ticker price: the kline vendor's forming candle close does not
+// tick in real time (it carries over the previous close), so the series tail must not
+// anchor the "current" leg of the change.
+func calculatePriceChangeByBars(klines []Kline, timeframe string, targetMinutes int, currentPrice float64) float64 {
 	if len(klines) < 2 {
 		return 0
 	}
@@ -256,7 +259,9 @@ func calculatePriceChangeByBars(klines []Kline, timeframe string, targetMinutes 
 		barsBack = 1
 	}
 
-	currentPrice := klines[len(klines)-1].Close
+	if currentPrice <= 0 {
+		currentPrice = klines[len(klines)-1].Close
+	}
 	idx := len(klines) - 1 - barsBack
 	if idx < 0 {
 		idx = 0

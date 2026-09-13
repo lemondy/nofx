@@ -52,7 +52,7 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 		Do(context.Background())
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to open long position: %w", err)
+		return nil, fmt.Errorf("failed to open long position: %w", WrapAuthError("OpenLong "+symbol, err))
 	}
 
 	logger.Infof("✓ Opened long position successfully: %s quantity: %s", symbol, quantityStr)
@@ -107,7 +107,7 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		Do(context.Background())
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to open short position: %w", err)
+		return nil, fmt.Errorf("failed to open short position: %w", WrapAuthError("OpenShort "+symbol, err))
 	}
 
 	logger.Infof("✓ Opened short position successfully: %s quantity: %s", symbol, quantityStr)
@@ -158,14 +158,18 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 		Do(context.Background())
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to close long position: %w", err)
+		return nil, fmt.Errorf("failed to close long position: %w", WrapAuthError("CloseLong "+symbol, err))
 	}
 
 	logger.Infof("✓ Closed long position successfully: %s quantity: %s", symbol, quantityStr)
 
-	// After closing position, cancel all pending orders for this symbol (stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
+	// Full closes cancel the remaining SL/TP orders; PARTIAL closes (explicit
+	// quantity, e.g. the TP-ladder 1/3 trim) must keep them — the remaining
+	// position would otherwise ride unprotected.
+	if quantity == 0 {
+		if err := t.CancelAllOrders(symbol); err != nil {
+			logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
+		}
 	}
 
 	result := make(map[string]interface{})
@@ -213,14 +217,17 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 		Do(context.Background())
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to close short position: %w", err)
+		return nil, fmt.Errorf("failed to close short position: %w", WrapAuthError("CloseShort "+symbol, err))
 	}
 
 	logger.Infof("✓ Closed short position successfully: %s quantity: %s", symbol, quantityStr)
 
-	// After closing position, cancel all pending orders for this symbol (stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
+	// Full closes cancel the remaining SL/TP orders; partial closes keep
+	// them (same rule as CloseLong).
+	if quantity == 0 {
+		if err := t.CancelAllOrders(symbol); err != nil {
+			logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
+		}
 	}
 
 	result := make(map[string]interface{})
@@ -447,7 +454,16 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 		positionSide = futures.PositionSideTypeShort
 	}
 
-	// Build order service with broker ID
+	// Client order ID: every order keeps the broker referral prefix (revival
+	// attribution, getBrOrderID). A caller-supplied req.ClientID tag is
+	// carried after it ("lim…" for AI limit entries, "grid…" for grid levels)
+	// so the order class is visible on-exchange — startup reconciliation
+	// attributes resting limit entries by this tag and never touches orders
+	// without it.
+	clientOrderID := getBrOrderID()
+	if req.ClientID != "" {
+		clientOrderID = getBrOrderIDFor(req.ClientID)
+	}
 	orderService := t.client.NewCreateOrderService().
 		Symbol(req.Symbol).
 		Side(side).
@@ -456,12 +472,17 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 		TimeInForce(futures.TimeInForceTypeGTC).
 		Quantity(quantityStr).
 		Price(priceStr).
-		NewClientOrderID(getBrOrderID())
+		NewClientOrderID(clientOrderID)
+	if req.ReduceOnly {
+		// Reduce-only resting limits (1R profit-lock trims) close in the
+		// position's own direction and never open new exposure.
+		orderService = orderService.ReduceOnly(true)
+	}
 
 	// Execute order
 	order, err := orderService.Do(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("failed to place limit order: %w", err)
+		return nil, fmt.Errorf("failed to place limit order: %w", WrapAuthError("PlaceLimitOrder "+req.Symbol, err))
 	}
 
 	logger.Infof("✓ [Grid] Placed limit order: %s %s %s @ %s, qty=%s, orderID=%d",
@@ -620,6 +641,7 @@ func (t *FuturesTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) 
 			StopPrice:    stopPrice,
 			Quantity:     quantity,
 			Status:       string(order.Status),
+			ClientID:     order.ClientOrderID,
 		})
 	}
 

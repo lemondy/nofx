@@ -30,7 +30,8 @@ func TestConfig_MaxRetries_IsUsed(t *testing.T) {
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
 		WithAPIKey("sk-test-key"),
-		WithMaxRetries(5), // Set to retry 5 times
+		WithMaxRetries(5),      // Set to retry 5 times
+		WithStreamDecisions(false), // keep the mock's non-stream expectations
 	)
 
 	// Call API (should fail)
@@ -153,6 +154,7 @@ func TestConfig_RetryWaitBase_IsUsed(t *testing.T) {
 		WithAPIKey("sk-test-key"),
 		WithRetryWaitBase(customWaitBase), // Set custom wait time
 		WithMaxRetries(3),
+		WithStreamDecisions(false), // non-stream: mock counts calls directly
 	)
 
 	// Record start time
@@ -244,8 +246,8 @@ func TestConfig_DefaultValues(t *testing.T) {
 	c := client.(*Client)
 
 	// Verify default values
-	if c.Cfg.MaxRetries != 3 {
-		t.Errorf("default MaxRetries should be 3, got %d", c.Cfg.MaxRetries)
+	if c.Cfg.MaxRetries != 2 {
+		t.Errorf("default MaxRetries should be 2, got %d", c.Cfg.MaxRetries)
 	}
 
 	if c.Cfg.Temperature != 0.5 {

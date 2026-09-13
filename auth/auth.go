@@ -22,9 +22,20 @@ var tokenBlacklist = struct {
 // maxBlacklistEntries is the maximum capacity threshold for blacklist
 const maxBlacklistEntries = 100_000
 
+// jwtTTL is the login-token lifetime; default 7 days, overridable via
+// JWT_TTL_HOURS (wired through config.SetJWTTTL at startup).
+var jwtTTL = 7 * 24 * time.Hour
+
 // SetJWTSecret sets the JWT secret key
 func SetJWTSecret(secret string) {
 	JWTSecret = []byte(secret)
+}
+
+// SetJWTTTL sets the login-token lifetime; non-positive values are ignored
+func SetJWTTTL(d time.Duration) {
+	if d > 0 {
+		jwtTTL = d
+	}
 }
 
 // BlacklistToken adds token to blacklist until expiration
@@ -87,7 +98,7 @@ func GenerateJWT(userID, email string) (string, error) {
 		UserID: userID,
 		Email:  email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // Expires in 24 hours
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "nofxAI",

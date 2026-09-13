@@ -1,11 +1,12 @@
 package config
 
 import (
-	"nofx/telemetry"
 	"nofx/mcp"
+	"nofx/telemetry"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Global configuration instance
@@ -17,6 +18,7 @@ type Config struct {
 	// Service configuration
 	APIServerPort int
 	JWTSecret     string
+	JWTTTL        time.Duration // login-token lifetime, JWT_TTL_HOURS (default 168h = 7 days)
 
 	// Database configuration
 	DBType     string // sqlite or postgres
@@ -66,6 +68,14 @@ func Init() {
 	}
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = "default-jwt-secret-change-in-production"
+	}
+
+	// Login-token lifetime: JWT_TTL_HOURS, default 168h (7 days)
+	cfg.JWTTTL = 168 * time.Hour
+	if v := os.Getenv("JWT_TTL_HOURS"); v != "" {
+		if hours, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && hours > 0 {
+			cfg.JWTTTL = time.Duration(hours) * time.Hour
+		}
 	}
 
 	if v := os.Getenv("API_SERVER_PORT"); v != "" {
@@ -129,7 +139,7 @@ func Init() {
 		telemetry.TrackAIUsage(telemetry.AIUsageEvent{
 			ModelProvider: usage.Provider,
 			ModelName:     usage.Model,
-			Channel:       usage.Channel(),
+			Channel:       "native",
 			InputTokens:   usage.PromptTokens,
 			OutputTokens:  usage.CompletionTokens,
 		})

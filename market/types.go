@@ -13,10 +13,22 @@ type Data struct {
 	CurrentRSI7       float64
 	OpenInterest      *OIData
 	FundingRate       float64
-	IntradaySeries    *IntradayData
-	LongerTermContext *LongerTermData
+	// FundingRateOK distinguishes a REAL zero rate (bstock tokens pay no
+	// funding) from a failed fetch — the kernel warns only on the latter.
+	FundingRateOK bool
+	// FundingSettleHours: funding settlement interval measured from recent
+	// settlement timestamps (0 = unknown, fall back to the 8h×3 convention).
+	// Some listings settle every 4h or 1h — a fixed ×3/day annualization
+	// understates their rate by 2-8×.
+	FundingSettleHours float64
+	IntradaySeries     *IntradayData
+	LongerTermContext  *LongerTermData
 	// Multi-timeframe data (new)
 	TimeframeData map[string]*TimeframeSeriesData `json:"timeframe_data,omitempty"`
+	// VendorStalenessPct: how far the vendor's forming-candle close was from
+	// the live ticker before the live-price patch (0 = unknown/not patched).
+	// Large values flag stale vendor data for the AI's freshness judgment.
+	VendorStalenessPct float64 `json:"-"`
 }
 
 // KlineBar single kline bar with OHLCV data
@@ -231,11 +243,11 @@ const (
 type GridDirection string
 
 const (
-	GridDirectionNeutral   GridDirection = "neutral"     // 50% buy + 50% sell
-	GridDirectionLong      GridDirection = "long"        // 100% buy
-	GridDirectionShort     GridDirection = "short"       // 100% sell
-	GridDirectionLongBias  GridDirection = "long_bias"   // 70% buy + 30% sell (default)
-	GridDirectionShortBias GridDirection = "short_bias"  // 30% buy + 70% sell (default)
+	GridDirectionNeutral   GridDirection = "neutral"    // 50% buy + 50% sell
+	GridDirectionLong      GridDirection = "long"       // 100% buy
+	GridDirectionShort     GridDirection = "short"      // 100% sell
+	GridDirectionLongBias  GridDirection = "long_bias"  // 70% buy + 30% sell (default)
+	GridDirectionShortBias GridDirection = "short_bias" // 30% buy + 70% sell (default)
 )
 
 // GetBuySellRatio returns the buy and sell ratio for this direction

@@ -5,10 +5,13 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/store"
+	notify "nofx/telegram/notify"
 	"nofx/trader/types"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -75,7 +78,10 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 	// Method 1: COMMISSION income detection
 	commissionSymbols, err := t.GetCommissionSymbols(lastSyncTime)
 	if err != nil {
-		logger.Infof("  ⚠️ Failed to get commission symbols: %v", err)
+		if IsAuthOrIPError(err) {
+			return WrapAuthError(fmt.Sprintf("OrderSync commission probe (exchange %s)", exchangeID), err)
+		}
+		logger.Infof("  ⚠️ [%s] Failed to get commission symbols: %v", exchangeID, err)
 	} else {
 		logger.Infof("  📋 COMMISSION symbols found: %d - %v", len(commissionSymbols), commissionSymbols)
 		for _, s := range commissionSymbols {
@@ -84,8 +90,15 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 	}
 
 	// Method 2: Always include active positions (catches trades that COMMISSION missed)
-	positionSymbols := t.getPositionSymbols()
-	logger.Infof("  📋 Position symbols found: %d - %v", len(positionSymbols), positionSymbols)
+	positionSymbols, err := t.getPositionSymbols()
+	if err != nil {
+		if IsAuthOrIPError(err) {
+			return WrapAuthError(fmt.Sprintf("OrderSync position probe (exchange %s)", exchangeID), err)
+		}
+		logger.Infof("  ⚠️ [%s] Failed to get position symbols: %v", exchangeID, err)
+	} else {
+		logger.Infof("  📋 Position symbols found: %d - %v", len(positionSymbols), positionSymbols)
+	}
 	for _, s := range positionSymbols {
 		symbolMap[s] = true
 	}
@@ -103,7 +116,10 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 	// because a position might be fully closed (no active position) but have PnL
 	pnlSymbols, err := t.GetPnLSymbols(lastSyncTime)
 	if err != nil {
-		logger.Infof("  ⚠️ Failed to get PnL symbols: %v", err)
+		if IsAuthOrIPError(err) {
+			return WrapAuthError(fmt.Sprintf("OrderSync PnL probe (exchange %s)", exchangeID), err)
+		}
+		logger.Infof("  ⚠️ [%s] Failed to get PnL symbols: %v", exchangeID, err)
 	} else {
 		logger.Infof("  📋 REALIZED_PNL symbols found: %d - %v", len(pnlSymbols), pnlSymbols)
 		for _, s := range pnlSymbols {
@@ -173,6 +189,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 	syncedCount := 0
 
 	skippedCount := 0
+	exchangeClosedSymbols := make(map[string]bool) // symbols with close trades this round (raw exchange symbol)
 	for _, trade := range allTrades {
 		// Check if trade already exists
 		existing, err := orderStore.GetOrderByExchangeID(exchangeID, trade.TradeID)
@@ -186,6 +203,9 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 
 		// Determine order action based on side and position side
 		orderAction := t.determineOrderAction(trade.Side, trade.PositionSide, trade.RealizedPnL)
+		if orderAction == "close_long" || orderAction == "close_short" {
+			exchangeClosedSymbols[trade.Symbol] = true
+		}
 
 		// Determine position side for position builder
 		positionSide := trade.PositionSide
@@ -270,6 +290,10 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		logger.Infof("  ✅ Synced trade: %s %s %s qty=%.6f price=%.6f pnl=%.2f fee=%.6f action=%s time=%s(UTC)",
 			trade.TradeID, symbol, side, trade.Quantity, trade.Price, trade.RealizedPnL, trade.Fee, orderAction,
 			trade.Time.UTC().Format("01-02 15:04:05"))
+
+		// Notify on every executed fill (covers AI orders, risk closes,
+		// exchange-side stop triggers and manual closes alike).
+		notifyFill(t.notifyLabel(), symbol, orderAction, trade)
 	}
 
 	// Update lastSyncTime to the LATEST trade time (not current time!)
@@ -286,16 +310,40 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		logger.Infof("  ⚠️ %d symbols failed, not updating lastSyncTime to retry next time: %v", len(failedSymbols), failedSymbols)
 	}
 
+	// Cancel orphaned conditional orders: when a position was fully closed on
+	// the exchange (stop-loss/take-profit algo trigger, liquidation, or manual
+	// close on the exchange UI), the surviving sibling order would linger and
+	// must be cleaned up. Only symbols with no open position are touched.
+	if len(exchangeClosedSymbols) > 0 {
+		if positions, err := t.GetPositions(); err == nil {
+			openSymbols := make(map[string]bool)
+			for _, pos := range positions {
+				if s, ok := pos["symbol"].(string); ok {
+					openSymbols[s] = true
+				}
+			}
+			for symbol := range exchangeClosedSymbols {
+				if !openSymbols[symbol] {
+					if err := t.CancelStopOrders(symbol); err != nil {
+						logger.Infof("  ⚠️ Failed to clean up orphaned stop orders for %s: %v", symbol, err)
+					} else {
+						logger.Infof("  🧹 Cleaned up orphaned stop-loss/take-profit orders for %s (position closed on exchange)", symbol)
+					}
+				}
+			}
+		}
+	}
+
 	logger.Infof("✅ Binance order sync completed: %d new trades synced, %d skipped (already exist)", syncedCount, skippedCount)
 	return nil
 }
 
 // getPositionSymbols returns list of symbols that have active positions
 // Used as fallback when COMMISSION detection fails
-func (t *FuturesTrader) getPositionSymbols() []string {
+func (t *FuturesTrader) getPositionSymbols() ([]string, error) {
 	positions, err := t.GetPositions()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var symbols []string
@@ -304,7 +352,7 @@ func (t *FuturesTrader) getPositionSymbols() []string {
 			symbols = append(symbols, symbol)
 		}
 	}
-	return symbols
+	return symbols, nil
 }
 
 // determineOrderAction determines the order action based on trade data
@@ -348,13 +396,16 @@ func (t *FuturesTrader) determineOrderAction(side, positionSide string, realized
 	return "open_short"
 }
 
+// syncAuthAlerted suppresses repeated auth alerts until a sync succeeds again.
+var syncAuthAlerted atomic.Bool
+
 // StartOrderSync starts background order sync task for Binance
 func (t *FuturesTrader) StartOrderSync(traderID string, exchangeID string, exchangeType string, st *store.Store, interval time.Duration) {
 	// Run first sync immediately
 	go func() {
-		logger.Infof("🔄 Running initial Binance order sync...")
+		logger.Infof("🔄 [%s] Running initial Binance order sync (exchange %s)...", traderID, exchangeID)
 		if err := t.SyncOrdersFromBinance(traderID, exchangeID, exchangeType, st); err != nil {
-			logger.Infof("⚠️  Initial Binance order sync failed: %v", err)
+			logger.Infof("⚠️  [%s] Initial Binance order sync failed (exchange %s): %v", traderID, exchangeID, err)
 		}
 	}()
 
@@ -363,9 +414,94 @@ func (t *FuturesTrader) StartOrderSync(traderID string, exchangeID string, excha
 	go func() {
 		for range ticker.C {
 			if err := t.SyncOrdersFromBinance(traderID, exchangeID, exchangeType, st); err != nil {
-				logger.Infof("⚠️  Binance order sync failed: %v", err)
+				logger.Infof("⚠️  [%s] Binance order sync failed (exchange %s): %v", traderID, exchangeID, err)
+				if IsAuthOrIPError(err) && !syncAuthAlerted.Swap(true) {
+					notify.Notify("ALERT", t.notifyLabel(), fmt.Sprintf("<b>🚨 Binance 认证/IP 校验失败（exchange %s），交易同步已停止</b>\n请检查该 API Key 的 IP 白名单与合约权限（当前出口 IP 见日志），修复后自动恢复。", exchangeID))
+				}
+			} else {
+				// Recovered — re-arm the alert for future failures.
+				syncAuthAlerted.Store(false)
 			}
 		}
 	}()
 	logger.Infof("🔄 Binance order sync started (interval: %v)", interval)
+}
+
+// fillNotified suppresses duplicate fill alerts until a successful sync.
+var fillNotified atomic.Bool
+
+// commaFormat renders a number with thousands separators in the integer part,
+// keeping the value's natural decimals (1425 → 1,425; 0.003289 unchanged).
+func commaFormat(v float64) string {
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = strings.TrimPrefix(s, "-")
+	}
+	intPart, decPart := s, ""
+	if dot := strings.Index(s, "."); dot >= 0 {
+		intPart, decPart = s[:dot], s[dot:]
+	}
+	var out []byte
+	for i, ch := range []byte(intPart) {
+		if i > 0 && (len(intPart)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, ch)
+	}
+	if neg {
+		return "-" + string(out) + decPart
+	}
+	return string(out) + decPart
+}
+
+// notifyFill pushes a trade fill (open/close) to Telegram. It fires once per
+// new synced trade — the sync dedup skips already-known trades, so repeats
+// only happen on genuine new fills. Body is HTML (the notify layer renders it
+// with parse_mode=HTML).
+func notifyFill(traderID, symbol, orderAction string, trade types.TradeRecord) {
+	switch orderAction {
+	case "open_long", "open_short":
+		if trade.RealizedPnL != 0 {
+			return
+		}
+	case "close_long", "close_short":
+	default:
+		return
+	}
+
+	sym := notify.Escape(symbol)
+	var title string
+	var body strings.Builder
+	switch orderAction {
+	case "open_long":
+		title = "🟢 开多 " + sym
+	case "open_short":
+		title = "🔻 开空 " + sym
+	case "close_long":
+		title = "🔴 平多 " + sym
+	case "close_short":
+		title = "🔵 平空 " + sym
+	default:
+		return
+	}
+
+	// Layout: headline / blank / trade numbers / blank / result block —
+	// cramped walls of text bury the PnL on a phone screen.
+	body.WriteString(fmt.Sprintf("数量  <code>%s</code>\n", commaFormat(trade.Quantity)))
+	body.WriteString(fmt.Sprintf("价格  <code>%s</code>\n", commaFormat(trade.Price)))
+	body.WriteString(fmt.Sprintf("价值  <code>%s USDT</code>\n", commaFormat(trade.Price*trade.Quantity)))
+	body.WriteString(fmt.Sprintf("手续费  <code>%s USDT</code>", commaFormat(trade.Fee)))
+	if orderAction == "close_long" || orderAction == "close_short" {
+		pnl := fmt.Sprintf("%+.2f USDT", trade.RealizedPnL)
+		if trade.RealizedPnL >= 0 {
+			pnl = "✅ 盈利 <b>+" + pnl + "</b>"
+		} else {
+			pnl = "❌ 亏损 <b>" + pnl + "</b>"
+		}
+		body.WriteString("\n\n━━━━━━━━━━\n\n")
+		body.WriteString(fmt.Sprintf("已实现盈亏\n%s", pnl))
+		body.WriteString(fmt.Sprintf("\n\n<i>成交 %s (UTC)</i>", trade.Time.UTC().Format("01-02 15:04:05")))
+	}
+	notify.Notify("ORDER", traderID, "<b>"+title+"</b>\n\n"+body.String())
 }

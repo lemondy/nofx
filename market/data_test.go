@@ -3,6 +3,7 @@ package market
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 // generateTestKlines generates test K-line data
@@ -581,5 +582,70 @@ func TestCalculateBoxData(t *testing.T) {
 	}
 	if box.CurrentPrice != 100.0 {
 		t.Errorf("Expected CurrentPrice = 100.0, got %v", box.CurrentPrice)
+	}
+}
+
+// The forming candle of each timeframe must be refreshed with the live ticker
+// price so every prompt section quotes the same "current price". Regression
+// for the narrative-vs-JSON systematic price lag: the kline vendor's forming
+// candle close sits frozen for a long time, so the daily narrative quoted
+// prices 4-7% behind the structured signal JSON on trending days.
+func TestRefreshFormingCandle(t *testing.T) {
+	now := time.Now()
+
+	sd := &TimeframeSeriesData{Timeframe: "1d"}
+	// Closed candle yesterday (must never be touched).
+	closedStart := now.Add(-25 * time.Hour)
+	sd.Klines = append(sd.Klines, KlineBar{Time: closedStart.UnixMilli(), Open: 98, High: 101, Low: 97, Close: 100, Volume: 10})
+	sd.MidPrices = append(sd.MidPrices, 99)
+	// Forming candle today with a vendor close frozen at 100.
+	formingStart := now.Add(-30 * time.Minute)
+	sd.Klines = append(sd.Klines, KlineBar{Time: formingStart.UnixMilli(), Open: 100, High: 102, Low: 99, Close: 100, Volume: 5})
+	sd.MidPrices = append(sd.MidPrices, 100.5)
+
+	refreshFormingCandle("1d", sd, 107)
+
+	closed := sd.Klines[0]
+	if closed.Close != 100 || closed.High != 101 {
+		t.Fatalf("closed candle must be untouched, got close=%.2f high=%.2f", closed.Close, closed.High)
+	}
+	forming := sd.Klines[1]
+	if forming.Close != 107 {
+		t.Fatalf("forming candle close = %.2f, want 107 (live price)", forming.Close)
+	}
+	if forming.High != 107 || forming.Low != 99 {
+		t.Fatalf("forming candle High/Low not widened correctly: H=%.2f L=%.2f", forming.High, forming.Low)
+	}
+	if mid := sd.MidPrices[1]; mid != (107+99)/2 {
+		t.Fatalf("MidPrices not realigned: %.2f", mid)
+	}
+
+	// Implausible ticker (>±80% from candle close) → no patch.
+	sd2 := &TimeframeSeriesData{Timeframe: "1d", Klines: []KlineBar{{Time: formingStart.UnixMilli(), Open: 100, High: 102, Low: 99, Close: 100}}}
+	refreshFormingCandle("1d", sd2, 600)
+	if sd2.Klines[0].Close != 100 {
+		t.Fatalf("implausible ticker must not patch, got close=%.2f", sd2.Klines[0].Close)
+	}
+
+	// Extreme but plausible mover (+80% meme pump) → must be patched, this is
+	// exactly where the frozen vendor close is most misleading.
+	sd5 := &TimeframeSeriesData{Timeframe: "1d", Klines: []KlineBar{{Time: formingStart.UnixMilli(), Open: 100, High: 130, Low: 99, Close: 110}}}
+	refreshFormingCandle("1d", sd5, 180)
+	if sd5.Klines[0].Close != 180 || sd5.Klines[0].High != 180 {
+		t.Fatalf("extreme mover must be patched, got close=%.2f high=%.2f", sd5.Klines[0].Close, sd5.Klines[0].High)
+	}
+
+	// Unknown timeframe label → no patch (duration table returns 0).
+	sd3 := &TimeframeSeriesData{Timeframe: "3d", Klines: []KlineBar{{Time: formingStart.UnixMilli(), Open: 100, High: 102, Low: 99, Close: 100}}}
+	refreshFormingCandle("3d", sd3, 107)
+	if sd3.Klines[0].Close != 100 {
+		t.Fatalf("unknown timeframe must not patch, got close=%.2f", sd3.Klines[0].Close)
+	}
+
+	// Downward move: Close lowered, Low widened, High untouched.
+	sd4 := &TimeframeSeriesData{Timeframe: "1d", Klines: []KlineBar{{Time: formingStart.UnixMilli(), Open: 100, High: 102, Low: 99, Close: 100}}}
+	refreshFormingCandle("1d", sd4, 95)
+	if sd4.Klines[0].Close != 95 || sd4.Klines[0].Low != 95 || sd4.Klines[0].High != 102 {
+		t.Fatalf("downward patch wrong: %+v", sd4.Klines[0])
 	}
 }

@@ -88,15 +88,28 @@ export interface GridStrategyConfig {
 }
 
 export interface CoinSourceConfig {
-  source_type: 'static' | 'ai500' | 'oi_top' | 'oi_low' | 'mixed';
+  source_type: 'static' | 'ai500' | 'oi_top' | 'oi_low' | 'piggy_dash' | 'short_scan' | 'mixed';
   static_coins?: string[];
   excluded_coins?: string[];   // 排除的币种列表
+  // mixed mode: include the static coin list as one of the sources
+  // (legacy configs without this flag always included it)
+  use_static?: boolean;
   use_ai500: boolean;
   ai500_limit?: number;
   use_oi_top: boolean;
   oi_top_limit?: number;
   use_oi_low: boolean;
   oi_low_limit?: number;
+  use_piggy_dash: boolean;
+  piggy_dash_limit?: number;
+  piggy_dash_direction?: string; // '', 'breakout', 'breakdown'
+  // 做空扫描: top 24h gainers ranked by short-suitability score (Binance-derived)
+  use_short_scan: boolean;
+  short_scan_limit?: number;
+  // 做空扫描资金费率拥挤阈值（%，8h 费率）；0/缺省 = 默认 0.03
+  short_scan_funding_rate_pct?: number;
+  // 候选币最低 OI 持仓价值（百万 USD），低于则跳过；0/缺省 = 默认 15M
+  min_oi_value_millions?: number;
   // Note: API URLs are now built automatically using nofxos_api_key from IndicatorConfig
 }
 
@@ -180,6 +193,41 @@ export interface RiskControlConfig {
   // Risk Parameters
   max_margin_usage: number;        // Max margin utilization, e.g. 0.9 = 90% (CODE ENFORCED)
   min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
-  min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
+  min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (CODE ENFORCED at open)
   min_confidence: number;          // Min AI confidence to open position (AI guided)
+
+  // Min holding period in minutes before AI-initiated closes are allowed (CODE ENFORCED)
+  min_hold_minutes?: number;
+  // AI closes before this many hours need ≥2 against-direction closed 1h candles (0 = default 4h, negative = disabled) (CODE ENFORCED)
+  early_close_min_hours?: number;
+  // TP ladder on leveraged PnL%: at ≥ this the program trims 1/3 (0 = default 10, negative = off) (CODE ENFORCED)
+  tp_trim_profit_pct?: number;
+  // At ≥ this PnL% the program closes the rest (0 = default 25, negative = off) (CODE ENFORCED)
+  tp_full_profit_pct?: number;
+  // Block open_short when the 1d trend is up (CODE ENFORCED)
+  block_short_1d_uptrend?: boolean;
+  // Entry timing gate: finest sub-hour TF trend must align with direction (CODE ENFORCED)
+  entry_timing_gate?: boolean;
+  // Position value capped at equity × this % ÷ stop-distance% (default 1.5)
+  risk_per_trade_pct?: number;
+  // Stop-distance noise floor: reject stops closer than N × ATR(1h) (0 = off)
+  sl_min_atr_mult?: number;
+  // Limit-entry state machine: AI can emit open_*_limit trigger orders (CODE ENFORCED)
+  limit_entry_enabled?: boolean;
+  // Cancel a limit entry after this many cycles unfilled (default 3)
+  limit_entry_max_cycles?: number;
+  // Limit-entry anchor offset from the snapshot price, % (buy below / sell above; default 0.5)
+  limit_entry_offset_pct?: number;
+  // Convert a limit entry to market when the live price already crossed the
+  // anchor (pullback arrived); rejected if price is beyond the SL. Default on.
+  limit_entry_market_fallback?: boolean;
+  // Volatility-targeted sizing with 80/120 hysteresis band (CODE ENFORCED)
+  vol_target_enabled?: boolean;
+  // Rule-based trailing stop: arm at 1.5× stop distance, trail 2×ATR (CODE ENFORCED)
+  trailing_stop_enabled?: boolean;
+  // Drawdown-protect close: peak profit must reach this % before the
+  // giveback guard arms (default 5)
+  peak_drawdown_min_profit_pct?: number;
+  // Giveback (of peak) that triggers the protective close (default 55)
+  peak_drawdown_max_dd_pct?: number;
 }

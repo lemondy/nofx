@@ -35,10 +35,10 @@ type HistorySummary struct {
 }
 
 // GetHistorySummary generates comprehensive AI context summary
-func (s *PositionStore) GetHistorySummary(traderID string) (*HistorySummary, error) {
+func (s *PositionStore) GetHistorySummary(traderID string, initialEquity float64) (*HistorySummary, error) {
 	summary := &HistorySummary{}
 
-	fullStats, err := s.GetFullStats(traderID)
+	fullStats, err := s.GetFullStats(traderID, initialEquity)
 	if err != nil {
 		return nil, err
 	}

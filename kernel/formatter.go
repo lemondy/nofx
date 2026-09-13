@@ -95,7 +95,7 @@ func formatContextData(ctx *Context, lang Language) string {
 		if lang == LangChinese {
 			nofxosLang = nofxos.LangChinese
 		}
-		sb.WriteString(nofxos.FormatOIRankingForAI(ctx.OIRankingData, nofxosLang))
+		sb.WriteString(nofxos.FormatOIRankingForAI(ctx.OIRankingData, nofxosLang, nil))
 	}
 
 	return sb.String()
@@ -223,6 +223,18 @@ func formatRecentTradesZH(orders []RecentOrder) string {
 	return sb.String()
 }
 
+// formatProtectiveOrder renders an exchange-side protective order trigger
+// price; 0 means no matching order was found on the exchange.
+func formatProtectiveOrder(price float64, lang Language) string {
+	if price > 0 {
+		return fmt.Sprintf("%.4f", price)
+	}
+	if lang == LangChinese {
+		return "未挂单"
+	}
+	return "none"
+}
+
 // formatCurrentPositionsZH formats current positions (Chinese)
 func formatCurrentPositionsZH(ctx *Context) string {
 	var sb strings.Builder
@@ -236,12 +248,13 @@ func formatCurrentPositionsZH(ctx *Context) string {
 		sb.WriteString(fmt.Sprintf("进场 %.4f 当前 %.4f | ", pos.EntryPrice, pos.MarkPrice))
 		sb.WriteString(fmt.Sprintf("数量 %.4f | ", pos.Quantity))
 		sb.WriteString(fmt.Sprintf("仓位价值 %.2f USDT | ", pos.Quantity*pos.MarkPrice))
-		sb.WriteString(fmt.Sprintf("盈亏 %+.2f%% | ", pos.UnrealizedPnLPct))
-		sb.WriteString(fmt.Sprintf("盈亏金额 %+.2f USDT | ", pos.UnrealizedPnL))
+		sb.WriteString(fmt.Sprintf("价格变动 %+.2f%% | 保证金ROI %+.2f%% | ", pos.PriceReturnPct, pos.UnrealizedPnLPct))
+		sb.WriteString(fmt.Sprintf("浮盈亏 %+.2f USDT | ", pos.UnrealizedPnL))
 		sb.WriteString(fmt.Sprintf("峰值盈亏 %.2f%% | ", pos.PeakPnLPct))
 		sb.WriteString(fmt.Sprintf("杠杆 %dx | ", pos.Leverage))
 		sb.WriteString(fmt.Sprintf("保证金 %.0f USDT | ", pos.MarginUsed))
-		sb.WriteString(fmt.Sprintf("强平价 %.4f\n", pos.LiquidationPrice))
+		sb.WriteString(fmt.Sprintf("强平价 %.4f | ", pos.LiquidationPrice))
+		sb.WriteString(fmt.Sprintf("止损挂单 %s | 止盈挂单 %s\n", formatProtectiveOrder(pos.StopLossPrice, LangChinese), formatProtectiveOrder(pos.TakeProfitPrice, LangChinese)))
 
 		// Add analysis hints
 		if drawdown < -0.30*pos.PeakPnLPct && pos.PeakPnLPct > 0.02 {
@@ -355,7 +368,6 @@ func formatKlineDataZH(symbol string, tfData map[string]*market.TimeframeSeriesD
 
 	return sb.String()
 }
-
 
 // getOIInterpretationZH returns OI change interpretation (Chinese)
 func getOIInterpretationZH(oiChange, priceChange string) string {
@@ -503,12 +515,13 @@ func formatCurrentPositionsEN(ctx *Context) string {
 		sb.WriteString(fmt.Sprintf("Entry %.4f Current %.4f | ", pos.EntryPrice, pos.MarkPrice))
 		sb.WriteString(fmt.Sprintf("Qty %.4f | ", pos.Quantity))
 		sb.WriteString(fmt.Sprintf("Value %.2f USDT | ", pos.Quantity*pos.MarkPrice))
-		sb.WriteString(fmt.Sprintf("PnL %+.2f%% | ", pos.UnrealizedPnLPct))
+		sb.WriteString(fmt.Sprintf("Price Chg %+.2f%% | Margin ROI %+.2f%% | ", pos.PriceReturnPct, pos.UnrealizedPnLPct))
 		sb.WriteString(fmt.Sprintf("PnL Amount %+.2f USDT | ", pos.UnrealizedPnL))
 		sb.WriteString(fmt.Sprintf("Peak PnL %.2f%% | ", pos.PeakPnLPct))
 		sb.WriteString(fmt.Sprintf("Leverage %dx | ", pos.Leverage))
 		sb.WriteString(fmt.Sprintf("Margin %.0f USDT | ", pos.MarginUsed))
-		sb.WriteString(fmt.Sprintf("Liq Price %.4f\n", pos.LiquidationPrice))
+		sb.WriteString(fmt.Sprintf("Liq Price %.4f | ", pos.LiquidationPrice))
+		sb.WriteString(fmt.Sprintf("SL order %s | TP order %s\n", formatProtectiveOrder(pos.StopLossPrice, LangEnglish), formatProtectiveOrder(pos.TakeProfitPrice, LangEnglish)))
 
 		// Analysis hints
 		if drawdown < -0.30*pos.PeakPnLPct && pos.PeakPnLPct > 0.02 {
@@ -620,7 +633,6 @@ func formatKlineDataEN(symbol string, tfData map[string]*market.TimeframeSeriesD
 
 	return sb.String()
 }
-
 
 // getOIInterpretationEN returns OI change interpretation (English)
 func getOIInterpretationEN(oiChange, priceChange string) string {

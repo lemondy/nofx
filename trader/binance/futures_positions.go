@@ -26,7 +26,7 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	logger.Infof("🔄 Cache expired, calling Binance API to get position information...")
 	positions, err := t.client.NewGetPositionRiskService().Do(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get positions: %w", err)
+		return nil, fmt.Errorf("failed to get positions: %w", WrapAuthError("GetPositions", err))
 	}
 
 	var result []map[string]interface{}

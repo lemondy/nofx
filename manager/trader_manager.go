@@ -24,6 +24,12 @@ type TraderManager struct {
 	loadErrors       map[string]error              // key: trader ID, stores last load error
 	competitionCache *CompetitionCache
 	mu               sync.RWMutex
+	store            *store.Store // set via SetStore; used by EnsureTraderStarted
+}
+
+// SetStore wires the store (needed by EnsureTraderStarted to persist state).
+func (tm *TraderManager) SetStore(st *store.Store) {
+	tm.store = st
 }
 
 // NewTraderManager creates a trader manager
@@ -387,6 +393,42 @@ func (tm *TraderManager) GetTopTradersData() (map[string]interface{}, error) {
 // RemoveTrader removes a trader from memory (does not affect database)
 // Used to force reload when updating trader configuration
 // If the trader is running, it will be stopped first
+// IsTraderRunning reports whether the in-memory trader loop is alive.
+func (tm *TraderManager) IsTraderRunning(traderID string) bool {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	t, exists := tm.traders[traderID]
+	if !exists {
+		return false
+	}
+	status := t.GetStatus()
+	running, ok := status["is_running"].(bool)
+	return ok && running
+}
+
+// EnsureTraderStarted restarts a trader whose in-memory loop died (e.g. lost
+// in a reload race). Persists is_running=true like the manual start flow.
+func (tm *TraderManager) EnsureTraderStarted(userID, traderID string) error {
+	tm.mu.Lock()
+	t, exists := tm.traders[traderID]
+	tm.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("trader %s not in memory", traderID)
+	}
+	status := t.GetStatus()
+	if running, ok := status["is_running"].(bool); ok && running {
+		return nil // already alive
+	}
+	logger.Warnf("⚠️ Trader %s loop is not running — starting it explicitly", traderID)
+	if err := t.Run(); err != nil {
+		return err
+	}
+	if tm.store != nil {
+		_ = tm.store.Trader().UpdateStatus(userID, traderID, true)
+	}
+	return nil
+}
+
 func (tm *TraderManager) RemoveTrader(traderID string) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -655,6 +697,9 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	case "binance":
 		traderConfig.BinanceAPIKey = string(exchangeCfg.APIKey)
 		traderConfig.BinanceSecretKey = string(exchangeCfg.SecretKey)
+	case "binance_stocks":
+		traderConfig.BinanceStocksAPIKey = string(exchangeCfg.APIKey)
+		traderConfig.BinanceStocksSecretKey = string(exchangeCfg.SecretKey)
 	case "bybit":
 		traderConfig.BybitAPIKey = string(exchangeCfg.APIKey)
 		traderConfig.BybitSecretKey = string(exchangeCfg.SecretKey)
@@ -740,4 +785,3 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 
 	return nil
 }
-

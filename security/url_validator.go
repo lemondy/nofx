@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -154,14 +155,23 @@ func ValidateURL(rawURL string) error {
 }
 
 // SafeHTTPClient returns an HTTP client with SSRF protection
-// It validates URLs and blocks requests to private networks
+// It validates URLs and blocks requests to private networks.
+// It also honors the standard HTTP(S)_PROXY / ALL_PROXY / NO_PROXY
+// environment variables, so deployments behind a local proxy (required to
+// reach Binance and other blocked upstreams from some networks) work out of
+// the box.
 func SafeHTTPClient(timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   timeout,
 		KeepAlive: 30 * time.Second,
 	}
 
+	proxyHosts := envProxyHosts()
+
 	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		// Re-enable HTTP/2: a custom DialContext alone would force HTTP/1.1.
+		ForceAttemptHTTP2: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// Extract host from address
 			host, _, err := net.SplitHostPort(addr)
@@ -169,15 +179,21 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 				host = addr
 			}
 
-			// Resolve and check the IP
-			ips, err := net.LookupIP(host)
-			if err != nil {
-				return nil, fmt.Errorf("SSRF protection: failed to resolve host %s: %w", host, err)
-			}
+			// When a proxy is in use, the dial target is the proxy itself —
+			// an operator-chosen egress whose address must not trip the
+			// private-IP check (the real destination is resolved remotely by
+			// the proxy, so dial-time DNS validation cannot apply anyway).
+			if !proxyHosts[host] {
+				// Resolve and check the IP
+				ips, err := net.LookupIP(host)
+				if err != nil {
+					return nil, fmt.Errorf("SSRF protection: failed to resolve host %s: %w", host, err)
+				}
 
-			for _, ip := range ips {
-				if isPrivateIP(ip) {
-					return nil, fmt.Errorf("SSRF protection: blocked connection to private IP %s", ip)
+				for _, ip := range ips {
+					if isPrivateIP(ip) {
+						return nil, fmt.Errorf("SSRF protection: blocked connection to private IP %s", ip)
+					}
 				}
 			}
 
@@ -201,6 +217,27 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 			return nil
 		},
 	}
+}
+
+// envProxyHosts returns the hostnames of the proxies configured through the
+// standard environment variables, so DialContext can recognize (and exempt)
+// dials that target the proxy itself.
+func envProxyHosts() map[string]bool {
+	hosts := map[string]bool{}
+	for _, key := range []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"ALL_PROXY", "all_proxy",
+	} {
+		raw := os.Getenv(key)
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			hosts[u.Hostname()] = true
+		}
+	}
+	return hosts
 }
 
 // SafeGet performs a GET request with SSRF protection

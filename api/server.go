@@ -109,6 +109,16 @@ func (s *Server) setupRoutes() {
 		// Market data (no authentication required)
 		s.route(api, "GET", "/klines", "Candlestick data (?symbol=&interval=&limit=)", s.handleKlines)
 		s.route(api, "GET", "/symbols", "Available trading symbols", s.handleSymbols)
+		s.route(api, "GET", "/trending/crypto", "Vergex trending crypto (?tab=net_flow|oi|depth|rates|price&duration=&limit=)", s.handleTrendingCrypto)
+		s.route(api, "GET", "/trending/hl", "Vergex trending Hyperliquid universe (?category=crypto|stocks|indices|commodities|fx|other&sub=preipo)", s.handleTrendingHL)
+		s.route(api, "GET", "/trending/category", "Vergex trending featured categories (?key=ai500|prediction&lang=en|zh)", s.handleTrendingCategory)
+		s.route(api, "GET", "/trending/flow", "Vergex net flow markets (?window=5m|15m|1h|4h|8h|12h|24h&limit=)", s.handleTrendingFlow)
+		s.route(api, "POST", "/trending/relay", "Cache a vergex payload fetched by the browser (?path=<upstream path>)", s.handleTrendingRelay)
+		s.route(api, "GET", "/breakout", "Breakout/breakdown signal score (?symbol=BTCUSDT)", s.handleBreakout)
+		s.route(api, "GET", "/breakout/scan", "Scan top-volume perps for breakout signals (?limit=10&concurrency=4)", s.handleBreakoutScan)
+		s.route(api, "GET", "/breakout/snapshot", "Background breakout snapshot (refreshed every 5 min)", s.handleBreakoutSnapshot)
+		s.route(api, "GET", "/breakout/short-scan", "Short-scan ranking: top 24h gainers scored for short suitability (?limit=)", s.handleBreakoutShortScan)
+		s.route(api, "GET", "/breakout/params", "Tunable parameters and last backtest tuning summary", s.handleBreakoutParams)
 
 		// Public strategy market (no authentication required)
 		s.route(api, "GET", "/strategies/public", "Public strategy market", s.handlePublicStrategies)
@@ -124,8 +134,6 @@ func (s *Server) setupRoutes() {
 		{
 			// Logout (add to blacklist)
 			s.route(protected, "POST", "/logout", "Logout (blacklist token)", s.handleLogout)
-			s.route(protected, "POST", "/onboarding/beginner", "Prepare beginner claw402 wallet and default model", s.handleBeginnerOnboarding)
-			s.route(protected, "GET", "/onboarding/beginner/current", "Get current beginner claw402 wallet", s.handleCurrentBeginnerWallet)
 
 			// User account management
 			s.routeWithSchema(protected, "PUT", "/user/password", "Change current user password",
@@ -190,8 +198,8 @@ CRITICAL: The "id" field (e.g. "abc123_deepseek") is what you must use for ai_mo
 				s.handleGetModelConfigs)
 			s.routeWithSchema(protected, "PUT", "/models", "Configure an AI model provider",
 				`Body: {"models":{"<model_id>":{"enabled":<bool>,"api_key":"<string>","custom_api_url":"<string, leave empty to use provider default>","custom_model_name":"<string, leave empty to use provider default>"}}}
-model_id values: "openai","deepseek","qwen","kimi","grok","gemini","claude"
-Defaults when custom fields empty: openai→api.openai.com/v1, deepseek→api.deepseek.com, qwen→dashscope.aliyuncs.com/compatible-mode/v1, kimi→api.moonshot.ai/v1, grok→api.x.ai/v1, gemini→generativelanguage.googleapis.com/v1beta/openai, claude→api.anthropic.com/v1`,
+model_id values: "openai","deepseek","qwen","kimi","grok","gemini","claude","minimax","glm","custom"
+Defaults when custom fields empty: openai→api.openai.com/v1, deepseek→api.deepseek.com, qwen→dashscope.aliyuncs.com/compatible-mode/v1, kimi→api.moonshot.ai/v1, grok→api.x.ai/v1, gemini→generativelanguage.googleapis.com/v1beta/openai, claude→api.anthropic.com/v1, minimax→api.minimax.io/v1, glm→open.bigmodel.cn/api/paas/v4`,
 				s.handleUpdateModelConfigs)
 
 			// Exchange configuration
@@ -249,6 +257,7 @@ CRITICAL: Always use the "id" field for strategy_id.`,
 				s.handleGetDefaultStrategyConfig)
 			s.route(protected, "POST", "/strategies/preview-prompt", "Preview the AI prompt that will be generated from a config", s.handlePreviewPrompt)
 			s.route(protected, "POST", "/strategies/test-run", "Test-run strategy AI analysis", s.handleStrategyTestRun)
+			s.route(protected, "GET", "/entry-quality-stats", "Quality→outcome backtest: decisions bucketed by entry_quality joined with journal outcomes (?trader_id=)", s.handleEntryQualityStats)
 			s.route(protected, "GET", "/strategies/:id", "Get strategy by ID", s.handleGetStrategy)
 			s.routeWithSchema(protected, "POST", "/strategies", "Create a new trading strategy",
 				`Body: {"name":"<string, required>","description":"<string, optional>","lang":"zh|en","config":<StrategyConfig object, OPTIONAL — if omitted the system applies complete working defaults automatically (ai500 top coins, all standard indicators, standard risk control)>}
@@ -276,7 +285,7 @@ StrategyConfig fields:
   indicators.rsi_periods: [7,14] default
   indicators.atr_periods: [14] default
   indicators.boll_periods: [20] default
-  indicators.nofxos_api_key: ALWAYS "cm_568c67eae410d912c54c"
+  indicators.nofxos_api_key: unused (quant data now comes from the vergex relay, same source as the data page)
   indicators.enable_quant_data: ALWAYS true
   indicators.enable_quant_oi: ALWAYS true
   indicators.enable_quant_netflow: ALWAYS true
@@ -355,6 +364,63 @@ Returns the most recent AI decision for each symbol analyzed in the last scan cy
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: {"total_trades":<int>,"winning_trades":<int>,"win_rate":<float>,"total_pnl":<float>,"sharpe_ratio":<float>,"max_drawdown":<float>}`,
 				s.handleStatistics)
+
+			// Trade review system (复盘): journal, rules, AI review
+			s.routeWithSchema(protected, "GET", "/review/journal", "Trade review journal (auto-synced from closed positions)",
+				`Query: ?trader_id=<EXACT trader_id>&limit=<int, default 50>&offset=<int>&symbol=<optional filter>&review_status=<pending|reviewed>`,
+				s.handleJournalList)
+			s.routeWithSchema(protected, "POST", "/review/journal/sync", "Force-sync trade journal from closed positions",
+				`Query: ?trader_id=<EXACT trader_id>. Returns {"created":<int>}`,
+				s.handleJournalSync)
+			s.routeWithSchema(protected, "POST", "/review/journal/:id", "Update review fields of a journal entry",
+				`:id = journal entry id from GET /api/review/journal. Query: ?trader_id=<EXACT trader_id>
+Body: {"executed_as_plan":"yes|partial|no","emotions":"comma tags e.g. calm,fomo","mistake_category":"strategy|execution|risk_control|market|none","strategy_tag":"breakout|mean_reversion|trend_following|...","deviation_note":"<string>","lesson":"<string>"}`,
+				s.handleJournalUpdate)
+			s.routeWithSchema(protected, "GET", "/review/journal/stats", "Aggregated review statistics (win rate/expectancy/adherence/emotions)",
+				`Query: ?trader_id=<EXACT trader_id>`,
+				s.handleJournalStats)
+			s.routeWithSchema(protected, "GET", "/review/rules", "List trading rules (hard rules + soft lessons)",
+				`Query: ?trader_id=<EXACT trader_id>`,
+				s.handleRulesList)
+			s.routeWithSchema(protected, "POST", "/review/rules", "Create a trading rule",
+				`Query: ?trader_id=<EXACT trader_id>
+Hard rule Body: {"rule_type":"hard","name":"<string>","description":"<string>","condition":{"field":"leverage|position_size_usd|position_value_pct|stop_loss_pct|take_profit_pct|risk_reward|confidence|has_stop_loss|has_take_profit|symbol","op":">|>=|<|<=|==|!=|in","value":<value>},"on_violation":"block|warn"}
+Soft rule Body: {"rule_type":"soft","name":"<string>","lesson_text":"<string>","tags":"comma,separated"}`,
+				s.handleRuleCreate)
+			s.routeWithSchema(protected, "POST", "/review/rules/:id", "Update a trading rule",
+				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>. Same body as POST /api/review/rules (partial updates allowed, include "enabled":<bool> to toggle).`,
+				s.handleRuleUpdate)
+			s.routeWithSchema(protected, "DELETE", "/review/rules/:id", "Delete a trading rule",
+				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>`,
+				s.handleRuleDelete)
+			s.routeWithSchema(protected, "GET", "/review/rules/logs", "Recent pre-trade rule check logs",
+				`Query: ?trader_id=<EXACT trader_id>&limit=<int, default 50>`,
+				s.handleRuleCheckLogs)
+			s.routeWithSchema(protected, "POST", "/review/rules/check", "Dry-run a hypothetical decision against the rule system",
+				`Query: ?trader_id=<EXACT trader_id>
+Body: {"symbol":"BTCUSDT","action":"open_long","leverage":10,"position_size_usd":1000,"stop_loss":100,"take_profit":110,"confidence":80,"price":105}`,
+				s.handleRuleCheck)
+			s.routeWithSchema(protected, "GET", "/review/rules/export", "Export all trading rules as JSON config",
+				`Query: ?trader_id=<EXACT trader_id>`,
+				s.handleRuleExport)
+			s.routeWithSchema(protected, "POST", "/review/ai/extract-rules", "AI extracts new rules from reviewed trade journal",
+				`Query: ?trader_id=<EXACT trader_id>. Returns {"proposals":[...]} for user confirmation.`,
+				s.handleAIExtractRules)
+			s.routeWithSchema(protected, "POST", "/review/ai/apply-rules", "Save AI-proposed rules after user confirmation",
+				`Query: ?trader_id=<EXACT trader_id>
+Body: {"rules":[{...same schema as POST /api/review/rules}]}`,
+				s.handleAIApplyRules)
+			s.routeWithSchema(protected, "GET", "/review/prompt-config", "Get AI review prompt templates (custom or built-in defaults)",
+				"Returns review_system_prompt / rule_extract_system_prompt in effect plus *_custom flags.",
+				s.handleGetReviewPromptConfig)
+			s.routeWithSchema(protected, "PUT", "/review/prompt-config", "Save AI review prompt templates (empty string = reset to built-in default)",
+				`Body: {"review_system_prompt":"...", "rule_extract_system_prompt":"..."} — both optional, partial updates allowed.
+Custom templates replace the built-in coach prompt for this user; empty string resets to default.`,
+				s.handleUpdateReviewPromptConfig)
+			s.routeWithSchema(protected, "POST", "/review/ai/review", "AI comprehensive trade review (strategy/execution/statistics layers)",
+				`Query: ?trader_id=<EXACT trader_id>
+Body: {"period":"daily|weekly|monthly"}`,
+				s.handleAIReview)
 
 		}
 	}

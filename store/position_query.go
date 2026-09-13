@@ -55,7 +55,11 @@ func (s *PositionStore) GetPositionStats(traderID string) (map[string]interface{
 }
 
 // GetFullStats gets complete trading statistics
-func (s *PositionStore) GetFullStats(traderID string) (*TraderStats, error) {
+// GetFullStats computes closed-trade statistics. initialEquity is the
+// trader's real starting capital — the max-drawdown percentage is measured
+// against it (a hardcoded 10k base shrank a ~9% account drawdown to 0.2%).
+// Pass 0 when unknown (falls back to a 100 USDT base).
+func (s *PositionStore) GetFullStats(traderID string, initialEquity float64) (*TraderStats, error) {
 	stats := &TraderStats{}
 
 	var count int64
@@ -108,7 +112,7 @@ func (s *PositionStore) GetFullStats(traderID string) (*TraderStats, error) {
 		stats.SharpeRatio = calculateSharpeRatioFromPnls(pnls)
 	}
 	if len(pnls) > 0 {
-		stats.MaxDrawdownPct = calculateMaxDrawdownFromPnls(pnls)
+		stats.MaxDrawdownPct = calculateMaxDrawdownFromPnls(pnls, initialEquity)
 	}
 
 	return stats, nil
@@ -194,15 +198,18 @@ func calculateSharpeRatioFromPnls(pnls []float64) float64 {
 	return mean / stdDev
 }
 
-// calculateMaxDrawdownFromPnls calculates maximum drawdown
-func calculateMaxDrawdownFromPnls(pnls []float64) float64 {
+// calculateMaxDrawdownFromPnls calculates the max drawdown of the cumulative
+// realized-PnL curve against the trader's real capital base.
+func calculateMaxDrawdownFromPnls(pnls []float64, initialEquity float64) float64 {
 	if len(pnls) == 0 {
 		return 0
 	}
+	if initialEquity <= 0 {
+		initialEquity = 100 // sane fallback when the real base is unknown
+	}
 
-	const startingEquity = 10000.0
-	equity := startingEquity
-	peak := startingEquity
+	equity := initialEquity
+	peak := initialEquity
 	var maxDD float64
 
 	for _, pnl := range pnls {
@@ -311,8 +318,8 @@ func (s *PositionStore) GetHoldingTimeStats(traderID string) ([]HoldingTimeStats
 	}
 
 	rangeStats := map[string]*struct {
-		count   int
-		wins    int
+		count    int
+		wins     int
 		totalPnL float64
 	}{
 		"<1h":   {},
@@ -403,4 +410,18 @@ func (s *PositionStore) GetDirectionStats(traderID string) ([]DirectionStats, er
 	}
 
 	return stats, nil
+}
+
+// GetClosedPositionsSince returns the trader's closed positions whose exit
+// time falls within [sinceMs, now], newest first — the raw material for
+// streak-based risk gates (loss-streak circuit breaker).
+func (s *PositionStore) GetClosedPositionsSince(traderID string, sinceMs int64) ([]TraderPosition, error) {
+	var positions []TraderPosition
+	err := s.db.Where("trader_id = ? AND status = ? AND exit_time >= ?", traderID, "CLOSED", sinceMs).
+		Order("exit_time DESC").
+		Find(&positions).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to query closed positions since %d: %w", sinceMs, err)
+	}
+	return positions, nil
 }

@@ -13,7 +13,10 @@ import (
 )
 
 // FundingRateCache is the funding rate cache structure
-// Binance Funding Rate only updates every 8 hours, using 1-hour cache can significantly reduce API calls
+// premiumIndex.lastFundingRate is the CONTINUOUSLY DRIFTING forward estimate
+// for the next settlement — only the settlement event is 8h-bound, the rate
+// value itself can halve within minutes on pumping symbols. A 1-hour cache
+// fed the AI prompt stale figures (observed: scanner 117% vs signal 52%).
 type FundingRateCache struct {
 	Rate      float64
 	UpdatedAt time.Time
@@ -21,8 +24,55 @@ type FundingRateCache struct {
 
 var (
 	fundingRateMap sync.Map // map[string]*FundingRateCache
-	frCacheTTL     = 1 * time.Hour
+	frCacheTTL     = 5 * time.Minute
 )
+
+// FundingIntervalCache holds the measured settlement interval per symbol.
+type FundingIntervalCache struct {
+	Hours     float64
+	UpdatedAt time.Time
+}
+
+var (
+	fundingIntervalMap sync.Map  // map[string]*FundingIntervalCache
+	fundingIntervalTTL           = 24 * time.Hour
+)
+
+// fundingIntervalHours returns the symbol's real funding settlement interval
+// in hours, measured from recent settlement timestamps (0 = unknown).
+// The interval is fixed per listing (8h default; some new listings 4h/1h)
+// and changes rarely, so it is cached for a day.
+func fundingIntervalHours(symbol string) float64 {
+	if cached, ok := fundingIntervalMap.Load(symbol); ok {
+		c := cached.(*FundingIntervalCache)
+		if time.Since(c.UpdatedAt) < fundingIntervalTTL {
+			return c.Hours
+		}
+	}
+	var raw []struct {
+		FundingTime int64 `json:"fundingTime"`
+	}
+	if err := binanceGetJSON("/fapi/v1/fundingRate?symbol="+symbol+"&limit=4", &raw); err != nil || len(raw) < 2 {
+		return 0
+	}
+	var gaps []float64
+	for i := 1; i < len(raw); i++ {
+		h := float64(raw[i].FundingTime-raw[i-1].FundingTime) / 3.6e6
+		if h > 0 && h <= 24 {
+			gaps = append(gaps, h)
+		}
+	}
+	if len(gaps) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, g := range gaps {
+		sum += g
+	}
+	hours := sum / float64(len(gaps))
+	fundingIntervalMap.Store(symbol, &FundingIntervalCache{Hours: hours, UpdatedAt: time.Now()})
+	return hours
+}
 
 // Get retrieves market data for the specified token (uses Binance data by default)
 func Get(symbol string) (*Data, error) {
@@ -86,6 +136,24 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 
 	// Calculate current indicators (based on 3-minute latest data)
 	currentPrice := klines3m[len(klines3m)-1].Close
+	// Live price: the kline vendor's forming candle close does not tick in
+	// real time, so query the exchange ticker for the actual current price
+	// (order placement / SL-TP anchor on this value). xyz dex assets are
+	// Hyperliquid-listed and have no Binance futures ticker — keep the close.
+	if !isXyzAsset {
+		if livePrice, err := NewAPIClient().GetCurrentPrice(symbol); err == nil && livePrice > 0 {
+			currentPrice = livePrice
+		}
+	}
+	// Patch the forming 3m candle with the live price so the intraday series
+	// and current indicators aren't anchored to the vendor's frozen close.
+	if len(klines3m) > 0 {
+		last := &klines3m[len(klines3m)-1]
+		bar := KlineBar{Time: last.OpenTime, Open: last.Open, High: last.High, Low: last.Low, Close: last.Close}
+		if applyLivePrice(&bar, "3m", currentPrice) {
+			last.Open, last.High, last.Low, last.Close = bar.Open, bar.High, bar.Low, bar.Close
+		}
+	}
 	currentEMA20 := calculateEMA(klines3m, 20)
 	currentMACD := calculateMACD(klines3m)
 	currentRSI7 := calculateRSI(klines3m, 7)
@@ -116,8 +184,9 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		oiData = &OIData{Latest: 0, Average: 0}
 	}
 
-	// Get Funding Rate
-	fundingRate, _ := getFundingRate(symbol)
+	// Get Funding Rate + measured settlement interval
+	fundingRate, fundingErr := getFundingRate(symbol)
+	fundingSettleHours := fundingIntervalHours(symbol)
 
 	// Calculate intraday series data
 	intradayData := calculateIntradaySeries(klines3m)
@@ -126,15 +195,17 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	longerTermData := calculateLongerTermData(klines4h)
 
 	return &Data{
-		Symbol:            symbol,
-		CurrentPrice:      currentPrice,
-		PriceChange1h:     priceChange1h,
-		PriceChange4h:     priceChange4h,
-		CurrentEMA20:      currentEMA20,
-		CurrentMACD:       currentMACD,
-		CurrentRSI7:       currentRSI7,
-		OpenInterest:      oiData,
-		FundingRate:       fundingRate,
+		Symbol:             symbol,
+		CurrentPrice:       currentPrice,
+		PriceChange1h:      priceChange1h,
+		PriceChange4h:      priceChange4h,
+		CurrentEMA20:       currentEMA20,
+		CurrentMACD:        currentMACD,
+		CurrentRSI7:        currentRSI7,
+		OpenInterest:       oiData,
+		FundingRate:        fundingRate,
+		FundingRateOK:      fundingErr == nil,
+		FundingSettleHours: fundingSettleHours,
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
 	}, nil
@@ -175,21 +246,31 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	// Check if this is an xyz dex asset (use Hyperliquid API)
 	isXyzAsset := IsXyzDexAsset(symbol)
 
-	// Get K-line data for each timeframe
+	// Get K-line data for each timeframe — request the strategy's configured
+	// count (floored at 200 so short configs still have indicator history;
+	// capped at 1500, the max most sources return per call).
+	fetchCount := count
+	if fetchCount < 200 {
+		fetchCount = 200
+	}
+	if fetchCount > 1500 {
+		fetchCount = 1500
+	}
+
 	for _, tf := range timeframes {
 		var klines []Kline
 		var err error
 
 		if isXyzAsset {
 			// Use Hyperliquid API for xyz dex assets
-			klines, err = getKlinesFromHyperliquid(symbol, tf, 200)
+			klines, err = getKlinesFromHyperliquid(symbol, tf, fetchCount)
 			if err != nil {
 				logger.Infof("⚠️ Failed to get %s %s K-line from Hyperliquid: %v", symbol, tf, err)
 				continue
 			}
 		} else {
 			// Use CoinAnk for regular crypto assets (default to Binance)
-			klines, err = getKlinesFromCoinAnk(symbol, tf, "binance", 200)
+			klines, err = getKlinesFromCoinAnk(symbol, tf, "binance", fetchCount)
 			if err != nil {
 				logger.Infof("⚠️ Failed to get %s %s K-line from CoinAnk: %v", symbol, tf, err)
 				continue
@@ -224,13 +305,41 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 
 	// Calculate current indicators (based on primary timeframe latest data)
 	currentPrice := primaryKlines[len(primaryKlines)-1].Close
+
+	// Live price: the kline vendor's forming candle close does not tick in
+	// real time (it can sit at the previous close for the whole bar), so
+	// query the exchange ticker for the actual current price. xyz dex assets
+	// have no Binance futures ticker — keep the kline close for those.
+	livePrice := 0.0
+	if !isXyzAsset {
+		if p, err := NewAPIClient().GetCurrentPrice(symbol); err == nil && p > 0 {
+			livePrice = p
+			currentPrice = p
+		}
+	}
+
+	// Refresh each timeframe's forming candle with the live price. Without
+	// this, consumers reading raw klines (the daily technical narrative, the
+	// legacy timeframe dumps, grid Donchian levels) quote the vendor's frozen
+	// forming-candle close while the structured signal JSON shows the live
+	// price — a systematic lag that misleads the model on trending days.
+	// Closed candles are never touched.
+	vendorStaleness := 0.0
+	if livePrice > 0 {
+		for tf, sd := range timeframeData {
+			if div, patched := refreshFormingCandle(tf, sd, livePrice); patched && tf == primaryTimeframe {
+				vendorStaleness = div
+			}
+		}
+	}
+
 	currentEMA20 := calculateEMA(primaryKlines, 20)
 	currentMACD := calculateMACD(primaryKlines)
 	currentRSI7 := calculateRSI(primaryKlines, 7)
 
 	// Calculate price changes
-	priceChange1h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 60) // 1 hour
-	priceChange4h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 240) // 4 hours
+	priceChange1h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 60, currentPrice)  // 1 hour
+	priceChange4h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 240, currentPrice) // 4 hours
 
 	// Get OI data
 	oiData, err := getOpenInterestData(symbol)
@@ -238,56 +347,149 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		oiData = &OIData{Latest: 0, Average: 0}
 	}
 
-	// Get Funding Rate
-	fundingRate, _ := getFundingRate(symbol)
+	// Get Funding Rate + measured settlement interval
+	fundingRate, fundingErr := getFundingRate(symbol)
+	fundingSettleHours := fundingIntervalHours(symbol)
 
 	return &Data{
-		Symbol:        symbol,
-		CurrentPrice:  currentPrice,
-		PriceChange1h: priceChange1h,
-		PriceChange4h: priceChange4h,
-		CurrentEMA20:  currentEMA20,
-		CurrentMACD:   currentMACD,
-		CurrentRSI7:   currentRSI7,
-		OpenInterest:  oiData,
-		FundingRate:   fundingRate,
-		TimeframeData: timeframeData,
+		Symbol:             symbol,
+		CurrentPrice:       currentPrice,
+		PriceChange1h:      priceChange1h,
+		PriceChange4h:      priceChange4h,
+		VendorStalenessPct: vendorStaleness,
+		CurrentEMA20:       currentEMA20,
+		CurrentMACD:        currentMACD,
+		CurrentRSI7:        currentRSI7,
+		OpenInterest:       oiData,
+		FundingRate:        fundingRate,
+		FundingRateOK:      fundingErr == nil,
+		FundingSettleHours: fundingSettleHours,
+		TimeframeData:      timeframeData,
 	}, nil
+}
+
+// TimeframeDuration returns the bar duration of a supported timeframe label,
+// or 0 for unknown labels.
+func TimeframeDuration(tf string) time.Duration {
+	switch tf {
+	case "1m":
+		return time.Minute
+	case "3m":
+		return 3 * time.Minute
+	case "5m":
+		return 5 * time.Minute
+	case "15m":
+		return 15 * time.Minute
+	case "30m":
+		return 30 * time.Minute
+	case "1h":
+		return time.Hour
+	case "2h":
+		return 2 * time.Hour
+	case "4h":
+		return 4 * time.Hour
+	case "6h":
+		return 6 * time.Hour
+	case "8h":
+		return 8 * time.Hour
+	case "12h":
+		return 12 * time.Hour
+	case "1d":
+		return 24 * time.Hour
+	}
+	return 0
+}
+
+// applyLivePrice patches one still-forming candle in place with the live
+// ticker price (Close refreshed, High/Low widened). Returns false — leaving
+// the candle untouched — when the candle is already closed, the timeframe is
+// unknown, or the ticker is implausibly far from the candle (>±80%, which
+// indicates broken data rather than volatility; extreme movers are exactly
+// where the frozen vendor close is most misleading and must be patched).
+func applyLivePrice(bar *KlineBar, tf string, livePrice float64) bool {
+	dur := TimeframeDuration(tf)
+	if dur <= 0 || bar == nil || bar.Close <= 0 || livePrice <= 0 {
+		return false
+	}
+	if !time.UnixMilli(bar.Time).Add(dur).After(time.Now()) {
+		return false // candle already closed
+	}
+	if livePrice > bar.Close*1.8 || livePrice < bar.Close*0.2 {
+		logger.Infof("⚠️ %s forming candle close %.6g vs live price %.6g too far apart, keeping vendor close", tf, bar.Close, livePrice)
+		return false
+	}
+	if livePrice > bar.High {
+		bar.High = livePrice
+	}
+	if livePrice < bar.Low {
+		bar.Low = livePrice
+	}
+	bar.Close = livePrice
+	return true
+}
+
+// refreshFormingCandle patches the forming candle of a timeframe series with
+// the live ticker price so every consumer quoting "the current price" from
+// raw klines agrees with Data.CurrentPrice.
+func refreshFormingCandle(tf string, sd *TimeframeSeriesData, livePrice float64) (divergencePct float64, patched bool) {
+	if sd == nil || len(sd.Klines) == 0 {
+		return 0, false
+	}
+	preClose := sd.Klines[len(sd.Klines)-1].Close
+	if applyLivePrice(&sd.Klines[len(sd.Klines)-1], tf, livePrice) {
+		last := sd.Klines[len(sd.Klines)-1]
+		if len(sd.MidPrices) == len(sd.Klines) {
+			sd.MidPrices[len(sd.MidPrices)-1] = (last.High + last.Low) / 2
+		}
+		if preClose > 0 {
+			divergencePct = (livePrice - preClose) / preClose * 100
+		}
+		return divergencePct, true
+	}
+	return 0, false
 }
 
 // getOpenInterestData retrieves OI data
 func getOpenInterestData(symbol string) (*OIData, error) {
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
-
-	apiClient := NewAPIClient()
-	resp, err := apiClient.client.Get(url)
-	if err != nil {
+	// Real average from 30 hourly history points — the previous placeholder
+	// (Average = Latest × 0.999) made oi_vs_avg_pct a constant ~0.1001% for
+	// every symbol, which the model could read as genuine crowding data.
+	var hist []struct {
+		SumOpenInterest string `json:"sumOpenInterest"`
+	}
+	if err := binanceGetJSON("/futures/data/openInterestHist?symbol="+symbol+"&period=1h&limit=30", &hist); err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	if len(hist) == 0 {
+		return nil, fmt.Errorf("empty OI history for %s", symbol)
 	}
 
-	var result struct {
-		OpenInterest string `json:"openInterest"`
-		Symbol       string `json:"symbol"`
-		Time         int64  `json:"time"`
+	latest, _ := strconv.ParseFloat(hist[len(hist)-1].SumOpenInterest, 64)
+	var sum float64
+	for _, h := range hist {
+		v, _ := strconv.ParseFloat(h.SumOpenInterest, 64)
+		sum += v
 	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	oi, _ := strconv.ParseFloat(result.OpenInterest, 64)
+	avg := sum / float64(len(hist))
 
 	return &OIData{
-		Latest:  oi,
-		Average: oi * 0.999, // Approximate average
+		Latest:  latest,
+		Average: avg,
 	}, nil
 }
+
+// binanceGetJSON GETs a public Binance fapi endpoint and decodes the JSON body.
+func binanceGetJSON(path string, out interface{}) error {
+	apiClient := NewAPIClient()
+	resp, err := apiClient.client.Get(binanceFAPIBase + path)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+const binanceFAPIBase = "https://fapi.binance.com"
 
 // getFundingRate retrieves funding rate (optimized: uses 1-hour cache)
 func getFundingRate(symbol string) (float64, error) {
@@ -330,9 +532,17 @@ func getFundingRate(symbol string) (float64, error) {
 		return 0, err
 	}
 
+	if result.Symbol != symbol {
+		// A valid-JSON error envelope (e.g. Binance -1121 invalid symbol)
+		// unmarshals into empty fields — parsing it would cache a fake 0 for
+		// an hour. Only a response that echoes the symbol is real data.
+		return 0, fmt.Errorf("premiumIndex response did not echo %s", symbol)
+	}
+
 	rate, _ := strconv.ParseFloat(result.LastFundingRate, 64)
 
-	// Update cache
+	// Update cache — SUCCESSFUL fetches only; failures must retry next call
+	// instead of poisoning the hour.
 	fundingRateMap.Store(symbol, &FundingRateCache{
 		Rate:      rate,
 		UpdatedAt: time.Now(),

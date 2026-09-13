@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="150" height="150">
+  <defs>
+    <linearGradient id="glm-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2454FF"/>
+      <stop offset="100%" stop-color="#7B9CFF"/>
+    </linearGradient>
+  </defs>
+  <path d="M5.5 5.5h13L8 18.5h11" fill="none" stroke="url(#glm-gradient)" stroke-width="3.2" stroke-linecap="square" stroke-linejoin="miter"/>
+</svg>

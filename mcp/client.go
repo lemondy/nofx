@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"nofx/logger"
 	"strings"
 	"time"
 )
@@ -21,11 +22,13 @@ const (
 var (
 	DefaultTimeout = 120 * time.Second
 
-	MaxRetryTimes = 3
+	MaxRetryTimes = 2
 
 	retryableErrors = []string{
 		"EOF",
 		"timeout",
+		"Timeout", // http.Client errors read "Client.Timeout exceeded ..."
+		"deadline exceeded",
 		"connection reset",
 		"connection refused",
 		"temporary failure",
@@ -44,22 +47,11 @@ var (
 
 // TokenUsage represents token usage from AI API response
 type TokenUsage struct {
-	Provider         string // payment channel: "claw402" or native provider name
+	Provider         string // provider name
 	Model            string
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
-}
-
-// Channel returns the payment channel category for telemetry.
-// Returns "claw402" or "native" based on the provider.
-func (u TokenUsage) Channel() string {
-	switch u.Provider {
-	case ProviderClaw402:
-		return "claw402"
-	default:
-		return "native"
-	}
 }
 
 // Client AI API configuration
@@ -178,8 +170,17 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 			client.Log.Warnf("⚠️  AI API call failed, retrying (%d/%d)...", attempt, maxRetries)
 		}
 
-		// Call the fixed single-call flow
-		result, err := client.Hooks.Call(systemPrompt, userPrompt)
+		// Streamable OpenAI-compatible providers use SSE streaming: headers
+		// return immediately, so a long reasoning generation no longer hits
+		// the "awaiting headers" request timeout. Non-streamable providers
+		// (claude wire format) keeps the fixed non-stream flow.
+		var result string
+		var err error
+		if client.Cfg.StreamDecisions && client.streamableProvider() {
+			result, err = client.callStreamSingle(systemPrompt, userPrompt)
+		} else {
+			result, err = client.Hooks.Call(systemPrompt, userPrompt)
+		}
 		if err == nil {
 			if attempt > 1 {
 				client.Log.Infof("✓ AI API retry succeeded")
@@ -273,9 +274,11 @@ func (client *Client) ParseMCPResponseFull(body []byte) (*LLMResponse, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content   string     `json:"content"`
-				ToolCalls []ToolCall `json:"tool_calls"`
+				Content          string     `json:"content"`
+				ReasoningContent string     `json:"reasoning_content"`
+				ToolCalls        []ToolCall `json:"tool_calls"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -304,8 +307,33 @@ func (client *Client) ParseMCPResponseFull(body []byte) (*LLMResponse, error) {
 	}
 
 	msg := result.Choices[0].Message
+	content := msg.Content
+
+	// Reasoning models (GLM thinking, DeepSeek-R1, Qwen thinking, ...) may put
+	// all their output in reasoning_content and leave content empty — fall back
+	// to it so callers don't see a blank response.
+	if strings.TrimSpace(content) == "" && strings.TrimSpace(msg.ReasoningContent) != "" {
+		client.Log.Infof("🧠 [%s] Empty content, falling back to reasoning_content (%d chars)",
+			client.String(), len(msg.ReasoningContent))
+		content = msg.ReasoningContent
+	}
+
+	if strings.TrimSpace(content) == "" {
+		client.Log.Warnf("⚠️ [%s] AI response has empty content (finish_reason=%s, body %d bytes) — response may have been truncated or filtered",
+			client.String(), result.Choices[0].FinishReason, len(body))
+	}
+
+	// finish_reason=length means the output hit max_tokens mid-generation:
+	// whatever JSON the caller expected is amputated. Surface it loudly here
+	// (the response still flows to the caller, which salvages what it can)
+	// so the fix (raise AI_MAX_TOKENS) is diagnosable from the log alone.
+	if result.Choices[0].FinishReason == "length" {
+		client.Log.Warnf("⚠️ [%s] Response TRUNCATED by max_tokens (finish_reason=length, %d completion tokens) — decision JSON is cut off. Raise AI_MAX_TOKENS.",
+			client.String(), result.Usage.CompletionTokens)
+	}
+
 	return &LLMResponse{
-		Content:   msg.Content,
+		Content:   content,
 		ToolCalls: msg.ToolCalls,
 	}, nil
 }
@@ -397,10 +425,11 @@ func (c *Client) BaseClient() *Client { return c }
 
 // IsRetryableError determines if error is retryable (network errors, timeouts, etc.)
 func (client *Client) IsRetryableError(err error) bool {
-	errStr := err.Error()
-	// Network errors, timeouts, EOF, etc. can be retried
+	// Case-insensitive matching: Go's http errors read "Client.Timeout exceeded"
+	// while context errors read "context deadline exceeded".
+	errStr := strings.ToLower(err.Error())
 	for _, retryable := range client.Cfg.RetryableErrors {
-		if strings.Contains(errStr, retryable) {
+		if strings.Contains(errStr, strings.ToLower(retryable)) {
 			return true
 		}
 	}
@@ -740,6 +769,7 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 // Returns the complete accumulated text.
 func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string, error) {
 	var accumulated strings.Builder
+	var reasoning strings.Builder
 	scanner := bufio.NewScanner(body)
 
 	for scanner.Scan() {
@@ -759,7 +789,8 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content string `json:"content"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
@@ -783,13 +814,18 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		}
 
 		delta := chunk.Choices[0].Delta.Content
-		if delta == "" {
+		if delta != "" {
+			accumulated.WriteString(delta)
+			if onChunk != nil {
+				onChunk(accumulated.String())
+			}
 			continue
 		}
 
-		accumulated.WriteString(delta)
-		if onChunk != nil {
-			onChunk(accumulated.String())
+		// Reasoning models stream their thinking via reasoning_content — keep
+		// it as a fallback in case content never arrives.
+		if rc := chunk.Choices[0].Delta.ReasoningContent; rc != "" {
+			reasoning.WriteString(rc)
 		}
 	}
 
@@ -797,5 +833,126 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		return accumulated.String(), fmt.Errorf("stream interrupted: %w", err)
 	}
 
+	// Content-only fallback: if the model produced reasoning but no final
+	// content, surface the reasoning instead of an empty string.
+	if strings.TrimSpace(accumulated.String()) == "" && reasoning.Len() > 0 {
+		return reasoning.String(), nil
+	}
+
 	return accumulated.String(), nil
+}
+
+// streamableProvider reports whether this provider speaks OpenAI-compatible
+// SSE streaming. claude (Anthropic wire format)
+// must stay non-stream.
+func (client *Client) streamableProvider() bool {
+	switch client.Provider {
+	case ProviderOpenAI, ProviderDeepSeek, ProviderQwen, ProviderGLM,
+		ProviderKimi, ProviderMiniMax, ProviderGrok, ProviderGemini, ProviderCustom:
+		return true
+	}
+	return false
+}
+
+// callStreamSingle performs one streaming attempt: same request shape as the
+// non-stream flow plus stream=true, with a 90s idle watchdog and a 300s hard
+// cap. Long reasoning generations stream chunks continuously, so the idle
+// watchdog — not the total timeout — is what bounds a hung connection; the
+// hard cap only backstops providers that keep the socket dripping.
+func (client *Client) callStreamSingle(systemPrompt, userPrompt string) (string, error) {
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": userPrompt},
+	}
+	requestBody := map[string]interface{}{
+		"model":       client.Model,
+		"messages":    messages,
+		"temperature": client.Cfg.Temperature,
+		"stream":      true,
+	}
+	// OpenAI newer models use max_completion_tokens instead of max_tokens
+	if client.Provider == ProviderOpenAI {
+		requestBody["max_completion_tokens"] = client.MaxTokens
+	} else {
+		requestBody["max_tokens"] = client.MaxTokens
+	}
+
+	jsonData, err := client.MarshalRequestBody(requestBody)
+	if err != nil {
+		return "", err
+	}
+
+	url := client.Hooks.BuildUrl()
+	httpReq, err := client.Hooks.BuildRequest(url, jsonData)
+	if err != nil {
+		return "", err
+	}
+
+	// Same (SSRF-safe) transport with a 300s cap. Big strategy prompts +
+	// restored ranking context push reasoning generations past 150s, and the
+	// hard cap was aborting legitimate mid-stream responses. The 90s idle
+	// watchdog still bounds genuinely hung connections.
+	httpClient := &http.Client{
+		Transport: client.HTTPClient.Transport,
+		Timeout:   300 * time.Second,
+	}
+
+	const idleTimeout = 90 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resetCh := make(chan struct{}, 1)
+	go func() {
+		t := time.NewTimer(idleTimeout)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				cancel()
+				return
+			case <-resetCh:
+				if !t.Stop() {
+					select {
+					case <-t.C:
+					default:
+					}
+				}
+				t.Reset(idleTimeout)
+			}
+		}
+	}()
+
+	httpReq = httpReq.WithContext(ctx)
+	client.Log.Infof("📡 [%s] Streaming request: %s", client.String(), url)
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("streaming request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		// 4xx usually means the provider rejected the stream parameter —
+		// retry this attempt once via the non-stream flow.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			logger.Warnf("⚠️  Stream rejected (status %d) — falling back to non-stream for this attempt", resp.StatusCode)
+			return client.Hooks.Call(systemPrompt, userPrompt)
+		}
+		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	return ParseSSEStream(resp.Body, nil, func() {
+		select {
+		case resetCh <- struct{}{}:
+		default:
+		}
+	})
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

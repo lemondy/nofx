@@ -21,14 +21,23 @@ func (s *Server) handleTraderList(c *gin.Context) {
 
 	result := make([]map[string]interface{}, 0, len(traders))
 	for _, trader := range traders {
-		// Get real-time running status
+		// Get real-time running status + runtime
 		isRunning := trader.IsRunning
+		runtimeMinutes := 0
 		if at, err := s.traderManager.GetTrader(trader.ID); err == nil {
 			status := at.GetStatus()
 			if running, ok := status["is_running"].(bool); ok {
 				isRunning = running
 			}
+			if rm, ok := status["runtime_minutes"].(int); ok {
+				runtimeMinutes = rm
+			}
 		}
+
+		// Last cycle count — lets the dashboard default to the trader with
+		// the freshest activity instead of a stopped one at the top of the
+		// list.
+		cycles, _ := s.store.Decision().GetLastCycleNumber(trader.ID)
 
 		// Get strategy name if strategy_id is set
 		var strategyName string
@@ -46,6 +55,8 @@ func (s *Server) handleTraderList(c *gin.Context) {
 			"ai_model":            trader.AIModelID, // Use complete ID
 			"exchange_id":         trader.ExchangeID,
 			"is_running":          isRunning,
+			"cycles":              cycles,
+			"runtime_minutes":     runtimeMinutes,
 			"show_in_competition": trader.ShowInCompetition,
 			"initial_balance":     trader.InitialBalance,
 			"strategy_id":         trader.StrategyID,
@@ -214,7 +225,7 @@ func (s *Server) handlePositionHistory(c *gin.Context) {
 	}
 
 	// Get statistics
-	stats, _ := store.Position().GetFullStats(trader.GetID())
+	stats, _ := store.Position().GetFullStats(trader.GetID(), trader.InitialBalance())
 
 	// Get symbol stats
 	symbolStats, _ := store.Position().GetSymbolStats(trader.GetID(), 10)

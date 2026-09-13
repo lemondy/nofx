@@ -13,10 +13,17 @@ import (
 // Hard limits to prevent token explosion in AI requests
 const (
 	MaxCandidateCoins = 10
-	MaxPositions      = 3
+	// MaxPositions is a sanity BOUND on risk_control.max_positions (fat-finger
+	// protection), not the default — the configured value is honored up to
+	// this cap. The default TEMPLATE for new strategies stays 3.
+	MaxPositions = 10
 	MaxTimeframes     = 4
 	MinKlineCount     = 10
-	MaxKlineCount     = 30
+	// 120: the structured signal derives indicators from the closed-bar
+	// window — 30 bars left EMA50/MACD unstable (data_quality.sufficient
+	// flagged EVERY candidate as insufficient). 120 keeps ≥60 closed bars
+	// even after the forming-bar drop on the longest fetched TF.
+	MaxKlineCount     = 120
 )
 
 // ClampLimits enforces product-level limits on strategy config to prevent token overflow.
@@ -33,6 +40,12 @@ func (c *StrategyConfig) ClampLimits() {
 	}
 
 	// Clamp static coins
+	if c.CoinSource.PiggyDashLimit > MaxCandidateCoins {
+		c.CoinSource.PiggyDashLimit = MaxCandidateCoins
+	}
+	if c.CoinSource.ShortScanLimit > MaxCandidateCoins {
+		c.CoinSource.ShortScanLimit = MaxCandidateCoins
+	}
 	if len(c.CoinSource.StaticCoins) > MaxCandidateCoins {
 		c.CoinSource.StaticCoins = c.CoinSource.StaticCoins[:MaxCandidateCoins]
 	}
@@ -153,12 +166,18 @@ type PromptSectionsConfig struct {
 
 // CoinSourceConfig coin source configuration
 type CoinSourceConfig struct {
-	// source type: "static" | "ai500" | "oi_top" | "oi_low" | "mixed"
+	// source type: "static" | "ai500" | "oi_top" | "oi_low" | "piggy_dash" | "mixed"
+	// "mixed" combines any selection of the individual sources (multi-select)
 	SourceType string `json:"source_type"`
-	// static coin list (used when source_type = "static")
+	// static coin list (used when source_type = "static", or in mixed mode
+	// when UseStatic is set)
 	StaticCoins []string `json:"static_coins,omitempty"`
 	// excluded coins list (filtered out from all sources)
 	ExcludedCoins []string `json:"excluded_coins,omitempty"`
+	// mixed mode: whether to include the static coin list as a source.
+	// Pointer so absent (legacy configs, which always included static coins)
+	// can default to true while an explicit false excludes them.
+	UseStatic *bool `json:"use_static,omitempty"`
 	// whether to use AI500 coin pool
 	UseAI500 bool `json:"use_ai500"`
 	// AI500 coin pool maximum count
@@ -171,6 +190,23 @@ type CoinSourceConfig struct {
 	UseOILow bool `json:"use_oi_low"`
 	// OI Low maximum count
 	OILowLimit int `json:"oi_low_limit,omitempty"`
+	// whether to use the breakout engine "piggy dash" source (猪猪冲刺:
+	// strongest breakout/breakdown signals from the 5-min scheduler)
+	UsePiggyDash       bool   `json:"use_piggy_dash"`
+	PiggyDashLimit     int    `json:"piggy_dash_limit,omitempty"`
+	PiggyDashDirection string `json:"piggy_dash_direction,omitempty"` // "", "breakout", "breakdown"
+	// whether to use the "short scan" source (做空扫描: top 24h gainers ranked
+	// by short-suitability score computed from Binance indicators)
+	UseShortScan bool `json:"use_short_scan"`
+	// ShortScan maximum count
+	ShortScanLimit int `json:"short_scan_limit,omitempty"`
+	// ShortScan funding-rate crowding threshold (percent per 8h, e.g. 0.03 =
+	// 0.03%). Injected into the AI prompt as a short-entry condition; injected
+	// value falls back to the built-in default (0.03) when unset.
+	ShortScanFundingRatePct float64 `json:"short_scan_funding_rate_pct,omitempty"`
+	// Minimum open-interest value (millions USD) for a candidate coin to be
+	// analyzed — lower-liquidity coins are skipped. 0 = built-in default (15M).
+	MinOIValueMillions float64 `json:"min_oi_value_millions,omitempty"`
 	// whether to use Hyperliquid All coins (all available perp pairs)
 	UseHyperAll bool `json:"use_hyper_all"`
 	// whether to use Hyperliquid Main coins (top N by 24h volume)
@@ -178,6 +214,20 @@ type CoinSourceConfig struct {
 	// Hyperliquid Main maximum count (default 20)
 	HyperMainLimit int `json:"hyper_main_limit,omitempty"`
 	// Note: API URLs are now built automatically using NofxOSAPIKey from IndicatorConfig
+}
+
+// DefaultMinOIValueMillions is the built-in OI-value floor applied when the
+// per-strategy min_oi_value_millions is unset (0).
+const DefaultMinOIValueMillions = 15.0
+
+// EffectiveMinOIMillions returns the configured OI-value floor, falling back
+// to the built-in default when unset. All OI-filter call sites go through
+// this method — the default lives here and nowhere else.
+func (c *CoinSourceConfig) EffectiveMinOIMillions() float64 {
+	if c.MinOIValueMillions <= 0 {
+		return DefaultMinOIValueMillions
+	}
+	return c.MinOIValueMillions
 }
 
 // IndicatorConfig indicator configuration
@@ -278,10 +328,126 @@ type RiskControlConfig struct {
 	// Min position size in USDT (CODE ENFORCED)
 	MinPositionSize float64 `json:"min_position_size"`
 
-	// Min take_profit / stop_loss ratio (AI guided)
+	// Min take_profit / stop_loss ratio (CODE ENFORCED at open: entries with a
+	// lower computed ratio are rejected)
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
 	// Min AI confidence to open position (AI guided)
 	MinConfidence int `json:"min_confidence"`
+
+	// Min holding period in minutes before AI-initiated closes are allowed.
+	// Exchange stop-loss/take-profit triggers bypass this lock. 0 = disabled. (CODE ENFORCED)
+	MinHoldMinutes int `json:"min_hold_minutes"`
+	// MaxSpreadPct: reject opens when the order-book spread exceeds this % of
+	// mid (a wide spread eats the limit-order edge and taxes market fills).
+	// 0 = default 0.5%; negative = disabled. Fail-open when no book. (CODE ENFORCED)
+	MaxSpreadPct float64 `json:"max_spread_pct"`
+	// StockWeekendNoOpen: block new opens on Binance tokenized stocks
+	// (underlyingSubType "Stocks") during the US-market weekend (Sat/Sun ET)
+	// — weekend volatility and edge are poor until Binance supports 24h stock
+	// trading. nil/true = block (default ON); false = allow. Closes, SL/TP
+	// fills and drawdown-protect are unaffected. (CODE ENFORCED)
+	StockWeekendNoOpen *bool `json:"stock_weekend_no_open,omitempty"`
+	// ProfitLockAtR: the R-multiple (PnL ÷ initial stop distance) that arms
+	// the profit lock — at this level the program market-trims 50% of the
+	// position (once) AND moves the stop-loss to entry (breakeven). The
+	// remaining half rides to the structural TP. 0 = default 1R; negative =
+	// disabled. Supersedes the ROE trim tier of the TP ladder while active;
+	// the 25% full-close backstop and drawdown-protect stay. (CODE ENFORCED)
+	ProfitLockAtR float64 `json:"profit_lock_at_r"`
+	// TP ladder on leveraged PnL% (CODE ENFORCED): at >= TpTrimProfitPct the
+	// program market-trims 1/3 of the position (once per position); at >=
+	// TpFullProfitPct it closes the rest. 0 = defaults 10/25; negative = that
+	// tier off. Exchange SL/TP and drawdown-protect unaffected.
+	TpTrimProfitPct float64 `json:"tp_trim_profit_pct"`
+	TpFullProfitPct float64 `json:"tp_full_profit_pct"`
+	// EarlyCloseMinHours: AI-initiated closes before this many hours of hold
+	// time are blocked unless the 1h timeframe shows ≥2 closed candles against
+	// the position direction (trend-change evidence). Exchange SL/TP triggers
+	// and the drawdown-protect close bypass it by construction (neither is an
+	// AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
+	EarlyCloseMinHours int `json:"early_close_min_hours"`
+	// Block open_short when the 1d trend is up (counter-trend protection). (CODE ENFORCED)
+	BlockShort1dUptrend bool `json:"block_short_1d_uptrend"`
+	// Entry timing gate: the finest sub-hour timeframe (15m/30m) trend must
+	// align with the entry direction — longs need up/pullback, shorts need
+	// down; "range" blocks both. (CODE ENFORCED)
+	EntryTimingGate bool `json:"entry_timing_gate"`
+	// Risk-based position sizing: position value is capped at
+	// equity × RiskPerTradePct% ÷ stop-distance% (defaults to 1.5% when
+	// unset). Sizing derives FROM the stop, not the other way round. (CODE ENFORCED)
+	RiskPerTradePct float64 `json:"risk_per_trade_pct"`
+	// Stop-distance floor: reject entries whose stop is closer than
+	// SLMinATRMult × ATR(1h) — inside normal noise. 0 disables. (CODE ENFORCED)
+	SLMinATRMult float64 `json:"sl_min_atr_mult"`
+	// Limit entry state machine: the AI may emit open_long_limit /
+	// open_short_limit with price = trigger level; the system places a LIMIT
+	// order and cancels it after LimitEntryMaxCycles cycles unfilled. (CODE ENFORCED)
+	LimitEntryEnabled   bool `json:"limit_entry_enabled"`
+	LimitEntryMaxCycles int  `json:"limit_entry_max_cycles"`
+	// LimitEntryOffsetPct is the pre-computed limit-entry anchor offset from
+	// the snapshot live price, in percent: buy limit below / sell limit above.
+	// Default 0.5 when unset; must stay within the 0.1%-5% trigger band.
+	// Used as the fixed-mode value AND as the fallback when ATR is
+	// unavailable. (CODE ENFORCED)
+	LimitEntryOffsetPct float64 `json:"limit_entry_offset_pct"`
+	// LimitEntryOffsetMode selects how the anchor offset scales:
+	// "atr" (default when empty) = OffsetATRMult × ATR(execution TF) clamped
+	// to [OffsetMinPct, OffsetMaxPct] — a fixed percent is either most of a
+	// quiet symbol's ATR or a hair off the live price for violent movers;
+	// "fixed" = LimitEntryOffsetPct as-is. The same scaling drives the
+	// anchor-vs-structure breathing-room threshold (suppression pre-filter
+	// and the execution supply-zone gate share it). (CODE ENFORCED)
+	LimitEntryOffsetMode    string  `json:"limit_entry_offset_mode,omitempty"`
+	LimitEntryOffsetATRMult float64 `json:"limit_entry_offset_atr_mult"`
+	LimitEntryOffsetMinPct  float64 `json:"limit_entry_offset_min_pct"`
+	LimitEntryOffsetMaxPct  float64 `json:"limit_entry_offset_max_pct"`
+	// LimitEntryMarketFallback: the anchor is computed at prompt-build time,
+	// but the AI latency window (minutes) lets the live price cross it. A long
+	// anchor at/above the live price (short anchor at/below) means the planned
+	// pullback/rally already arrived — the resting order would fill
+	// immediately at a price at least as good as the anchor — so the entry is
+	// converted to MARKET with every risk gate re-validated at the live price
+	// (and rejected outright when the price is already at/beyond the SL).
+	// Default on (nil = enabled); set false to keep rejecting crossed
+	// anchors. (CODE ENFORCED)
+	LimitEntryMarketFallback *bool `json:"limit_entry_market_fallback,omitempty"`
+	// Volatility-targeted position sizing, recomputed every cycle with an
+	// 80/120 hysteresis band (reduce-only automation; adds stay AI-driven).
+	VolTargetEnabled bool `json:"vol_target_enabled"`
+	// Rule-based trailing stop: arms at 1.5× initial stop distance, trails at
+	// 2×ATR(1h), monotonic tighten-only. (CODE ENFORCED)
+	TrailingStopEnabled bool `json:"trailing_stop_enabled"`
+	// Resistance-breakout hold: block an AI-initiated close of a LOSING
+	// position when the nearest opposite-side structure level (overhead
+	// resistance for longs / support below for shorts) is within
+	// CloseRejectBreakoutPct% and the near-TF (15m) structure is NOT yet
+	// broken — give the breakout/breakdown room instead of exiting on
+	// "resistance rejection". 0 disables. (CODE ENFORCED)
+	CloseRejectBreakoutPct float64 `json:"close_reject_breakout_pct"`
+	// Supply-zone entry block: reject an open_long_limit / open_short_limit
+	// whose anchor sits within OpenRejectSupplyPct% of the opposite-side
+	// structure (below resistance for longs / above support for shorts) —
+	// the fill would land inside the supply/demand zone with no room.
+	// 0 disables. (CODE ENFORCED)
+	OpenRejectSupplyPct float64 `json:"open_reject_supply_pct"`
+	// Loss-streak circuit breaker: when a symbol closes LossStreakMaxLosses
+	// consecutive losing trades within the last 24h, new opens on that symbol
+	// are blocked for 24h from the third loss (recomputed statelessly from
+	// the closed-trade record, restart-safe). (CODE ENFORCED)
+	LossStreakBanEnabled bool `json:"loss_streak_ban_enabled"`
+	LossStreakMaxLosses  int  `json:"loss_streak_max_losses"`
+	// Drawdown protection close: when a position's peak profit (margin
+	// basis) reaches PeakDrawdownMinProfitPct% and then gives back
+	// PeakDrawdownMaxDrawdownPct% of that peak, the program closes it to
+	// lock the remainder. Defaults 5 / 55 when unset. (CODE ENFORCED)
+	PeakDrawdownMinProfitPct float64 `json:"peak_drawdown_min_profit_pct"`
+	PeakDrawdownMaxDDPct     float64 `json:"peak_drawdown_max_dd_pct"`
+	// Account-level circuit breaker: when account equity sits
+	// AccountMaxDrawdownPct% below the initial balance, ALL new opens are
+	// blocked (closes/reduces still allowed) — the per-symbol loss-streak
+	// breaker cannot catch a negative-edge strategy bleeding across many
+	// symbols. 0 disables. (CODE ENFORCED)
+	AccountMaxDrawdownPct float64 `json:"account_max_drawdown_pct"`
 }
 
 // NewStrategyStore creates a new StrategyStore
@@ -612,6 +778,7 @@ const (
 	contextLimitGrok     = 131_072   // 128K
 	contextLimitKimi     = 131_072   // 128K
 	contextLimitMinimax  = 1_000_000 // 1M
+	contextLimitGLM      = 131_072   // 128K
 )
 
 // ModelContextLimits maps provider names to their context window sizes (in tokens)
@@ -624,6 +791,7 @@ var ModelContextLimits = map[string]int{
 	"grok":     contextLimitGrok,
 	"kimi":     contextLimitKimi,
 	"minimax":  contextLimitMinimax,
+	"glm":      contextLimitGLM,
 }
 
 // GetContextLimit returns the context limit for a given provider
@@ -635,30 +803,7 @@ func GetContextLimit(provider string) int {
 }
 
 // GetContextLimitForClient returns context limit for a provider+model pair.
-// For claw402, the underlying model is inferred from the model name prefix.
 func GetContextLimitForClient(provider, model string) int {
-	if provider == "claw402" {
-		switch {
-		case strings.HasPrefix(model, "claude"):
-			return ModelContextLimits["claude"]
-		case strings.HasPrefix(model, "gpt"), strings.HasPrefix(model, "o1"), strings.HasPrefix(model, "o3"):
-			return ModelContextLimits["openai"]
-		case strings.HasPrefix(model, "gemini"):
-			return ModelContextLimits["gemini"]
-		case strings.HasPrefix(model, "grok"):
-			return ModelContextLimits["grok"]
-		case strings.HasPrefix(model, "kimi"):
-			return ModelContextLimits["kimi"]
-		case strings.HasPrefix(model, "qwen"):
-			return ModelContextLimits["qwen"]
-		case strings.HasPrefix(model, "minimax"):
-			return ModelContextLimits["minimax"]
-		case strings.HasPrefix(model, "deepseek"):
-			return ModelContextLimits["deepseek"]
-		default:
-			return ModelContextLimits["deepseek"]
-		}
-	}
 	return GetContextLimit(provider)
 }
 
@@ -698,8 +843,10 @@ func (c *StrategyConfig) EstimateTokens() TokenEstimate {
 		klineCount = 20
 	}
 
-	// Per coin per timeframe: kline OHLCV rows
-	charsPerCoinTF := klineCount * 80 // each OHLCV line ~80 chars
+	// Per coin per timeframe: the structured signal renders DERIVED fields
+	// (trend/indicators/levels/quality), not raw klines — cost is constant
+	// per TF regardless of kline count.
+	charsPerCoinTF := 450
 
 	// Add enabled indicator overhead per timeframe
 	indicatorCharsPerLine := 0
@@ -721,7 +868,7 @@ func (c *StrategyConfig) EstimateTokens() TokenEstimate {
 	if c.Indicators.EnableVolume {
 		indicatorCharsPerLine += 10
 	}
-	charsPerCoinTF += klineCount * indicatorCharsPerLine
+	_ = klineCount // indicator detail is folded into the 450-char structured block
 
 	totalMarketChars := numCoins * numTimeframes * charsPerCoinTF
 
@@ -847,6 +994,10 @@ func (c *StrategyConfig) getEffectiveCoinCount() int {
 		count = c.CoinSource.OITopLimit
 	case "oi_low":
 		count = c.CoinSource.OILowLimit
+	case "piggy_dash":
+		count = c.CoinSource.PiggyDashLimit
+	case "short_scan":
+		count = c.CoinSource.ShortScanLimit
 	case "mixed":
 		if c.CoinSource.UseAI500 {
 			count += c.CoinSource.AI500Limit
@@ -856,6 +1007,15 @@ func (c *StrategyConfig) getEffectiveCoinCount() int {
 		}
 		if c.CoinSource.UseOILow {
 			count += c.CoinSource.OILowLimit
+		}
+		if c.CoinSource.UsePiggyDash {
+			count += c.CoinSource.PiggyDashLimit
+		}
+		if c.CoinSource.UseShortScan {
+			count += c.CoinSource.ShortScanLimit
+		}
+		if c.CoinSource.UseStatic == nil || *c.CoinSource.UseStatic {
+			count += len(c.CoinSource.StaticCoins)
 		}
 	default:
 		count = c.CoinSource.AI500Limit

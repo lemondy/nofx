@@ -154,84 +154,128 @@ func (c *Client) GetOILowSymbols() ([]string, error) {
 	return symbols, nil
 }
 
-// FormatOIRankingForAI formats OI ranking data for AI consumption
-func FormatOIRankingForAI(data *OIRankingData, lang Language) string {
+// FormatOIRankingForAI formats OI ranking data for AI consumption.
+// interesting marks symbols worth full rows (candidates/open positions);
+// everything else collapses to a compact headline so the table doesn't eat
+// the context budget.
+func FormatOIRankingForAI(data *OIRankingData, lang Language, interesting map[string]bool) string {
 	if data == nil {
 		return ""
 	}
 
 	if lang == LangChinese {
-		return formatOIRankingZH(data)
+		return formatOIRankingZH(data, interesting)
 	}
-	return formatOIRankingEN(data)
+	return formatOIRankingEN(data, interesting)
 }
 
-func formatOIRankingZH(data *OIRankingData) string {
+// oiInterestingRow decides whether a position deserves a full row.
+func oiInterestingRow(pos OIPosition, interesting map[string]bool) bool {
+	return interesting[pos.Symbol]
+}
+
+func formatOIRankingZH(data *OIRankingData, interesting map[string]bool) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("## 持仓量变化排行 (%s)\n\n", data.Duration))
+	sb.WriteString("完整数据行 = 与候选池/持仓有交集的标的;其余压缩为前3名概览。\n\n")
 
-	if len(data.TopPositions) > 0 {
-		sb.WriteString("### 持仓增加榜\n")
-		sb.WriteString("资金流入，趋势延续或新仓建立信号:\n\n")
-		sb.WriteString("| 排名 | 币种 | 持仓变化(USDT) | OI变化% | 价格变化% |\n")
-		sb.WriteString("|------|------|----------------|---------|----------|\n")
-		for _, pos := range data.TopPositions {
-			sb.WriteString(fmt.Sprintf("| %d | %s | %s | %+.2f%% | %+.2f%% |\n",
-				pos.Rank, pos.Symbol, formatValue(pos.OIDeltaValue),
-				pos.OIDeltaPercent, pos.PriceDeltaPercent))
+	writeSide := func(title string, positions []OIPosition) {
+		if len(positions) == 0 {
+			return
+		}
+		sb.WriteString(fmt.Sprintf("### %s\n", title))
+		// Two passes: full table first, headline after — a single pass lets
+		// "其余前列:" text land mid-table and breaks the markdown.
+		var fullRows, rest []OIPosition
+		for _, pos := range positions {
+			if oiInterestingRow(pos, interesting) {
+				fullRows = append(fullRows, pos)
+			} else {
+				rest = append(rest, pos)
+			}
+		}
+		if len(fullRows) > 0 {
+			sb.WriteString("| 排名 | 币种 | OI变化(USDT) | OI变化% | 价格变化% |\n")
+			sb.WriteString("|------|------|----------------|---------|----------|\n")
+			for _, pos := range fullRows {
+				sb.WriteString(fmt.Sprintf("| %d | %s | %s | %+.2f%% | %+.2f%% | ← 候选/持仓\n",
+					pos.Rank, pos.Symbol, formatValue(pos.OIDeltaValue),
+					pos.OIDeltaPercent, pos.PriceDeltaPercent))
+			}
+		}
+		if len(rest) > 0 {
+			sb.WriteString("其余前列: ")
+			for i, pos := range rest {
+				if i >= 3 {
+					break
+				}
+				if i > 0 {
+					sb.WriteString(" ")
+				}
+				sb.WriteString(fmt.Sprintf("%s(%+.1f%%)", pos.Symbol, pos.OIDeltaPercent))
+			}
+			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
 	}
 
-	if len(data.LowPositions) > 0 {
-		sb.WriteString("### 持仓减少榜\n")
-		sb.WriteString("资金流出，趋势反转或仓位平仓信号:\n\n")
-		sb.WriteString("| 排名 | 币种 | 持仓变化(USDT) | OI变化% | 价格变化% |\n")
-		sb.WriteString("|------|------|----------------|---------|----------|\n")
-		for _, pos := range data.LowPositions {
-			sb.WriteString(fmt.Sprintf("| %d | %s | %s | %+.2f%% | %+.2f%% |\n",
-				pos.Rank, pos.Symbol, formatValue(pos.OIDeltaValue),
-				pos.OIDeltaPercent, pos.PriceDeltaPercent))
-		}
-		sb.WriteString("\n")
-	}
+	writeSide("持仓增加榜", data.TopPositions)
+	writeSide("持仓减少榜", data.LowPositions)
 
 	sb.WriteString("**解读**: OI增+价涨=多头主导 | OI增+价跌=空头主导 | OI减+价涨=空头平仓 | OI减+价跌=多头平仓\n\n")
 	return sb.String()
 }
 
-func formatOIRankingEN(data *OIRankingData) string {
+func formatOIRankingEN(data *OIRankingData, interesting map[string]bool) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("## Open Interest Changes (%s)\n\n", data.Duration))
+	sb.WriteString(fmt.Sprintf("## Open Interest Ranking (%s)\n\n", data.Duration))
+	sb.WriteString("Full rows = symbols overlapping the candidate pool / open positions; the rest collapse to a top-3 headline.\n\n")
 
-	if len(data.TopPositions) > 0 {
-		sb.WriteString("### OI Increase Ranking\n")
-		sb.WriteString("Capital inflow signals - trend continuation or new positions:\n\n")
-		sb.WriteString("| Rank | Symbol | OI Change (USDT) | OI Change % | Price Change % |\n")
-		sb.WriteString("|------|--------|------------------|-------------|----------------|\n")
-		for _, pos := range data.TopPositions {
-			sb.WriteString(fmt.Sprintf("| %d | %s | %s | %+.2f%% | %+.2f%% |\n",
-				pos.Rank, pos.Symbol, formatValue(pos.OIDeltaValue),
-				pos.OIDeltaPercent, pos.PriceDeltaPercent))
+	writeSide := func(title string, positions []OIPosition) {
+		if len(positions) == 0 {
+			return
+		}
+		sb.WriteString(fmt.Sprintf("### %s\n", title))
+		// Two passes: table first, headline after (single-pass interleaving
+		// breaks the markdown when an interesting row follows 3 others).
+		var fullRows, rest []OIPosition
+		for _, pos := range positions {
+			if oiInterestingRow(pos, interesting) {
+				fullRows = append(fullRows, pos)
+			} else {
+				rest = append(rest, pos)
+			}
+		}
+		if len(fullRows) > 0 {
+			sb.WriteString("| Rank | Symbol | OI Change (USD) | OI Change% | Price Change% |\n")
+			sb.WriteString("|------|--------|------------------|------------|---------------|\n")
+			for _, pos := range fullRows {
+				sb.WriteString(fmt.Sprintf("| %d | %s | %s | %+.2f%% | %+.2f%% | ← candidate/position\n",
+					pos.Rank, pos.Symbol, formatValue(pos.OIDeltaValue),
+					pos.OIDeltaPercent, pos.PriceDeltaPercent))
+			}
+		}
+		if len(rest) > 0 {
+			sb.WriteString("Others in the lead: ")
+			for i, pos := range rest {
+				if i >= 3 {
+					break
+				}
+				if i > 0 {
+					sb.WriteString(" ")
+				}
+				sb.WriteString(fmt.Sprintf("%s(%+.1f%%)", pos.Symbol, pos.OIDeltaPercent))
+			}
+			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
 	}
 
-	if len(data.LowPositions) > 0 {
-		sb.WriteString("### OI Decrease Ranking\n")
-		sb.WriteString("Capital outflow signals - trend reversal or position closing:\n\n")
-		sb.WriteString("| Rank | Symbol | OI Change (USDT) | OI Change % | Price Change % |\n")
-		sb.WriteString("|------|--------|------------------|-------------|----------------|\n")
-		for _, pos := range data.LowPositions {
-			sb.WriteString(fmt.Sprintf("| %d | %s | %s | %+.2f%% | %+.2f%% |\n",
-				pos.Rank, pos.Symbol, formatValue(pos.OIDeltaValue),
-				pos.OIDeltaPercent, pos.PriceDeltaPercent))
-		}
-		sb.WriteString("\n")
-	}
+	writeSide("OI Increasing", data.TopPositions)
+	writeSide("OI Decreasing", data.LowPositions)
 
-	sb.WriteString("**Key**: OI up + Price up = Bulls dominant | OI up + Price down = Bears dominant | OI down + Price up = Short covering | OI down + Price down = Long liquidation\n\n")
+	sb.WriteString("**Reading**: OI up + price up = longs leading | OI up + price down = shorts leading | OI down + price up = shorts closing | OI down + price down = longs closing\n\n")
 	return sb.String()
 }

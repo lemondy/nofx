@@ -15,7 +15,7 @@ import { useLanguage } from '../contexts/LanguageContext'
  * FAQ 数据配置在 data/faqData.ts
  */
 export function FAQPage() {
-  const { language } = useLanguage()
+ const { language } = useLanguage()
 
-  return <FAQLayout language={language} />
+ return <FAQLayout language={language} />
 }

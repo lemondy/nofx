@@ -1,14 +1,5 @@
 // Constants for AI model and provider configuration
 
-export interface Claw402Model {
-  id: string
-  name: string
-  provider: string
-  desc: string
-  icon: string
-  price: number  // USD per call
-}
-
 export interface AIProviderConfig {
   defaultModel: string
   apiUrl: string
@@ -34,24 +25,6 @@ export function getShortName(fullName: string): string {
   const parts = fullName.split('_')
   return parts.length > 1 ? parts[parts.length - 1] : fullName
 }
-
-// Models available through Claw402 (x402 USDC payment protocol)
-export const CLAW402_MODELS: Claw402Model[] = [
-  { id: 'deepseek', name: 'DeepSeek V3', provider: 'DeepSeek', desc: '$0.003/call', icon: '🔥', price: 0.003 },
-  { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'DeepSeek', desc: '$0.005/call', icon: '🤔', price: 0.005 },
-  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'OpenAI', desc: '$0.005/call', icon: '🚀', price: 0.005 },
-  { id: 'qwen-turbo', name: 'Qwen Turbo', provider: 'Alibaba', desc: '$0.002/call', icon: '⚡', price: 0.002 },
-  { id: 'qwen-flash', name: 'Qwen Flash', provider: 'Alibaba', desc: '$0.002/call', icon: '⚡', price: 0.002 },
-  { id: 'qwen-plus', name: 'Qwen Plus', provider: 'Alibaba', desc: '$0.005/call', icon: '✨', price: 0.005 },
-  { id: 'kimi-k2.5', name: 'Kimi K2.5', provider: 'Moonshot', desc: '$0.008/call', icon: '🌙', price: 0.008 },
-  { id: 'gpt-5.3', name: 'GPT-5.3', provider: 'OpenAI', desc: '$0.01/call', icon: '💡', price: 0.01 },
-  { id: 'qwen-max', name: 'Qwen Max', provider: 'Alibaba', desc: '$0.01/call', icon: '🌟', price: 0.01 },
-  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', provider: 'Google', desc: '$0.03/call', icon: '💎', price: 0.03 },
-  { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'OpenAI', desc: '$0.05/call', icon: '⚡', price: 0.05 },
-  { id: 'grok-4.1', name: 'Grok 4.1', provider: 'xAI', desc: '$0.06/call', icon: '⚡', price: 0.06 },
-  { id: 'claude-opus', name: 'Claude Opus', provider: 'Anthropic', desc: '$0.12/call', icon: '🎯', price: 0.12 },
-  { id: 'gpt-5.4-pro', name: 'GPT-5.4 Pro', provider: 'OpenAI', desc: '$0.50/call', icon: '🧠', price: 0.50 },
-]
 
 // AI Provider configuration - default models and API links
 export const AI_PROVIDER_CONFIG: Record<string, AIProviderConfig> = {
@@ -95,10 +68,10 @@ export const AI_PROVIDER_CONFIG: Record<string, AIProviderConfig> = {
     apiUrl: 'https://platform.minimax.io',
     apiName: 'MiniMax',
   },
-  claw402: {
+  glm: {
     defaultModel: 'glm-5',
-    apiUrl: 'https://claw402.ai',
-    apiName: 'Claw402',
+    apiUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+    apiName: 'Zhipu (GLM)',
   },
 }
 

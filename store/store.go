@@ -28,7 +28,12 @@ type Store struct {
 	equity         *EquityStore
 	order          *OrderStore
 	grid           *GridStore
+	pendingEntry   *PendingEntryStore
+	entryAssess    *EntryAssessmentStore
 	aiCharge       *AIChargeStore
+	journal        *TradeJournalStore
+	rule           *RuleStore
+	reviewPrompt   *ReviewPromptStore
 	telegramConfig TelegramConfigStore
 
 	mu sync.RWMutex
@@ -155,6 +160,12 @@ func (s *Store) initTables() error {
 	if err := s.Order().InitTables(); err != nil {
 		return fmt.Errorf("failed to initialize order tables: %w", err)
 	}
+	if err := s.PendingEntry().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize pending entry tables: %w", err)
+	}
+	if err := s.EntryAssessment().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize entry assessment tables: %w", err)
+	}
 	if err := s.Grid().InitTables(); err != nil {
 		return fmt.Errorf("failed to initialize grid tables: %w", err)
 	}
@@ -163,6 +174,15 @@ func (s *Store) initTables() error {
 	}
 	if err := s.AICharge().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize AI charge tables: %w", err)
+	}
+	if err := s.TradeJournal().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize trade journal tables: %w", err)
+	}
+	if err := s.Rule().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize trading rule tables: %w", err)
+	}
+	if err := s.ReviewPrompt().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize review prompt tables: %w", err)
 	}
 	return nil
 }
@@ -267,6 +287,26 @@ func (s *Store) Equity() *EquityStore {
 	return s.equity
 }
 
+// EntryAssessment gets the quality→outcome backtest dataset store
+func (s *Store) EntryAssessment() *EntryAssessmentStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entryAssess == nil {
+		s.entryAssess = NewEntryAssessmentStore(s.gdb)
+	}
+	return s.entryAssess
+}
+
+// PendingEntry gets the pending limit-entry shadow storage
+func (s *Store) PendingEntry() *PendingEntryStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingEntry == nil {
+		s.pendingEntry = NewPendingEntryStore(s.gdb)
+	}
+	return s.pendingEntry
+}
+
 // Order gets order storage
 func (s *Store) Order() *OrderStore {
 	s.mu.Lock()
@@ -305,6 +345,36 @@ func (s *Store) TelegramConfig() TelegramConfigStore {
 		s.telegramConfig = NewTelegramConfigStore(s.gdb)
 	}
 	return s.telegramConfig
+}
+
+// TradeJournal gets trade journal storage
+func (s *Store) TradeJournal() *TradeJournalStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.journal == nil {
+		s.journal = NewTradeJournalStore(s.gdb)
+	}
+	return s.journal
+}
+
+// ReviewPrompt returns the per-user review prompt config store.
+func (s *Store) ReviewPrompt() *ReviewPromptStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reviewPrompt == nil {
+		s.reviewPrompt = NewReviewPromptStore(s.gdb)
+	}
+	return s.reviewPrompt
+}
+
+// Rule gets trading rules storage
+func (s *Store) Rule() *RuleStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rule == nil {
+		s.rule = NewRuleStore(s.gdb)
+	}
+	return s.rule
 }
 
 // Close closes database connection

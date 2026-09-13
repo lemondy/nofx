@@ -69,7 +69,7 @@ Không tài khoản. Không API key. Không trả trước. Một ví, tất c�
 
 | Tính năng | Mô tả |
 |:--------|:------------|
-| **Đa AI** | DeepSeek, Qwen, GPT, Claude, Gemini, Grok, Kimi, MiniMax — chuyển đổi bất cứ lúc nào |
+| **Đa AI** | DeepSeek, Qwen, GPT, Claude, Gemini, Grok, Kimi, MiniMax, GLM — chuyển đổi bất cứ lúc nào |
 | **Đa Sàn** | Binance, Bybit, OKX, Bitget, KuCoin, Gate, Hyperliquid, Aster, Lighter |
 | **Strategy Studio** | Trình xây dựng trực quan — nguồn coin, chỉ báo, kiểm soát rủi ro |
 | **AI Competition** | AI cạnh tranh thời gian thực, bảng xếp hạng hiệu suất |
@@ -111,6 +111,7 @@ Crypto · Cổ phiếu Mỹ · Forex · Kim loại
 | <img src="../../../web/public/icons/grok.svg" width="20" height="20" style="vertical-align: middle;"/> **Grok** | ✅ | [Lấy API Key](https://console.x.ai) |
 | <img src="../../../web/public/icons/kimi.svg" width="20" height="20" style="vertical-align: middle;"/> **Kimi** | ✅ | [Lấy API Key](https://platform.moonshot.cn) |
 | <img src="../../../web/public/icons/minimax.svg" width="20" height="20" style="vertical-align: middle;"/> **MiniMax** | ✅ | [Lấy API Key](https://platform.minimaxi.com) |
+| <img src="../../../web/public/icons/glm.svg" width="20" height="20" style="vertical-align: middle;"/> **GLM** | ✅ | [Lấy API Key](https://open.bigmodel.cn) |
 
 ### Mô hình AI (Chế độ x402 — Không cần API Key)
 

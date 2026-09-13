@@ -97,6 +97,8 @@ export interface TraderInfo {
   ai_model: string
   exchange_id?: string
   is_running?: boolean
+  cycles?: number
+  runtime_minutes?: number
   startup_warning?: string
   show_in_competition?: boolean
   strategy_id?: string

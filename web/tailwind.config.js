@@ -8,24 +8,27 @@ export default {
     extend: {
       colors: {
         'nofx-gold': {
-          DEFAULT: '#F0B90B',
-          dim: 'rgba(240, 185, 11, 0.1)',
-          glow: 'rgba(240, 185, 11, 0.5)',
-          highlight: '#FFD700',
+          DEFAULT: '#B8912A',
+          dim: 'rgba(184, 145, 42, 0.1)',
+          glow: 'rgba(184, 145, 42, 0.4)',
+          highlight: '#C9A227',
         },
         'nofx-bg': {
-          DEFAULT: '#05070A', // Deep Void
-          deeper: '#020304',  // Abyssal
-          lighter: '#0E1217', // Surface
+          DEFAULT: '#F2EFE6', // Paper — page bg + inset controls
+          deeper: '#EFECE1',
+          lighter: '#ECE8DB', // Card surface
         },
-        'nofx-accent': '#00F0FF', // Cyan Cyber
+        'nofx-card': '#ECE8DB', // 卡片面板(比页面更深,让内嵌控件浮起)
+        'nofx-inset': '#F2EFE6', // 卡片内控件(与卡片形成对比)
+        'nofx-line': '#C0B9A2', // 边框线
+        'nofx-accent': '#6B7F5E', // Sage
         'nofx-text': {
-          DEFAULT: '#EAECEF',
-          main: '#EAECEF',
-          muted: '#848E9C',
+          DEFAULT: '#1E1E1A',
+          main: '#1E1E1A',
+          muted: '#6E6E60',
         },
-        'nofx-success': '#0ECB81',
-        'nofx-danger': '#F6465D',
+        'nofx-success': '#2E7D4F',
+        'nofx-danger': '#C0392B',
       },
       fontFamily: {
         sans: ['Inter', 'ui-sans-serif', 'system-ui'],

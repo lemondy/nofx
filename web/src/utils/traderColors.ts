@@ -2,7 +2,7 @@
 // 用于 ComparisonChart 和 Leaderboard，确保颜色一致性
 
 export const TRADER_COLORS = [
-  '#60a5fa', // blue-400
+  '#5e7a5e', // blue-400
   '#c084fc', // purple-400
   '#34d399', // emerald-400
   '#fb923c', // orange-400

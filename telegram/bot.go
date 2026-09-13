@@ -5,10 +5,10 @@ import (
 	"nofx/config"
 	"nofx/logger"
 	"nofx/mcp"
-	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
 	"nofx/telegram/agent"
+	notify "nofx/telegram/notify"
 	"os"
 	"strings"
 	"sync"
@@ -104,149 +104,177 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 	}
 	resolveBotUser()
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := bot.GetUpdatesChan(u)
+	// Manual polling (instead of GetUpdatesChan): gives explicit control over
+	// conflict detection, backoff and offset tracking. A 30s long-poll is
+	// shorter than typical proxy idle-timeouts — proxies that abort/replay the
+	// request are what Telegram reports as "Conflict: terminated by other
+	// getUpdates request".
+	offset := 0
+	backoff := 3 * time.Second
+	conflictAlerted := false
 
 	// awaitingLang is set only when the user explicitly runs /lang.
 	awaitingLang := false
 
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
-		chatID := update.Message.Chat.ID
-		text := strings.TrimSpace(update.Message.Text)
-
-		// ── Language selection (triggered only by /lang) ──────────────────────
-		if awaitingLang && chatID == allowedChatID {
-			if lang := parseLangChoice(text); lang != "" {
-				awaitingLang = false
-				st.TelegramConfig().SetLanguage(lang) //nolint:errcheck
-				sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
-			} else {
-				sendMarkdownMsg(bot, chatID, langMenuMsg())
+	for {
+		u := tgbotapi.NewUpdate(offset)
+		u.Timeout = 30
+		updates, err := bot.GetUpdates(u)
+		if err != nil {
+			if strings.Contains(err.Error(), "terminated by other getUpdates") {
+				if !conflictAlerted {
+					conflictAlerted = true
+					logger.Errorf("🚨 [Telegram] Another bot instance is polling with this token (Conflict). Find and stop the duplicate — check cloud deployments or other machines. Retrying with backoff.")
+					notify.Notify("ALERT", "telegram", "🚨 检测到另一个实例正在使用同一个 Bot Token 拉取消息，本机机器人暂停接收。请排查其它部署/机器，重复实例停止后自动恢复。")
+				}
+				time.Sleep(backoff)
+				backoff = min(backoff*2, 60*time.Second)
+				continue
 			}
+			logger.Warnf("Telegram getUpdates failed: %v — retrying in %v", err, backoff)
+			time.Sleep(backoff)
+			backoff = min(backoff*2, 60*time.Second)
 			continue
 		}
+		backoff = 3 * time.Second
+		conflictAlerted = false
 
-		// ── /start ────────────────────────────────────────────────────────────
-		if text == "/start" {
-			resolveBotUser()
-			if botUserID == "" {
-				sendMsg(bot, chatID,
-					"No account found.\nOpen the web dashboard to register, then send /start.")
+		for _, update := range updates {
+			offset = update.UpdateID + 1
+			if update.Message == nil {
+				continue
+			}
+			chatID := update.Message.Chat.ID
+			text := strings.TrimSpace(update.Message.Text)
+
+			// ── Language selection (triggered only by /lang) ──────────────────────
+			if awaitingLang && chatID == allowedChatID {
+				if lang := parseLangChoice(text); lang != "" {
+					awaitingLang = false
+					st.TelegramConfig().SetLanguage(lang) //nolint:errcheck
+					sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
+				} else {
+					sendMarkdownMsg(bot, chatID, langMenuMsg())
+				}
+				continue
+			}
+
+			// ── /start ────────────────────────────────────────────────────────────
+			if text == "/start" {
+				resolveBotUser()
+				if botUserID == "" {
+					sendMsg(bot, chatID,
+						"No account found.\nOpen the web dashboard to register, then send /start.")
+					continue
+				}
+				if allowedChatID == 0 {
+					username := update.Message.From.UserName
+					if err := st.TelegramConfig().BindUser(chatID, "@"+username); err != nil {
+						logger.Errorf("Failed to bind Telegram user: %v", err)
+						sendMsg(bot, chatID, "Binding failed. Please try again.")
+						continue
+					}
+					allowedChatID = chatID
+					logger.Infof("Telegram bound to @%s (chatID: %d)", username, chatID)
+				} else if chatID != allowedChatID {
+					sendMsg(bot, chatID, "This bot is already bound to another account.")
+					continue
+				} else {
+					agents.Reset(chatID)
+				}
+				lang := st.TelegramConfig().GetLanguage()
+				sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
+				continue
+			}
+
+			// ── /lang ─────────────────────────────────────────────────────────────
+			if text == "/lang" {
+				awaitingLang = true
+				sendMarkdownMsg(bot, chatID, langMenuMsg())
+				continue
+			}
+
+			// ── /help ─────────────────────────────────────────────────────────────
+			if text == "/help" {
+				lang := st.TelegramConfig().GetLanguage()
+				sendMarkdownMsg(bot, chatID, helpMsg(lang))
+				continue
+			}
+
+			// ── Access control ────────────────────────────────────────────────────
+			if allowedChatID != 0 && chatID != allowedChatID {
+				sendMsg(bot, chatID, "Unauthorized.")
 				continue
 			}
 			if allowedChatID == 0 {
-				username := update.Message.From.UserName
-				if err := st.TelegramConfig().BindUser(chatID, "@"+username); err != nil {
-					logger.Errorf("Failed to bind Telegram user: %v", err)
-					sendMsg(bot, chatID, "Binding failed. Please try again.")
-					continue
-				}
-				allowedChatID = chatID
-				logger.Infof("Telegram bound to @%s (chatID: %d)", username, chatID)
-			} else if chatID != allowedChatID {
-				sendMsg(bot, chatID, "This bot is already bound to another account.")
+				sendMsg(bot, chatID, "Send /start first.")
 				continue
-			} else {
-				agents.Reset(chatID)
 			}
+			if text == "" {
+				continue
+			}
+
+			// ── Refresh user before every AI call ────────────────────────────────
+			resolveBotUser()
+			if botUserID == "" {
+				sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
+				continue
+			}
+
 			lang := st.TelegramConfig().GetLanguage()
-			sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
-			continue
-		}
 
-		// ── /lang ─────────────────────────────────────────────────────────────
-		if text == "/lang" {
-			awaitingLang = true
-			sendMarkdownMsg(bot, chatID, langMenuMsg())
-			continue
-		}
-
-		// ── /help ─────────────────────────────────────────────────────────────
-		if text == "/help" {
-			lang := st.TelegramConfig().GetLanguage()
-			sendMarkdownMsg(bot, chatID, helpMsg(lang))
-			continue
-		}
-
-		// ── Access control ────────────────────────────────────────────────────
-		if allowedChatID != 0 && chatID != allowedChatID {
-			sendMsg(bot, chatID, "Unauthorized.")
-			continue
-		}
-		if allowedChatID == 0 {
-			sendMsg(bot, chatID, "Send /start first.")
-			continue
-		}
-		if text == "" {
-			continue
-		}
-
-		// ── Refresh user before every AI call ────────────────────────────────
-		resolveBotUser()
-		if botUserID == "" {
-			sendMsg(bot, chatID, "No account found. Open the web dashboard to register.")
-			continue
-		}
-
-		lang := st.TelegramConfig().GetLanguage()
-
-		// ── Guard: show status if not ready for trading ───────────────────────
-		if newLLMClient(st, botUserID) == nil {
-			sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
-			continue
-		}
-
-		// ── AI agent ─────────────────────────────────────────────────────────
-		go func(chatID int64, text string) {
-			sent, err := bot.Send(tgbotapi.NewMessage(chatID, "⏳"))
-			placeholderID := 0
-			if err == nil {
-				placeholderID = sent.MessageID
+			// ── Guard: show status if not ready for trading ───────────────────────
+			if newLLMClient(st, botUserID) == nil {
+				sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
+				continue
 			}
 
-			var (
-				mu       sync.Mutex
-				lastEdit time.Time
-			)
-			onChunk := func(accumulated string) {
-				if placeholderID == 0 {
-					return
+			// ── AI agent ─────────────────────────────────────────────────────────
+			go func(chatID int64, text string) {
+				sent, err := bot.Send(tgbotapi.NewMessage(chatID, "⏳"))
+				placeholderID := 0
+				if err == nil {
+					placeholderID = sent.MessageID
 				}
-				mu.Lock()
-				defer mu.Unlock()
-				if accumulated != "⏳" && time.Since(lastEdit) < time.Second {
-					return
-				}
-				lastEdit = time.Now()
-				edit := tgbotapi.NewEditMessageText(chatID, placeholderID, accumulated)
-				bot.Send(edit) //nolint:errcheck
-			}
 
-			reply := agents.Run(chatID, text, onChunk)
+				var (
+					mu       sync.Mutex
+					lastEdit time.Time
+				)
+				onChunk := func(accumulated string) {
+					if placeholderID == 0 {
+						return
+					}
+					mu.Lock()
+					defer mu.Unlock()
+					if accumulated != "⏳" && time.Since(lastEdit) < time.Second {
+						return
+					}
+					lastEdit = time.Now()
+					edit := tgbotapi.NewEditMessageText(chatID, placeholderID, accumulated)
+					bot.Send(edit) //nolint:errcheck
+				}
 
-			if placeholderID != 0 {
-				edit := tgbotapi.NewEditMessageText(chatID, placeholderID, reply)
-				edit.ParseMode = "Markdown"
-				if _, err := bot.Send(edit); err != nil {
-					edit2 := tgbotapi.NewEditMessageText(chatID, placeholderID, reply)
-					bot.Send(edit2) //nolint:errcheck
+				reply := agents.Run(chatID, text, onChunk)
+
+				if placeholderID != 0 {
+					edit := tgbotapi.NewEditMessageText(chatID, placeholderID, reply)
+					edit.ParseMode = "Markdown"
+					if _, err := bot.Send(edit); err != nil {
+						edit2 := tgbotapi.NewEditMessageText(chatID, placeholderID, reply)
+						bot.Send(edit2) //nolint:errcheck
+					}
+				} else {
+					msg := tgbotapi.NewMessage(chatID, reply)
+					msg.ParseMode = "Markdown"
+					if _, err := bot.Send(msg); err != nil {
+						msg.ParseMode = ""
+						bot.Send(msg) //nolint:errcheck
+					}
 				}
-			} else {
-				msg := tgbotapi.NewMessage(chatID, reply)
-				msg.ParseMode = "Markdown"
-				if _, err := bot.Send(msg); err != nil {
-					msg.ParseMode = ""
-					bot.Send(msg) //nolint:errcheck
-				}
-			}
-		}(chatID, text)
+			}(chatID, text)
+		}
 	}
-
-	return true
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -275,11 +303,7 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 			if apiKey != "" {
 				client := clientForProvider(model.Provider)
 				client.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
-				if isUSDCProvider(model.Provider) {
-					logger.Infof("Telegram agent: provider=%s (USDC payment) user=%s", model.Provider, userID)
-				} else {
-					logger.Infof("Telegram agent: provider=%s user=%s", model.Provider, userID)
-				}
+				logger.Infof("Telegram agent: provider=%s user=%s", model.Provider, userID)
 				return client
 			}
 		}
@@ -291,11 +315,7 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 		if apiKey != "" {
 			client := clientForProvider(model.Provider)
 			client.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
-			if isUSDCProvider(model.Provider) {
-				logger.Infof("Telegram agent: provider=%s (USDC payment) user=%s", model.Provider, userID)
-			} else {
-				logger.Infof("Telegram agent: provider=%s user=%s", model.Provider, userID)
-			}
+			logger.Infof("Telegram agent: provider=%s user=%s", model.Provider, userID)
 			return client
 		}
 	}
@@ -313,11 +333,6 @@ func newLLMClient(st *store.Store, userID string) mcp.AIClient {
 		}
 	}
 	return nil
-}
-
-// isUSDCProvider returns true for providers that pay per call with USDC (x402 protocol).
-func isUSDCProvider(provider string) bool {
-	return provider == "claw402"
 }
 
 func clientForProvider(provider string) mcp.AIClient {

@@ -93,6 +93,10 @@ type DecisionAction struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Success    bool      `json:"success"`
 	Error      string    `json:"error"`
+	// EntryPath tags the entry context for path-attribution stats (user
+	// 09-13: rally-window limit shorts vs bb_ride market shorts must be
+	// separately measurable): e.g. "15m:down", "15m:rally", "bb_ride".
+	EntryPath string `json:"entry_path,omitempty"`
 }
 
 // Statistics statistics information

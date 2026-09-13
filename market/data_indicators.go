@@ -72,6 +72,9 @@ func calculateRSI(klines []Kline, period int) float64 {
 		}
 	}
 
+	if avgGain == 0 && avgLoss == 0 {
+		return 50 // perfectly flat series — no direction, not overbought
+	}
 	if avgLoss == 0 {
 		return 100
 	}

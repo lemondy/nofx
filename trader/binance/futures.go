@@ -42,9 +42,34 @@ func getBrOrderID() string {
 	return orderID
 }
 
+// BrIDPrefix is the broker referral prefix every client order ID carries —
+// order attribution (revival) depends on it, so tagged orders keep it too.
+// Exported for the trader's startup reconciliation, which strips it before
+// matching entry tags.
+const BrIDPrefix = "x-KzrpZaP9"
+
+// getBrOrderIDFor builds a client order ID that keeps the broker referral
+// prefix but replaces the timestamp+random tail with a caller tag ("lim-…"
+// for AI limit entries, "grid-…" for grid levels) so the order class is
+// visible on-exchange. Binance caps client IDs at 32 chars; the prefix is
+// 10, so the tag may use at most 22. Truncation keeps the tag's HEAD — the
+// lim-<hash> class/ownership marker — and drops tail digits: timestamps can
+// lose precision, the marker cannot.
+func getBrOrderIDFor(tag string) string {
+	const maxTag = 22
+	if len(tag) > maxTag {
+		tag = tag[:maxTag]
+	}
+	return BrIDPrefix + tag
+}
+
 // FuturesTrader Binance futures trader
 type FuturesTrader struct {
 	client *futures.Client
+
+	// displayName is the human-readable label (trader name · model) used in
+	// Telegram notifications.
+	displayName string
 
 	// Balance cache
 	cachedBalance     map[string]interface{}
@@ -85,10 +110,22 @@ func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
 	return trader
 }
 
-// setDualSidePosition sets dual-side position mode (called during initialization)
+// setDualSidePosition ensures dual-side position mode (called during initialization).
+// Queries the current mode first: when already in Hedge Mode (the normal case for
+// an account with open orders/positions) no change request is sent — Binance
+// rejects mode changes with -4067 while open orders exist.
 func (t *FuturesTrader) setDualSidePosition() error {
-	// Try to set dual-side position mode
-	err := t.client.NewChangePositionModeService().
+	mode, err := t.client.NewGetPositionModeService().Do(context.Background())
+	if err == nil && mode != nil && mode.DualSidePosition {
+		logger.Infof("  ✓ Account is already in dual-side position mode (Hedge Mode)")
+		return nil
+	}
+	// Query failed (non-fatal) or account is in one-way mode — attempt the switch.
+	if err != nil {
+		logger.Infof("  ⚠️ Could not query position mode (%v), attempting to set dual-side mode", err)
+	}
+
+	err = t.client.NewChangePositionModeService().
 		DualSide(true). // true = dual-side position (Hedge Mode)
 		Do(context.Background())
 
@@ -177,4 +214,17 @@ func trimTrailingZeros(s string) string {
 	}
 
 	return s
+}
+
+// SetDisplayName sets the label used in Telegram notifications.
+func (t *FuturesTrader) SetDisplayName(name string) {
+	t.displayName = name
+}
+
+// notifyLabel returns the display name, falling back to the internal ID.
+func (t *FuturesTrader) notifyLabel() string {
+	if t.displayName != "" {
+		return t.displayName
+	}
+	return "Binance"
 }

@@ -26,7 +26,7 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	account, err := t.client.NewGetAccountService().Do(context.Background())
 	if err != nil {
 		logger.Infof("❌ Binance API call failed: %v", err)
-		return nil, fmt.Errorf("failed to get account info: %w", err)
+		return nil, fmt.Errorf("failed to get account info: %w", WrapAuthError("GetBalance", err))
 	}
 
 	result := make(map[string]interface{})

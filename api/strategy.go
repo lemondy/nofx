@@ -8,7 +8,6 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
-	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
 	"time"
@@ -325,7 +324,40 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 	// Validate merged configuration and collect warnings
 	warnings := validateStrategyConfig(&mergedConfig)
 
+	// Reload traders that use this strategy so config changes (coin-source
+	// limits, indicators, risk control) take effect without a restart —
+	// same behavior as model/exchange config updates.
+	traders, _ := s.store.Trader().List(userID)
+	reloaded := 0
+	for _, t := range traders {
+		if t.StrategyID != strategyID {
+			continue
+		}
+		logger.Infof("🔄 Strategy %s changed — reloading trader %s to apply new config", strategyID, t.ID)
+		s.traderManager.RemoveTrader(t.ID)
+		reloaded++
+	}
+	if reloaded > 0 {
+		if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
+			logger.Warnf("⚠️ Failed to reload traders after strategy update: %v", err)
+		}
+		// Reload race guard: verify each affected trader's loop is actually
+		// alive — the load path can lose the running loop in a rebuild race.
+		traders, _ := s.store.Trader().List(userID)
+		for _, t := range traders {
+			if t.StrategyID != strategyID || !t.IsRunning {
+				continue
+			}
+			if err := s.traderManager.EnsureTraderStarted(userID, t.ID); err != nil {
+				logger.Warnf("⚠️ EnsureTraderStarted(%s): %v", t.ID, err)
+			}
+		}
+	}
+
 	response := gin.H{"message": "Strategy updated successfully"}
+	if reloaded > 0 {
+		response["reloaded_traders"] = reloaded
+	}
 	if len(warnings) > 0 {
 		response["warnings"] = warnings
 	}
@@ -681,13 +713,7 @@ func (s *Server) runRealAITest(userID, modelID, systemPrompt, userPrompt string)
 		aiClient = mcp.NewClient()
 	}
 
-	// Payment providers ignore custom URL
-	switch provider {
-	case "claw402":
-		aiClient.SetAPIKey(apiKey, "", model.CustomModelName)
-	default:
-		aiClient.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
-	}
+	aiClient.SetAPIKey(apiKey, model.CustomAPIURL, model.CustomModelName)
 
 	// Call AI API
 	response, err := aiClient.CallWithMessages(systemPrompt, userPrompt)
@@ -696,4 +722,43 @@ func (s *Server) runRealAITest(userID, modelID, systemPrompt, userPrompt string)
 	}
 
 	return response, nil
+}
+
+// handleEntryQualityStats serves the quality→outcome backtest aggregation:
+// decisions bucketed by the model's self-assessed entry quality, joined with
+// realized trade outcomes from the journal.
+func (s *Server) handleEntryQualityStats(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	traderID := c.Query("trader_id")
+	if traderID == "" {
+		SafeBadRequest(c, "trader_id is required")
+		return
+	}
+	// Ownership: the trader must belong to the caller.
+	traders, err := s.store.Trader().ListAll()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list traders"})
+		return
+	}
+	owned := false
+	for _, t := range traders {
+		if t.ID == traderID && t.UserID == userID {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Trader not found for this user"})
+		return
+	}
+	stats, err := s.store.EntryAssessment().BucketStats(traderID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to aggregate"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"trader_id": traderID, "buckets": stats})
 }

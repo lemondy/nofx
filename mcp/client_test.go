@@ -50,6 +50,7 @@ func TestNewClient_WithOptions(t *testing.T) {
 		WithMaxTokens(4000),
 		WithTimeout(60*time.Second),
 		WithAPIKey("test-key"),
+		WithStreamDecisions(false),
 	)
 
 	c := client.(*Client)
@@ -84,6 +85,7 @@ func TestClient_CallWithMessages_Success(t *testing.T) {
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
 		WithAPIKey("test-key"),
+		WithStreamDecisions(false),
 		WithBaseURL("https://api.test.com"),
 	)
 
@@ -137,6 +139,7 @@ func TestClient_CallWithMessages_HTTPError(t *testing.T) {
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
 		WithAPIKey("test-key"),
+		WithStreamDecisions(false),
 	)
 
 	_, err := client.CallWithMessages("system", "user")
@@ -171,6 +174,7 @@ func TestClient_Retry_Success(t *testing.T) {
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
 		WithAPIKey("test-key"),
+		WithStreamDecisions(false),
 		WithMaxRetries(3),
 	)
 
@@ -219,6 +223,7 @@ func TestClient_Retry_NonRetryableError(t *testing.T) {
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
 		WithAPIKey("test-key"),
+		WithStreamDecisions(false),
 	)
 
 	_, err := client.CallWithMessages("system", "user")

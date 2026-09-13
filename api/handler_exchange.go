@@ -37,23 +37,26 @@ type SafeExchangeConfig struct {
 	LighterWalletAddr     string `json:"lighterWalletAddr"`     // LIGHTER wallet address (not sensitive)
 }
 
+// ExchangeConfigPayload is the per-exchange body for update requests.
+type ExchangeConfigPayload struct {
+	Enabled                 bool   `json:"enabled"`
+	APIKey                  string `json:"api_key"`
+	SecretKey               string `json:"secret_key"`
+	Passphrase              string `json:"passphrase"` // OKX specific
+	Testnet                 bool   `json:"testnet"`
+	HyperliquidWalletAddr   string `json:"hyperliquid_wallet_addr"`
+	HyperliquidUnifiedAcct  bool   `json:"hyperliquid_unified_account"` // Unified Account mode
+	AsterUser               string `json:"aster_user"`
+	AsterSigner             string `json:"aster_signer"`
+	AsterPrivateKey         string `json:"aster_private_key"`
+	LighterWalletAddr       string `json:"lighter_wallet_addr"`
+	LighterPrivateKey       string `json:"lighter_private_key"`
+	LighterAPIKeyPrivateKey string `json:"lighter_api_key_private_key"`
+	LighterAPIKeyIndex      int    `json:"lighter_api_key_index"`
+}
+
 type UpdateExchangeConfigRequest struct {
-	Exchanges map[string]struct {
-		Enabled                 bool   `json:"enabled"`
-		APIKey                  string `json:"api_key"`
-		SecretKey               string `json:"secret_key"`
-		Passphrase              string `json:"passphrase"` // OKX specific
-		Testnet                 bool   `json:"testnet"`
-		HyperliquidWalletAddr   string `json:"hyperliquid_wallet_addr"`
-		HyperliquidUnifiedAcct  bool   `json:"hyperliquid_unified_account"` // Unified Account mode
-		AsterUser               string `json:"aster_user"`
-		AsterSigner             string `json:"aster_signer"`
-		AsterPrivateKey         string `json:"aster_private_key"`
-		LighterWalletAddr       string `json:"lighter_wallet_addr"`
-		LighterPrivateKey       string `json:"lighter_private_key"`
-		LighterAPIKeyPrivateKey string `json:"lighter_api_key_private_key"`
-		LighterAPIKeyIndex      int    `json:"lighter_api_key_index"`
-	} `json:"exchanges"`
+	Exchanges map[string]ExchangeConfigPayload `json:"exchanges"`
 }
 
 // CreateExchangeRequest request structure for creating a new exchange account
@@ -207,7 +210,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 		// Don't return error here since exchange config was successfully updated to database
 	}
 
-	logger.Infof("✓ Exchange config updated: %+v", req.Exchanges)
+	logger.Infof("✓ Exchange config updated: %+v", SanitizeExchangeConfigForLog(req.Exchanges))
 	c.JSON(http.StatusOK, gin.H{"message": "Exchange configuration updated"})
 }
 
@@ -343,6 +346,7 @@ func (s *Server) handleGetSupportedExchanges(c *gin.Context) {
 	// Note: ID is empty for supported exchanges (they are templates, not actual accounts)
 	supportedExchanges := []SafeExchangeConfig{
 		{ExchangeType: "binance", Name: "Binance Futures", Type: "cex"},
+		{ExchangeType: "binance_stocks", Name: "Binance Stocks (US Equity)", Type: "stock"},
 		{ExchangeType: "bybit", Name: "Bybit Futures", Type: "cex"},
 		{ExchangeType: "okx", Name: "OKX Futures", Type: "cex"},
 		{ExchangeType: "gate", Name: "Gate.io Futures", Type: "cex"},

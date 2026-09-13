@@ -6,6 +6,8 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/store"
+	notify "nofx/telegram/notify"
+	"strings"
 	"time"
 )
 
@@ -13,13 +15,25 @@ import (
 func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	switch decision.Action {
 	case "open_long":
+		at.dropPendingEntry(decision.Symbol) // market entry supersedes any pending limit
 		return at.executeOpenLongWithRecord(decision, actionRecord)
 	case "open_short":
+		at.dropPendingEntry(decision.Symbol)
 		return at.executeOpenShortWithRecord(decision, actionRecord)
+	case "open_long_limit":
+		return at.executeOpenLimitLongWithRecord(decision, actionRecord)
+	case "open_short_limit":
+		return at.executeOpenLimitShortWithRecord(decision, actionRecord)
 	case "close_long":
 		return at.executeCloseLongWithRecord(decision, actionRecord)
 	case "close_short":
 		return at.executeCloseShortWithRecord(decision, actionRecord)
+	case "adjust_stop_loss":
+		return at.executeAdjustStopLossWithRecord(decision, actionRecord)
+	case "partial_close_long":
+		return at.executePartialCloseWithRecord(decision, actionRecord, "long")
+	case "partial_close_short":
+		return at.executePartialCloseWithRecord(decision, actionRecord, "short")
 	case "hold", "wait":
 		// No execution needed, just record
 		return nil
@@ -28,9 +42,30 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actio
 	}
 }
 
+
+// stampEntryPath tags the entry context (timing-TF trend) for path
+// attribution stats — rally-window shorts vs down-trend shorts vs future
+// bb_ride market entries must be separately measurable (user 09-13 #2).
+func (at *AutoTrader) stampEntryPath(record *store.DecisionAction, data *market.Data) {
+	tf, trend := finestSubHourTrend(data)
+	if tf == "" {
+		return
+	}
+	record.EntryPath = tf + ":" + trend
+}
+
 // executeOpenLongWithRecord executes open long position and records detailed information
 func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  📈 Open long: %s", decision.Symbol)
+
+	if marketData, err := market.GetWithExchange(decision.Symbol, at.exchange); err == nil {
+		at.stampEntryPath(actionRecord, marketData)
+	}
+
+	// Spread gate: thin books eat the entry edge (market fills pay the spread).
+	if blocked, reason := at.spreadBlocksOpen(decision.Symbol); blocked {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
+	}
 
 	// ⚠️ Get current positions for multiple checks
 	positions, err := at.trader.GetPositions()
@@ -76,11 +111,21 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		equity = availableBalance // Fallback to available balance
 	}
 
+	// [CODE ENFORCED] Entry risk gates: mandatory SL, SL/TP side sanity,
+	// min RR (dual-anchor), stop-distance window [ATR floor, wide cap].
+	if err := at.validateOpenRisk(decision, marketData.CurrentPrice, oneHourATRPct(marketData), fourHourATRPct(marketData)); err != nil {
+		return err
+	}
+
 	// [CODE ENFORCED] Position Value Ratio Check: position_value <= equity × ratio
 	adjustedPositionSize, wasCapped := at.enforcePositionValueRatio(decision.PositionSizeUSD, equity, decision.Symbol)
 	if wasCapped {
 		decision.PositionSizeUSD = adjustedPositionSize
 	}
+
+	// [CODE ENFORCED] Risk-based sizing: position value derives from the stop
+	// distance (equity × risk% ÷ dist%), clamped down when the AI oversizes.
+	decision.PositionSizeUSD = at.clampSizeToRisk(decision, decision.PositionSizeUSD, equity, marketData.CurrentPrice)
 
 	// ⚠️ Auto-adjust position size if insufficient margin
 	// Formula: totalRequired = positionSize/leverage + positionSize*0.001 + positionSize/leverage*0.01
@@ -103,6 +148,12 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		return err
 	}
 
+
+	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
+	// the prompt states the budget, this enforces it (audit 09-13 #2).
+	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
+	}
 	// Calculate quantity with adjusted position size
 	quantity := actualPositionSize / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
@@ -130,24 +181,31 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0)
 
-	// Record position opening time
+	// Record position opening time and stop-loss (drives the min-hold gate)
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+	at.SetRecordedStopLoss(decision.Symbol, "long", decision.StopLoss)
+	// Peak PnL is per-position state — a re-opened symbol must not inherit
+	// the previous trade's peak (stale peaks poison the drawdown monitors).
+	at.ClearPeakPnLCache(decision.Symbol, "long")
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		logger.Infof("  ⚠ Failed to set stop loss: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
-		logger.Infof("  ⚠ Failed to set take profit: %v", err)
-	}
-
+	fillPrice := orderFloat(order, "avgPrice")
+	at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
 	return nil
 }
 
 // executeOpenShortWithRecord executes open short position and records detailed information
 func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  📉 Open short: %s", decision.Symbol)
+
+	if marketData, err := market.GetWithExchange(decision.Symbol, at.exchange); err == nil {
+		at.stampEntryPath(actionRecord, marketData)
+	}
+
+	// Spread gate: thin books eat the entry edge (market fills pay the spread).
+	if blocked, reason := at.spreadBlocksOpen(decision.Symbol); blocked {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
+	}
 
 	// ⚠️ Get current positions for multiple checks
 	positions, err := at.trader.GetPositions()
@@ -193,11 +251,21 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		equity = availableBalance // Fallback to available balance
 	}
 
+	// [CODE ENFORCED] Entry risk gates: mandatory SL, SL/TP side sanity,
+	// min RR (dual-anchor), stop-distance window [ATR floor, wide cap].
+	if err := at.validateOpenRisk(decision, marketData.CurrentPrice, oneHourATRPct(marketData), fourHourATRPct(marketData)); err != nil {
+		return err
+	}
+
 	// [CODE ENFORCED] Position Value Ratio Check: position_value <= equity × ratio
 	adjustedPositionSize, wasCapped := at.enforcePositionValueRatio(decision.PositionSizeUSD, equity, decision.Symbol)
 	if wasCapped {
 		decision.PositionSizeUSD = adjustedPositionSize
 	}
+
+	// [CODE ENFORCED] Risk-based sizing: position value derives from the stop
+	// distance (equity × risk% ÷ dist%), clamped down when the AI oversizes.
+	decision.PositionSizeUSD = at.clampSizeToRisk(decision, decision.PositionSizeUSD, equity, marketData.CurrentPrice)
 
 	// ⚠️ Auto-adjust position size if insufficient margin
 	// Formula: totalRequired = positionSize/leverage + positionSize*0.001 + positionSize/leverage*0.01
@@ -220,6 +288,12 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		return err
 	}
 
+
+	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
+	// the prompt states the budget, this enforces it (audit 09-13 #2).
+	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
+	}
 	// Calculate quantity with adjusted position size
 	quantity := actualPositionSize / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
@@ -247,19 +321,55 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, marketData.CurrentPrice, decision.Leverage, 0)
 
-	// Record position opening time
+	// Record position opening time and stop-loss (drives the min-hold gate)
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
+	// Peak PnL is per-position state — see the open_long note above.
+	at.ClearPeakPnLCache(decision.Symbol, "short")
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		logger.Infof("  ⚠ Failed to set stop loss: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
-		logger.Infof("  ⚠ Failed to set take profit: %v", err)
-	}
-
+	fillPrice := orderFloat(order, "avgPrice")
+	at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
 	return nil
+}
+
+// orderFloat reads a float64 field from an exchange order response map.
+func orderFloat(m map[string]interface{}, key string) float64 {
+	if m == nil {
+		return 0
+	}
+	if v, ok := m[key].(float64); ok {
+		return v
+	}
+	return 0
+}
+
+// placeProtectiveOrders places the exchange-side stop-loss/take-profit algo
+// orders (closePosition mode on Binance) right after a successful open, so the
+// AI's planned SL/TP are enforced by the exchange instead of only living in
+// the decision log. The SL/TP are RE-ANCHORED to the actual fill price (the
+// RR gate validated distances at a pre-fill ticker — a market order can fill
+// away from it, silently compressing the take-profit distance). Zero prices
+// are skipped; placement failures raise an alert because the position would
+// otherwise run unprotected. quantity is used by exchange implementations that
+// place qty-sized trigger orders.
+func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) {
+	reanchorProtectivePrices(decision, refPrice, fillPrice)
+	if decision.StopLoss > 0 {
+		if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
+			logger.Infof("  ⚠ Failed to set stop loss for %s: %v", decision.Symbol, err)
+			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ %s 止损单设置失败</b>\n<code>%s</code>\n该仓位当前没有交易所止损保护，请人工关注！", notify.Escape(decision.Symbol), notify.Escape(err.Error())))
+		}
+	} else {
+		logger.Infof("  ⚠ AI decision for %s has no stop_loss, exchange stop not placed", decision.Symbol)
+	}
+	if decision.TakeProfit > 0 {
+		if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.TakeProfit); err != nil {
+			logger.Infof("  ⚠ Failed to set take profit for %s: %v", decision.Symbol, err)
+		}
+		side := strings.ToLower(positionSide)
+		at.recordOpenTakeProfit(decision.Symbol, side, decision.TakeProfit)
+	}
 }
 
 // executeCloseLongWithRecord executes close long position and records detailed information
@@ -322,6 +432,8 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice)
 
+	at.ClearRecordedStopLoss(decision.Symbol, "long")
+	at.ClearPeakPnLCache(decision.Symbol, "long")
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
 }
@@ -386,6 +498,8 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice)
 
+	at.ClearRecordedStopLoss(decision.Symbol, "short")
+	at.ClearPeakPnLCache(decision.Symbol, "short")
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
 }

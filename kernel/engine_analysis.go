@@ -6,6 +6,7 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/provider/nofxos"
 	"nofx/store"
 	"regexp"
 	"strings"
@@ -18,11 +19,16 @@ import (
 
 var (
 	// Safe regex: precisely match ```json code blocks
-	reJSONFence      = regexp.MustCompile(`(?is)` + "```json\\s*(\\[\\s*\\{.*?\\}\\s*\\])\\s*```")
-	reJSONArray      = regexp.MustCompile(`(?is)\[\s*\{.*?\}\s*\]`)
-	reArrayHead      = regexp.MustCompile(`^\[\s*\{`)
+	// The (?:\{.*?\}\s*,?\s*)* group allows empty decision arrays [] — a valid
+	// "no trades this cycle" verdict from the model.
+	reJSONFence      = regexp.MustCompile(`(?is)` + "```json\\s*(\\[\\s*(?:\\{.*?\\}\\s*,?\\s*)*\\])\\s*```")
+	reJSONArray      = regexp.MustCompile(`(?is)\[\s*(?:\{.*?\}\s*,?\s*)*\]`)
+	reArrayHead      = regexp.MustCompile(`^\[\s*(?:\{|\])`)
 	reArrayOpenSpace = regexp.MustCompile(`^\[\s+\{`)
 	reInvisibleRunes = regexp.MustCompile("[\u200B\u200C\u200D\uFEFF]")
+	// Placeholder values models emit for unknown numbers (?, ??, ？, N/A, —)
+	rePlaceholderVal = regexp.MustCompile(`:\s*("[^"]*")?[?？]+\s*|:\s*"(?:N/A|n/a|NA|—|–|TBD|unknown)"`)
+	reTrailingComma  = regexp.MustCompile(`,\s*(\}|\])`)
 
 	// XML tag extraction (supports any characters in reasoning chain)
 	reReasoningTag = regexp.MustCompile(`(?s)<reasoning>(.*?)</reasoning>`)
@@ -88,8 +94,13 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	// Ensure OITopDataMap is initialized
 	if ctx.OITopDataMap == nil {
 		ctx.OITopDataMap = make(map[string]*OITopData)
-		oiPositions, err := engine.nofxosClient.GetOITopPositions()
-		if err == nil {
+		// Vergex only (same source as the data page). NofxOS public keys were
+		// deprecated server-side, so there is no fallback.
+		var oiPositions []nofxos.OIPosition
+		if oiRanking, err := engine.vergexClient.GetOIRanking("1h", 20); err == nil {
+			oiPositions = oiRanking.TopPositions
+		}
+		if len(oiPositions) > 0 {
 			for _, pos := range oiPositions {
 				ctx.OITopDataMap[pos.Symbol] = &OITopData{
 					Rank:              pos.Rank,
@@ -132,6 +143,11 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		decision.UserPrompt = userPrompt
 		decision.AIRequestDurationMs = aiCallDuration.Milliseconds()
 		decision.RawResponse = aiResponse
+		// Anchor compliance: snap open_*_limit prices back to the
+		// pre-computed values the prompt showed when the model drifted.
+		if err == nil {
+			correctLimitAnchors(decision.Decisions, ctx.LimitAnchors, LimitAnchorTolerancePct)
+		}
 	}
 
 	if err != nil {
@@ -190,7 +206,8 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		positionSymbols[pos.Symbol] = true
 	}
 
-	const minOIThresholdMillions = 15.0 // 15M USD minimum open interest value
+	// Minimum OI value filter — per-strategy config, 0/unset = built-in 15M USD.
+	minOIThresholdMillions := config.CoinSource.EffectiveMinOIMillions()
 
 	for _, coin := range ctx.CandidateCoins {
 		if _, exists := ctx.MarketDataMap[coin.Symbol]; exists {
@@ -216,6 +233,14 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 			}
 		}
 
+		// XYZ tokenized listings (data.Symbol carries the "NAME:TICKER"
+		// exchange form) must never reach the decision layer — the candidate
+		// name was normalized (colon stripped) so the choke-point filter
+		// missed them; stop them here instead.
+		if strings.Contains(strings.ToUpper(data.Symbol), ":") {
+			logger.Infof("🚫 Excluded XYZ (tokenized) symbol from market data: %s (candidate %s)", data.Symbol, coin.Symbol)
+			continue
+		}
 		ctx.MarketDataMap[coin.Symbol] = data
 	}
 
@@ -273,6 +298,7 @@ func extractCoTTrace(response string) string {
 
 func extractDecisions(response string) ([]Decision, error) {
 	s := removeInvisibleRunes(response)
+	s = sanitizePlaceholders(s)
 	s = strings.TrimSpace(s)
 	s = fixMissingQuotes(s)
 
@@ -303,12 +329,27 @@ func extractDecisions(response string) ([]Decision, error) {
 
 	jsonContent := strings.TrimSpace(reJSONArray.FindString(jsonPart))
 	if jsonContent == "" {
-		logger.Infof("⚠️  [SafeFallback] AI didn't output JSON decision, entering safe wait mode")
-
-		cotSummary := jsonPart
-		if len(cotSummary) > 240 {
-			cotSummary = cotSummary[:240] + "..."
+		// Max-token truncation amputates the tail of the decision array: the
+		// model has usually already emitted several complete decision objects
+		// before the cut. Salvage them instead of discarding the whole
+		// response to safe-wait — the earlier coins' decisions are real
+		// analysis, and a truncated WAIT-heavy board is still directionally
+		// correct (positions beyond the cut just keep their default behavior).
+		if salvaged := salvageTruncatedDecisionArray(jsonPart); salvaged != nil {
+			logger.Warnf("⚠️  [TruncatedSalvage] Decision array was cut off mid-stream (max_tokens); recovered %d complete decisions, later coins default to no-action", len(salvaged))
+			return salvaged, nil
 		}
+
+		if strings.TrimSpace(jsonPart) == "" {
+			logger.Warnf("⚠️  [SafeFallback] AI response is empty after cleanup (%d raw bytes) — upstream returned blank content (check truncation/limits)", len(response))
+		} else {
+			logger.Infof("⚠️  [SafeFallback] AI didn't output JSON decision, entering safe wait mode")
+		}
+
+		// The model's conclusion sits at the END of its reasoning (the beginning
+		// is preamble like "Let me analyze this carefully...") — summarize the
+		// tail so users see the actual take-away.
+		cotSummary := summarizeTail(jsonPart, 240)
 
 		fallbackDecision := Decision{
 			Symbol:    "ALL",
@@ -332,6 +373,16 @@ func extractDecisions(response string) ([]Decision, error) {
 	}
 
 	return decisions, nil
+}
+
+// sanitizePlaceholders replaces placeholder values models emit for unknown
+// numbers (?, ??, full-width ？, "N/A", "—") with null, which json.Unmarshal
+// treats as "leave the field at zero" — the decision stays executable instead
+// of being rejected wholesale by strict JSON parsing.
+func sanitizePlaceholders(s string) string {
+	s = rePlaceholderVal.ReplaceAllString(s, ": null")
+	s = reTrailingComma.ReplaceAllString(s, "$1")
+	return s
 }
 
 func fixMissingQuotes(jsonStr string) string {
@@ -360,6 +411,11 @@ func fixMissingQuotes(jsonStr string) string {
 
 func validateJSONFormat(jsonStr string) error {
 	trimmed := strings.TrimSpace(jsonStr)
+
+	// An empty decision array [] is a valid "no trades this cycle" verdict.
+	if trimmed == "[]" {
+		return nil
+	}
 
 	if !reArrayHead.MatchString(trimmed) {
 		if strings.HasPrefix(trimmed, "[") && !strings.Contains(trimmed[:min(20, len(trimmed))], "{") {
@@ -398,4 +454,66 @@ func removeInvisibleRunes(s string) string {
 
 func compactArrayOpen(s string) string {
 	return reArrayOpenSpace.ReplaceAllString(strings.TrimSpace(s), "[{")
+}
+
+// salvageTruncatedDecisionArray recovers complete decision objects from a
+// response whose closing "]" was amputated by max-token truncation. It scans
+// the first JSON-looking array, tracks brace depth (string-aware, escape-safe),
+// and cuts after the last object that closed at depth 1 — then re-arms the
+// array and parses normally. Returns nil when nothing complete survives.
+func salvageTruncatedDecisionArray(s string) []Decision {
+	start := strings.Index(s, "[")
+	if start < 0 {
+		return nil
+	}
+	depth, lastComplete := 0, -1
+	inString, escaped := false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				lastComplete = i
+			} else if depth < 0 {
+				return nil // stray close brace — not a salvageable array
+			}
+		}
+	}
+	if lastComplete < 0 {
+		return nil
+	}
+	candidate := s[start:lastComplete+1] + "]"
+	if err := validateJSONFormat(candidate); err != nil {
+		return nil
+	}
+	var decisions []Decision
+	if err := json.Unmarshal([]byte(candidate), &decisions); err != nil {
+		return nil
+	}
+	return decisions
+}
+
+// summarizeTail returns the last n characters of s (with an ellipsis prefix
+// when truncated) — reasoning models put their conclusion at the end.
+func summarizeTail(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
 }

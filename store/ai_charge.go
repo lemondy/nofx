@@ -26,14 +26,14 @@ var modelPrices = map[string]float64{
 	"gpt-5.4-pro":       0.50,
 	"gpt-5.3":           0.01,
 	"gpt-5-mini":        0.005,
-	"claude-opus":        0.12,
-	"qwen-max":           0.01,
-	"qwen-plus":          0.005,
-	"qwen-turbo":         0.002,
-	"qwen-flash":         0.002,
-	"grok-4.1":           0.06,
-	"gemini-3.1-pro":     0.03,
-	"kimi-k2.5":          0.008,
+	"claude-opus":       0.12,
+	"qwen-max":          0.01,
+	"qwen-plus":         0.005,
+	"qwen-turbo":        0.002,
+	"qwen-flash":        0.002,
+	"grok-4.1":          0.06,
+	"gemini-3.1-pro":    0.03,
+	"kimi-k2.5":         0.008,
 }
 
 // GetModelPrice returns the price per call for a given model
@@ -145,23 +145,4 @@ func applyPeriodFilter(query *gorm.DB, period string) *gorm.DB {
 		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 		return query.Where("created_at >= ?", start)
 	}
-}
-
-// IsClaw402Config checks if a trader config uses claw402 payment provider
-func IsClaw402Config(aiModel string) bool {
-	return aiModel == "claw402"
-}
-
-// EstimateRunway estimates how many days the given USDC balance will last
-func EstimateRunway(usdcBalance float64, modelName string, scanIntervalMinutes int) (dailyCost float64, runwayDays float64) {
-	if scanIntervalMinutes <= 0 {
-		scanIntervalMinutes = 3
-	}
-	callsPerDay := float64(24*60) / float64(scanIntervalMinutes)
-	pricePerCall := GetModelPrice(modelName)
-	dailyCost = callsPerDay * pricePerCall
-	if dailyCost > 0 && usdcBalance > 0 {
-		runwayDays = usdcBalance / dailyCost
-	}
-	return dailyCost, runwayDays
 }

@@ -114,7 +114,8 @@ type OpenOrder struct {
 	Price        float64 `json:"price"`         // Order price (for limit orders)
 	StopPrice    float64 `json:"stop_price"`    // Trigger price (for stop orders)
 	Quantity     float64 `json:"quantity"`
-	Status       string  `json:"status"` // NEW
+	Status       string  `json:"status"`              // NEW
+	ClientID     string  `json:"client_id,omitempty"` // exchange client order ID — the ownership tag startup reconciliation relies on
 }
 
 // LimitOrderRequest represents a limit order request for grid trading

@@ -10,7 +10,6 @@ import (
 	"nofx/crypto"
 	"nofx/logger"
 	"nofx/security"
-	"nofx/wallet"
 
 	"github.com/gin-gonic/gin"
 )
@@ -68,6 +67,8 @@ func (s *Server) handleGetModelConfigs(c *gin.Context) {
 			{ID: "grok", Name: "Grok AI", Provider: "grok", Enabled: false},
 			{ID: "kimi", Name: "Kimi AI", Provider: "kimi", Enabled: false},
 			{ID: "minimax", Name: "MiniMax AI", Provider: "minimax", Enabled: false},
+			{ID: "glm", Name: "GLM AI", Provider: "glm", Enabled: false},
+			{ID: "custom", Name: "Custom API", Provider: "custom", Enabled: false},
 		}
 		c.JSON(http.StatusOK, defaultModels)
 		return
@@ -85,17 +86,6 @@ func (s *Server) handleGetModelConfigs(c *gin.Context) {
 			Enabled:         model.Enabled,
 			CustomAPIURL:    model.CustomAPIURL,
 			CustomModelName: model.CustomModelName,
-		}
-
-		if model.Provider == "claw402" {
-			if privateKey := strings.TrimSpace(model.APIKey.String()); privateKey != "" {
-				if walletAddress, addrErr := walletAddressFromPrivateKey(privateKey); addrErr == nil {
-					safeModel.WalletAddress = walletAddress
-					safeModel.BalanceUSDC = wallet.QueryUSDCBalanceStr(walletAddress)
-				} else {
-					logger.Warnf("⚠️ Failed to derive claw402 wallet address for model %s: %v", model.ID, addrErr)
-				}
-			}
 		}
 
 		safeModels[i] = safeModel
@@ -218,7 +208,8 @@ func (s *Server) handleGetSupportedModels(c *gin.Context) {
 		{"id": "grok", "name": "Grok (xAI)", "provider": "grok", "defaultModel": "grok-3-latest"},
 		{"id": "kimi", "name": "Kimi (Moonshot)", "provider": "kimi", "defaultModel": "moonshot-v1-auto"},
 		{"id": "minimax", "name": "MiniMax", "provider": "minimax", "defaultModel": "MiniMax-M2.7"},
-		{"id": "claw402", "name": "Claw402 (Base USDC)", "provider": "claw402", "defaultModel": "glm-5"},
+		{"id": "glm", "name": "GLM (Zhipu)", "provider": "glm", "defaultModel": "glm-5"},
+		{"id": "custom", "name": "Custom (OpenAI-compatible)", "provider": "custom", "defaultModel": ""},
 	}
 
 	c.JSON(http.StatusOK, supportedModels)

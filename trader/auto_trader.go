@@ -5,13 +5,11 @@ import (
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/mcp"
-	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
-	"nofx/wallet"
-	"github.com/ethereum/go-ethereum/crypto"
 	"nofx/trader/aster"
 	"nofx/trader/binance"
+	binance_stocks "nofx/trader/binance_stocks"
 	"nofx/trader/bitget"
 	"nofx/trader/bybit"
 	"nofx/trader/gate"
@@ -20,6 +18,7 @@ import (
 	"nofx/trader/kucoin"
 	"nofx/trader/lighter"
 	"nofx/trader/okx"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,8 +35,10 @@ type AutoTraderConfig struct {
 	ExchangeID string // Exchange account UUID (for multi-account support)
 
 	// Binance API configuration
-	BinanceAPIKey    string
-	BinanceSecretKey string
+	BinanceAPIKey          string
+	BinanceStocksAPIKey    string
+	BinanceStocksSecretKey string
+	BinanceSecretKey       string
 
 	// Bybit API configuration
 	BybitAPIKey    string
@@ -136,21 +137,39 @@ type AutoTrader struct {
 	lastResetTime         time.Time
 	stopUntil             time.Time
 	isRunning             bool
-	isRunningMutex        sync.RWMutex       // Mutex to protect isRunning flag
-	startTime             time.Time          // System start time
-	callCount             int                // AI call count
-	positionFirstSeenTime map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
-	stopMonitorCh         chan struct{}      // Used to stop monitoring goroutine
-	monitorWg             sync.WaitGroup     // Used to wait for monitoring goroutine to finish
-	peakPnLCache          map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
-	peakPnLCacheMutex     sync.RWMutex       // Cache read-write lock
-	lastBalanceSyncTime   time.Time          // Last balance sync time
-	userID                string             // User ID
-	gridState             *GridState         // Grid trading state (only used when StrategyType == "grid_trading")
-	claw402WalletAddr     string             // Claw402 wallet address (derived from private key at start)
-	consecutiveAIFailures int               // Consecutive AI call failures
-	safeMode              bool              // Safe mode: no new positions, protect existing ones
-	safeModeReason        string            // Why safe mode was activated
+	isRunningMutex        sync.RWMutex                // Mutex to protect isRunning flag
+	startTime             time.Time                   // System start time
+	callCount             int                         // AI call count
+	positionFirstSeenTime map[string]int64            // Position first seen time (symbol_side -> timestamp in milliseconds)
+	positionStopLoss      map[string]float64          // Recorded stop-loss per open position (symbol_side -> price), set at open, drives the min-hold hard-exit bypass
+	positionStopLossMutex sync.RWMutex                // Mutex protecting positionStopLoss
+	stopMonitorCh         chan struct{}               // Used to stop monitoring goroutine
+	monitorWg             sync.WaitGroup              // Used to wait for monitoring goroutine to finish
+	peakPnLCache          map[string]float64          // Peak profit cache (symbol -> peak P&L percentage)
+	peakPnLCacheMutex     sync.RWMutex                // Cache read-write lock
+	tpTrimDone            map[string]bool             // TP ladder: symbol_side -> 1/3 trim already taken
+	r1TrimDone            map[string]bool             // 1R profit lock: symbol_side -> 50% trim already taken
+	r1PriceCache          map[string]float64          // 1R lock: symbol_side -> resting trim price
+	r1OrderID             map[string]string           // 1R lock: symbol_side -> resting order id
+	partialTrimmed        map[string]float64          // AI partial_close: symbol_side -> cumulative fraction
+	tpTrimMutex           sync.Mutex
+	lastBalanceSyncTime   time.Time                   // Last balance sync time
+	userID                string                      // User ID
+	gridState             *GridState                  // Grid trading state (only used when StrategyType == "grid_trading")
+	consecutiveAIFailures int                         // Consecutive AI call failures
+	safeMode              bool                        // Safe mode: no new positions, protect existing ones
+	safeModeReason        string                      // Why safe mode was activated
+	authBlocked           bool                        // Binance auth/IP rejection (-2015/-2014): trading paused until operator fixes config
+	authBlockedReason     string                      // Why auth blocking was activated
+	gateNotify            map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
+	gateNotifyMu          sync.Mutex
+	pendingEntries        map[string]*pendingEntry // limit-entry state machine (symbol → order)
+	pendingEntriesMu      sync.RWMutex
+	volResizeLast         map[string]time.Time // per-position vol-resize cooldown
+	volResizeMu           sync.Mutex
+	tpRunnerDoneMap       map[string]bool    // TP-runner conversion done per position
+	openTP                map[string]float64 // recorded decision TP per open position (symbol_side)
+	openTPMu              sync.RWMutex
 }
 
 // NewAutoTrader creates an automatic trader
@@ -205,13 +224,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		mcpClient = mcp.New()
 	}
 
-	// Payment providers (claw402) ignore customURL
-	switch aiModel {
-	case "claw402":
-		mcpClient.SetAPIKey(apiKey, "", config.CustomModelName)
-	default:
-		mcpClient.SetAPIKey(apiKey, customURL, config.CustomModelName)
-	}
+	mcpClient.SetAPIKey(apiKey, customURL, config.CustomModelName)
 	logger.Infof("🤖 [%s] Using %s AI", config.Name, aiModel)
 
 	if config.CustomAPIURL != "" || config.CustomModelName != "" {
@@ -238,6 +251,13 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	case "binance":
 		logger.Infof("🏦 [%s] Using Binance Futures trading", config.Name)
 		trader = binance.NewFuturesTrader(config.BinanceAPIKey, config.BinanceSecretKey, userID)
+	case "binance_stocks":
+		logger.Infof("🏦 [%s] Using Binance Stocks (US equity) trading", config.Name)
+		stocksTrader := binance_stocks.NewStocksTrader(config.BinanceStocksAPIKey, config.BinanceStocksSecretKey)
+		if err := stocksTrader.EnsureDisclaimer(); err != nil {
+			logger.Warnf("⚠️ [%s] %v (the US equity disclaimer must be signed once before trading)", config.Name, err)
+		}
+		trader = stocksTrader
 	case "bybit":
 		logger.Infof("🏦 [%s] Using Bybit Futures trading", config.Name)
 		trader = bybit.NewBybitTrader(config.BybitAPIKey, config.BybitSecretKey)
@@ -333,13 +353,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	if config.StrategyConfig == nil {
 		return nil, fmt.Errorf("[%s] strategy not configured", config.Name)
 	}
-	// Pass claw402 wallet key to strategy engine so nofxos data requests
-	// are routed through claw402 (reuses the same wallet as AI calls)
-	var claw402Key string
-	if config.AIModel == "claw402" && config.CustomAPIKey != "" {
-		claw402Key = config.CustomAPIKey
-	}
-	strategyEngine := kernel.NewStrategyEngine(config.StrategyConfig, claw402Key)
+	strategyEngine := kernel.NewStrategyEngine(config.StrategyConfig)
 	logger.Infof("✓ [%s] Using strategy engine (strategy configuration loaded)", config.Name)
 
 	return &AutoTrader{
@@ -361,13 +375,28 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		callCount:             0,
 		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
+		positionStopLoss:      make(map[string]float64),
+		gateNotify:            make(map[string]*gateNotifyState),
+		pendingEntries:        make(map[string]*pendingEntry),
+		tpRunnerDoneMap:       make(map[string]bool),
+		openTP:                make(map[string]float64),
 		stopMonitorCh:         make(chan struct{}),
 		monitorWg:             sync.WaitGroup{},
 		peakPnLCache:          make(map[string]float64),
+		tpTrimDone:            make(map[string]bool),
+		r1TrimDone:            make(map[string]bool),
+		r1PriceCache:          make(map[string]float64),
+		r1OrderID:             make(map[string]string),
+		partialTrimmed:        make(map[string]float64),
 		peakPnLCacheMutex:     sync.RWMutex{},
 		lastBalanceSyncTime:   time.Now(),
 		userID:                userID,
 	}, nil
+}
+
+// InitialBalance exposes the configured starting capital for stats/reporting.
+func (at *AutoTrader) InitialBalance() float64 {
+	return at.initialBalance
 }
 
 // Run runs the automatic trading main loop
@@ -384,13 +413,17 @@ func (at *AutoTrader) Run() error {
 	logger.Infof("⚙️  Scan interval: %v", at.config.ScanInterval)
 	logger.Info("🤖 AI will make full decisions on leverage, position size, stop loss/take profit, etc.")
 
-	// Pre-launch checks for claw402 users
-	at.runPreLaunchChecks()
 	at.monitorWg.Add(1)
 	defer at.monitorWg.Done()
 
 	// Start drawdown monitoring
 	at.startDrawdownMonitor()
+
+	// Reconcile resting limit entries before the first decision cycle: a
+	// restart orphans the in-memory pending state — shadow rows re-claim live
+	// orders, offline fills get their protective orders placed, unowned
+	// tagged orders get cancelled (see auto_trader_reconcile.go).
+	at.ReconcilePendingEntries()
 
 	// Start Lighter order sync if using Lighter exchange
 	if at.exchange == "lighter" {
@@ -443,6 +476,8 @@ func (at *AutoTrader) Run() error {
 	// Start Binance order sync if using Binance exchange
 	if at.exchange == "binance" {
 		if binanceTrader, ok := at.trader.(*binance.FuturesTrader); ok && at.store != nil {
+			// Label for Telegram notifications: trader name + AI model.
+			binanceTrader.SetDisplayName(fmt.Sprintf("%s · %s", at.name, strings.ToUpper(at.aiModel)))
 			binanceTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
 			logger.Infof("🔄 [%s] Binance order+position sync enabled (every 30s)", at.name)
 		}
@@ -464,8 +499,10 @@ func (at *AutoTrader) Run() error {
 		}
 	}
 
-	ticker := time.NewTicker(at.config.ScanInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(nextAlignedWait(at.config.ScanInterval, time.Now()))
+	defer timer.Stop()
+	logger.Infof("🕒 [%s] 周期调度对齐整点: 每 %v,下次 %s",
+		at.name, at.config.ScanInterval, time.Now().Add(nextAlignedWait(at.config.ScanInterval, time.Now())).Format("15:04:05"))
 
 	// Check if this is a grid trading strategy
 	isGridStrategy := at.IsGridStrategy()
@@ -498,7 +535,7 @@ func (at *AutoTrader) Run() error {
 		}
 
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			if isGridStrategy {
 				if err := at.RunGridCycle(); err != nil {
 					logger.Infof("❌ Grid execution failed: %v", err)
@@ -508,6 +545,9 @@ func (at *AutoTrader) Run() error {
 					logger.Infof("❌ Execution failed: %v", err)
 				}
 			}
+			// Re-arm on the next wall-clock boundary — a cycle that overshoots
+			// a boundary skips it instead of bursting.
+			timer.Reset(nextAlignedWait(at.config.ScanInterval, time.Now()))
 		case <-at.stopMonitorCh:
 			logger.Infof("[%s] ⏹ Stop signal received, exiting automatic trading main loop", at.name)
 			return nil
@@ -515,6 +555,25 @@ func (at *AutoTrader) Run() error {
 	}
 
 	return nil
+}
+
+// nextAlignedWait returns how long to wait until the next wall-clock interval
+// boundary: boundaries are counted from the top of the hour (5m →
+// :00/:05/:10…, 7m → :00/:07/:14…), so trader restarts and UI starts land on
+// the shared grid instead of drifting with the start moment. Falls back to a
+// one-minute wait when the interval is non-positive.
+func nextAlignedWait(interval time.Duration, now time.Time) time.Duration {
+	if interval <= 0 {
+		return time.Minute
+	}
+	hourStart := now.Truncate(time.Hour)
+	next := hourStart.Add((now.Sub(hourStart)/interval + 1) * interval)
+	if wait := next.Sub(now); wait > 0 {
+		return wait
+	}
+	// now sits exactly on a boundary (the immediate first run covers it):
+	// aim at the following one.
+	return interval
 }
 
 // Stop stops the automatic trading
@@ -601,64 +660,4 @@ func calculatePnLPercentage(unrealizedPnl, marginUsed float64) float64 {
 		return (unrealizedPnl / marginUsed) * 100
 	}
 	return 0.0
-}
-
-// runPreLaunchChecks performs pre-launch checks for claw402 users (wallet balance, runway estimate)
-func (at *AutoTrader) runPreLaunchChecks() {
-	if !store.IsClaw402Config(at.config.AIModel) {
-		return
-	}
-
-	logger.Info("🔍 Running pre-launch checks (claw402)...")
-
-	// Derive wallet address from CustomAPIKey (which is the private key for claw402)
-	if at.config.CustomAPIKey != "" {
-		// Try to derive address using go-ethereum
-		addr := deriveWalletAddress(at.config.CustomAPIKey)
-		if addr != "" {
-			at.claw402WalletAddr = addr
-			logger.Infof("💳 [%s] Claw402 wallet: %s", at.name, addr)
-
-			// Query USDC balance
-			balance, err := wallet.QueryUSDCBalance(addr)
-			if err != nil {
-				logger.Warnf("⚠️ [%s] Could not query USDC balance: %v", at.name, err)
-			} else {
-				// Estimate runway
-				scanMinutes := int(at.config.ScanInterval.Minutes())
-				modelName := at.config.CustomModelName
-				if modelName == "" {
-					modelName = "deepseek"
-				}
-				dailyCost, runway := store.EstimateRunway(balance, modelName, scanMinutes)
-				logger.Infof("💰 [%s] USDC Balance: $%.2f | Daily AI cost: ~$%.2f | Runway: ~%.1f days",
-					at.name, balance, dailyCost, runway)
-
-				if balance < 1.0 {
-					logger.Warnf("⚠️ [%s] Low USDC balance! Consider topping up.", at.name)
-				}
-				if balance <= 0 {
-					logger.Errorf("🚨 [%s] USDC balance is ZERO — AI calls will fail!", at.name)
-				}
-			}
-		}
-	}
-
-	logger.Info("✅ Pre-launch checks complete")
-}
-
-// deriveWalletAddress derives an Ethereum address from a hex private key
-func deriveWalletAddress(privateKeyHex string) string {
-	// Remove 0x prefix if present
-	if len(privateKeyHex) > 2 && privateKeyHex[:2] == "0x" {
-		privateKeyHex = privateKeyHex[2:]
-	}
-
-	privateKey, err := crypto.HexToECDSA(privateKeyHex)
-	if err != nil {
-		return ""
-	}
-
-	address := crypto.PubkeyToAddress(privateKey.PublicKey)
-	return address.Hex()
 }

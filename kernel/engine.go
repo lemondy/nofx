@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"nofx/logger"
 	"nofx/market"
+	"nofx/market/breakout"
 	"nofx/provider/hyperliquid"
 	"nofx/provider/nofxos"
+	"nofx/provider/vergex"
 	"nofx/security"
 	"nofx/store"
 	"strings"
@@ -30,11 +31,14 @@ type PositionInfo struct {
 	Quantity         float64 `json:"quantity"`
 	Leverage         int     `json:"leverage"`
 	UnrealizedPnL    float64 `json:"unrealized_pnl"`
-	UnrealizedPnLPct float64 `json:"unrealized_pnl_pct"`
+	UnrealizedPnLPct float64 `json:"unrealized_pnl_pct"` // 保证金口径 ROI (含杠杆)
+	PriceReturnPct   float64 `json:"price_return_pct"`    // 标的价格涨跌幅 (不含杠杆) — ②拆开两种口径
 	PeakPnLPct       float64 `json:"peak_pnl_pct"` // Historical peak profit percentage
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
 	UpdateTime       int64   `json:"update_time"` // Position update timestamp (milliseconds)
+	StopLossPrice    float64 `json:"stop_loss_price"`    // Trigger price of the protective SL order currently on the exchange (0 = none found)
+	TakeProfitPrice  float64 `json:"take_profit_price"`  // Trigger price of the protective TP order currently on the exchange (0 = none found)
 }
 
 // AccountInfo account information
@@ -52,7 +56,22 @@ type AccountInfo struct {
 // CandidateCoin candidate coin (from coin pool)
 type CandidateCoin struct {
 	Symbol  string   `json:"symbol"`
-	Sources []string `json:"sources"` // Sources: "ai500" and/or "oi_top"
+	Sources []string `json:"sources"` // Sources: "ai500", "oi_top", "short_scan", ...
+	// Short-side metadata (short_scan sourced candidates only):
+	ShortScore      float64  `json:"short_score,omitempty"`       // 0-100 short suitability
+	ShortGrade      string   `json:"short_grade,omitempty"`       // strong / medium / weak
+	ShortReasons    []string `json:"short_reasons,omitempty"`     // topping confirmations printed
+	ShortFundingAnn float64  `json:"short_funding_ann,omitempty"` // funding annualized % AT SCAN TIME
+	ShortScanAtMs   int64    `json:"short_scan_at_ms,omitempty"`  // when the scanner snapshot was taken
+	ShortUniverse   string   `json:"short_universe,omitempty"`    // "gainer" | "near_high" (磨顶池)
+	// ScannerDirection is the direction the scanning engine concluded for
+	// this symbol: short_scan ⇒ "short"; piggy_dash ⇒ "up"/"down".
+	ScannerDirection string `json:"scanner_direction,omitempty"`
+	// ScannerConflict marks the symbol appearing in two scanners with
+	// OPPOSITE directional conclusions (short_scan short vs piggy_dash up)
+	// — surfaced as signal_conflict type SCANNER_VS_SCANNER so the model
+	// must resolve it instead of silently receiving both hints.
+	ScannerConflict bool   `json:"scanner_conflict,omitempty"`
 }
 
 // OITopData open interest growth top data (for AI decision reference)
@@ -96,6 +115,7 @@ type Context struct {
 	Account            AccountInfo                        `json:"account"`
 	Positions          []PositionInfo                     `json:"positions"`
 	CandidateCoins     []CandidateCoin                    `json:"candidate_coins"`
+	RulesText          string                             `json:"rules_text,omitempty"` // Review-derived trading rules (hard + soft lessons)
 	PromptVariant      string                             `json:"prompt_variant,omitempty"`
 	TradingStats       *TradingStats                      `json:"trading_stats,omitempty"`
 	RecentOrders       []RecentOrder                      `json:"recent_orders,omitempty"`
@@ -106,9 +126,95 @@ type Context struct {
 	OIRankingData      *nofxos.OIRankingData              `json:"-"` // Market-wide OI ranking data
 	NetFlowRankingData *nofxos.NetFlowRankingData         `json:"-"` // Market-wide fund flow ranking data
 	PriceRankingData   *nofxos.PriceRankingData           `json:"-"` // Market-wide price gainers/losers
+	SymbolStats        map[string]*TraderHistoryStat      `json:"-"` // per-symbol closed-trade record for this trader
+	LimitAnchors       map[string]*LimitAnchor            `json:"-"` // pre-computed open_*_limit anchors per symbol (prompt-build time)
 	BTCETHLeverage     int                                `json:"-"`
 	AltcoinLeverage    int                                `json:"-"`
 	Timeframes         []string                           `json:"-"`
+}
+
+// LimitAnchor carries the pre-computed limit-entry prices for one symbol —
+// exactly the values the model was shown as limit_buy_price / limit_sell_price.
+type LimitAnchor struct {
+	LimitBuy  float64 `json:"limit_buy"`
+	LimitSell float64 `json:"limit_sell"`
+}
+
+// ValidDecisionStages is the setup lifecycle enum (⑯): NO_SETUP = nothing
+// forming; WATCH = setup forming, conditions tracked; READY = conditions met,
+// waiting for the trigger; TRIGGERED = firing the entry/exit now;
+// IN_POSITION = already holding, managing; EXIT = leaving.
+var ValidDecisionStages = []string{
+	"NO_SETUP", "WATCH", "READY", "TRIGGERED", "IN_POSITION", "EXIT",
+}
+
+// ValidBlockingFactors is the closed vocabulary for Decision.BlockingFactors
+// — machine-aggregatable no-trade reasons (the Chinese free-text array stays
+// for humans). Anything else is stripped at validation.
+var ValidBlockingFactors = []string{
+	"RR_LOW", "ANCHOR_SUPPRESSED", "TIMING_GATE", "BREAKOUT_UNCONFIRMED",
+	"RANGE_NO_DIRECTION", "CONFLICT_UNRESOLVED", "CROWDING_HIGH",
+	"LOSS_STREAK_BAN", "VOL_EXTREME", "DATA_INSUFFICIENT", "MIN_SIZE",
+	"STRUCTURE_CONFLICT", "WAIT_PULLBACK",
+}
+
+// DeriveWaitStage derives the lifecycle stage of a wait decision from its
+// direction bias and blockers (schema-redundancy audit 09-13): no bias = no
+// directional embryo (NO_SETUP); a bias with only the soft "wait for price"
+// blocker = READY; any substantive blocker = WATCH. The model no longer
+// declares the stage on waits — one less field to keep consistent.
+func DeriveWaitStage(waitBias string, blockingFactors []string) string {
+	if waitBias == "" {
+		return "NO_SETUP"
+	}
+	for _, b := range blockingFactors {
+		if b != "WAIT_PULLBACK" {
+			return "WATCH"
+		}
+	}
+	return "READY"
+}
+
+// NormalizeBlockingFactors drops tags outside the vocabulary (keeps order,
+// dedupes) and returns the cleaned slice.
+// ValidManagementFlags is the closed vocabulary for Decision.ManagementFlags.
+var ValidManagementFlags = []string{
+	"BREAKEVEN_WARRANTED", "PARTIAL_WARRANTED", "TRAIL_SUFFICIENT",
+	"TREND_INTACT", "STRUCTURE_WEAKENING", "CHOP_RISK", "VOL_SPIKE", "EVENT_RISK",
+}
+
+// NormalizeManagementFlags drops tags outside the vocabulary (keeps order,
+// dedupes) and returns the cleaned slice.
+func NormalizeManagementFlags(tags []string) []string {
+	valid := map[string]bool{}
+	for _, v := range ValidManagementFlags {
+		valid[v] = true
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if valid[t] && !seen[t] {
+			out = append(out, t)
+			seen[t] = true
+		}
+	}
+	return out
+}
+
+func NormalizeBlockingFactors(tags []string) []string {
+	valid := map[string]bool{}
+	for _, v := range ValidBlockingFactors {
+		valid[v] = true
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if valid[t] && !seen[t] {
+			out = append(out, t)
+			seen[t] = true
+		}
+	}
+	return out
 }
 
 // Decision AI trading decision
@@ -133,6 +239,40 @@ type Decision struct {
 	Confidence int     `json:"confidence,omitempty"` // Confidence level (0-100)
 	RiskUSD    float64 `json:"risk_usd,omitempty"`   // Maximum USD risk
 	Reasoning  string  `json:"reasoning"`
+	// ⑮ Mandatory for hold/wait: WHY no trade (micro trend range, RR short,
+	// crowding, circuit breaker…). Powers the no-trade statistics loop.
+	NoTradeReasons []string `json:"no_trade_reason,omitempty"`
+	// ⑯ Setup lifecycle annotation for every decision (see ValidDecisionStages).
+	Stage string `json:"decision_stage,omitempty"`
+	// CloseFraction: partial_close_* 的平仓比例, (0, 0.5]——每仓位累计
+	// ≤75%(程序强制), 全平请用 close_*。
+	CloseFraction float64 `json:"close_fraction,omitempty"`
+	// EntryQuality is the model's self-assessed entry quality (0-100) for its
+	// preferred direction — the raw datum of the quality→outcome backtest
+	// dataset (user 2026-09-11: PF 0.76 means analysis quality is an
+	// unproven hypothesis; every decision must produce measurable data).
+	EntryQuality *int `json:"entry_quality,omitempty"`
+	// ManagementQuality is the model's self-assessed hold quality (0-100)
+	// on open-position decisions — the mirror of entry_quality for the
+	// position-management backtest ("did 'keep holding' have predictive
+	// value"). Required by prompt contract on IN_POSITION holds.
+	ManagementQuality *int `json:"management_quality,omitempty"`
+	// ManagementFlags names what the model judged about the open position,
+	// FIXED enum tags (ValidManagementFlags): when BREAKEVEN_WARRANTED /
+	// PARTIAL_WARRANTED the model should emit adjust_stop_loss /
+	// partial_close_* instead of hold — hold+flag means "judged, not acting
+	// now" (program ladder owns it).
+	ManagementFlags []string `json:"management_flags,omitempty"`
+	// BlockingFactors names the objective blockers with FIXED enum tags
+	// (ValidBlockingFactors) so no-trade reasons aggregate machine-wise —
+	// the free-text no_trade_reason stays for humans.
+	BlockingFactors []string `json:"blocking_factors,omitempty"`
+	// WaitBias separates "no valid entry" from "no directional edge" on wait
+	// decisions (user taxonomy 2026-09-11): "long"/"short" = direction
+	// identified, entry not compliant yet (WAIT_LONG/WAIT_SHORT); "" = no
+	// edge (true NO TRADE). Directional verdicts live here and in
+	// directional_score — never re-phrased inside no_trade_reason.
+	WaitBias string `json:"wait_bias,omitempty"`
 }
 
 // FullDecision AI's complete decision (including chain of thought)
@@ -183,44 +323,14 @@ type OIDeltaData struct {
 // StrategyEngine strategy execution engine
 type StrategyEngine struct {
 	config       *store.StrategyConfig
-	nofxosClient *nofxos.Client
+	vergexClient *vergex.Client
 }
 
 // NewStrategyEngine creates strategy execution engine.
-// claw402WalletKey is optional — if provided, nofxos data requests are routed through claw402.
-func NewStrategyEngine(config *store.StrategyConfig, claw402WalletKey ...string) *StrategyEngine {
-	// Create NofxOS client with API key from config
-	apiKey := config.Indicators.NofxOSAPIKey
-	if apiKey == "" {
-		apiKey = nofxos.DefaultAuthKey
-	}
-	client := nofxos.NewClient(nofxos.DefaultBaseURL, apiKey)
-
-	// If claw402 wallet key is provided (from trader's AI config), route through claw402
-	walletKey := ""
-	if len(claw402WalletKey) > 0 {
-		walletKey = claw402WalletKey[0]
-	}
-	if walletKey == "" {
-		walletKey = os.Getenv("CLAW402_WALLET_KEY")
-	}
-	if walletKey != "" {
-		claw402URL := os.Getenv("CLAW402_URL")
-		if claw402URL == "" {
-			claw402URL = "https://claw402.ai"
-		}
-		claw402Client, err := nofxos.NewClaw402DataClient(claw402URL, walletKey, &logger.MCPLogger{})
-		if err == nil {
-			client.SetClaw402(claw402Client)
-			logger.Infof("🔗 NofxOS data routed through claw402 (%s)", claw402URL)
-		} else {
-			logger.Warnf("⚠️ Failed to init claw402 data client: %v (using direct nofxos.ai)", err)
-		}
-	}
-
+func NewStrategyEngine(config *store.StrategyConfig) *StrategyEngine {
 	return &StrategyEngine{
 		config:       config,
-		nofxosClient: client,
+		vergexClient: vergex.NewClient(),
 	}
 }
 
@@ -330,6 +440,25 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// Empty list is a normal condition, return directly
 		return e.filterExcludedCoins(coins), nil
 
+	case "piggy_dash":
+		// 猪猪冲刺: strongest breakout/breakdown signals from the 5-min engine.
+		// Note: unlike ai500/oi_*, there is no separate enable gate — selecting
+		// this source type IS the switch.
+		coins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
+		if err != nil {
+			return nil, err
+		}
+		return e.filterExcludedCoins(coins), nil
+
+	case "short_scan":
+		// 做空扫描: top 24h gainers ranked by short-suitability score.
+		// Like piggy_dash, selecting this source type IS the switch.
+		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions())
+		if err != nil {
+			return nil, err
+		}
+		return e.filterExcludedCoins(coins), nil
+
 	case "hyper_all":
 		// All Hyperliquid perp coins
 		if !coinSource.UseHyperAll {
@@ -402,6 +531,21 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			}
 		}
 
+		// Short candidates: the same pre-scored "pump quality + contract
+		// overheating + topping confirmation" engine the short_scan source
+		// type uses. Without this the mixed pool is long-only (AI500/OI-top/
+		// piggy-dash are all up-side selectors) and the model drifts long.
+		if coinSource.UseShortScan {
+			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions())
+			if err != nil {
+				logger.Infof("⚠️  Failed to get short-scan coins: %v", err)
+			} else {
+				for _, coin := range shortCoins {
+					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "short_scan")
+				}
+			}
+		}
+
 		if coinSource.UseHyperAll {
 			hyperCoins, err := e.getHyperAllCoins()
 			if err != nil {
@@ -424,20 +568,76 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			}
 		}
 
-		for _, symbol := range coinSource.StaticCoins {
-			symbol = market.Normalize(symbol)
-			if _, exists := symbolSources[symbol]; !exists {
-				symbolSources[symbol] = []string{"static"}
+		if coinSource.UsePiggyDash {
+			piggyCoins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
+			if err != nil {
+				logger.Infof("⚠️  Failed to get Piggy Dash coins: %v", err)
 			} else {
-				symbolSources[symbol] = append(symbolSources[symbol], "static")
+				for _, coin := range piggyCoins {
+					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "piggy_dash")
+				}
 			}
 		}
 
+		if coinSource.UseShortScan {
+			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions())
+			if err != nil {
+				logger.Infof("⚠️  Failed to get Short Scan coins: %v", err)
+			} else {
+				for _, coin := range shortCoins {
+					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "short_scan")
+				}
+			}
+		}
+
+		// Static coins join the mixed pool when listed. Legacy configs
+		// (UseStatic unset) always included them; an explicit false opts out.
+		includeStatic := coinSource.UseStatic == nil || *coinSource.UseStatic
+		if includeStatic {
+			for _, symbol := range coinSource.StaticCoins {
+				symbol = market.Normalize(symbol)
+				if _, exists := symbolSources[symbol]; !exists {
+					symbolSources[symbol] = []string{"static"}
+				} else {
+					symbolSources[symbol] = append(symbolSources[symbol], "static")
+				}
+			}
+		}
+
+		// Short-scan metadata (score/grade/reasons) must survive the
+		// symbolSources collapse — it labels the direction hints in the prompt.
+		shortMeta := make(map[string]CandidateCoin)
+		if coinSource.UseShortScan {
+			if shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions()); err == nil {
+				for _, c := range shortCoins {
+					shortMeta[c.Symbol] = c
+				}
+			}
+		}
+		// Piggy-dash direction metadata survives the collapse too — the
+		// cross-scanner conflict check needs it (audit 2026-09-12 #11).
+		piggyMeta := make(map[string]CandidateCoin)
+		if coinSource.UsePiggyDash {
+			if piggyCoins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection); err == nil {
+				for _, c := range piggyCoins {
+					piggyMeta[c.Symbol] = c
+				}
+			}
+		}
 		for symbol, sources := range symbolSources {
-			candidates = append(candidates, CandidateCoin{
-				Symbol:  symbol,
-				Sources: sources,
-			})
+			c := CandidateCoin{Symbol: symbol, Sources: sources}
+			if meta, ok := shortMeta[symbol]; ok {
+				c.ShortScore = meta.ShortScore
+				c.ShortGrade = meta.ShortGrade
+				c.ShortReasons = meta.ShortReasons
+				c.ShortFundingAnn = meta.ShortFundingAnn
+				c.ShortUniverse = meta.ShortUniverse
+			}
+			if meta, ok := piggyMeta[symbol]; ok && meta.ScannerDirection != "" {
+				c.ScannerDirection = meta.ScannerDirection
+			}
+			c.ScannerConflict = hasScannerConflict(c.Sources, c.ScannerDirection)
+			candidates = append(candidates, c)
 		}
 		return e.filterExcludedCoins(candidates), nil
 
@@ -446,8 +646,43 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	}
 }
 
+// hasScannerConflict reports whether a candidate carries OPPOSITE
+// directional conclusions from the two scanners: short_scan is inherently
+// short; piggy_dash "up" against it is a SCANNER_VS_SCANNER conflict the
+// model must resolve explicitly (audit 2026-09-12 #11).
+func hasScannerConflict(sources []string, piggyDirection string) bool {
+	if piggyDirection != "up" {
+		return false
+	}
+	var shortScan, piggy bool
+	for _, s := range sources {
+		switch s {
+		case "short_scan":
+			shortScan = true
+		case "piggy_dash":
+			piggy = true
+		}
+	}
+	return shortScan && piggy
+}
+
 // filterExcludedCoins removes excluded coins from the candidates list
 func (e *StrategyEngine) filterExcludedCoins(candidates []CandidateCoin) []CandidateCoin {
+	// XYZ-prefixed symbols (Hyperliquid "xyz:" listings) are tokenized
+	// stock/commodity perps (SKHX, XAU, CL, ...). Their derivatives metrics
+	// (funding, long/short accounts) don't map to the crypto market context
+	// the strategies reason over — drop them at the single choke point every
+	// coin source passes through.
+	filtered0 := make([]CandidateCoin, 0, len(candidates))
+	for _, c := range candidates {
+		if strings.Contains(strings.ToUpper(c.Symbol), ":") {
+			logger.Infof("🚫 Excluded XYZ (tokenized stock/commodity) symbol: %s", c.Symbol)
+			continue
+		}
+		filtered0 = append(filtered0, c)
+	}
+	candidates = filtered0
+
 	if len(e.config.CoinSource.ExcludedCoins) == 0 {
 		return candidates
 	}
@@ -472,15 +707,179 @@ func (e *StrategyEngine) filterExcludedCoins(candidates []CandidateCoin) []Candi
 	return filtered
 }
 
+// getPiggyDashCoins returns the strongest breakout-engine signals (猪猪冲刺).
+// Data comes exclusively from the breakout scheduler, which computes
+// everything from Binance fapi endpoints (klines / OI / depth / funding) —
+// no third-party ranking feeds involved. On a cold start (server just
+// booted, first 5-min scan still running) we trigger a synchronous refresh
+// and re-read instead of falling back to external rankings.
+func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]CandidateCoin, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	symbols := breakout.DefaultScheduler().TopSymbolsWithDirection(limit, direction)
+	if len(symbols) == 0 {
+		logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")
+		breakout.DefaultScheduler().RefreshNow(60 * time.Second)
+		symbols = breakout.DefaultScheduler().TopSymbolsWithDirection(limit, direction)
+	}
+	if len(symbols) == 0 {
+		return nil, fmt.Errorf("piggy-dash scan produced no signals (Binance data unavailable)")
+	}
+	logger.Infof("🐷 Piggy-dash source: %d symbols (direction=%q) %v", len(symbols), direction, symbols)
+	var candidates []CandidateCoin
+	for _, row := range symbols {
+		candidates = append(candidates, CandidateCoin{
+			Symbol:           row.Symbol,
+			Sources:          []string{"piggy_dash"},
+			ScannerDirection: row.Direction,
+		})
+	}
+	return candidates, nil
+}
+
+// getShortScanCoins returns the top 24h gainers ranked by short-suitability
+// (做空扫描). Data is 100% Binance-derived: the 24h gainer list comes from
+// fapi ticker and each candidate is scored on RSI exhaustion, EMA extension,
+// upper-wick rejection, volume fade, funding crowding and OI build-up by
+// breakout.AnalyzeShort.
+// The strategy's min OI value threshold is applied BEFORE taking the top-N:
+// the full ranked list is fetched, low-OI symbols are dropped, then the
+// strongest remaining short setups fill the candidate slots.
+func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64) ([]CandidateCoin, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if minOIMillions <= 0 {
+		// Defensive: callers should pass coinSource.EffectiveMinOIMillions();
+		// this keeps the built-in floor for any direct call.
+		minOIMillions = store.DefaultMinOIValueMillions
+	}
+	// Full ranked universe (cached), so the OI filter happens before the
+	// top-N cut instead of wasting slots on coins that would be skipped later.
+	signals, scanAt, err := breakout.ScanShorts(breakout.ShortScanUniverse)
+	if err != nil {
+		return nil, fmt.Errorf("short scan failed: %w", err)
+	}
+	var candidates []CandidateCoin
+	var bestNearHigh *CandidateCoin // strongest grinding-top setup, reserved a slot
+	var skipped []string
+	for _, sig := range signals {
+		// The near_high universe passed a $30M/day liquidity prefilter at
+		// scan time; its OI is structurally lower (low OI = less squeeze
+		// fuel) and the prompt's funding-crowding exemption assumes these
+		// candidates actually reach the AI — so the gainer-side OI floor
+		// must not silently drop the whole universe (it did: every
+		// near_high symbol sat below 15M OI and never appeared).
+		if sig.Universe == "near_high" {
+			c := shortSignalToCandidate(sig, scanAt)
+			if bestNearHigh == nil || c.ShortScore > bestNearHigh.ShortScore {
+				bestNearHigh = &c
+			}
+			continue
+		}
+		// OI data unavailable (0) can't be judged — keep, matching the
+		// market-data layer which only filters when OI is present.
+		if sig.OIValueMillions > 0 && sig.OIValueMillions < minOIMillions {
+			skipped = append(skipped, fmt.Sprintf("%s(%.1fM)", sig.Symbol, sig.OIValueMillions))
+			continue
+		}
+		c := shortSignalToCandidate(sig, scanAt)
+		candidates = append(candidates, c)
+	}
+	// Reserve one slot for the strongest grinding-top setup when the gainer
+	// fill left no room for it — without this the near_high universe stays
+	// invisible to the AI in every cycle and its exemption is dead text.
+	// Audit 2026-09-12 #6: near_high symbols are OI-exempt (structurally
+	// lower liquidity, squeeze fuel) — the reserved slot requires at least a
+	// MEDIUM grade (score ≥ 55) so a marginal grinding top can't occupy a
+	// slot under the same bar as liquid gainers.
+	const nearHighReservedMinScore = 55
+	if bestNearHigh != nil && bestNearHigh.ShortScore < nearHighReservedMinScore {
+		logger.Infof("🩸 Grinding-top reserved slot skipped: %s score %.0f < %d (low-OI squeeze risk bar)",
+			bestNearHigh.Symbol, bestNearHigh.ShortScore, nearHighReservedMinScore)
+		bestNearHigh = nil
+	}
+	if bestNearHigh != nil {
+		hasIt := false
+		for _, c := range candidates {
+			if c.Symbol == bestNearHigh.Symbol {
+				hasIt = true
+				break
+			}
+		}
+		if !hasIt {
+			if len(candidates) >= limit {
+				candidates = candidates[:limit-1] // drop the weakest gainer for the reserved slot
+			}
+			logger.Infof("🩸 Reserved short-scan slot for grinding-top: %s (score %.0f)",
+				bestNearHigh.Symbol, bestNearHigh.ShortScore)
+			candidates = append(candidates, *bestNearHigh)
+		}
+	}
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	if len(skipped) > 0 {
+		logger.Infof("🩸 Short-scan OI filter (< %.1fM): skipped %d low-liquidity candidates %v",
+			minOIMillions, len(skipped), skipped)
+	}
+	var syms []string
+	for _, c := range candidates {
+		if c.ShortUniverse == "near_high" {
+			syms = append(syms, c.Symbol+"(near_high)")
+		} else {
+			syms = append(syms, c.Symbol)
+		}
+	}
+	logger.Infof("🩸 Short-scan source: %d symbols %v", len(candidates), syms)
+	return candidates, nil
+}
+
+// shortSignalToCandidate converts a scanner ShortSignal into a CandidateCoin.
+func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) CandidateCoin {
+	c := CandidateCoin{
+		Symbol:           sig.Symbol,
+		Sources:          []string{"short_scan"},
+		ScannerDirection: "short",
+		ShortScore:       sig.Score,
+		ShortGrade:      sig.Grade,
+		ShortFundingAnn: sig.FundingAnnualPct,
+		ShortScanAtMs:   scanAt.UnixMilli(),
+		ShortUniverse:   sig.Universe,
+	}
+	if sig.Universe == "near_high" {
+		c.ShortReasons = append(c.ShortReasons, "磨顶:距90日高点<5%")
+	}
+	// Keep the topping confirmations compact: the reasons list can be long.
+	if sig.BearishDiv4h {
+		c.ShortReasons = append(c.ShortReasons, "4h顶背离")
+	}
+	if sig.FakeBreakout {
+		c.ShortReasons = append(c.ShortReasons, "假突破")
+	}
+	if sig.MABreak {
+		c.ShortReasons = append(c.ShortReasons, "跌破EMA20")
+	}
+	if sig.FundingRollover {
+		c.ShortReasons = append(c.ShortReasons, "资金费率回落")
+	}
+	return c
+}
+
+// getAI500Coins returns AI500 picks from vergex trending — the same source as
+// the data page's "AI500 Picks" card (browser-relayed payloads).
+// Vergex is the only source: NofxOS public keys were deprecated server-side.
 func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 30
 	}
 
-	symbols, err := e.nofxosClient.GetTopRatedCoins(limit)
+	symbols, err := e.vergexClient.GetAI500Symbols(limit)
 	if err != nil {
 		return nil, err
 	}
+	logger.Infof("📊 AI500 (vergex) returned %d coins (limit %d)", len(symbols), limit)
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
@@ -492,22 +891,22 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 	return candidates, nil
 }
 
+// getOITopCoins returns the top OI-increase coins from vergex trending (1h
+// window, same ranking as the data page's Open Interest top list).
+// Vergex is the only source: NofxOS public keys were deprecated server-side.
 func (e *StrategyEngine) getOITopCoins(limit int) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	positions, err := e.nofxosClient.GetOITopPositions()
+	symbols, err := e.vergexClient.GetOITopSymbols(limit)
 	if err != nil {
 		return nil, err
 	}
+	logger.Infof("📊 OI top (vergex, 1h) returned %d coins (limit %d)", len(symbols), limit)
 
 	var candidates []CandidateCoin
-	for i, pos := range positions {
-		if i >= limit {
-			break
-		}
-		symbol := market.Normalize(pos.Symbol)
+	for _, symbol := range symbols {
 		candidates = append(candidates, CandidateCoin{
 			Symbol:  symbol,
 			Sources: []string{"oi_top"},
@@ -516,22 +915,22 @@ func (e *StrategyEngine) getOITopCoins(limit int) ([]CandidateCoin, error) {
 	return candidates, nil
 }
 
+// getOILowCoins returns the top OI-decrease coins from vergex trending (1h
+// window, same ranking as the data page's Open Interest low list).
+// Vergex is the only source: NofxOS public keys were deprecated server-side.
 func (e *StrategyEngine) getOILowCoins(limit int) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	positions, err := e.nofxosClient.GetOILowPositions()
+	symbols, err := e.vergexClient.GetOILowSymbols(limit)
 	if err != nil {
 		return nil, err
 	}
+	logger.Infof("📊 OI low (vergex, 1h) returned %d coins (limit %d)", len(symbols), limit)
 
 	var candidates []CandidateCoin
-	for i, pos := range positions {
-		if i >= limit {
-			break
-		}
-		symbol := market.Normalize(pos.Symbol)
+	for _, symbol := range symbols {
 		candidates = append(candidates, CandidateCoin{
 			Symbol:  symbol,
 			Sources: []string{"oi_low"},
@@ -672,77 +1071,15 @@ func extractJSONPath(data interface{}, path string) interface{} {
 	return current
 }
 
-// FetchQuantData fetches quantitative data for a single coin
+// FetchQuantData fetches the per-symbol quantitative block (price, price
+// changes, OI level/delta) from Binance Futures directly. Fund flow has no
+// Binance equivalent and is omitted; the data-page relay remains the source
+// for the AI500 coin list and NetFlow ranking.
 func (e *StrategyEngine) FetchQuantData(symbol string) (*QuantData, error) {
 	if !e.config.Indicators.EnableQuantData {
 		return nil, nil
 	}
-
-	// Use nofxos client with unified API key
-	include := "oi,price"
-	if e.config.Indicators.EnableQuantNetflow {
-		include = "netflow,oi,price"
-	}
-
-	nofxosData, err := e.nofxosClient.GetCoinData(symbol, include)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch quant data: %w", err)
-	}
-
-	if nofxosData == nil {
-		return nil, nil
-	}
-
-	// Convert nofxos.QuantData to kernel.QuantData
-	quantData := &QuantData{
-		Symbol:      nofxosData.Symbol,
-		Price:       nofxosData.Price,
-		PriceChange: nofxosData.PriceChange,
-	}
-
-	// Convert OI data
-	if nofxosData.OI != nil {
-		quantData.OI = make(map[string]*OIData)
-		for exchange, oiData := range nofxosData.OI {
-			if oiData != nil {
-				kData := &OIData{
-					CurrentOI: oiData.CurrentOI,
-				}
-				if oiData.Delta != nil {
-					kData.Delta = make(map[string]*OIDeltaData)
-					for dur, delta := range oiData.Delta {
-						if delta != nil {
-							kData.Delta[dur] = &OIDeltaData{
-								OIDelta:        delta.OIDelta,
-								OIDeltaValue:   delta.OIDeltaValue,
-								OIDeltaPercent: delta.OIDeltaPercent,
-							}
-						}
-					}
-				}
-				quantData.OI[exchange] = kData
-			}
-		}
-	}
-
-	// Convert Netflow data
-	if nofxosData.Netflow != nil {
-		quantData.Netflow = &NetflowData{}
-		if nofxosData.Netflow.Institution != nil {
-			quantData.Netflow.Institution = &FlowTypeData{
-				Future: nofxosData.Netflow.Institution.Future,
-				Spot:   nofxosData.Netflow.Institution.Spot,
-			}
-		}
-		if nofxosData.Netflow.Personal != nil {
-			quantData.Netflow.Personal = &FlowTypeData{
-				Future: nofxosData.Netflow.Personal.Future,
-				Spot:   nofxosData.Netflow.Personal.Spot,
-			}
-		}
-	}
-
-	return quantData, nil
+	return binanceQuantSnapshot(symbol)
 }
 
 // FetchQuantDataBatch batch fetches quantitative data
@@ -767,7 +1104,8 @@ func (e *StrategyEngine) FetchQuantDataBatch(symbols []string) map[string]*Quant
 	return result
 }
 
-// FetchOIRankingData fetches market-wide OI ranking data
+// FetchOIRankingData fetches market-wide OI ranking data from Binance
+// openInterestHist over the top-volume universe.
 func (e *StrategyEngine) FetchOIRankingData() *nofxos.OIRankingData {
 	indicators := e.config.Indicators
 	if !indicators.EnableOIRanking {
@@ -784,17 +1122,13 @@ func (e *StrategyEngine) FetchOIRankingData() *nofxos.OIRankingData {
 		limit = 10
 	}
 
-	logger.Infof("📊 Fetching OI ranking data (duration: %s, limit: %d)", duration, limit)
+	logger.Infof("📊 Fetching OI ranking data (duration: %s, limit: %d, source: binance)", duration, limit)
 
-	data, err := e.nofxosClient.GetOIRanking(duration, limit)
+	data, err := binanceOIRanking(context.Background(), duration, limit)
 	if err != nil {
 		logger.Warnf("⚠️  Failed to fetch OI ranking data: %v", err)
 		return nil
 	}
-
-	logger.Infof("✓ OI ranking data ready: %d top, %d low positions",
-		len(data.TopPositions), len(data.LowPositions))
-
 	return data
 }
 
@@ -817,7 +1151,9 @@ func (e *StrategyEngine) FetchNetFlowRankingData() *nofxos.NetFlowRankingData {
 
 	logger.Infof("💰 Fetching NetFlow ranking data (duration: %s, limit: %d)", duration, limit)
 
-	data, err := e.nofxosClient.GetNetFlowRanking(duration, limit)
+	// Vergex only (data page "Net Flow" card source). NofxOS public keys were
+	// deprecated server-side, so there is no fallback.
+	data, err := e.vergexClient.GetNetFlowRanking(duration, limit)
 	if err != nil {
 		logger.Warnf("⚠️  Failed to fetch NetFlow ranking data: %v", err)
 		return nil
@@ -831,6 +1167,7 @@ func (e *StrategyEngine) FetchNetFlowRankingData() *nofxos.NetFlowRankingData {
 }
 
 // FetchPriceRankingData fetches market-wide price ranking data (gainers/losers)
+// from Binance tickers and klines.
 func (e *StrategyEngine) FetchPriceRankingData() *nofxos.PriceRankingData {
 	indicators := e.config.Indicators
 	if !indicators.EnablePriceRanking {
@@ -847,16 +1184,13 @@ func (e *StrategyEngine) FetchPriceRankingData() *nofxos.PriceRankingData {
 		limit = 10
 	}
 
-	logger.Infof("📈 Fetching Price ranking data (durations: %s, limit: %d)", durations, limit)
+	logger.Infof("📈 Fetching Price ranking data (durations: %s, limit: %d, source: binance)", durations, limit)
 
-	data, err := e.nofxosClient.GetPriceRanking(durations, limit)
+	data, err := binancePriceRanking(context.Background(), durations, limit)
 	if err != nil {
 		logger.Warnf("⚠️  Failed to fetch Price ranking data: %v", err)
 		return nil
 	}
-
-	logger.Infof("✓ Price ranking data ready for %d durations", len(data.Durations))
-
 	return data
 }
 

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"nofx/wallet"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gin-gonic/gin"
@@ -17,14 +16,11 @@ type walletValidateRequest struct {
 }
 
 type walletValidateResponse struct {
-	Valid        bool   `json:"valid"`
-	Address      string `json:"address,omitempty"`
-	BalanceUSDC  string `json:"balance_usdc,omitempty"`
-	Claw402Status string `json:"claw402_status"` // "ok", "unreachable", "error"
-	Error        string `json:"error,omitempty"`
+	Valid       bool   `json:"valid"`
+	Address     string `json:"address,omitempty"`
+	BalanceUSDC string `json:"balance_usdc,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
-
-
 
 func (s *Server) handleWalletValidate(c *gin.Context) {
 	var req walletValidateRequest
@@ -80,18 +76,12 @@ func (s *Server) handleWalletValidate(c *gin.Context) {
 	// Query USDC balance (async-ish, but sequential for simplicity)
 	balanceStr := wallet.QueryUSDCBalanceStr(addrHex)
 
-	// Check claw402 health
-	claw402Status := checkClaw402Health()
-
 	c.JSON(http.StatusOK, walletValidateResponse{
-		Valid:        true,
-		Address:      addrHex,
-		BalanceUSDC:  balanceStr,
-		Claw402Status: claw402Status,
+		Valid:       true,
+		Address:     addrHex,
+		BalanceUSDC: balanceStr,
 	})
 }
-
-
 
 type walletGenerateResponse struct {
 	Address    string `json:"address"`
@@ -113,18 +103,4 @@ func (s *Server) handleWalletGenerate(c *gin.Context) {
 		Address:    address.Hex(),
 		PrivateKey: privKeyHex,
 	})
-}
-
-func checkClaw402Health() string {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("https://claw402.ai/health")
-	if err != nil {
-		return "unreachable"
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return "ok"
-	}
-	return "error"
 }

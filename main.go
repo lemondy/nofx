@@ -1,21 +1,26 @@
 package main
 
 import (
+	"context"
 	"nofx/api"
 	"nofx/auth"
 	"nofx/config"
 	"nofx/crypto"
-	"nofx/telemetry"
 	"nofx/logger"
 	"nofx/manager"
-	_ "nofx/mcp/payment"
 	_ "nofx/mcp/provider"
 	"nofx/store"
 	"nofx/telegram"
+	notify "nofx/telegram/notify"
+
+	"nofx/market/breakout"
+	"nofx/provider/vergex"
+	"nofx/telemetry"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -85,7 +90,8 @@ func main() {
 
 	// Set JWT secret
 	auth.SetJWTSecret(cfg.JWTSecret)
-	logger.Info("🔑 JWT secret configured")
+	auth.SetJWTTTL(cfg.JWTTTL)
+	logger.Infof("🔑 JWT secret configured, login TTL: %v (JWT_TTL_HOURS)", cfg.JWTTTL)
 
 	// WebSocket market monitor is NO LONGER USED
 	// All K-line data now comes from CoinAnk API instead of Binance WebSocket cache
@@ -97,6 +103,7 @@ func main() {
 
 	// Create TraderManager
 	traderManager := manager.NewTraderManager()
+	traderManager.SetStore(st)
 
 	// Load all traders from database to memory (may auto-start traders with IsRunning=true)
 	if err := traderManager.LoadTradersFromStore(st); err != nil {
@@ -119,10 +126,10 @@ func main() {
 				status = "✅ Running"
 			}
 			idShort := t.ID
-		if len(idShort) > 8 {
-			idShort = idShort[:8]
-		}
-		logger.Infof("  • %s [%s] %s - AI Model: %s, Exchange: %s",
+			if len(idShort) > 8 {
+				idShort = idShort[:8]
+			}
+			logger.Infof("  • %s [%s] %s - AI Model: %s, Exchange: %s",
 				t.Name, idShort, status, t.AIModelID, t.ExchangeID)
 		}
 	}
@@ -144,6 +151,16 @@ func main() {
 	// Start Telegram bot (if TELEGRAM_BOT_TOKEN is configured)
 	go telegram.Start(cfg, st, telegramReloadCh)
 
+	// Trading event notifications (order fills, risk alerts) via Telegram
+	notify.Init(st)
+
+	// Breakout/breakdown engine: refresh top signals every 5 minutes
+	breakout.StartDefault()
+
+	// Vergex headless relay: keep AI500/OI/NetFlow fresh via a real browser
+	// (Cloudflare blocks backend direct requests). Disable: VERGEX_HEADLESS=off
+	vergex.StartHeadlessRelay(context.Background(), time.Minute)
+
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -154,8 +171,31 @@ func main() {
 	<-quit
 	logger.Info("📴 Shutdown signal received, closing system...")
 
-	// Stop all traders
-	traderManager.StopAll()
+	// Second Ctrl+C force-exits: a graceful shutdown can legitimately take a
+	// few seconds (finishing order sync, closing DB), but the operator should
+	// never be held hostage by one.
+	go func() {
+		<-quit
+		logger.Warn("⛔ Forced exit (second interrupt)")
+		os.Exit(130)
+	}()
+
+	// Stop all traders — bounded wait so an in-flight AI call (up to 120s
+	// timeout × retries) cannot stall shutdown for minutes.
+	done := make(chan struct{})
+	go func() {
+		traderManager.StopAll()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		logger.Warn("⏱️ Graceful trader stop timed out (10s) — exiting anyway; in-flight cycle will be abandoned")
+	}
+
+	// Stop background engines
+	breakout.DefaultScheduler().Stop()
+
 	logger.Info("✅ System shut down safely")
 }
 

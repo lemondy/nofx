@@ -6,7 +6,9 @@ import (
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/store"
-	"nofx/wallet"
+	notify "nofx/telegram/notify"
+	"nofx/trader/binance"
+	"nofx/trader/types"
 	"strings"
 	"time"
 )
@@ -28,15 +30,31 @@ func (at *AutoTrader) runCycle() error {
 		return nil
 	}
 
-	// Check USDC balance periodically for claw402 users (every 10 cycles)
-	if at.callCount%10 == 0 && store.IsClaw402Config(at.config.AIModel) {
-		at.checkClaw402Balance()
-	}
+	// Process limit-entry pending orders first: finalize fills, cancel
+	// expired/invalidated ones — their outcome shapes this cycle's context.
+	at.processPendingEntries()
+
+	// Volatility-targeted rescale (80/120 band) + rule-based trailing stop.
+	at.processVolTargetAndTrailing()
+
+	// Per-cycle protection watchdog: re-place missing SL/TP orders at the
+	// recorded plan prices (manual cancels, exchange hiccups, missed legs).
+	at.processProtectionWatchdog()
 
 	// Create decision record
 	record := &store.DecisionRecord{
 		ExecutionLog: []string{},
 		Success:      true,
+	}
+
+	// 0.5 Binance auth/IP rejection: configuration problem, not transient —
+	// pause all trading (including AI calls) until the operator fixes it.
+	if at.authBlocked {
+		logger.Errorf("🚨 [%s] Auth/IP blocked: %s — skipping cycle #%d. Add the logged egress IP to the Binance API key whitelist and restart the trader.",
+			at.name, at.authBlockedReason, at.callCount)
+		record.ErrorMessage = fmt.Sprintf("Auth/IP blocked: %s", at.authBlockedReason)
+		at.saveDecision(record)
+		return nil
 	}
 
 	// 1. Check if trading needs to be stopped
@@ -132,6 +150,7 @@ func (at *AutoTrader) runCycle() error {
 		if at.consecutiveAIFailures >= 3 && !at.safeMode {
 			at.safeMode = true
 			at.safeModeReason = fmt.Sprintf("AI failed %d consecutive times: %v", at.consecutiveAIFailures, err)
+			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>🛡️ 已进入安全模式</b>\nAI 连续失败 %d 次：不再开新仓，现有持仓按原止损保护，AI 恢复后自动解除。\n<i>%s</i>", at.consecutiveAIFailures, notify.Escape(err.Error())))
 			logger.Errorf("🛡️ [%s] SAFE MODE ACTIVATED — AI failed %d times in a row. No new positions will be opened. Existing positions are protected with current stop-loss settings.",
 				at.name, at.consecutiveAIFailures)
 			logger.Errorf("🛡️ [%s] Reason: %v", at.name, err)
@@ -227,7 +246,7 @@ func (at *AutoTrader) runCycle() error {
 	if at.safeMode {
 		filtered := make([]kernel.Decision, 0)
 		for _, d := range sortedDecisions {
-			if d.Action == "open_long" || d.Action == "open_short" {
+			if d.Action == "open_long" || d.Action == "open_short" || d.Action == "open_long_limit" || d.Action == "open_short_limit" {
 				logger.Warnf("🛡️ [%s] Safe mode: BLOCKED %s %s (no new positions allowed)", at.name, d.Action, d.Symbol)
 				continue
 			}
@@ -237,6 +256,17 @@ func (at *AutoTrader) runCycle() error {
 		if len(sortedDecisions) == 0 {
 			logger.Infof("🛡️ [%s] Safe mode: all decisions were open positions, nothing to execute", at.name)
 		}
+	}
+
+	// Pre-trade rule check: evaluate review-derived rules before execution.
+	// Hard rules with action=block reject the decision outright.
+	sortedDecisions = at.preTradeRuleCheck(sortedDecisions, ctx.Account.TotalEquity)
+
+	// Hard risk gates the AI cannot override: 1d-uptrend short block and the
+	// minimum holding period lock on closes (both strategy risk_control driven).
+	sortedDecisions = at.applyHardRiskGates(sortedDecisions, ctx)
+	if len(sortedDecisions) == 0 {
+		logger.Infof("🛡️ [%s] All decisions filtered by hard risk gates", at.name)
 	}
 
 	// Execute decisions and record results
@@ -266,21 +296,86 @@ func (at *AutoTrader) runCycle() error {
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
+			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>❌ %s %s 执行失败</b>\n<code>%s</code>", notify.Escape(d.Symbol), d.Action, notify.Escape(err.Error())))
+			// A Binance auth/IP rejection during order execution pauses the
+			// trader immediately — retrying orders with a rejected key is noise.
+			if binance.IsAuthOrIPError(err) && !at.authBlocked {
+				at.authBlocked = true
+				at.authBlockedReason = err.Error()
+				notify.Notify("ALERT", at.name, "<b>🚨 Binance 认证/IP 校验失败，交易已暂停</b>\n请把日志中的出口 IP 加入 API Key 白名单后重启交易器。")
+			}
 			actionRecord.Error = err.Error()
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s failed: %v", d.Symbol, d.Action, err))
 		} else {
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s succeeded", d.Symbol, d.Action))
+			// Fill notification is handled centrally by the order-sync layer
+			// (covers exchange-side stops and manual closes too).
 			// Brief delay after successful execution
 			time.Sleep(1 * time.Second)
 		}
 
 		record.Decisions = append(record.Decisions, actionRecord)
+
+		// Quality→outcome dataset: one row per decision, executed or not.
+		if at.store != nil {
+			direction := "none"
+			switch {
+			case d.Action == "open_long" || d.Action == "open_long_limit" || d.Action == "close_short":
+				direction = "long"
+			case d.Action == "open_short" || d.Action == "open_short_limit" || d.Action == "close_long":
+				direction = "short"
+			case d.WaitBias == "long" || d.WaitBias == "short":
+				direction = d.WaitBias
+			}
+			quality := -1
+			if d.EntryQuality != nil {
+				quality = *d.EntryQuality
+			}
+			mgmtQuality := -1
+			if d.ManagementQuality != nil {
+				mgmtQuality = *d.ManagementQuality
+			}
+			if err := at.store.EntryAssessment().Insert(&store.EntryAssessment{
+				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
+				Symbol: d.Symbol, Direction: direction, Action: d.Action,
+				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,
+				BlockingFactors: store.MarshalBlockingFactors(d.BlockingFactors),
+				MgmtQuality:     mgmtQuality,
+				MgmtFlags:       store.MarshalBlockingFactors(d.ManagementFlags),
+				EntryPath:       actionRecord.EntryPath,
+				Price:           d.Price,
+			}); err != nil {
+				logger.Infof("⚠️ [%s] entry assessment insert failed (%s): %v", at.name, d.Symbol, err)
+			}
+		}
+	}
+
+	// Chain-of-thought push: whenever the AI proposed at least one actionable
+	// decision, send its reasoning to Telegram with per-decision outcomes —
+	// all-wait cycles stay silent to keep the chat signal-dense.
+	if cotHasActionable(aiDecision.Decisions) {
+		summaries := make([]notify.DecisionSummary, 0, len(aiDecision.Decisions))
+		for _, s := range buildCoTSummaries(aiDecision.Decisions, record.Decisions) {
+			s.Detail = cotClamp(s.Detail, 120)
+			s.ErrText = cotClamp(s.ErrText, 200)
+			summaries = append(summaries, s)
+		}
+		notify.SendCoT(notify.FormatCoT(at.name, at.callCount, at.aiModel, aiDecision.CoTTrace, summaries))
 	}
 
 	// 9. Save decision record
 	if err := at.saveDecision(record); err != nil {
 		logger.Infof("⚠ Failed to save decision record: %v", err)
+	}
+
+	// 10. Sync trade journal (create review entries for newly closed positions)
+	if at.store != nil {
+		if created, err := at.store.TradeJournal().SyncFromPositions(at.id); err != nil {
+			logger.Infof("⚠ [%s] Failed to sync trade journal: %v", at.name, err)
+		} else if created > 0 {
+			logger.Infof("📓 [%s] Trade journal synced: %d new entries pending review", at.name, created)
+		}
 	}
 
 	return nil
@@ -291,6 +386,11 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	// 1. Get account information
 	balance, err := at.trader.GetBalance()
 	if err != nil {
+		if binance.IsAuthOrIPError(err) && !at.authBlocked {
+			at.authBlocked = true
+			at.authBlockedReason = err.Error()
+			notify.Notify("ALERT", at.name, "<b>🚨 Binance 认证/IP 校验失败，交易已暂停</b>\n请把日志中的出口 IP 加入 API Key 白名单后重启交易器。")
+		}
 		return nil, fmt.Errorf("failed to get account balance: %w", err)
 	}
 
@@ -321,11 +421,21 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	// 2. Get position information
 	positions, err := at.trader.GetPositions()
 	if err != nil {
+		if binance.IsAuthOrIPError(err) && !at.authBlocked {
+			at.authBlocked = true
+			at.authBlockedReason = err.Error()
+			notify.Notify("ALERT", at.name, "<b>🚨 Binance 认证/IP 校验失败，交易已暂停</b>\n请把日志中的出口 IP 加入 API Key 白名单后重启交易器。")
+		}
 		return nil, fmt.Errorf("failed to get positions: %w", err)
 	}
 
 	var positionInfos []kernel.PositionInfo
 	totalMarginUsed := 0.0
+
+	// Protective SL/TP trigger prices come from the exchange's open orders
+	// (authoritative: reflects trailing-stop moves and survives restarts,
+	// unlike the in-memory positionStopLoss/TP maps)
+	protectionOrderCache := make(map[string][]types.OpenOrder)
 
 	// Current position key set (for cleaning up closed position records)
 	currentPositionKeys := make(map[string]bool)
@@ -358,6 +468,16 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 
 		// Calculate P&L percentage (based on margin, considering leverage)
 		pnlPct := calculatePnLPercentage(unrealizedPnl, marginUsed)
+		// ② price return (no leverage) vs margin ROI — two different numbers,
+		// both rendered so the model never has to guess the definition.
+		priceReturnPct := 0.0
+		if entryPrice > 0 {
+			if side == "long" {
+				priceReturnPct = (markPrice - entryPrice) / entryPrice * 100
+			} else {
+				priceReturnPct = (entryPrice - markPrice) / entryPrice * 100
+			}
+		}
 
 		// Get position open time from exchange (preferred) or fallback to local tracking
 		posKey := symbol + "_" + side
@@ -382,6 +502,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		if updateTime == 0 {
 			if _, exists := at.positionFirstSeenTime[posKey]; !exists {
 				at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+				// First sighting of this posKey — any cached peak belongs to
+				// an earlier incarnation (e.g. an externally opened trade
+				// reusing the symbol); drop it so the monitor re-seeds fresh.
+				at.ClearPeakPnLCache(symbol, side)
 			}
 			updateTime = at.positionFirstSeenTime[posKey]
 		}
@@ -390,6 +514,33 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		at.peakPnLCacheMutex.RLock()
 		peakPnlPct := at.peakPnLCache[posKey]
 		at.peakPnLCacheMutex.RUnlock()
+
+		// Look up the SL/TP orders currently protecting this position on the exchange
+		stopLossPrice, takeProfitPrice := 0.0, 0.0
+		orders, cached := protectionOrderCache[symbol]
+		if !cached {
+			orders, err = at.trader.GetOpenOrders(symbol)
+			if err != nil {
+				logger.Infof("⚠️ [%s] Failed to get open orders for %s: %v", at.name, symbol, err)
+			}
+			protectionOrderCache[symbol] = orders
+		}
+		posSideUpper := strings.ToUpper(side) // "LONG"/"SHORT"
+		for _, o := range orders {
+			if o.PositionSide != "" && o.PositionSide != posSideUpper {
+				continue
+			}
+			switch o.Type {
+			case "STOP_MARKET", "STOP":
+				if o.StopPrice > 0 {
+					stopLossPrice = o.StopPrice
+				}
+			case "TAKE_PROFIT_MARKET", "TAKE_PROFIT":
+				if o.StopPrice > 0 {
+					takeProfitPrice = o.StopPrice
+				}
+			}
+		}
 
 		positionInfos = append(positionInfos, kernel.PositionInfo{
 			Symbol:           symbol,
@@ -400,10 +551,13 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			Leverage:         leverage,
 			UnrealizedPnL:    unrealizedPnl,
 			UnrealizedPnLPct: pnlPct,
+			PriceReturnPct:   priceReturnPct,
 			PeakPnLPct:       peakPnlPct,
 			LiquidationPrice: liquidationPrice,
 			MarginUsed:       marginUsed,
 			UpdateTime:       updateTime,
+			StopLossPrice:    stopLossPrice,
+			TakeProfitPrice:  takeProfitPrice,
 		})
 	}
 
@@ -411,6 +565,15 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	for key := range at.positionFirstSeenTime {
 		if !currentPositionKeys[key] {
 			delete(at.positionFirstSeenTime, key)
+			// Drop the recorded stop-loss along with the position
+			at.positionStopLossMutex.Lock()
+			delete(at.positionStopLoss, key)
+			at.positionStopLossMutex.Unlock()
+			// And the peak-PnL cache — otherwise the next position on the
+			// same symbol_side inherits a dead trade's peak.
+			at.peakPnLCacheMutex.Lock()
+			delete(at.peakPnLCache, key)
+			at.peakPnLCacheMutex.Unlock()
 		}
 	}
 
@@ -465,7 +628,23 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			PositionCount:    len(positionInfos),
 		},
 		Positions:      positionInfos,
+		SymbolStats:    at.loadSymbolStats(),
 		CandidateCoins: candidateCoins,
+	}
+
+	// 6.5 Inject review-derived trading rules into AI context
+	if at.store != nil {
+		if rules, err := at.store.Rule().GetEnabledRules(at.id); err == nil && len(rules) > 0 {
+			ctx.RulesText = kernel.BuildRulesPromptText(rules)
+			hardCount := 0
+			for _, r := range rules {
+				if r.RuleType == "hard" {
+					hardCount++
+				}
+			}
+			logger.Infof("📏 [%s] Injected %d review rules into AI context (%d hard, %d soft)",
+				at.name, len(rules), hardCount, len(rules)-hardCount)
+		}
 	}
 
 	// 7. Add recent closed trades (if store is available)
@@ -501,7 +680,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			}
 		}
 		// Get trading statistics for AI context
-		stats, err := at.store.Position().GetFullStats(at.id)
+		stats, err := at.store.Position().GetFullStats(at.id, at.initialBalance)
 		if err != nil {
 			logger.Infof("⚠️ [%s] Failed to get trading stats: %v", at.name, err)
 		} else if stats == nil {
@@ -509,6 +688,26 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		} else if stats.TotalTrades == 0 {
 			logger.Infof("⚠️ [%s] GetFullStats returned 0 trades (traderID=%s)", at.name, at.id)
 		} else {
+			maxDD := stats.MaxDrawdownPct
+			// Prefer the real equity curve when available: it includes
+			// unrealized swings that closed-trade PnL never shows.
+			if snaps, err := at.store.Equity().GetLatest(at.id, 2000); err == nil && len(snaps) > 1 {
+				peak := snaps[0].TotalEquity
+				var dd float64
+				for _, sn := range snaps {
+					if sn.TotalEquity > peak {
+						peak = sn.TotalEquity
+					}
+					if peak > 0 {
+						if d := (peak - sn.TotalEquity) / peak * 100; d > dd {
+							dd = d
+						}
+					}
+				}
+				if dd > 0 {
+					maxDD = dd
+				}
+			}
 			ctx.TradingStats = &kernel.TradingStats{
 				TotalTrades:    stats.TotalTrades,
 				WinRate:        stats.WinRate,
@@ -517,7 +716,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				TotalPnL:       stats.TotalPnL,
 				AvgWin:         stats.AvgWin,
 				AvgLoss:        stats.AvgLoss,
-				MaxDrawdownPct: stats.MaxDrawdownPct,
+				MaxDrawdownPct: maxDD,
 			}
 			logger.Infof("📈 [%s] Trading stats: %d trades, %.1f%% win rate, PF=%.2f, Sharpe=%.2f, DD=%.1f%%",
 				at.name, stats.TotalTrades, stats.WinRate, stats.ProfitFactor, stats.SharpeRatio, stats.MaxDrawdownPct)
@@ -592,7 +791,7 @@ func sortDecisionsByPriority(decisions []kernel.Decision) []kernel.Decision {
 		switch action {
 		case "close_long", "close_short":
 			return 1 // Highest priority: close positions first
-		case "open_long", "open_short":
+		case "open_long", "open_short", "open_long_limit", "open_short_limit":
 			return 2 // Second priority: open positions later
 		case "hold", "wait":
 			return 3 // Lowest priority: wait
@@ -617,35 +816,26 @@ func sortDecisionsByPriority(decisions []kernel.Decision) []kernel.Decision {
 	return sorted
 }
 
-// checkClaw402Balance checks USDC balance and logs warnings if low
-func (at *AutoTrader) checkClaw402Balance() {
-	scanMinutes := int(at.config.ScanInterval.Minutes())
-	if scanMinutes <= 0 {
-		scanMinutes = 3
+// loadSymbolStats converts the store's per-symbol closed-trade record into the
+// kernel-side map injected into every symbol's signal block.
+func (at *AutoTrader) loadSymbolStats() map[string]*kernel.TraderHistoryStat {
+	if at.store == nil {
+		return nil
 	}
-	dailyCost, _ := store.EstimateRunway(1.0, at.config.CustomModelName, scanMinutes)
-	logger.Infof("💰 [%s] Estimated daily AI cost: ~$%.2f (model: %s, interval: %dm)",
-		at.name, dailyCost, at.config.CustomModelName, scanMinutes)
-
-	if at.claw402WalletAddr != "" {
-		balance, err := wallet.QueryUSDCBalance(at.claw402WalletAddr)
-		if err != nil {
-			logger.Warnf("⚠️ [%s] Failed to query USDC balance: %v", at.name, err)
-			return
-		}
-
-		if balance < 1.0 {
-			logger.Warnf("⚠️ [%s] Low USDC balance: $%.2f — AI may stop soon!", at.name, balance)
-		}
-		if balance <= 0 {
-			logger.Errorf("🚨 [%s] USDC balance is ZERO — AI calls will fail!", at.name)
-		}
-
-		runway := float64(0)
-		if dailyCost > 0 {
-			runway = balance / dailyCost
-		}
-		logger.Infof("💰 [%s] USDC Balance: $%.2f | Daily AI cost: ~$%.2f | Runway: ~%.1f days",
-			at.name, balance, dailyCost, runway)
+	stats, err := at.store.Position().GetSymbolStats(at.id, 200)
+	if err != nil {
+		logger.Infof("⚠️ [%s] Failed to load symbol stats: %v", at.name, err)
+		return nil
 	}
+	out := make(map[string]*kernel.TraderHistoryStat, len(stats))
+	for i := range stats {
+		s := stats[i]
+		out[strings.ToUpper(s.Symbol)] = &kernel.TraderHistoryStat{
+			ClosedTrades: s.TotalTrades,
+			Wins:         s.WinTrades,
+			WinRatePct:   s.WinRate,
+			RealizedPnL:  s.TotalPnL,
+		}
+	}
+	return out
 }

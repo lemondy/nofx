@@ -3,11 +3,74 @@ package kernel
 import (
 	"fmt"
 	"nofx/logger"
+	"nofx/market"
+	"strings"
 )
 
 // ============================================================================
 // Decision Validation
 // ============================================================================
+
+// LimitAnchorTolerancePct is the max allowed drift between the model's
+// open_*_limit price and the pre-computed anchor before the price is snapped
+// back to the anchor (models sometimes do their own arithmetic despite the
+// "copy, don't calculate" instruction).
+const LimitAnchorTolerancePct = 0.05
+
+// correctLimitAnchors snaps open_long_limit / open_short_limit prices back to
+// the pre-computed limit_buy_price / limit_sell_price shown in the prompt when
+// they drift beyond tolerance. Symbols without a stored anchor (not in the
+// prompt, data-incomplete) pass through untouched.
+//
+// Suppressed anchors (LimitBuy/LimitSell = 0) are fail-closed: the prompt
+// forbids opening that side, so a model-invented price is downgraded to wait
+// instead of reaching the exchange (entry_rule_triggered can still be true —
+// the heuristic never sees the suppression, review 2026-09-07).
+func correctLimitAnchors(decisions []Decision, anchors map[string]*LimitAnchor, tolerancePct float64) {
+	for i := range decisions {
+		d := &decisions[i]
+		if d.Action != "open_long_limit" && d.Action != "open_short_limit" {
+			continue
+		}
+		a, ok := anchors[market.Normalize(d.Symbol)]
+		if !ok || a == nil {
+			continue
+		}
+		expected := a.LimitBuy
+		if d.Action == "open_short_limit" {
+			expected = a.LimitSell
+		}
+		if expected <= 0 {
+			logger.Infof("🚫 [%s] %s downgraded to wait: the shown %s anchor was suppressed (0), model price %.6g discarded",
+				d.Symbol, d.Action, map[bool]string{true: "limit_sell", false: "limit_buy"}[d.Action == "open_short_limit"], d.Price)
+			d.WaitBias = map[bool]string{true: "short", false: "long"}[d.Action == "open_short_limit"]
+			d.Action = "wait"
+			d.Price = 0
+			d.BlockingFactors = []string{"ANCHOR_SUPPRESSED"}
+			d.NoTradeReasons = append(d.NoTradeReasons, "挂单锚点被程序抑制,该方向本周期禁止开仓")
+			continue
+		}
+		if d.Price <= 0 {
+			// Placeholder zero from the "unknown → 0" output rule: the anchor
+			// itself is valid, so copy it (the prompt's "copy, don't calculate"
+			// contract) instead of failing the whole batch in validateDecision.
+			logger.Infof("📐 [%s] %s placeholder price %.4g → anchor %.6g",
+				d.Symbol, d.Action, d.Price, expected)
+			d.Price = expected
+			continue
+		}
+		dev := (d.Price - expected) / expected * 100
+		if dev < 0 {
+			dev = -dev
+		}
+		if dev <= tolerancePct {
+			continue
+		}
+		logger.Infof("📐 [%s] %s anchor corrected: %.6g → %.6g (model deviation %.3f%% > %.2f%%)",
+			d.Symbol, d.Action, d.Price, expected, dev, tolerancePct)
+		d.Price = expected
+	}
+}
 
 func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
 	for i := range decisions {
@@ -20,19 +83,89 @@ func validateDecisions(decisions []Decision, accountEquity float64, btcEthLevera
 
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
 	validActions := map[string]bool{
-		"open_long":   true,
-		"open_short":  true,
-		"close_long":  true,
-		"close_short": true,
-		"hold":        true,
-		"wait":        true,
+		"open_long":        true,
+		"open_short":       true,
+		"open_long_limit":  true,
+		"open_short_limit": true,
+		"close_long":       true,
+		"close_short":      true,
+		"adjust_stop_loss": true,
+		"partial_close_long":  true,
+		"partial_close_short": true,
+		"hold":             true,
+		"wait":             true,
 	}
 
 	if !validActions[d.Action] {
 		return fmt.Errorf("invalid action: %s", d.Action)
 	}
 
-	if d.Action == "open_long" || d.Action == "open_short" {
+	// Position-management actions carry required fields (user 2026-09-13:
+	// expose the backend's stop-move/partial-close capabilities to the AI).
+	if d.Action == "adjust_stop_loss" && d.StopLoss <= 0 {
+		return fmt.Errorf("adjust_stop_loss requires stop_loss (the new stop price)")
+	}
+	if (d.Action == "partial_close_long" || d.Action == "partial_close_short") &&
+		(d.CloseFraction <= 0 || d.CloseFraction > 0.5) {
+		return fmt.Errorf("partial_close requires close_fraction in (0, 0.5] — full exits use close_*")
+	}
+
+	if err := ValidateDecisionStage(d); err != nil {
+		return err
+	}
+
+	// wait_bias: empty | long | short, only meaningful on wait (hold keeps
+	// the bias it entered with implicitly; open/close carry no bias).
+	if d.WaitBias != "" && d.WaitBias != "long" && d.WaitBias != "short" {
+		return fmt.Errorf("invalid wait_bias %q (must be long/short or empty)", d.WaitBias)
+	}
+
+	// Backtest-dataset hygiene: strip non-vocabulary tags, clamp quality.
+	if len(d.BlockingFactors) > 0 {
+		d.BlockingFactors = NormalizeBlockingFactors(d.BlockingFactors)
+	}
+	// Position-management self-assessment hygiene (hold on open positions):
+	// clamp quality, strip non-vocabulary flags.
+	if len(d.ManagementFlags) > 0 {
+		d.ManagementFlags = NormalizeManagementFlags(d.ManagementFlags)
+	}
+	if d.ManagementQuality != nil {
+		q := *d.ManagementQuality
+		if q < 0 {
+			q = 0
+		}
+		if q > 100 {
+			q = 100
+		}
+		d.ManagementQuality = &q
+	}
+	// wait stage is DERIVED, not declared (schema-redundancy audit 09-13):
+	// wait_bias + blocking_factors fully determine NO_SETUP/WATCH/READY, so
+	// the model no longer states it — one less field to keep consistent.
+	if d.Action == "wait" {
+		d.Stage = DeriveWaitStage(d.WaitBias, d.BlockingFactors)
+	}
+	if d.EntryQuality != nil {
+		q := *d.EntryQuality
+		if q < 0 {
+			q = 0
+		}
+		if q > 100 {
+			q = 100
+		}
+		d.EntryQuality = &q
+	}
+
+	if d.Action == "open_long_limit" || d.Action == "open_short_limit" {
+		if d.Price <= 0 {
+			return fmt.Errorf("%s requires price (the limit/trigger level)", d.Action)
+		}
+	}
+
+	isOpen := d.Action == "open_long" || d.Action == "open_short" ||
+		d.Action == "open_long_limit" || d.Action == "open_short_limit"
+	isLongOpen := d.Action == "open_long" || d.Action == "open_long_limit"
+	if isOpen {
 		maxLeverage := altcoinLeverage
 		posRatio := altcoinPosRatio
 		maxPositionValue := accountEquity * posRatio
@@ -79,7 +212,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("stop loss and take profit must be greater than 0")
 		}
 
-		if d.Action == "open_long" {
+		if isLongOpen {
 			if d.StopLoss >= d.TakeProfit {
 				return fmt.Errorf("for long positions, stop loss price must be less than take profit price")
 			}
@@ -90,14 +223,14 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		}
 
 		var entryPrice float64
-		if d.Action == "open_long" {
+		if isLongOpen {
 			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2
 		} else {
 			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2
 		}
 
 		var riskPercent, rewardPercent, riskRewardRatio float64
-		if d.Action == "open_long" {
+		if isLongOpen {
 			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
 			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
 			if riskPercent > 0 {
@@ -118,4 +251,18 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	}
 
 	return nil
+}
+
+// ValidateDecisionStage checks the ⑯ lifecycle enum (empty = legacy decision,
+// allowed for backward compatibility).
+func ValidateDecisionStage(d *Decision) error {
+	if d.Stage == "" {
+		return nil
+	}
+	for _, st := range ValidDecisionStages {
+		if d.Stage == st {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid decision_stage %q (must be one of: %s)", d.Stage, strings.Join(ValidDecisionStages, "/"))
 }
