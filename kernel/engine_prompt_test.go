@@ -209,11 +209,13 @@ func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
 	for _, want := range []string{
-		"逐项检查止盈方向上 15m/1h/4h 全部 resistance/support 数组元素",
+		"无条件适用", // scan is the PRIMARY algorithm, not a remedial branch (ZEC 09-13: nearer passing 15m level skipped for the trend_tf level)
+		"15m/1h/4h **全部** resistance/support 数组元素",
+		"15m 不在 role_tfs.trend_tf 里也必须纳入遍历",
+		"第一个 RR≥1.5",
+		"属于违规选位",
 		"不只看数组第一项",
-		"从近到远逐个算 RR",
-		"全部不达标才允许下\"无可用结构位\"的结论",
-		"1.5",
+		"无可用结构位",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("TP rule missing %q", want)
