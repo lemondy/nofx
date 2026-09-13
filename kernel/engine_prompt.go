@@ -493,6 +493,9 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		if EarlyCloseHours(&e.config.RiskControl) > 0 {
 			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 需要该币 1h 出现至少 2 根逆持仓方向的已收盘 K 线(1h 节奏出现趋势转变的证据)才会放行,浮盈浮亏一视同仁;止盈/止损触发单与回撤保护平仓由程序自动执行,不受此限。持仓满 %dh 后正常平仓\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
 		}
+		if e.config.RiskControl.MinHoldMinutes > 0 {
+			params.WriteString(fmt.Sprintf("- 最短持仓限制(程序强制): 持仓不足 %d 分钟时,close/partial_close 会被程序拦截(现价已触及记录止损的硬退出除外)——不要在时间未到且无 1h 逆势证据时输出平仓动作\n", e.config.RiskControl.MinHoldMinutes))
+		}
 		if e.config.RiskControl.OpenRejectSupplyPct > 0 {
 			breathCfg := AnchorOffsetFromRiskControl(&e.config.RiskControl).normalized()
 			params.WriteString(fmt.Sprintf("- 限价开仓锚点位置(程序强制): 做多挂单价距上方 15m/1h 阻力/structure_high 太近(买进供给区)、做空挂单价距下方 support/structure_low 太近(卖出支撑正上方)的开仓会被拒单——锚点与结构位之间必须留有呼吸空间。呼吸空间阈值随执行周期波动率缩放: %.2f×ATR(执行周期),夹在 %.2f%%~%.2f%%(固定模式恒为 %.1f%%),实际生效值见各币 JSON 的 limit_entry_offset_pct;没有干净空间的设置直接放弃,不要输出会被拒的单\n", breathCfg.ATRMult, breathCfg.MinPct, breathCfg.MaxPct, e.config.RiskControl.OpenRejectSupplyPct))

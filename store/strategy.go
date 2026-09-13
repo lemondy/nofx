@@ -370,7 +370,8 @@ type RiskControlConfig struct {
 	BlockShort1dUptrend bool `json:"block_short_1d_uptrend"`
 	// Entry timing gate: the finest sub-hour timeframe (15m/30m) trend must
 	// align with the entry direction — longs need up/pullback, shorts need
-	// down; "range" blocks both. (CODE ENFORCED)
+	// down/rally (selling the bounce in a downtrend); "range" blocks both.
+	// Symmetric four-quadrant policy (audit 09-13). (CODE ENFORCED)
 	EntryTimingGate bool `json:"entry_timing_gate"`
 	// Risk-based position sizing: position value is capped at
 	// equity × RiskPerTradePct% ÷ stop-distance% (defaults to 1.5% when
@@ -386,9 +387,10 @@ type RiskControlConfig struct {
 	LimitEntryMaxCycles int  `json:"limit_entry_max_cycles"`
 	// LimitEntryOffsetPct is the pre-computed limit-entry anchor offset from
 	// the snapshot live price, in percent: buy limit below / sell limit above.
-	// Default 0.5 when unset; must stay within the 0.1%-5% trigger band.
-	// Used as the fixed-mode value AND as the fallback when ATR is
-	// unavailable. (CODE ENFORCED)
+	// Default 0.5 when unset; used as the fixed-mode value AND as the
+	// fallback when ATR is unavailable. In the default "atr" mode the offset
+	// is clamped to [LimitEntryOffsetMinPct, LimitEntryOffsetMaxPct]
+	// (defaults 0.15%-1.2%, kernel/anchor_offset.go). (CODE ENFORCED)
 	LimitEntryOffsetPct float64 `json:"limit_entry_offset_pct"`
 	// LimitEntryOffsetMode selects how the anchor offset scales:
 	// "atr" (default when empty) = OffsetATRMult × ATR(execution TF) clamped
