@@ -210,8 +210,9 @@ func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
 	for _, want := range []string{
 		"无条件适用", // scan is the PRIMARY algorithm, not a remedial branch (ZEC 09-13: nearer passing 15m level skipped for the trend_tf level)
-		"15m/1h/4h **全部** resistance/support 数组元素",
-		"15m 不在 role_tfs.trend_tf 里也必须纳入遍历",
+		"快照里全部时间块", // includes 5m — ZEC's execution_tf is 5m and the nearest passing level lived there
+		"15m/1h/4h",
+		"与 15m 不在 role_tfs.trend_tf 里也必须纳入遍历",
 		"第一个 RR≥1.5",
 		"属于违规选位",
 		"不只看数组第一项",
