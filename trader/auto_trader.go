@@ -149,8 +149,6 @@ type AutoTrader struct {
 	peakPnLCacheMutex     sync.RWMutex                // Cache read-write lock
 	tpTrimDone            map[string]bool             // TP ladder: symbol_side -> 1/3 trim already taken
 	r1TrimDone            map[string]bool             // 1R profit lock: symbol_side -> 50% trim already taken
-	r1PriceCache          map[string]float64          // 1R lock: symbol_side -> resting trim price
-	r1OrderID             map[string]string           // 1R lock: symbol_side -> resting order id
 	partialTrimmed        map[string]float64          // AI partial_close: symbol_side -> cumulative fraction
 	tpTrimMutex           sync.Mutex
 	lastBalanceSyncTime   time.Time                   // Last balance sync time
@@ -385,8 +383,6 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		peakPnLCache:          make(map[string]float64),
 		tpTrimDone:            make(map[string]bool),
 		r1TrimDone:            make(map[string]bool),
-		r1PriceCache:          make(map[string]float64),
-		r1OrderID:             make(map[string]string),
 		partialTrimmed:        make(map[string]float64),
 		peakPnLCacheMutex:     sync.RWMutex{},
 		lastBalanceSyncTime:   time.Now(),

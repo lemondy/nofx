@@ -510,6 +510,20 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			updateTime = at.positionFirstSeenTime[posKey]
 		}
 
+		// Backfill the gate-facing first-seen map from the authoritative
+		// sources too (audit 09-13 #6): the min-hold/early-close gates read
+		// positionFirstSeenTime directly, and it was previously only written
+		// in the local-fallback branch above — after a restart a pre-existing
+		// position with an accurate DB EntryTime left the map empty, which
+		// fail-opens both close gates ("age unknown — don't block") for that
+		// position's entire life. Seeding is idempotent: the map entry
+		// written at open time is never overwritten here.
+		if updateTime > 0 {
+			if _, exists := at.positionFirstSeenTime[posKey]; !exists {
+				at.positionFirstSeenTime[posKey] = updateTime
+			}
+		}
+
 		// Get peak profit rate for this position
 		at.peakPnLCacheMutex.RLock()
 		peakPnlPct := at.peakPnLCache[posKey]

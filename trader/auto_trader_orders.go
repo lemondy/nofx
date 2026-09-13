@@ -73,8 +73,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		return fmt.Errorf("failed to get positions: %w", err)
 	}
 
-	// [CODE ENFORCED] Check max positions limit
-	if err := at.enforceMaxPositions(len(positions)); err != nil {
+	// [CODE ENFORCED] Check max positions limit. Resting limit entries on
+	// OTHER symbols occupy slots too (same accounting as the limit path) —
+	// counting only open positions let a market open push open+pending past
+	// the cap when the limit path had already been refused.
+	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingSymbols(), decision.Symbol)); err != nil {
 		return err
 	}
 
@@ -213,8 +216,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		return fmt.Errorf("failed to get positions: %w", err)
 	}
 
-	// [CODE ENFORCED] Check max positions limit
-	if err := at.enforceMaxPositions(len(positions)); err != nil {
+	// [CODE ENFORCED] Check max positions limit. Resting limit entries on
+	// OTHER symbols occupy slots too (same accounting as the limit path) —
+	// counting only open positions let a market open push open+pending past
+	// the cap when the limit path had already been refused.
+	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingSymbols(), decision.Symbol)); err != nil {
 		return err
 	}
 

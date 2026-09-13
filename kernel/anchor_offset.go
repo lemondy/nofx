@@ -265,17 +265,3 @@ func MaxSpreadPct(rc *store.RiskControlConfig) float64 {
 	}
 	return rc.MaxSpreadPct
 }
-
-// R1Price resolves the resting 1R trim price: entry ± the initial stop
-// distance (long above, short below). Degenerate basis (stop == entry, e.g.
-// post-breakeven with no recorded history) returns entry itself — the trim
-// then rests at breakeven and locks on any dip back to it.
-func R1Price(side string, entry, initialSL float64) float64 {
-	if entry <= 0 || initialSL <= 0 {
-		return 0
-	}
-	if side == "long" {
-		return entry + (entry - initialSL)
-	}
-	return entry - (initialSL - entry)
-}

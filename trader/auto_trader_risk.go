@@ -317,8 +317,6 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 	delete(at.tpTrimDone, posKey)
 	delete(at.r1TrimDone, posKey)
 	delete(at.partialTrimmed, posKey)
-	delete(at.r1PriceCache, posKey)
-	delete(at.r1OrderID, posKey)
 	at.tpTrimMutex.Unlock()
 }
 
@@ -440,6 +438,14 @@ func (at *AutoTrader) validateOpenRisk(decision *kernel.Decision, entryPrice, fl
 	// the open, so an entry without one would run unprotected.
 	if decision.StopLoss <= 0 {
 		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: missing stop_loss (entry would be unprotected)", decision.Action, decision.Symbol)
+	}
+
+	// 1b. Take profit is mandatory too (audit 09-13 #3): the min-RR gate only
+	// runs when a TP exists, so an open that simply omits take_profit used to
+	// bypass the entire reward-side validation AND place no TP protection on
+	// the exchange. The prompt requires TP on every open — enforce it.
+	if decision.TakeProfit <= 0 {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: missing take_profit (min-RR gate requires a target; omitting TP does not skip validation)", decision.Action, decision.Symbol)
 	}
 
 	// 2. SL/TP must sit on the correct side of the entry price, otherwise the
@@ -674,7 +680,10 @@ func (at *AutoTrader) spreadBlocksOpen(symbol string) (bool, string) {
 	}
 	bids, asks, err := book.GetOrderBook(symbol, 5)
 	if err != nil {
-		return false, "" // fail-open
+		// Fail-open, but never silently: an unmeasurable book means the gate
+		// is blind for this symbol this cycle (audit 09-13 #5).
+		logger.Infof("⚠️ [RISK CONTROL] spread gate: order book unavailable for %s (%v) — gate skipped for this cycle", symbol, err)
+		return false, ""
 	}
 	spread := topOfBookSpreadPct(bids, asks)
 	if spread <= 0 {
@@ -693,14 +702,22 @@ func (at *AutoTrader) spreadBlocksOpen(symbol string) (bool, string) {
 // ============================================================================
 
 // usedMarginOf sums per-position margin (notional ÷ leverage) from open
-// positions; positions without a readable leverage are skipped (fail-open).
+// positions. A position with a nonzero size but unusable mark/leverage is
+// SKIPPED (fail-open) — that silently undercounts used margin, so it logs a
+// warning instead of disappearing (audit 09-13 #5).
 func usedMarginOf(positions []map[string]interface{}) float64 {
 	total := 0.0
 	for _, pos := range positions {
 		qty, _ := pos["positionAmt"].(float64)
+		if qty == 0 {
+			continue
+		}
+		symbol, _ := pos["symbol"].(string)
 		mark, _ := pos["markPrice"].(float64)
 		lev, _ := pos["leverage"].(float64)
-		if qty == 0 || mark <= 0 || lev <= 0 {
+		if mark <= 0 || lev <= 0 {
+			logger.Warnf("⚠️ [RISK CONTROL] margin budget: %s position excluded from used-margin (mark=%.6g lev=%.1f) — used margin is UNDERCOUNTED, check exchange data",
+				symbol, mark, lev)
 			continue
 		}
 		if qty < 0 {
@@ -719,11 +736,37 @@ func marginExceedsBudget(usedMargin, newMargin, equity, budgetFrac float64) bool
 	return usedMargin+newMargin > budgetFrac*equity
 }
 
+// pendingMarginReserved sums the margin that resting AI limit-entry orders
+// on OTHER symbols would consume if they all filled (notional ÷ leverage).
+// Each placement passed the margin gate against the used margin AT PLACEMENT
+// TIME — none of them sees the others — so without this reservation N
+// pending limits checked individually could all fill and jointly blow the
+// budget. excludeSymbol is the symbol currently being opened (its own pending
+// entry was already dropped/replaced on that path).
+func (at *AutoTrader) pendingMarginReserved(excludeSymbol string) float64 {
+	at.pendingEntriesMu.RLock()
+	defer at.pendingEntriesMu.RUnlock()
+	total := 0.0
+	for sym, pe := range at.pendingEntries {
+		if sym == excludeSymbol || pe == nil || pe.Price <= 0 || pe.Quantity <= 0 {
+			continue
+		}
+		lev := float64(pe.Leverage)
+		if lev <= 0 {
+			lev = 1 // assume worst case: no leverage → full notional as margin
+		}
+		total += pe.Price * pe.Quantity / lev
+	}
+	return total
+}
+
 // marginBudgetBlocksOpen rejects an open when the resulting total margin
 // usage would exceed risk_control.max_margin_usage (0 = 90% default). The
 // prompt states this budget but until now nothing enforced it — a max-size
 // BTC/ETH position alone could cross the 90% line (audit 09-13 #2).
-// Fail-open on data errors.
+// Resting limit entries count as reserved margin (audit 09-13 #4: N pending
+// limits each checked in isolation can jointly exceed the budget once they
+// all fill). Fail-open on data errors.
 func (at *AutoTrader) marginBudgetBlocksOpen(symbol string, newSizeUSD, newLeverage, equity float64) (bool, string) {
 	if at.config.StrategyConfig == nil || newSizeUSD <= 0 || newLeverage <= 0 || equity <= 0 {
 		return false, ""
@@ -737,13 +780,13 @@ func (at *AutoTrader) marginBudgetBlocksOpen(symbol string, newSizeUSD, newLever
 		return false, ""
 	}
 	newMargin := newSizeUSD / newLeverage
-	used := usedMarginOf(positions)
+	used := usedMarginOf(positions) + at.pendingMarginReserved(symbol)
 	if !marginExceedsBudget(used, newMargin, equity, budget) {
 		return false, ""
 	}
 	return true, fmt.Sprintf(
-		"margin budget: used %.2f + new %.2f USDT (size %.2f @ %.0fx) would exceed %.0f%% × equity %.2f (%.2f USDT) — reduce size/leverage or close a position first",
-		used, newMargin, newSizeUSD, newLeverage, budget*100, equity, budget*equity)
+		"margin budget: used %.2f (incl. %.2f reserved by resting limit entries) + new %.2f USDT (size %.2f @ %.0fx) would exceed %.0f%% × equity %.2f (%.2f USDT) — reduce size/leverage or close a position first",
+		used, at.pendingMarginReserved(symbol), newMargin, newSizeUSD, newLeverage, budget*100, equity, budget*equity)
 }
 
 // ============================================================================
@@ -1115,145 +1158,9 @@ func (at *AutoTrader) alertUnprotectedPosition(symbol, side, reason string) {
 }
 
 // ============================================================================
-// 1R profit lock (resting exchange order)
+// Recorded stop-loss state (drives the min-hold/early-close hard-exit bypass)
 // ============================================================================
 
-// R1Price resolves the resting 1R trim price: entry ± the initial stop
-// distance (long above, short below). Degenerate basis (stop == entry, e.g.
-// post-breakeven with no recorded history) returns entry itself — the trim
-// then rests at breakeven and locks on any dip back to it.
-//
-// NOTE: moved to kernel as kernel.R1Price? No — kept here; see r1LockPrice.
-
-// r1LockPrice returns the resting 1R trim price for a position, deriving it
-// once and caching (the R basis survives breakeven's move of the recorded
-// stop within one process lifetime; after a restart the cached price is
-// re-derived from the recorded/exchange stop — a post-breakeven restart
-// degrades the rest price to entry, which still locks profit).
-func (at *AutoTrader) r1LockPrice(posKey, side string, entry float64) float64 {
-	if p := at.r1PriceCache[posKey]; p > 0 {
-		return p
-	}
-	initialSL := at.GetRecordedStopLoss(symbolOfKey(posKey), side)
-	if initialSL <= 0 {
-		initialSL = at.exchangeStopPrice(symbolOfKey(posKey), side)
-	}
-	price := kernel.R1Price(side, entry, initialSL)
-	if price > 0 {
-		at.r1PriceCache[posKey] = price
-	}
-	return price
-}
-
-// symbolOfKey extracts the symbol from a "symbol_side" pos key.
-func symbolOfKey(posKey string) string {
-	if i := strings.LastIndex(posKey, "_"); i > 0 {
-		return posKey[:i]
-	}
-	return posKey
-}
-
-// maintainR1TrimOrder places/verifies the resting reduce-only 1R trim limit
-// (tick-accurate — a cycle-sampled market trim misses sub-minute spikes like
-// BTWUSDT's 0.57 wick on 09-13). Fill/cancel detection via order status;
-// a canceled or filled order resolves the lock state.
-func (at *AutoTrader) maintainR1TrimOrder(pos map[string]interface{}, markPrice float64, lockR float64) {
-	symbol, _ := pos["symbol"].(string)
-	side, _ := pos["side"].(string)
-	qty, _ := pos["positionAmt"].(float64)
-	entry := posEntryPrice(pos)
-	if symbol == "" || side == "" || qty <= 0 || entry <= 0 || markPrice <= 0 {
-		return
-	}
-	posKey := symbol + "_" + side
-	if at.r1TrimDone[posKey] {
-		return
-	}
-	if at.r1OrderID == nil {
-		at.r1OrderID = make(map[string]string)
-	}
-	if orderID := at.r1OrderID[posKey]; orderID != "" {
-		// A resting order was placed earlier — check its status.
-		st, err := at.trader.GetOrderStatus(symbol, orderID)
-		if err != nil {
-			return // transient — keep waiting
-		}
-		status, _ := st["status"].(string)
-		switch strings.ToUpper(status) {
-		case "FILLED":
-			at.tpTrimMutex.Lock()
-			at.r1TrimDone[posKey] = true
-			at.tpTrimDone[posKey] = true
-			at.tpTrimMutex.Unlock()
-			delete(at.r1OrderID, posKey)
-			logger.Infof("🎯 [%s] 1R resting trim FILLED: %s 50%% locked (breakeven SL active)", at.name, symbol)
-			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 1R 锁盈单成交 %s</b>\n<i>50%% 利润已锁定,剩余仓位保本继续持有</i>", notify.Escape(symbol)))
-		case "CANCELED", "EXPIRED", "REJECTED":
-			delete(at.r1OrderID, posKey) // re-place next pass
-		default: // NEW / PARTIALLY_FILLED — still working
-		}
-		return
-	}
-	// No resting order yet — place it (reduce-only, 50% of the position).
-	minSize := 0.0
-	if at.config.StrategyConfig != nil {
-		minSize = at.config.StrategyConfig.RiskControl.MinPositionSize
-	}
-	trimQty := qty * 0.5
-	if minSize > 0 && trimQty*markPrice < minSize {
-		// remainder would be dust — the trim tier is not placeable; the
-		// full-close backstop / TP still own the exit.
-		at.tpTrimMutex.Lock()
-		at.r1TrimDone[posKey] = true
-		at.tpTrimDone[posKey] = true
-		at.tpTrimMutex.Unlock()
-		return
-	}
-	grid, ok := at.trader.(interface {
-		PlaceLimitOrder(req *types.LimitOrderRequest) (*types.LimitOrderResult, error)
-	})
-	if !ok {
-		return
-	}
-	r1Price := at.r1LockPrice(posKey, side, entry)
-	if r1Price <= 0 {
-		return
-	}
-	res, err := grid.PlaceLimitOrder(&types.LimitOrderRequest{
-		Symbol:       symbol,
-		Side:         map[bool]string{true: "SELL", false: "BUY"}[side == "long"],
-		PositionSide: strings.ToUpper(side),
-		Price:        r1Price,
-		Quantity:     trimQty,
-		ReduceOnly:   true,
-		ClientID:     "r1lock" + fmt.Sprintf("%d", time.Now().UnixMilli()),
-	})
-	if err != nil {
-		logger.Infof("⚠️ [%s] 1R resting trim place failed for %s: %v — retries next pass", at.name, symbol, err)
-		return
-	}
-	at.r1OrderID[posKey] = res.OrderID
-	logger.Infof("🎯 [%s] 1R resting trim placed: %s %s %.6g @ %.6g (reduce-only, tick-accurate)", at.name, symbol, side, trimQty, r1Price)
-	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 1R 锁盈单已挂 %s</b>\n<i>%s 减仓 50%% 挂单 @ %.6g(交易所逐笔盯盘,触价即锁)</i>", notify.Escape(symbol), side, r1Price))
-}
-
-// cleanupR1TrimFor cancels a position's resting 1R trim order (position gone)
-// and clears all lock state.
-func (at *AutoTrader) cleanupR1TrimFor(symbol, side string) {
-	posKey := symbol + "_" + side
-	if orderID := at.r1OrderID[posKey]; orderID != "" {
-		if c, ok := at.trader.(interface {
-			CancelOrder(symbol, orderID string) error
-		}); ok {
-			_ = c.CancelOrder(symbol, orderID)
-		}
-		delete(at.r1OrderID, posKey)
-	}
-	at.tpTrimMutex.Lock()
-	delete(at.r1TrimDone, posKey)
-	delete(at.r1PriceCache, posKey)
-	at.tpTrimMutex.Unlock()
-}
 // SetRecordedStopLoss records the stop-loss price of a freshly opened position
 // (used by the min-hold gate to allow hard-exit closes).
 func (at *AutoTrader) SetRecordedStopLoss(symbol, side string, price float64) {
@@ -1355,6 +1262,29 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 	}
 	filtered := make([]kernel.Decision, 0, len(decisions))
 	for _, d := range decisions {
+		// Account-level circuit breaker (user directive, prompt 09-13): once
+		// equity has retraced ≥ account_max_drawdown_pct from the initial
+		// balance, ALL new opens are blocked — reduce-only mode. The prompt
+		// promises this as CODE ENFORCED; this branch is that enforcement
+		// (it was prompt-only until now). Closes/SL/TP are never blocked —
+		// the account must be able to de-risk.
+		if strings.HasPrefix(d.Action, "open_") && rc.AccountMaxDrawdownPct > 0 && at.initialBalance > 0 {
+			equity := ctx.Account.TotalEquity
+			if equity > 0 {
+				drawdownPct := (at.initialBalance - equity) / at.initialBalance * 100
+				if drawdownPct >= rc.AccountMaxDrawdownPct {
+					streak, push := at.gateNotifyRecord("acctdd:"+d.Symbol, time.Now())
+					logger.Warnf("🛑 [%s] GATE BLOCKED %s %s: account drawdown %.2f%% ≥ %.1f%% (equity %.2f vs initial %.2f) — reduce-only mode (streak %d)",
+						at.name, d.Action, d.Symbol, drawdownPct, rc.AccountMaxDrawdownPct, equity, at.initialBalance, streak)
+					if push {
+						notify.Notify("ALERT", at.name, fmt.Sprintf(
+							"<b>🛑 账户级熔断 — 只减仓模式</b>\n净值回撤 <code>%.2f%%</code> ≥ %.1f%%(equity %.2f / initial %.2f)\n一切新开仓被程序拦截,直至回撤修复\n\n<i>%s</i>",
+							drawdownPct, rc.AccountMaxDrawdownPct, equity, at.initialBalance, notify.Escape(d.Reasoning)))
+					}
+					continue
+				}
+			}
+		}
 		// Stock weekend block: Binance tokenized stocks (bstock) trade on
 		// weekends but the US market doesn't — volatility and edge are poor
 		// (user 2026-09-11). nil/true = block; closes/SL/TP unaffected.

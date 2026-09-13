@@ -281,4 +281,21 @@ entryPrice := pos["entryPrice"].(float64)
 
 ---
 
-*本报告基于 2026-09-13 dev 分支（含大量未提交改动）的代码快照，未涉及前端 React 代码、交易所适配层细节（bybit/okx/gate 等）及数据库 schema 层面的审查。第 8 节的修复记录反映的是同日完成的第二轮改动。*
+## 9. 七门深挖补充审查与修复记录（2026-09-13，第三轮）
+
+针对 `auto_trader_risk.go` 七类风控闸门（验仓/止损窗口/点差/保证金/平仓/看门狗/1R 锁盈）的逐门专项复核。核心机制验证无误，但发现 6 项缺口并已全部修复（`go build ./...`、`go vet ./...`、`go test ./...` 全量通过）：
+
+| # | 严重级别 | 问题 | 修复 |
+|---|---|---|---|
+| 1 | P0 | **账户级熔断 `AccountMaxDrawdownPct` 无任何执行代码**——配置有定义、prompt 向 AI 宣称"程序强制拦截一切新开仓"，但没有任何代码把 equity 与 initialBalance×(1−pct) 比较。与 09-13 审计 #2（保证金预算门）同类缺口 | `applyHardRiskGates` 新增 open_* 分支：回撤 ≥ 阈值时拦截全部新开仓 + Telegram 告警（`gateNotifyRecord` 去重）；平仓/SL/TP 不受影响 |
+| 2 | P1 | 市价开仓路径只数 `len(positions)` 不计其他币的挂单槽位（限价路径已用 `nextSlotCount`）；挂单不预留保证金——N 张限价单各自单独通过保证金检查后同时成交可合计超预算 | 市价路径（open_long/open_short）改用 `nextSlotCount`；`marginBudgetBlocksOpen` 计入 `pendingMarginReserved`（其他币挂单 notional÷leverage，leverage 不可读时按 1x 保守估算） |
+| 3 | P2 | **无 TP 可整体绕过 min-RR 门**：`validateOpenRisk` 的 RR 校验包在 `TakeProfit > 0` 条件里，省略 take_profit 的开仓跳过全部收益侧校验且交易所无 TP 保护单 | `validateOpenRisk` 新增 take_profit 必填检查（与 stop_loss 同级强制） |
+| 4 | P2 | **挂单版 1R 锁盈是从未接线的死代码**：`maintainR1TrimOrder`/`cleanupR1TrimFor`/`r1LockPrice`/`symbolOfKey`/`r1OrderID`/`r1PriceCache` 及 `kernel.R1Price` 零调用者；其注释声称的"tick 级触价"优势实际不存在（生效的是 vol.go 市价轮询版） | 全部删除（选择删除而非接线：接线是较大的行为变更，删除可逆且消除心智负担；市价版 1R 逻辑不变） |
+| 5 | P3 | `usedMarginOf` 静默跳过 mark/leverage 不可读的持仓（低估已用保证金）；点差门 `GetOrderBook` 失败静默放行零日志 | 两处均加日志（fail-open 语义保留，只消除静默性） |
+| 6 | P3 | `positionFirstSeenTime`（min-hold/early-close 门的数据源）只在本地兜底分支写入——重启后已有 DB EntryTime 的持仓 map 为空，两道平仓门对其**永久 fail-open**（"age unknown — don't block"），而非仅重置计时 | `auto_trader_loop.go` 持仓快照处新增幂等回填：updateTime（DB EntryTime / 交易所 createdTime）> 0 且 map 无记录时回种 |
+
+**顺带核实无虞**：三个后台维护流程（pending/vol/watchdog）串行执行无竞态；`moveStopExchange` 撤挂窗口由看门狗下周期自愈；`closeRejectBreakoutBlocks` 仅拦浮亏且 15m 结构未破（与 prompt 一致）；1R 锁盈重启后 `initialDist=0` 自然停用的降级路径正确。
+
+---
+
+*本报告基于 2026-09-13 dev 分支（含大量未提交改动）的代码快照，未涉及前端 React 代码、交易所适配层细节（bybit/okx/gate 等）及数据库 schema 层面的审查。第 8 节为第二轮修复（首次审查的 4 项核心发现），第 9 节为第三轮修复（七门专项深挖的 6 项缺口），均于同日完成。*
