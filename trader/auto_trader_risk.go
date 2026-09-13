@@ -75,13 +75,27 @@ func (at *AutoTrader) startDrawdownMonitor() {
 		for {
 			select {
 			case <-ticker.C:
-				at.checkPositionDrawdown()
+				at.safeCheckPositionDrawdown()
 			case <-at.stopMonitorCh:
 				logger.Info("⏹ Stopped position drawdown monitoring")
 				return
 			}
 		}
 	}()
+}
+
+// safeCheckPositionDrawdown runs one drawdown-check pass with a recover
+// backstop — the type-asserted fields above are now guarded, but this monitor
+// must never die silently on an unexpected panic (e.g. a future edit that
+// reintroduces an unguarded assertion): one bad cycle logs and moves on
+// instead of taking down the whole goroutine for the rest of the process.
+func (at *AutoTrader) safeCheckPositionDrawdown() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Infof("❌ Drawdown monitoring: recovered from panic: %v", r)
+		}
+	}()
+	at.checkPositionDrawdown()
 }
 
 // checkPositionDrawdown checks position drawdown situation
@@ -94,11 +108,31 @@ func (at *AutoTrader) checkPositionDrawdown() {
 	}
 
 	for _, pos := range positions {
-		symbol := pos["symbol"].(string)
-		side := pos["side"].(string)
-		entryPrice := pos["entryPrice"].(float64)
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		symbol, ok := pos["symbol"].(string)
+		if !ok || symbol == "" {
+			logger.Warnf("⚠️ Drawdown monitoring: position missing/malformed symbol, skipping: %+v", pos)
+			continue
+		}
+		side, ok := pos["side"].(string)
+		if !ok || side == "" {
+			logger.Warnf("⚠️ Drawdown monitoring: %s missing/malformed side, skipping", symbol)
+			continue
+		}
+		entryPrice, ok := pos["entryPrice"].(float64)
+		if !ok {
+			logger.Warnf("⚠️ Drawdown monitoring: %s %s missing/malformed entryPrice, skipping", symbol, side)
+			continue
+		}
+		markPrice, ok := pos["markPrice"].(float64)
+		if !ok {
+			logger.Warnf("⚠️ Drawdown monitoring: %s %s missing/malformed markPrice, skipping", symbol, side)
+			continue
+		}
+		quantity, ok := pos["positionAmt"].(float64)
+		if !ok {
+			logger.Warnf("⚠️ Drawdown monitoring: %s %s missing/malformed positionAmt, skipping", symbol, side)
+			continue
+		}
 		if quantity < 0 {
 			quantity = -quantity // Short position quantity is negative, convert to positive
 		}
@@ -1029,12 +1063,15 @@ func (at *AutoTrader) processProtectionWatchdog() {
 						repaired = append(repaired, fmt.Sprintf("SL %.6g", sl))
 					} else {
 						logger.Infof("⚠️ [%s] Protection watchdog: SL re-place failed for %s: %v", at.name, symbol, err)
+						at.alertUnprotectedPosition(symbol, side, fmt.Sprintf("SL re-place failed: %v", err))
 					}
 				} else {
 					logger.Infof("⚠️ [%s] Protection watchdog: %s recorded SL %.6g is on the wrong side of mark %.6g — not placed, manual check", at.name, symbol, sl, markPrice)
+					at.alertUnprotectedPosition(symbol, side, fmt.Sprintf("recorded SL %.6g is on the wrong side of mark %.6g", sl, markPrice))
 				}
 			} else {
 				logger.Infof("⚠️ [%s] Protection watchdog: %s has no SL order and no recorded stop — cannot auto-repair", at.name, symbol)
+				at.alertUnprotectedPosition(symbol, side, "no SL order on the exchange and no recorded stop to repair from")
 			}
 		}
 		if needTP && !at.tpRunnerDone(posKey) {
@@ -1060,6 +1097,21 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🛡️ 保护单补挂 %s</b>\n<i>%s(按开仓计划价自动补挂)</i>", notify.Escape(symbol), strings.Join(repaired, " + ")))
 		}
 	}
+}
+
+// alertUnprotectedPosition pushes a Telegram alert when the watchdog finds a
+// position with NO usable stop-loss protection (missing order, missing
+// recorded price, wrong-side price, or a failed re-place) — the SL leg is the
+// one leg that must never silently stay naked. Deduped like the other gate
+// alerts (gateNotifyRecord) so a stuck position doesn't spam every cycle.
+func (at *AutoTrader) alertUnprotectedPosition(symbol, side, reason string) {
+	streak, push := at.gateNotifyRecord("unprotected-sl:"+symbol+":"+side, time.Now())
+	if !push {
+		return
+	}
+	notify.Notify("ALERT", at.name, fmt.Sprintf(
+		"<b>🚨 仓位无止损保护 %s (%s)</b>\n%s\n\n<i>看门狗无法自动补挂,请人工核查该仓位并手动设置止损(streak %d)</i>",
+		notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], notify.Escape(reason), streak))
 }
 
 // ============================================================================

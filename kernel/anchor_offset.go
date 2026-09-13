@@ -214,8 +214,16 @@ func ProfitLockRMult(rc *store.RiskControlConfig) float64 {
 }
 
 // ProfitLockTargets returns (breakeven, trim) for a position given its R
-// multiple — the two 1R actions of the profit lock. currentSL breaks the
-// breakeven check once the stop already sits at/beyond entry.
+// multiple — the two 1R actions of the profit lock. currentSL is the LIVE
+// recorded stop (not necessarily the trade's original stop) and is what
+// gates the breakeven check: once breakeven has already fired once, the
+// caller's recorded stop equals entry, so initialDist collapses to 0 and
+// this function short-circuits to (false, false) — that is the mechanism
+// that makes repeated per-cycle calls idempotent (breakeven arms exactly
+// once) without separate "already armed" bookkeeping. Callers that read
+// initialSL and currentSL from the same "recorded stop" source (as
+// auto_trader_vol.go does) get this idempotency for free; do not special-case
+// it away by tracking the two separately.
 func ProfitLockTargets(side string, entry, initialSL, currentSL, markPrice, lockR float64) (bool, bool) {
 	if lockR <= 0 || entry <= 0 || initialSL <= 0 || markPrice <= 0 {
 		return false, false

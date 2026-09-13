@@ -198,7 +198,18 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		// ── 1R profit lock (user 2026-09-12): breakeven stop + 50% trim ──
 		if lockR := kernel.ProfitLockRMult(&at.config.StrategyConfig.RiskControl); lockR > 0 {
 			entry := posEntryPrice(pos)
-			breakeven, trim := kernel.ProfitLockTargets(side, entry, initialSL, initialSL, markPrice, lockR)
+			// currentStop is deliberately the SAME value as initialSL here:
+			// GetRecordedStopLoss (read into initialSL above) always returns
+			// the LIVE recorded stop, not the trade's original one — once
+			// breakeven fires below, SetRecordedStopLoss overwrites it to
+			// `entry`, so next cycle's initialSL/currentStop are both `entry`.
+			// ProfitLockTargets then sees initialDist == 0 and short-circuits
+			// to (false, false), which is what makes this call idempotent
+			// (breakeven arms exactly once) without any extra "already armed"
+			// bookkeeping. Do not replace this with a separately-tracked
+			// "original" stop — that would break the self-limiting behavior.
+			currentStop := initialSL
+			breakeven, trim := kernel.ProfitLockTargets(side, entry, initialSL, currentStop, markPrice, lockR)
 			if breakeven {
 				if err := at.moveStopExchange(symbol, side, entry); err != nil {
 					logger.Infof("⚠️ [%s] Breakeven SL place failed for %s: %v", at.name, symbol, err)
