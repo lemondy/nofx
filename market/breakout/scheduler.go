@@ -63,16 +63,29 @@ func (s *Scheduler) Start() {
 		s.runOnce(nil)
 
 		// Tuning loop: first pass shortly after the first snapshot, then weekly —
-		// 72h let the sigmoids overfit one regime's tail.
+		// 72h let the sigmoids overfit one regime's tail. A FAILED pass (429 on
+		// the shared proxy IP, transient API errors) retries after 10 minutes
+		// instead of sleeping the full week — one rate-limit blip used to cost
+		// seven days of tuning.
 		go func() {
 			time.Sleep(30 * time.Second)
-			s.runTuning()
+			pendingRetry := !s.runTuning()
 			tuneTicker := time.NewTicker(168 * time.Hour)
+			retryTicker := time.NewTicker(10 * time.Minute)
 			defer tuneTicker.Stop()
+			defer retryTicker.Stop()
 			for {
 				select {
 				case <-tuneTicker.C:
-					s.runTuning()
+					if !s.runTuning() {
+						pendingRetry = true
+					}
+				case <-retryTicker.C:
+					if pendingRetry {
+						if s.runTuning() {
+							pendingRetry = false
+						}
+					}
 				case <-s.stop:
 					return
 				}
@@ -131,10 +144,14 @@ func (s *Scheduler) Start() {
 
 // runTuning executes a backtest pass and micro-adjusts parameters.
 // Recovers from panics: tuning is best-effort and must never take down trading.
-func (s *Scheduler) runTuning() {
+// Returns false when the pass could not run (list-symbols or backtest error,
+// e.g. a 429 on the shared proxy IP) so the caller can retry soon instead of
+// sleeping the full weekly interval.
+func (s *Scheduler) runTuning() (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("🚨 Breakout tuning panicked (recovered): %v", r)
+			ok = false
 		}
 	}()
 	// 15 symbols: the old top-10 (majors only) under-covered the high-ATR
@@ -142,7 +159,7 @@ func (s *Scheduler) runTuning() {
 	symbols, err := TopVolumeSymbols(15)
 	if err != nil {
 		logger.Warnf("⚠️ Breakout tuning: failed to list symbols: %v", err)
-		return
+		return false
 	}
 	hasBTC := false
 	for _, sym := range symbols {
@@ -156,7 +173,9 @@ func (s *Scheduler) runTuning() {
 	}
 	if _, err := TuneFromBacktest(symbols); err != nil {
 		logger.Warnf("⚠️ Breakout tuning failed: %v", err)
+		return false
 	}
+	return true
 }
 
 // Stop terminates the loop.
