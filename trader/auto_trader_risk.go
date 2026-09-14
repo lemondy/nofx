@@ -969,7 +969,14 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 		}
 	}
 	if side == "" {
-		return fmt.Errorf("❌ %s has no open position to adjust the stop for", decision.Symbol)
+		// No position on the exchange — the normal AI-latency race, not an
+		// error: the decision was made on the cycle-start context snapshot,
+		// and during the 2-10min AI call the position legitimately closed
+		// (SL/TP trigger, manual close). There is nothing left to protect,
+		// so skip silently instead of firing the failed-execution alert
+		// (user 09-14: 没有仓位就停止 stop loss 操作).
+		logger.Infof("ℹ️ [%s] adjust_stop_loss skipped: %s has no open position (closed during the AI-call window — context snapshot was stale)", at.name, decision.Symbol)
+		return nil
 	}
 	if !stopMoveTightens(side, currentSL, decision.StopLoss, markPrice) {
 		return fmt.Errorf("❌ [RISK CONTROL] adjust_stop_loss %s rejected: new SL %.6g must TIGHTEN (current %.6g, mark %.6g) — never widen, never cross the mark",
