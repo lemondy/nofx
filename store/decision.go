@@ -209,6 +209,33 @@ func (s *DecisionStore) GetLatestRecords(traderID string, n int) ([]*DecisionRec
 	return records, nil
 }
 
+// QualityRecord is the lightweight projection for the system-quality page —
+// decision_records rows carry the full prompts, so aggregation must never
+// load whole rows.
+type QualityRecord struct {
+	Success             bool
+	ErrorMessage        string
+	AIRequestDurationMs int64
+	Timestamp           time.Time
+}
+
+// GetQualityRecordsSince returns the lightweight projection of all records
+// for a trader since the given time, oldest first.
+func (s *DecisionStore) GetQualityRecordsSince(traderID string, since time.Time) ([]QualityRecord, error) {
+	var rows []QualityRecord
+	if err := s.qualityQuery(traderID, since).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("failed to query quality records: %w", err)
+	}
+	return rows, nil
+}
+
+func (s *DecisionStore) qualityQuery(traderID string, since time.Time) *gorm.DB {
+	return s.db.Table("decision_records").
+		Select("success, error_message, ai_request_duration_ms, timestamp").
+		Where("trader_id = ? AND timestamp >= ?", traderID, since).
+		Order("timestamp ASC")
+}
+
 // GetAllLatestRecords gets the latest N records for all traders
 func (s *DecisionStore) GetAllLatestRecords(n int) ([]*DecisionRecord, error) {
 	var dbRecords []*DecisionRecordDB

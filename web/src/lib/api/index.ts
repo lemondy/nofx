@@ -4,6 +4,7 @@ import { configApi } from './config'
 import { dataApi } from './data'
 import { telegramApi } from './telegram'
 import { reviewApi } from './review'
+import { systemApi } from './system'
 
 export const api = {
   ...traderApi,
@@ -12,4 +13,5 @@ export const api = {
   ...dataApi,
   ...telegramApi,
   ...reviewApi,
+  ...systemApi,
 }

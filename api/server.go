@@ -258,6 +258,7 @@ CRITICAL: Always use the "id" field for strategy_id.`,
 			s.route(protected, "POST", "/strategies/preview-prompt", "Preview the AI prompt that will be generated from a config", s.handlePreviewPrompt)
 			s.route(protected, "POST", "/strategies/test-run", "Test-run strategy AI analysis", s.handleStrategyTestRun)
 			s.route(protected, "GET", "/entry-quality-stats", "Quality→outcome backtest: decisions bucketed by entry_quality joined with journal outcomes (?trader_id=)", s.handleEntryQualityStats)
+			s.route(protected, "GET", "/system-quality", "System health: per-cycle AI-call duration stats, success rate, failure categories (?trader_id=&hours=24)", s.handleSystemQuality)
 			s.route(protected, "GET", "/strategies/:id", "Get strategy by ID", s.handleGetStrategy)
 			s.routeWithSchema(protected, "POST", "/strategies", "Create a new trading strategy",
 				`Body: {"name":"<string, required>","description":"<string, optional>","lang":"zh|en","config":<StrategyConfig object, OPTIONAL — if omitted the system applies complete working defaults automatically (ai500 top coins, all standard indicators, standard risk control)>}

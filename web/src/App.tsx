@@ -16,6 +16,7 @@ import { StrategyStudioPage } from './pages/StrategyStudioPage'
 import { StrategyMarketPage } from './pages/StrategyMarketPage'
 import { DataPage } from './pages/DataPage'
 import { ReviewPage } from './pages/ReviewPage'
+import SystemQualityPage from './pages/SystemQualityPage'
 import { LoginRequiredOverlay } from './components/auth/LoginRequiredOverlay'
 import HeaderBar from './components/common/HeaderBar'
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext'
@@ -43,6 +44,7 @@ type Page =
  | 'strategy-market'
  | 'data'
  | 'review'
+ | 'system-quality'
  | 'faq'
  | 'login'
  | 'register'
@@ -66,6 +68,7 @@ function App() {
  if (path === '/strategy-market' || hash === 'strategy-market') return 'strategy-market'
  if (path === '/data' || hash === 'data') return 'data'
  if (path === '/review' || hash === 'review') return 'review'
+ if (path === '/system-quality' || hash === 'system-quality') return 'system-quality'
  if (path === '/dashboard' || hash === 'trader' || hash === 'details')
  return 'trader'
  return 'competition' // 默认为竞赛页面
@@ -87,6 +90,7 @@ function App() {
  'strategy-market': '/strategy-market',
  'data': '/data',
  'review': '/review',
+ 'system-quality': '/system-quality',
  'traders': '/traders',
  'trader': '/dashboard',
  'strategy': '/strategy',
@@ -506,6 +510,38 @@ function App() {
  />
  <main className="pt-16">
  <ReviewPage language={language} />
+ </main>
+ <LoginRequiredOverlay
+ isOpen={loginOverlayOpen}
+ onClose={() => setLoginOverlayOpen(false)}
+ featureName={loginOverlayFeature}
+ />
+ </div>
+ )
+ }
+ // System quality page (系统质量) - requires authentication
+ if (route === '/system-quality') {
+ if ((!user || !token) && !hasPersistedAuth) {
+ window.location.href = '/login'
+ return null
+ }
+ return (
+ <div
+ className="min-h-screen"
+ style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+ >
+ <HeaderBar
+ isLoggedIn={!!user}
+ currentPage="system-quality"
+ language={language}
+ onLanguageChange={setLanguage}
+ user={user}
+ onLogout={logout}
+ onLoginRequired={handleLoginRequired}
+ onPageChange={navigateToPage}
+ />
+ <main className="pt-16">
+ <SystemQualityPage language={language} />
  </main>
  <LoginRequiredOverlay
  isOpen={loginOverlayOpen}

@@ -19,6 +19,7 @@ type Page =
  | 'strategy-market'
  | 'data'
  | 'review'
+ | 'system-quality'
  | 'faq'
  | 'login'
  | 'register'
@@ -119,6 +120,7 @@ export default function HeaderBar({
  { page: 'trader', path: '/dashboard', label: t('dashboardNav', language), requiresAuth: true },
  { page: 'strategy', path: '/strategy', label: t('strategyNav', language), requiresAuth: true },
  { page: 'review', path: '/review', label: t('reviewNav', language), requiresAuth: true },
+ { page: 'system-quality', path: '/system-quality', label: language === 'zh' ? '系统质量' : 'System Quality', requiresAuth: true },
  { page: 'competition', path: '/competition', label: t('realtimeNav', language), requiresAuth: true },
  { page: 'faq', path: '/faq', label: t('faqNav', language), requiresAuth: false },
  ]
@@ -370,6 +372,7 @@ export default function HeaderBar({
  { page: 'trader', path: '/dashboard', label: t('dashboardNav', language), requiresAuth: true },
  { page: 'strategy', path: '/strategy', label: t('strategyNav', language), requiresAuth: true },
  { page: 'review', path: '/review', label: t('reviewNav', language), requiresAuth: true },
+ { page: 'system-quality', path: '/system-quality', label: language === 'zh' ? '系统质量' : 'System Quality', requiresAuth: true },
  { page: 'competition', path: '/competition', label: t('realtimeNav', language), requiresAuth: true },
  { page: 'faq', path: '/faq', label: t('faqNav', language), requiresAuth: false },
  ]
