@@ -30,6 +30,7 @@ type DecisionRecordDB struct {
 	Success             bool      `gorm:"default:false"`
 	ErrorMessage        string    `gorm:"column:error_message;default:''"`
 	AIRequestDurationMs int64     `gorm:"column:ai_request_duration_ms;default:0"`
+	ConfigHash          string    `gorm:"column:config_hash;default:''"` // risk_control hash the cycle ran under (config-drift forensics)
 	CreatedAt           time.Time `json:"created_at"`
 }
 
@@ -51,6 +52,7 @@ type DecisionRecord struct {
 	Success             bool               `json:"success"`
 	ErrorMessage        string             `json:"error_message"`
 	AIRequestDurationMs int64              `json:"ai_request_duration_ms"`
+	ConfigHash          string             `json:"config_hash"`
 	AccountState        AccountSnapshot    `json:"account_state"`
 	Positions           []PositionSnapshot `json:"positions"`
 	Decisions           []DecisionAction   `json:"decisions"`
@@ -141,6 +143,7 @@ func (db *DecisionRecordDB) toRecord() *DecisionRecord {
 		Success:             db.Success,
 		ErrorMessage:        db.ErrorMessage,
 		AIRequestDurationMs: db.AIRequestDurationMs,
+		ConfigHash:          db.ConfigHash,
 	}
 	json.Unmarshal([]byte(db.CandidateCoins), &record.CandidateCoins)
 	json.Unmarshal([]byte(db.ExecutionLog), &record.ExecutionLog)
@@ -176,6 +179,7 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 		Success:             record.Success,
 		ErrorMessage:        record.ErrorMessage,
 		AIRequestDurationMs: record.AIRequestDurationMs,
+		ConfigHash:          record.ConfigHash,
 	}
 
 	if err := s.db.Create(dbRecord).Error; err != nil {

@@ -57,6 +57,11 @@ func (at *AutoTrader) runCycle() error {
 		return nil
 	}
 
+	// 0.4 Config-drift self-check: the strategy row in the DB must still match
+	// what this process loaded at start (a UI save or backend edit otherwise
+	// silently diverges from the enforced values — the 09-14 sl_min incident).
+	at.checkConfigDrift()
+
 	// 1. Check if trading needs to be stopped
 	if time.Now().Before(at.stopUntil) {
 		remaining := at.stopUntil.Sub(time.Now())

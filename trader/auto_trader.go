@@ -114,6 +114,7 @@ type AutoTraderConfig struct {
 
 	// Strategy configuration (use complete strategy config)
 	StrategyConfig *store.StrategyConfig // Strategy configuration (includes coin sources, indicators, risk control, prompts, etc.)
+	StrategyID     string                // Strategy row ID in the store — lets the cycle self-check compare the DB config against this process's in-memory copy
 }
 
 // AutoTrader automatic trader
@@ -129,6 +130,8 @@ type AutoTrader struct {
 	mcpClient             mcp.AIClient
 	store                 *store.Store           // Data storage (decision records, etc.)
 	strategyEngine        *kernel.StrategyEngine // Strategy engine (uses strategy configuration)
+	strategyID            string                 // Strategy row ID — drives the per-cycle config-drift self-check
+	loadedConfigHash      string                 // risk_control hash this process LOADED at start (compare against the DB row each cycle)
 	cycleNumber           int                    // Current cycle number
 	initialBalance        float64
 	dailyPnL              float64
@@ -137,19 +140,19 @@ type AutoTrader struct {
 	lastResetTime         time.Time
 	stopUntil             time.Time
 	isRunning             bool
-	isRunningMutex        sync.RWMutex                // Mutex to protect isRunning flag
-	startTime             time.Time                   // System start time
-	callCount             int                         // AI call count
-	positionFirstSeenTime map[string]int64            // Position first seen time (symbol_side -> timestamp in milliseconds)
-	positionStopLoss      map[string]float64          // Recorded stop-loss per open position (symbol_side -> price), set at open, drives the min-hold hard-exit bypass
-	positionStopLossMutex sync.RWMutex                // Mutex protecting positionStopLoss
-	stopMonitorCh         chan struct{}               // Used to stop monitoring goroutine
-	monitorWg             sync.WaitGroup              // Used to wait for monitoring goroutine to finish
-	peakPnLCache          map[string]float64          // Peak profit cache (symbol -> peak P&L percentage)
-	peakPnLCacheMutex     sync.RWMutex                // Cache read-write lock
-	tpTrimDone            map[string]bool             // TP ladder: symbol_side -> 1/3 trim already taken
-	r1TrimDone            map[string]bool             // 1R profit lock: symbol_side -> 50% trim already taken
-	partialTrimmed        map[string]float64          // AI partial_close: symbol_side -> cumulative fraction
+	isRunningMutex        sync.RWMutex       // Mutex to protect isRunning flag
+	startTime             time.Time          // System start time
+	callCount             int                // AI call count
+	positionFirstSeenTime map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
+	positionStopLoss      map[string]float64 // Recorded stop-loss per open position (symbol_side -> price), set at open, drives the min-hold hard-exit bypass
+	positionStopLossMutex sync.RWMutex       // Mutex protecting positionStopLoss
+	stopMonitorCh         chan struct{}      // Used to stop monitoring goroutine
+	monitorWg             sync.WaitGroup     // Used to wait for monitoring goroutine to finish
+	peakPnLCache          map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
+	peakPnLCacheMutex     sync.RWMutex       // Cache read-write lock
+	tpTrimDone            map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
+	r1TrimDone            map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
+	partialTrimmed        map[string]float64 // AI partial_close: symbol_side -> cumulative fraction
 	tpTrimMutex           sync.Mutex
 	lastBalanceSyncTime   time.Time                   // Last balance sync time
 	userID                string                      // User ID
@@ -366,6 +369,8 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		mcpClient:             mcpClient,
 		store:                 st,
 		strategyEngine:        strategyEngine,
+		strategyID:            config.StrategyID,
+		loadedConfigHash:      RiskControlHash(&config.StrategyConfig.RiskControl),
 		cycleNumber:           cycleNumber,
 		initialBalance:        config.InitialBalance,
 		lastResetTime:         time.Now(),

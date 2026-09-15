@@ -3,11 +3,11 @@ package trader
 import (
 	"fmt"
 	"math"
-	"nofx/telemetry"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
 	"nofx/store"
+	"nofx/telemetry"
 	"time"
 )
 
@@ -41,6 +41,7 @@ func (at *AutoTrader) saveDecision(record *store.DecisionRecord) error {
 	at.cycleNumber++
 	record.CycleNumber = at.cycleNumber
 	record.TraderID = at.id
+	record.ConfigHash = at.loadedConfigHash // which parameter set this cycle actually ran under
 
 	if record.Timestamp.IsZero() {
 		record.Timestamp = time.Now().UTC()
