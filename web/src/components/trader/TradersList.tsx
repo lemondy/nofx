@@ -24,6 +24,7 @@ import {
 interface TradersListProps {
  traders: TraderInfo[] | undefined
  isLoading: boolean
+ loadError?: unknown
  allExchanges: Exchange[]
  configuredModelsCount: number
  configuredExchangesCount: number
@@ -43,6 +44,7 @@ interface TradersListProps {
 export function TradersList({
  traders,
  isLoading,
+ loadError,
  allExchanges,
  configuredModelsCount,
  configuredExchangesCount,
@@ -73,8 +75,17 @@ export function TradersList({
  </h2>
  </div>
 
- {isLoading ? (
+ {isLoading && !traders ? (
  <TradersLoadingSkeleton />
+ ) : loadError && (!traders || traders.length === 0) ? (
+ <div className="py-8 text-center text-sm" style={{ color: '#C0392B' }}>
+ ⚠️ {t('traderDashboard.decisionsFetchFailed', language)}
+ <div className="text-xs mt-2" style={{ color: '#6E6E60' }}>
+ {t('common.retryLater', language) !== 'common.retryLater'
+ ? t('common.retryLater', language)
+ : '加载失败,稍后自动重试 / Will retry automatically'}
+ </div>
+ </div>
  ) : traders && traders.length > 0 ? (
  <div className="space-y-3 md:space-y-4">
  {traders.map((trader) => (

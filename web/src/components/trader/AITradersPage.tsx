@@ -230,7 +230,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
  }
  }
 
- const { data: traders, mutate: mutateTraders, isLoading: isTradersLoading } = useSWR<TraderInfo[]>(
+ const { data: traders, mutate: mutateTraders, isLoading: isTradersLoading, error: tradersError } = useSWR<TraderInfo[]>(
  user && token ? 'traders' : null,
  api.getTraders,
  { refreshInterval: 5000 }
@@ -862,6 +862,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
  <TradersList
  traders={traders}
  isLoading={isTradersLoading}
+ loadError={tradersError}
  allExchanges={allExchanges}
  configuredModelsCount={configuredModels.length}
  configuredExchangesCount={configuredExchanges.length}
