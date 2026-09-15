@@ -32,7 +32,7 @@ func TestMinSizeCheckFeasibleAndDeadZone(t *testing.T) {
 		PrimaryTF:       "1h",
 		EquityUSDT:      52.9,
 		RiskPct:         1.5,
-		MinNotionalUSDT: 10.0,
+		MinPositionSizeUSDT: 10.0, // strategy min_position_size as configured
 		// No noise floor → the tightest allowed stop is a structure stop, so
 		// the minimum is always reachable (feasible; the max-stop ceiling is
 		// still surfaced for the model).
@@ -43,9 +43,9 @@ func TestMinSizeCheckFeasibleAndDeadZone(t *testing.T) {
 		t.Fatalf("compute: %v", err)
 	}
 	if sig.MinSize == nil {
-		t.Fatal("min_size block missing — equity/risk/minNotional inputs were provided")
+		t.Fatal("min_size block missing — equity/risk/minPositionSize inputs were provided")
 	}
-	wantMax := 52.9 * 1.5 / 100 / 10.0 * 100 // equity×risk% ÷ minNotional → d% ceiling
+	wantMax := 52.9 * 1.5 / 100 / 10.0 * 100 // equity×risk% ÷ minPositionSize → d% ceiling
 	if math.Abs(sig.MinSize.MaxStopPct-wantMax) > 0.01 {
 		t.Errorf("max_stop_pct_for_min_size = %.2f, want %.2f", sig.MinSize.MaxStopPct, wantMax)
 	}
@@ -55,8 +55,8 @@ func TestMinSizeCheckFeasibleAndDeadZone(t *testing.T) {
 	if sig.MinSize.Reason != "" {
 		t.Errorf("feasible coin must not carry a reason, got %q", sig.MinSize.Reason)
 	}
-	if sig.MinSize.MinNotionalUsd != 10.0 {
-		t.Errorf("min_notional_usd = %.1f, want 10.0", sig.MinSize.MinNotionalUsd)
+	if sig.MinSize.MinPositionSizeUsd != 10.0 {
+		t.Errorf("min_position_size_usd = %.1f, want 10.0 (strategy config echoed)", sig.MinSize.MinPositionSizeUsd)
 	}
 
 	// Structural dead zone: a floor mult whose ×ATR(1h)% overshoots the
@@ -86,7 +86,7 @@ func TestMinSizeCheckOmittedWithoutInputs(t *testing.T) {
 		t.Fatalf("compute: %v", err)
 	}
 	if sig.MinSize != nil {
-		t.Errorf("min_size must be omitted without equity/risk/minNotional inputs, got %+v", sig.MinSize)
+		t.Errorf("min_size must be omitted without equity/risk/minPositionSize inputs, got %+v", sig.MinSize)
 	}
 }
 

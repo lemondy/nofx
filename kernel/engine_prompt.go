@@ -464,7 +464,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		} else {
 			params.WriteString(fmt.Sprintf("- 止损(程序校验): 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(方向性微调: 空单——尤其反弹追空/急跌追空——取上半段 0.4-0.5,挤压行情的上影线更长;多单回调入场取下半段 0.3-0.4),止损距离 d%% 只需满足: d ≤ 上限,其中 %s(本策略未启用噪声下限)\n", stopBand))
 		}
-		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额1.5U → 名义价值50U → 3x杠杆保证金≈16.7U。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小下单量的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct))
+		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额1.5U → 名义价值50U → 3x杠杆保证金≈16.7U。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益与策略配置 min_position_size(策略页可改)预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小仓位的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct))
 		params.WriteString(fmt.Sprintf("- 止盈: 选位规则(无条件适用,不是仅在第一个候选不足时才触发)——从近到远遍历止盈方向上**快照里全部时间块**(execution_tf/primary_tf 所在周期如 5m 也要,以及 15m/1h/4h)的**全部** resistance/support 数组元素(不只看数组第一项,每个时间块通常列多层),逐项算 RR,取**第一个 RR≥%.1f** 的结构位作为 take_profit。**execution_tf/primary_tf(如 5m)与 15m 不在 role_tfs.trend_tf 里也必须纳入遍历**——不得因主导周期是 1h/4h 就只看该周期的数组:跳过一个 RR 已达标、距离更近的结构位去用更远目标(例:15m/5m 支撑 RR 1.89 达标却被跳过、直接用 1h 支撑)属于违规选位,更近的达标位意味着更快落袋、更少中途回吐。全部元素 RR<%.1f 才允许下\"无可用结构位\"的结论;该比例是程序硬门槛(开仓时按决策价与成交价双重校验 RR),但\"最近可行位\"的选择正确性靠你自己执行本规则\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
 		var tpParts []string
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
@@ -1100,7 +1100,13 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 		}
 		if eq := ctx.Account.TotalEquity; eq > 0 {
 			opt.EquityUSDT = eq
-			opt.MinNotionalUSDT = MinOrderNotionalUSDT
+			// The binding minimum is the strategy-config min_position_size
+			// (web strategy page) — the same value enforceMinPositionSize
+			// rejects orders under. Config unset → executor default 12.
+			opt.MinPositionSizeUSDT = e.config.RiskControl.MinPositionSize
+			if opt.MinPositionSizeUSDT <= 0 {
+				opt.MinPositionSizeUSDT = MinPositionSizeDefaultUSDT
+			}
 			riskPct := e.config.RiskControl.RiskPerTradePct
 			if riskPct <= 0 {
 				riskPct = 1.5

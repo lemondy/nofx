@@ -145,12 +145,14 @@ type LimitAnchor struct {
 	LimitSell float64 `json:"limit_sell"`
 }
 
-// MinOrderNotionalUSDT mirrors binance FuturesTrader.GetMinNotional's
-// conservative exchange-minimum default (10 USDT). The executor rejects any
-// order below it (CheckMinNotional); the signal layer uses the same constant
-// to precompute per-symbol minimum-notional feasibility so the model never
-// proposes an order the executor must reject. Keep the two in sync.
-const MinOrderNotionalUSDT = 10.0
+// MinPositionSizeDefaultUSDT mirrors the executor's enforceMinPositionSize
+// fallback (trader/auto_trader_risk.go: min_position_size ≤ 0 → 12 USDT).
+// The BINDING minimum for a planned open is the strategy-config
+// min_position_size (web strategy page) — the signal layer reads the live
+// config value and falls back to this default only when the config is unset.
+// Binance's own exchange minimum (binance GetMinNotional, 10 USDT) is a
+// separate, weaker check further down the order path. Keep defaults in sync.
+const MinPositionSizeDefaultUSDT = 12.0
 
 // ValidDecisionStages is the setup lifecycle enum (⑯): NO_SETUP = nothing
 // forming; WATCH = setup forming, conditions tracked; READY = conditions met,

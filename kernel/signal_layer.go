@@ -221,19 +221,20 @@ type LossStreakState struct {
 }
 
 // MinSizeCheck precomputes whether any ALLOWED stop on this symbol can meet
-// the exchange minimum notional at the current equity. Small accounts have a
+// the strategy's minimum position size at the current equity (risk_control.
+// min_position_size from the web strategy page — the same value
+// enforceMinPositionSize rejects opens under). Small accounts have a
 // structural dead zone: notional = equity×risk% ÷ stop%, so a wide stop floor
-// (high-ATR coins) yields a notional below the exchange minimum — every order
-// would be rejected. Surfacing this per-symbol stops the model from burning
-// decision budget on settings that can never execute (09-15 CAPUSDT case:
-// 10.4-11.4% stop floor → 7-7.6U notional < 10U minimum, re-derived every
-// cycle).
+// (high-ATR coins) yields a notional below the minimum — every order would be
+// rejected. Surfacing this per-symbol stops the model from burning decision
+// budget on settings that can never execute (09-15 CAPUSDT case: 10.4-11.4%
+// stop floor → 7-7.6U notional < 10U minimum, re-derived every cycle).
 type MinSizeCheck struct {
-	Feasible       bool    `json:"feasible"`                  // false = even the tightest allowed stop breaks the minimum
-	MinNotionalUsd float64 `json:"min_notional_usd"`          // exchange minimum notional
-	MaxStopPct     float64 `json:"max_stop_pct_for_min_size"` // stop distance beyond this → notional < minimum
-	StopFloorPct   float64 `json:"stop_floor_pct,omitempty"`  // SLMinATRMult×ATR(1h); 0 = no noise floor configured
-	Reason         string  `json:"reason,omitempty"`          // set when !Feasible
+	Feasible           bool    `json:"feasible"`                  // false = even the tightest allowed stop breaks the minimum
+	MinPositionSizeUsd float64 `json:"min_position_size_usd"`     // risk_control.min_position_size in effect
+	MaxStopPct         float64 `json:"max_stop_pct_for_min_size"` // stop distance beyond this → notional < minimum
+	StopFloorPct       float64 `json:"stop_floor_pct,omitempty"`  // SLMinATRMult×ATR(1h); 0 = no noise floor configured
+	Reason             string  `json:"reason,omitempty"`          // set when !Feasible
 }
 
 // SignalOptions carries the evaluation moment, the strategy's primary
@@ -282,13 +283,15 @@ type SignalOptions struct {
 	// banned this symbol from new opens until that moment (program-computed
 	// from the closed-trade record — never the model's judgment).
 	LossStreakBannedUntil time.Time
-	// Min-notional feasibility inputs: with notional = equity×risk% ÷ stop%,
-	// a stop beyond equity×risk%/minNotional cannot meet the exchange minimum.
-	// Zero equity/risk/minNotional disables the MinSize block.
-	EquityUSDT      float64
-	RiskPct         float64 // RiskPerTradePct (prompt default 1.5)
-	MinNotionalUSDT float64 // mirrors binance FuturesTrader.GetMinNotional (10 USDT)
-	SLMinATRMult    float64 // stop noise floor multiplier; <=0 = no floor
+	// Min-position-size feasibility inputs: with notional = equity×risk% ÷
+	// stop%, a stop beyond equity×risk%/minPositionSize cannot meet the
+	// strategy's minimum position size (risk_control.min_position_size, web
+	// strategy page — the same gate enforceMinPositionSize enforces).
+	// Zero equity/risk/minPositionSize disables the MinSize block.
+	EquityUSDT          float64
+	RiskPct             float64 // RiskPerTradePct (prompt default 1.5)
+	MinPositionSizeUSDT float64 // risk_control.min_position_size; default 12 when unset
+	SLMinATRMult        float64 // stop noise floor multiplier; <=0 = no floor
 }
 
 // ComputeSymbolSignals builds the normalized signal block for one symbol from
@@ -661,16 +664,16 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		}
 	}
 
-	// Min-notional feasibility: notional = equity×risk% ÷ stop%, so the
+	// Min-position-size feasibility: notional = equity×risk% ÷ stop%, so the
 	// widest stop the rules allow must still satisfy equity×risk%/stop ≥
-	// minimum. The binding constraint is the NOISE FLOOR (SLMinATRMult×
-	// ATR(1h)) — if even that floor overshoots, no permitted stop can produce
-	// a tradable notional (structural dead zone). Mirrors the sizing formula
-	// and the executor's CheckMinNotional rejection.
-	if opt.EquityUSDT > 0 && opt.RiskPct > 0 && opt.MinNotionalUSDT > 0 {
+	// min_position_size. The binding constraint is the NOISE FLOOR
+	// (SLMinATRMult×ATR(1h)) — if even that floor overshoots, no permitted
+	// stop can produce a tradable notional (structural dead zone). Mirrors
+	// the sizing formula and the executor's enforceMinPositionSize rejection.
+	if opt.EquityUSDT > 0 && opt.RiskPct > 0 && opt.MinPositionSizeUSDT > 0 {
 		riskUSD := opt.EquityUSDT * opt.RiskPct / 100
 		// Stop distance d (in %) at which notional exactly equals the minimum.
-		maxStopPct := riskUSD / opt.MinNotionalUSDT * 100
+		maxStopPct := riskUSD / opt.MinPositionSizeUSDT * 100
 		floorPct := 0.0
 		if opt.SLMinATRMult > 0 {
 			if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
@@ -678,15 +681,15 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 			}
 		}
 		ms := &MinSizeCheck{
-			Feasible:       floorPct <= maxStopPct,
-			MinNotionalUsd: opt.MinNotionalUSDT,
-			MaxStopPct:     math.Round(maxStopPct*100) / 100,
-			StopFloorPct:   math.Round(floorPct*100) / 100,
+			Feasible:           floorPct <= maxStopPct,
+			MinPositionSizeUsd: opt.MinPositionSizeUSDT,
+			MaxStopPct:         math.Round(maxStopPct*100) / 100,
+			StopFloorPct:       math.Round(floorPct*100) / 100,
 		}
 		if !ms.Feasible {
 			ms.Reason = fmt.Sprintf(
-				"stop floor %.2f%% (SLMinATR %.1f×ATR(1h)) exceeds %.2f%% max for the %.0fU minimum notional at equity %.1fU — no allowed stop can meet the exchange minimum, wait+MIN_SIZE",
-				floorPct, opt.SLMinATRMult, maxStopPct, opt.MinNotionalUSDT, opt.EquityUSDT)
+				"stop floor %.2f%% (SLMinATR %.1f×ATR(1h)) exceeds %.2f%% max for the %.0fU minimum position size at equity %.1fU — no allowed stop can meet the strategy minimum, wait+MIN_SIZE",
+				floorPct, opt.SLMinATRMult, maxStopPct, opt.MinPositionSizeUSDT, opt.EquityUSDT)
 		}
 		sig.MinSize = ms
 	}
