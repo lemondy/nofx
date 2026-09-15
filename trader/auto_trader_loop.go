@@ -374,12 +374,25 @@ func (at *AutoTrader) runCycle() error {
 				}
 				break
 			}
+			// The rr_scan ceiling shown to the model this cycle for this row's
+			// direction (09-16 point 2: makes the wait→fill RR decay measurable).
+			gateRR, gateUsable := 0.0, false
+			if c := ctx.RRCeilings[market.Normalize(d.Symbol)]; c != nil {
+				switch direction {
+				case "long":
+					gateRR, gateUsable = c.LongRR, c.LongUsable
+				case "short":
+					gateRR, gateUsable = c.ShortRR, c.ShortUsable
+				}
+			}
 			if err := at.store.EntryAssessment().Insert(&store.EntryAssessment{
 				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
 				Symbol: d.Symbol, Direction: direction, Action: d.Action,
 				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,
 				WaitState:   d.WaitState,
-				NextTrigger: d.NextTrigger, // clamped to the column width at validation
+				NextTrigger: d.NextTrigger, // clamped to the dataset column width at validation
+				GateRR:      gateRR,
+				GateUsable:  gateUsable,
 				BlockingFactors: store.MarshalBlockingFactors(blockingFactors),
 				MgmtQuality:     mgmtQuality,
 				MgmtFlags:       store.MarshalBlockingFactors(d.ManagementFlags),

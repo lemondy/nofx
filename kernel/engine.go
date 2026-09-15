@@ -133,6 +133,14 @@ type Context struct {
 	// LOSS_STREAK_BAN only for symbols present here.
 	LossStreakBanned map[string]time.Time    `json:"-"`
 	LimitAnchors       map[string]*LimitAnchor            `json:"-"` // pre-computed open_*_limit anchors per symbol (prompt-build time)
+	// RRCeilings records per symbol the rr_scan best_rr the model was SHOWN
+	// per direction at prompt-build time (program values, not model echoes).
+	// This powers the "cost of waiting for the micro-trend" dataset (user
+	// review 09-16 point 2): when a WATCH_SHORT candidate finally opens after
+	// the 15m turn, its realized entry RR compares against the ceiling the
+	// wait snapshot promised — quantifying how much RR decays between the
+	// trigger event and the fill (lower entry, nearer target).
+	RRCeilings map[string]*RRCeiling `json:"-"`
 	BTCETHLeverage     int                                `json:"-"`
 	AltcoinLeverage    int                                `json:"-"`
 	Timeframes         []string                           `json:"-"`
@@ -143,6 +151,14 @@ type Context struct {
 type LimitAnchor struct {
 	LimitBuy  float64 `json:"limit_buy"`
 	LimitSell float64 `json:"limit_sell"`
+}
+
+// RRCeiling is the per-symbol rr_scan ceiling captured at prompt-build time.
+type RRCeiling struct {
+	LongRR      float64 // rr_scan.long best_rr (0 = no scan rendered)
+	ShortRR     float64
+	LongUsable  bool
+	ShortUsable bool
 }
 
 // MinPositionSizeDefaultUSDT mirrors the executor's enforceMinPositionSize

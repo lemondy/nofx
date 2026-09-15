@@ -29,6 +29,13 @@ type EntryAssessment struct {
 	WaitBias  string    `gorm:"column:wait_bias;size:8" json:"wait_bias"`
 	WaitState   string `gorm:"column:wait_state;size:16" json:"wait_state"`       // BLOCKED | WATCH_* | READY_* (empty = not declared)
 	NextTrigger string `gorm:"column:next_trigger;size:192" json:"next_trigger"` // required-event sentence for directional states
+	// Gate RR ceiling (review 09-16 point 2): the rr_scan.best_rr the model
+	// was SHOWN this cycle for the row's direction, plus its usable flag.
+	// Comparing a later open's realized RR on the same symbol against the
+	// WATCH_* rows' gate_rr quantifies the RR decay paid for "wait for the
+	// micro-trend turn". 0 / false when no scan was rendered (no noise floor).
+	GateRR     float64 `gorm:"column:gate_rr;default:0" json:"gate_rr"`
+	GateUsable bool    `gorm:"column:gate_usable" json:"gate_usable"`
 	EntryQuality int    `gorm:"column:entry_quality;default:-1" json:"entry_quality"` // -1 = not provided
 	BlockingFactors string `gorm:"column:blocking_factors;type:text" json:"blocking_factors"` // JSON array
 	MgmtQuality  int    `gorm:"column:mgmt_quality;default:-1" json:"mgmt_quality"`   // -1 = not provided (holds)

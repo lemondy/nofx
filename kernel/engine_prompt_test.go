@@ -376,6 +376,7 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 		"这只是限价路径被禁≠该方向整体禁止",
 		"数据新鲜度优先级",
 		"严禁参与 entry/SL/TP/RR 精确计算",
+		"stop_price 仅是门槛校验口径",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("per-coin block missing %q", want)
@@ -385,6 +386,7 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 	user := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
 	for _, want := range []string{
 		"开仓硬门(程序判定,禁止自行重算)",
+		"严禁照抄为 stop_loss",
 		"derivatives.funding_rollover.detected",
 		"禁止从 scanner patterns",
 		"RECHECK_ALL_HARD_GATES",
@@ -403,5 +405,44 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 		if !strings.Contains(sys, want) {
 			t.Errorf("system prompt missing %q", want)
 		}
+	}
+}
+
+// The rr_scan ceiling shown this cycle must be captured per symbol onto the
+// Context (09-16 point 2: the wait→fill RR-decay dataset reads this value at
+// insert time; no later re-derivation).
+func TestFormatMarketDataRecordsRRCeilings(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.RiskControl.SLMinATRMult = 1.5
+	cfg.RiskControl.MinRiskRewardRatio = 1.5
+	engine := NewStrategyEngine(cfg)
+
+	now := time.Now()
+	tfData := buildTF("1h", now, 80, 5.0, false) // swings via BOLL band supplements give both sides targets
+	data := &market.Data{
+		Symbol: "TESTUSDT", CurrentPrice: tfData.Klines[len(tfData.Klines)-1].Close,
+		TimeframeData: map[string]*market.TimeframeSeriesData{"1h": tfData},
+	}
+	ctx := &Context{}
+	out := engine.formatMarketData(data, nil, ctx, nil)
+	c := ctx.RRCeilings["TESTUSDT"]
+	if c == nil {
+		t.Fatalf("rr ceiling not recorded (keys %v)", ctx.RRCeilings)
+	}
+	if c.LongRR == 0 && c.ShortRR == 0 {
+		t.Fatalf("empty ceiling with a configured noise floor: %+v", c)
+	}
+	// The recorded value must match the best_rr the model saw in the JSON.
+	if !strings.Contains(out, `"hard_entry_gate"`) {
+		t.Fatal("gate block not rendered for a complete symbol")
+	}
+
+	// No noise floor → no ceiling values (never fabricate one).
+	cfg2 := &store.StrategyConfig{}
+	engine2 := NewStrategyEngine(cfg2)
+	ctx2 := &Context{}
+	engine2.formatMarketData(data, nil, ctx2, nil)
+	if c2 := ctx2.RRCeilings["TESTUSDT"]; c2 == nil || c2.LongRR != 0 || c2.ShortRR != 0 {
+		t.Errorf("ceiling without a floor = %+v, want zeros present (captured but empty)", c2)
 	}
 }
