@@ -136,3 +136,32 @@ func TestLossStreakVerdict(t *testing.T) {
 		}
 	})
 }
+
+// lossStreakState now also feeds the prompt-side ban map
+// (AutoTrader.lossStreakBannedMap → kernel.Context.LossStreakBanned): pin the
+// expiry arithmetic — the ban runs 24h from the Nth (triggering) loss.
+func TestLossStreakStateBannedUntil(t *testing.T) {
+	nowMs := time.Now().UnixMilli()
+	// Newest first: 1h ago, 3h ago, 5h ago (all losses).
+	positions := []store.TraderPosition{
+		mkClosed("ZECUSDT", 1, -1.0, nowMs),
+		mkClosed("ZECUSDT", 3, -0.5, nowMs),
+		mkClosed("ZECUSDT", 5, -0.8, nowMs),
+	}
+	streak, until := lossStreakState(positions, 3, nowMs)
+	if streak != 3 {
+		t.Fatalf("streak = %d, want 3", streak)
+	}
+	want := time.UnixMilli(positions[2].ExitTime).Add(24 * time.Hour)
+	if !until.Equal(want) {
+		t.Errorf("bannedUntil = %v, want Nth-loss exit + 24h = %v", until, want)
+	}
+	if _, until := lossStreakState(positions[:2], 3, nowMs); !until.IsZero() {
+		t.Errorf("2 losses must not ban, got until %v", until)
+	}
+	// Newest trade profitable → streak broken, no ban.
+	positions[0].RealizedPnL = 1.2
+	if _, until := lossStreakState(positions, 3, nowMs); !until.IsZero() {
+		t.Errorf("win at the tail must break the streak, got until %v", until)
+	}
+}

@@ -204,7 +204,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("  - 程序自动机制仍在: 1R 减仓 50%+保本、1.5R 跟踪止损、25% 全平、回撤保护——这些动作是**补充**,不是替代\n")
 	sb.WriteString("- `wait_bias`: wait 决策的方向语义,枚举 \"long\"/\"short\"/留空——见上三类分类;它承载方向判断,directional_score 是它的证据,no_trade_reason 不承载方向判断\n")
 	sb.WriteString("- **`management_quality` + `management_flags`(IN_POSITION hold 必填,数据集字段)**: management_quality 是你对\"继续持有\"这个判断的诚实自评 0-100(90+: 趋势完好+结构无损+浮盈保护已到位;70-89: 持有理由成立但需盯一个风险;50-69: 边缘,理由在弱化;<50: 该考虑离场——此时应输出 close/partial 而不是低分 hold)。management_flags 固定枚举(逐字): BREAKEVEN_WARRANTED|PARTIAL_WARRANTED|TRAIL_SUFFICIENT|TREND_INTACT|STRUCTURE_WEAKENING|CHOP_RISK|VOL_SPIKE|EVENT_RISK。**若你认为该保本/该部分止盈,正确动作是输出 adjust_stop_loss / partial_close_*,而不是 hold+flag**——hold+flag 的语义是\"我判断了,但程序阶梯/时机还没到,暂不动作\"\n")
-	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
+	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK。其中 `LOSS_STREAK_BAN` **只允许用于快照 JSON 里有 `loss_streak` 字段的币**——那是程序按成交记录算出的连亏禁开期;快照没有该字段 = 程序判定未熔断,给这样的币标 LOSS_STREAK_BAN 属于标签造假(09-15 审计:模型曾给刚连胜两笔的币标此标签 17 次)。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
 	sb.WriteString("- **STRICT JSON**: Output raw JSON only — no placeholders (`?`, `？`, `N/A`, `—`) or trailing commas for unknown values. If a value is unknown, use `0` or omit the field entirely\n")
 	sb.WriteString("- **`0` 的语义例外(价格字段)**: 对 `price` / `stop_loss` / `take_profit`,以及输入里的 `limit_buy_price` / `limit_sell_price`,`0` 严格等于\"不可交易/被抑制\",绝不是占位符——这些字段绝不能输出 0,也不确定时省略字段并把原因写进 no_trade_reason\n\n")
 
@@ -464,7 +464,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		} else {
 			params.WriteString(fmt.Sprintf("- 止损(程序校验): 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(方向性微调: 空单——尤其反弹追空/急跌追空——取上半段 0.4-0.5,挤压行情的上影线更长;多单回调入场取下半段 0.3-0.4),止损距离 d%% 只需满足: d ≤ 上限,其中 %s(本策略未启用噪声下限)\n", stopBand))
 		}
-		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额1.5U → 名义价值50U → 3x杠杆保证金≈16.7U。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置\n", riskPct))
+		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额1.5U → 名义价值50U → 3x杠杆保证金≈16.7U。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小下单量的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct))
 		params.WriteString(fmt.Sprintf("- 止盈: 选位规则(无条件适用,不是仅在第一个候选不足时才触发)——从近到远遍历止盈方向上**快照里全部时间块**(execution_tf/primary_tf 所在周期如 5m 也要,以及 15m/1h/4h)的**全部** resistance/support 数组元素(不只看数组第一项,每个时间块通常列多层),逐项算 RR,取**第一个 RR≥%.1f** 的结构位作为 take_profit。**execution_tf/primary_tf(如 5m)与 15m 不在 role_tfs.trend_tf 里也必须纳入遍历**——不得因主导周期是 1h/4h 就只看该周期的数组:跳过一个 RR 已达标、距离更近的结构位去用更远目标(例:15m/5m 支撑 RR 1.89 达标却被跳过、直接用 1h 支撑)属于违规选位,更近的达标位意味着更快落袋、更少中途回吐。全部元素 RR<%.1f 才允许下\"无可用结构位\"的结论;该比例是程序硬门槛(开仓时按决策价与成交价双重校验 RR),但\"最近可行位\"的选择正确性靠你自己执行本规则\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
 		var tpParts []string
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
@@ -511,7 +511,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			if maxLosses <= 0 {
 				maxLosses = 3
 			}
-			params.WriteString(fmt.Sprintf("- 连亏熔断(程序强制): 某币在 24h 内连续 %d 笔亏损平仓后,该币接下来 24h 禁止再开仓,开仓决策会被程序直接拦截。近期交易里已经连亏的币不要尝试抄底翻本,把机会让给趋势健康的标的\n", maxLosses))
+			params.WriteString(fmt.Sprintf("- 连亏熔断(程序强制): 某币在 24h 内连续 %d 笔亏损平仓后,该币接下来 24h 禁止再开仓,开仓决策会被程序直接拦截。熔断判定与解除由程序按成交记录计算:当前熔断中的币会在其快照 JSON 里标注 `loss_streak` 块(含 until_utc 解除时间);**快照没有 `loss_streak` 字段的币一律视为未熔断**,不要自行推测某个币\"应该被熔断了\"。近期交易里已经连亏的币不要尝试抄底翻本,把机会让给趋势健康的标的\n", maxLosses))
 		}
 		if params.Len() > 0 {
 			sb.WriteString("## Strategy Parameters\n")
@@ -1088,6 +1088,25 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 	if ctx != nil && len(ctx.SymbolStats) > 0 {
 		if st, ok := ctx.SymbolStats[strings.ToUpper(data.Symbol)]; ok {
 			opt.TraderHistory = st
+		}
+	}
+	// Program-computed circuit-breaker verdict + minimum-notional feasibility
+	// (09-15: the model was self-declaring LOSS_STREAK_BAN on just-won symbols
+	// and re-deriving the small-account dead zone every cycle — both now
+	// precomputed here).
+	if ctx != nil {
+		if until, ok := ctx.LossStreakBanned[strings.ToUpper(data.Symbol)]; ok {
+			opt.LossStreakBannedUntil = until
+		}
+		if eq := ctx.Account.TotalEquity; eq > 0 {
+			opt.EquityUSDT = eq
+			opt.MinNotionalUSDT = MinOrderNotionalUSDT
+			riskPct := e.config.RiskControl.RiskPerTradePct
+			if riskPct <= 0 {
+				riskPct = 1.5
+			}
+			opt.RiskPct = riskPct
+			opt.SLMinATRMult = e.config.RiskControl.SLMinATRMult
 		}
 	}
 	if quantData != nil {

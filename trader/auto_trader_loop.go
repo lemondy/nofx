@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"nofx/kernel"
 	"nofx/logger"
+	"nofx/market"
 	"nofx/store"
 	notify "nofx/telegram/notify"
 	"nofx/trader/binance"
 	"nofx/trader/types"
+	"sort"
 	"strings"
 	"time"
 )
@@ -350,11 +352,33 @@ func (at *AutoTrader) runCycle() error {
 			if d.ManagementQuality != nil {
 				mgmtQuality = *d.ManagementQuality
 			}
+			// Dataset hygiene (09-15): LOSS_STREAK_BAN is program truth —
+			// the model may cite it only for symbols the circuit breaker has
+			// actually banned. Strip self-invented bans (it tagged just-won
+			// symbols with this 125×/5h during the 09-15 audit) so the
+			// quality→win-rate dataset stays trustworthy.
+			blockingFactors := d.BlockingFactors
+			for _, f := range d.BlockingFactors {
+				if f != "LOSS_STREAK_BAN" {
+					continue
+				}
+				if _, banned := ctx.LossStreakBanned[market.Normalize(d.Symbol)]; !banned {
+					filtered := make([]string, 0, len(d.BlockingFactors))
+					for _, tag := range d.BlockingFactors {
+						if tag != "LOSS_STREAK_BAN" {
+							filtered = append(filtered, tag)
+						}
+					}
+					blockingFactors = filtered
+					logger.Warnf("🧹 [%s] %s: stripped model-declared LOSS_STREAK_BAN (program verdict: not banned) from %v", at.name, d.Symbol, d.BlockingFactors)
+				}
+				break
+			}
 			if err := at.store.EntryAssessment().Insert(&store.EntryAssessment{
 				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
 				Symbol: d.Symbol, Direction: direction, Action: d.Action,
 				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,
-				BlockingFactors: store.MarshalBlockingFactors(d.BlockingFactors),
+				BlockingFactors: store.MarshalBlockingFactors(blockingFactors),
 				MgmtQuality:     mgmtQuality,
 				MgmtFlags:       store.MarshalBlockingFactors(d.ManagementFlags),
 				EntryPath:       actionRecord.EntryPath,
@@ -658,6 +682,24 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		Positions:      positionInfos,
 		SymbolStats:    at.loadSymbolStats(),
 		CandidateCoins: candidateCoins,
+	}
+	// Loss-streak circuit breaker: program-computed ban map (one store pass),
+	// mirrored into each symbol's snapshot so the model reads the verdict
+	// instead of self-judging it (09-15 label-abuse fix). Nil = nothing banned.
+	if strategyConfig.RiskControl.LossStreakBanEnabled {
+		maxLosses := strategyConfig.RiskControl.LossStreakMaxLosses
+		if maxLosses <= 0 {
+			maxLosses = lossStreakDefaultN
+		}
+		ctx.LossStreakBanned = at.lossStreakBannedMap(maxLosses)
+		if len(ctx.LossStreakBanned) > 0 {
+			names := make([]string, 0, len(ctx.LossStreakBanned))
+			for sym, until := range ctx.LossStreakBanned {
+				names = append(names, fmt.Sprintf("%s(until %s)", sym, until.Local().Format("01-02 15:04")))
+			}
+			sort.Strings(names)
+			logger.Infof("🛡️ [%s] Loss-streak ban active: %s", at.name, strings.Join(names, ", "))
+		}
 	}
 
 	// 6.5 Inject review-derived trading rules into AI context

@@ -116,6 +116,13 @@ type SymbolSignal struct {
 	BTC           *BTCCorrelation    `json:"btc_correlation,omitempty"`
 	DataFreshness *DataFreshness     `json:"data_freshness,omitempty"`
 	TraderHistory *TraderHistoryStat `json:"trader_history,omitempty"`
+	// LossStreak is the program's circuit-breaker verdict for this symbol.
+	// Present ONLY when the symbol is currently banned; the model may cite
+	// LOSS_STREAK_BAN for this symbol and no other.
+	LossStreak *LossStreakState `json:"loss_streak,omitempty"`
+	// MinSize is the precomputed minimum-notional feasibility for this
+	// symbol at the current equity (see MinSizeCheck).
+	MinSize *MinSizeCheck `json:"min_size,omitempty"`
 
 	SignalConflict *SignalConflict `json:"signal_conflict,omitempty"`
 }
@@ -202,6 +209,33 @@ type TraderHistoryStat struct {
 	RealizedPnL  float64 `json:"realized_pnl"`
 }
 
+// LossStreakState is the PROGRAM-computed loss-streak circuit-breaker verdict
+// for one symbol (auto_trader_lossstreak.go is the enforcement mirror). The
+// model must read this field instead of self-judging the ban — an audit on
+// 09-15 found the model tagging just-won symbols (e.g. CAPUSDT ×17) with
+// LOSS_STREAK_BAN, poisoning the entry_quality dataset.
+type LossStreakState struct {
+	Banned    bool    `json:"banned"`
+	UntilUTC  string  `json:"until_utc,omitempty"`  // ban expiry (program-computed)
+	HoursLeft float64 `json:"hours_left,omitempty"` // remaining ban duration
+}
+
+// MinSizeCheck precomputes whether any ALLOWED stop on this symbol can meet
+// the exchange minimum notional at the current equity. Small accounts have a
+// structural dead zone: notional = equity×risk% ÷ stop%, so a wide stop floor
+// (high-ATR coins) yields a notional below the exchange minimum — every order
+// would be rejected. Surfacing this per-symbol stops the model from burning
+// decision budget on settings that can never execute (09-15 CAPUSDT case:
+// 10.4-11.4% stop floor → 7-7.6U notional < 10U minimum, re-derived every
+// cycle).
+type MinSizeCheck struct {
+	Feasible       bool    `json:"feasible"`                  // false = even the tightest allowed stop breaks the minimum
+	MinNotionalUsd float64 `json:"min_notional_usd"`          // exchange minimum notional
+	MaxStopPct     float64 `json:"max_stop_pct_for_min_size"` // stop distance beyond this → notional < minimum
+	StopFloorPct   float64 `json:"stop_floor_pct,omitempty"`  // SLMinATRMult×ATR(1h); 0 = no noise floor configured
+	Reason         string  `json:"reason,omitempty"`          // set when !Feasible
+}
+
 // SignalOptions carries the evaluation moment, the strategy's primary
 // timeframe, and the quant layer's true 1h OI change. All indicator features
 // are self-computed from closed bars — no display toggles involved.
@@ -244,6 +278,17 @@ type SignalOptions struct {
 	BtcCloses              []float64          // closed 1h BTC closes for correlation/beta
 	VendorStalenessPct     *float64           // vendor forming close vs live ticker
 	TraderHistory          *TraderHistoryStat // this trader's closed-trade record on the symbol
+	// LossStreakBannedUntil is non-zero when the trader's circuit breaker has
+	// banned this symbol from new opens until that moment (program-computed
+	// from the closed-trade record — never the model's judgment).
+	LossStreakBannedUntil time.Time
+	// Min-notional feasibility inputs: with notional = equity×risk% ÷ stop%,
+	// a stop beyond equity×risk%/minNotional cannot meet the exchange minimum.
+	// Zero equity/risk/minNotional disables the MinSize block.
+	EquityUSDT      float64
+	RiskPct         float64 // RiskPerTradePct (prompt default 1.5)
+	MinNotionalUSDT float64 // mirrors binance FuturesTrader.GetMinNotional (10 USDT)
+	SLMinATRMult    float64 // stop noise floor multiplier; <=0 = no floor
 }
 
 // ComputeSymbolSignals builds the normalized signal block for one symbol from
@@ -600,6 +645,51 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// price/levels/volume/OI itself.
 	sig.Breakout = computeBreakoutState(data, sig)
 	sig.BBRide = computeBBRide(data)
+
+	// Loss-streak circuit breaker: the trader computes the ban from the
+	// closed-trade record; the signal only mirrors the verdict so the model
+	// never has to (and must not) self-judge it.
+	if !opt.LossStreakBannedUntil.IsZero() {
+		hoursLeft := opt.LossStreakBannedUntil.Sub(now).Hours()
+		if hoursLeft < 0 {
+			hoursLeft = 0
+		}
+		sig.LossStreak = &LossStreakState{
+			Banned:    true,
+			UntilUTC:  opt.LossStreakBannedUntil.UTC().Format(time.RFC3339),
+			HoursLeft: math.Round(hoursLeft*10) / 10,
+		}
+	}
+
+	// Min-notional feasibility: notional = equity×risk% ÷ stop%, so the
+	// widest stop the rules allow must still satisfy equity×risk%/stop ≥
+	// minimum. The binding constraint is the NOISE FLOOR (SLMinATRMult×
+	// ATR(1h)) — if even that floor overshoots, no permitted stop can produce
+	// a tradable notional (structural dead zone). Mirrors the sizing formula
+	// and the executor's CheckMinNotional rejection.
+	if opt.EquityUSDT > 0 && opt.RiskPct > 0 && opt.MinNotionalUSDT > 0 {
+		riskUSD := opt.EquityUSDT * opt.RiskPct / 100
+		// Stop distance d (in %) at which notional exactly equals the minimum.
+		maxStopPct := riskUSD / opt.MinNotionalUSDT * 100
+		floorPct := 0.0
+		if opt.SLMinATRMult > 0 {
+			if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
+				floorPct = opt.SLMinATRMult * t1h.ATRPct
+			}
+		}
+		ms := &MinSizeCheck{
+			Feasible:       floorPct <= maxStopPct,
+			MinNotionalUsd: opt.MinNotionalUSDT,
+			MaxStopPct:     math.Round(maxStopPct*100) / 100,
+			StopFloorPct:   math.Round(floorPct*100) / 100,
+		}
+		if !ms.Feasible {
+			ms.Reason = fmt.Sprintf(
+				"stop floor %.2f%% (SLMinATR %.1f×ATR(1h)) exceeds %.2f%% max for the %.0fU minimum notional at equity %.1fU — no allowed stop can meet the exchange minimum, wait+MIN_SIZE",
+				floorPct, opt.SLMinATRMult, maxStopPct, opt.MinNotionalUSDT, opt.EquityUSDT)
+		}
+		sig.MinSize = ms
+	}
 
 	sig.DataComplete = complete && sig.Price > 0
 	if !complete {

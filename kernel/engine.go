@@ -127,6 +127,11 @@ type Context struct {
 	NetFlowRankingData *nofxos.NetFlowRankingData         `json:"-"` // Market-wide fund flow ranking data
 	PriceRankingData   *nofxos.PriceRankingData           `json:"-"` // Market-wide price gainers/losers
 	SymbolStats        map[string]*TraderHistoryStat      `json:"-"` // per-symbol closed-trade record for this trader
+	// LossStreakBanned maps symbol → ban-expiry for symbols currently under
+	// the loss-streak circuit breaker (program-computed by the trader from
+	// the closed-trade record). The prompt instructs the model to cite
+	// LOSS_STREAK_BAN only for symbols present here.
+	LossStreakBanned map[string]time.Time    `json:"-"`
 	LimitAnchors       map[string]*LimitAnchor            `json:"-"` // pre-computed open_*_limit anchors per symbol (prompt-build time)
 	BTCETHLeverage     int                                `json:"-"`
 	AltcoinLeverage    int                                `json:"-"`
@@ -139,6 +144,13 @@ type LimitAnchor struct {
 	LimitBuy  float64 `json:"limit_buy"`
 	LimitSell float64 `json:"limit_sell"`
 }
+
+// MinOrderNotionalUSDT mirrors binance FuturesTrader.GetMinNotional's
+// conservative exchange-minimum default (10 USDT). The executor rejects any
+// order below it (CheckMinNotional); the signal layer uses the same constant
+// to precompute per-symbol minimum-notional feasibility so the model never
+// proposes an order the executor must reject. Keep the two in sync.
+const MinOrderNotionalUSDT = 10.0
 
 // ValidDecisionStages is the setup lifecycle enum (⑯): NO_SETUP = nothing
 // forming; WATCH = setup forming, conditions tracked; READY = conditions met,
