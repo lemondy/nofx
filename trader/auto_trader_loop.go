@@ -296,7 +296,16 @@ func (at *AutoTrader) runCycle() error {
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
-			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>❌ %s %s 执行失败</b>\n<code>%s</code>", notify.Escape(d.Symbol), d.Action, notify.Escape(err.Error())))
+			// Alert dedup (CAPUSDT 09-15): the AI retrying an illegal
+			// adjust_stop_loss every cycle must not page six times — one alert
+			// per (action, symbol) within the gateNotifyRecord window, follow-ups
+			// stay in the log with a running streak.
+			streak, push := at.gateNotifyRecord("execfail:"+d.Action+":"+d.Symbol, time.Now())
+			if push {
+				notify.Notify("ALERT", at.name, fmt.Sprintf("<b>❌ %s %s 执行失败</b>\n<code>%s</code>\n<i>同因告警 30 分钟内已去重(streak %d)</i>", notify.Escape(d.Symbol), d.Action, notify.Escape(err.Error()), streak))
+			} else {
+				logger.Infof("🔇 [%s] 执行失败告警去重(%s %s, streak %d)", at.name, d.Symbol, d.Action, streak)
+			}
 			// A Binance auth/IP rejection during order execution pauses the
 			// trader immediately — retrying orders with a rejected key is noise.
 			if binance.IsAuthOrIPError(err) && !at.authBlocked {
