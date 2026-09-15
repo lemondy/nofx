@@ -240,7 +240,7 @@ func TestBreakoutChaseExceptionWording(t *testing.T) {
 	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"例外一(突破追入)",
-		"例外二(布林上轨骑行)",
+		"例外二(布林上轨骑行,只做多)",
 		"`bb_ride.ride`=true",
 		"布林上轨骑行",
 		"`bb_ride.ride`=true",
@@ -250,7 +250,10 @@ func TestBreakoutChaseExceptionWording(t *testing.T) {
 		"`directional_score`≥80",
 		"`signal_conflict.directional_conflict`=false",
 		"连亏禁开仓期",
-		"任一例外不满足仍必须用限价单",
+		"例外不满足仍必须用限价单",
+		"例外三(布林下轨骑行,只做空)",
+		"`short_ride.ride`=true",
+		"open_short` 市价追入",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("breakout-chase exception missing %q", want)

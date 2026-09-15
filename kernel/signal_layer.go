@@ -123,6 +123,11 @@ type SymbolSignal struct {
 	// volume surge + ≥3 consecutive bullish closed 15m bars hugging the upper
 	// Bollinger band — the momentum-ride market-entry evidence.
 	BBRide *BBRide `json:"bb_ride,omitempty"`
+	// ShortRide is the lower-band plunge-ride mirror (short_ride, 09-16):
+	// volume surge + ≥3 consecutive bearish closed 15m bars hugging the lower
+	// Bollinger band — the market-open_short evidence for plunges where the
+	// short limit anchor sits suppressed against the swing-low.
+	ShortRide *BBShortRide `json:"short_ride,omitempty"`
 	// ⑩ Data completeness ≠ data sufficiency: per-TF closed-bar counts vs
 	// indicator requirements.
 	DataQuality *DataQuality `json:"data_quality,omitempty"`
@@ -766,6 +771,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// price/levels/volume/OI itself.
 	sig.Breakout = computeBreakoutState(data, sig)
 	sig.BBRide = computeBBRide(data)
+	sig.ShortRide = computeBBShortRide(data)
 
 	// Loss-streak circuit breaker: the trader computes the ban from the
 	// closed-trade record; the signal only mirrors the verdict so the model
