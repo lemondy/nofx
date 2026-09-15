@@ -2,6 +2,7 @@ package binance
 
 import (
 	"context"
+	"nofx/market"
 	"strings"
 	"sync"
 	"time"
@@ -69,15 +70,9 @@ func (t *FuturesTrader) IsStockSymbol(symbol string) bool {
 }
 
 // IsUSMarketWeekend reports whether `now` falls on a Saturday or Sunday in
-// US Eastern time — the underlying stock market's non-trading days.
+// US Eastern time — the underlying stock market's non-trading days. Delegates
+// to market.IsUSMarketWeekend so the executor gate and the prompt-side
+// STOCK_WEEKEND hard block share one calendar definition.
 func IsUSMarketWeekend(now time.Time) bool {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		// IANA data unavailable: fall back to a fixed UTC-5 estimate (no DST
-		// handling — weekend boundaries are day-granular, a DST-hour is
-		// irrelevant).
-		loc = time.FixedZone("EST", -5*3600)
-	}
-	et := now.In(loc)
-	return et.Weekday() == time.Saturday || et.Weekday() == time.Sunday
+	return market.IsUSMarketWeekend(now)
 }

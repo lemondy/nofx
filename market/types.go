@@ -21,6 +21,11 @@ type Data struct {
 	// Some listings settle every 4h or 1h — a fixed ×3/day annualization
 	// understates their rate by 2-8×.
 	FundingSettleHours float64
+	// FundingHistory carries the recent SETTLED funding rates, oldest→newest
+	// (nil when the history fetch failed). The signal layer derives the
+	// program-verified funding_rollover verdict from it — the settled sequence
+	// vs the live forward estimate in FundingRate.
+	FundingHistory []float64
 	IntradaySeries     *IntradayData
 	LongerTermContext  *LongerTermData
 	// Multi-timeframe data (new)

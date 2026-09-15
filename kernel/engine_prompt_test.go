@@ -202,20 +202,24 @@ func extractStopLine(prompt string) string {
 // role timeframes before any "no usable structure" verdict: on BZUSDT the
 // model read resistance[0] (103.49), declared "再远无任何历史结构" while
 // resistance[1] (104.297) sat right there in the 15m block — the skip was
-// right by luck (RR 1.14 < 1.5), not by process.
+// right by luck (RR 1.14 < 1.5), not by process. Review 2026-09-15 point 1:
+// the scan is now PROGRAM-DELIVERED via hard_entry_gate.rr_scan — the rule
+// must pin (a) the full-array scan semantics of the field, (b) adoption of
+// first_rr_ge_target, (c) MAX_STRUCTURAL_RR as the failure verdict wording,
+// and (d) the manual fallback for symbols without the field.
 func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.MinRiskRewardRatio = 1.5
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
 	for _, want := range []string{
-		"无条件适用", // scan is the PRIMARY algorithm, not a remedial branch (ZEC 09-13: nearer passing 15m level skipped for the trend_tf level)
-		"快照里全部时间块", // includes 5m — ZEC's execution_tf is 5m and the nearest passing level lived there
-		"15m/1h/4h",
-		"与 15m 不在 role_tfs.trend_tf 里也必须纳入遍历",
+		"rr_scan",
+		"全部时间块(含 execution_tf/15m)全部 resistance/support",
+		"直接采用 `rr_scan.first_rr_ge_target`",
 		"第一个 RR≥1.5",
-		"属于违规选位",
-		"不只看数组第一项",
+		"MAX_STRUCTURAL_RR",
+		"RR 门结构性失败",
+		"没有 rr_scan 字段", // manual fallback kept for symbols without the block
 		"无可用结构位",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -330,6 +334,74 @@ func TestBuildUserPromptRallyWindow(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("rally window prompt missing %q", want)
+		}
+	}
+}
+
+// Program-truth gate wording (review 2026-09-15): the per-coin legend must
+// introduce hard_entry_gate / rr_scan / bias / funding_rollover with their
+// verdict semantics (MAX_STRUCTURAL_RR wording, scanner≠market-short,
+// anchor-suppression-is-not-a-direction-ban), carry the data freshness
+// priority that bars ranking prices from exact math, and the system prompt
+// must teach the wait state machine with the RECHECK_ALL_HARD_GATES
+// discipline and the next-snapshot (never weekly) re-evaluation semantics.
+func TestPromptProgramTruthGateWording(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.RiskControl.MinRiskRewardRatio = 1.5
+	cfg.RiskControl.SLMinATRMult = 1.5
+	cfg.CoinSource.SourceType = "short_scan"
+	engine := NewStrategyEngine(cfg)
+
+	now := time.Now()
+	tfData := &market.TimeframeSeriesData{Timeframe: "1h"}
+	p := 5.0
+	for i := 0; i < 80; i++ {
+		p *= 1.002
+		tfData.Klines = append(tfData.Klines, market.KlineBar{
+			Time: now.Add(time.Duration(i-80) * time.Hour).UnixMilli(),
+			Open: p * 0.999, High: p * 1.002, Low: p * 0.998, Close: p, Volume: 1000 + float64(i),
+		})
+	}
+	data := &market.Data{
+		Symbol: "TESTUSDT", CurrentPrice: p,
+		FundingRate: 0.00005, FundingRateOK: true, FundingSettleHours: 4,
+		FundingHistory: []float64{0.0004, 0.0004, 0.0004, 0.0004, 0.00005, 0.00005},
+		TimeframeData:  map[string]*market.TimeframeSeriesData{"1h": tfData},
+	}
+	out := engine.formatMarketData(data, nil, nil, nil)
+	for _, want := range []string{
+		`"hard_entry_gate"`, `"rr_scan"`, `"bias"`, `"funding_rollover"`,
+		"MAX_STRUCTURAL_RR",
+		"不等于市场空头证据强",
+		"这只是限价路径被禁≠该方向整体禁止",
+		"数据新鲜度优先级",
+		"严禁参与 entry/SL/TP/RR 精确计算",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("per-coin block missing %q", want)
+		}
+	}
+
+	user := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	for _, want := range []string{
+		"开仓硬门(程序判定,禁止自行重算)",
+		"derivatives.funding_rollover.detected",
+		"禁止从 scanner patterns",
+		"RECHECK_ALL_HARD_GATES",
+	} {
+		if !strings.Contains(user, want) {
+			t.Errorf("user prompt missing %q", want)
+		}
+	}
+
+	sys := engine.BuildSystemPrompt(100, "")
+	for _, want := range []string{
+		"`wait_state` + `next_trigger`",
+		"READY_LONG", "WATCH_SHORT", "BLOCKED",
+		"重评条件", "禁止输出任何以天/周为尺度的搁置结论",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("system prompt missing %q", want)
 		}
 	}
 }

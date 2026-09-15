@@ -27,6 +27,8 @@ type EntryAssessment struct {
 	Action    string    `gorm:"column:action;size:24" json:"action"`
 	Stage     string    `gorm:"column:stage;size:16" json:"stage"`     // decision_stage
 	WaitBias  string    `gorm:"column:wait_bias;size:8" json:"wait_bias"`
+	WaitState   string `gorm:"column:wait_state;size:16" json:"wait_state"`       // BLOCKED | WATCH_* | READY_* (empty = not declared)
+	NextTrigger string `gorm:"column:next_trigger;size:192" json:"next_trigger"` // required-event sentence for directional states
 	EntryQuality int    `gorm:"column:entry_quality;default:-1" json:"entry_quality"` // -1 = not provided
 	BlockingFactors string `gorm:"column:blocking_factors;type:text" json:"blocking_factors"` // JSON array
 	MgmtQuality  int    `gorm:"column:mgmt_quality;default:-1" json:"mgmt_quality"`   // -1 = not provided (holds)

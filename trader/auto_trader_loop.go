@@ -378,6 +378,8 @@ func (at *AutoTrader) runCycle() error {
 				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
 				Symbol: d.Symbol, Direction: direction, Action: d.Action,
 				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,
+				WaitState:   d.WaitState,
+				NextTrigger: d.NextTrigger, // clamped to the column width at validation
 				BlockingFactors: store.MarshalBlockingFactors(blockingFactors),
 				MgmtQuality:     mgmtQuality,
 				MgmtFlags:       store.MarshalBlockingFactors(d.ManagementFlags),

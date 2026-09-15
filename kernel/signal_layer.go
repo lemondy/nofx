@@ -66,6 +66,25 @@ type DerivSignal struct {
 	LongShortAccountRatio  *float64 `json:"long_short_account_ratio,omitempty"`  // global accounts long/short
 	TopTraderPositionRatio *float64 `json:"top_trader_position_ratio,omitempty"` // top-20%-by-position traders long/short
 	TakerBuySellRatio      *float64 `json:"taker_buy_sell_ratio,omitempty"`      // taker buy/sell volume, 1h
+	// FundingRollover is the PROGRAM-verified short-side crowding condition ②
+	// ("费率刚从高位回落"), computed from the settled funding history vs the
+	// live forward rate (user review 2026-09-15 point 6: the rule demanded
+	// this evidence but no structured-signal field carried it, so the model
+	// could only trust — or distrust — the scanner's snapshot pattern text).
+	// Absent = history unavailable → the condition is UNKNOWN, never "not
+	// rolled over".
+	FundingRollover *FundingRolloverState `json:"funding_rollover,omitempty"`
+}
+
+// FundingRolloverState: detected via market.FundingRolloverDetected — the
+// settled rate 3 intervals ago sat above the symbol-scaled crowding threshold
+// and the live forward rate is now below it. from/to are annualized on the
+// symbol's real settlement interval.
+type FundingRolloverState struct {
+	Detected          bool     `json:"detected"`
+	FromAnnualizedPct *float64 `json:"from_annualized_pct,omitempty"` // the "high" it rolled off, annualized
+	ToAnnualizedPct   *float64 `json:"to_annualized_pct,omitempty"`   // the live forward rate, annualized
+	SettlesBack       int      `json:"settles_back"`                  // reference point: N settlements ago
 }
 
 // LiquiditySignal carries order-book tradability metrics.
@@ -123,6 +142,16 @@ type SymbolSignal struct {
 	// MinSize is the precomputed minimum-notional feasibility for this
 	// symbol at the current equity (see MinSizeCheck).
 	MinSize *MinSizeCheck `json:"min_size,omitempty"`
+
+	// HardGate is the program's per-direction open verdict: entry basis,
+	// anchor/limit availability, the exhaustive rr_scan, and the machine
+	// blocker list (see HardEntryGate / DirectionGate). The model must open
+	// only in a direction this says allowed (or argue one of the two
+	// documented market-order exceptions), and adopt rr_scan.first_rr_ge_target
+	// as the take-profit instead of re-scanning structure.
+	HardGate *HardEntryGate `json:"hard_entry_gate,omitempty"`
+	// Bias names the SOURCE of each directional read (see BiasBlock).
+	Bias *BiasBlock `json:"bias,omitempty"`
 
 	SignalConflict *SignalConflict `json:"signal_conflict,omitempty"`
 }
@@ -237,6 +266,60 @@ type MinSizeCheck struct {
 	Reason             string  `json:"reason,omitempty"`          // set when !Feasible
 }
 
+// RRScan is the program's exhaustive structural take-profit scan for one
+// direction (user review 2026-09-15 points 1/2/8): walk EVERY resistance
+// (long) / support (short) element across ALL timeframe blocks, near→far,
+// deduped, and compute the RR of each at the TIGHTEST ALLOWED stop (the noise
+// floor). The floor stop is deliberately the best case — a wide structural
+// stop only lowers RR — so best_rr < min_rr is a DEFINITIVE verdict that the
+// RR gate cannot be passed in this direction, whatever structure the model
+// picks. first_rr_ge_target is the level the TP rule demands: the nearest
+// target whose RR clears min_rr — the model adopts it instead of re-deriving.
+type RRScan struct {
+	Direction       string  `json:"direction"`                 // long | short
+	EntryPrice      float64 `json:"entry_price"`               // the anchor the scan assumed
+	EntryBasis      string  `json:"entry_basis"`               // limit_anchor | live_price
+	StopDistancePct float64 `json:"stop_distance_pct"`         // noise floor (best-case stop) in %
+	StopPrice       float64 `json:"stop_price"`                // entry ∓ floor distance
+	MinRR           float64 `json:"min_rr"`                    // strategy min_risk_reward_ratio in effect
+	TargetsScanned  int     `json:"targets_scanned"`           // distinct structural levels scanned
+	BestTarget      float64 `json:"best_target,omitempty"`     // farthest scanned level (max RR)
+	BestRR          float64 `json:"best_rr"`                   // upper-bound RR — < min_rr ⇒ RR fails for sure
+	FirstRRGeTarget float64 `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
+	Usable          bool    `json:"usable"`                    // a qualifying target exists
+}
+
+// DirectionGate is the program's per-direction open verdict for one symbol —
+// the "three hard gates" (stop band / RR≥min / timing + anchor + breaker +
+// data + size) evaluated ONCE by code so the model sorts, explains and
+// chooses instead of re-assembling gates per cycle (review point 10).
+type DirectionGate struct {
+	Allowed      bool     `json:"allowed"`
+	EntryPrice   float64  `json:"entry_price"`
+	EntryBasis   string   `json:"entry_basis"`        // limit_anchor | live_price
+	LimitAllowed bool     `json:"limit_allowed"`      // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
+	StopFloorPct float64  `json:"stop_floor_pct,omitempty"`
+	RR           *RRScan  `json:"rr_scan,omitempty"`  // nil when no noise floor is configured (best-case RR undefined)
+	Failed       []string `json:"failed,omitempty"`   // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND
+}
+
+// HardEntryGate holds both direction verdicts.
+type HardEntryGate struct {
+	Long  *DirectionGate `json:"long"`
+	Short *DirectionGate `json:"short"`
+}
+
+// BiasBlock separates the three bias SOURCES so "scanner says short" is never
+// phrased as "short evidence is strong" (review point 3, AKE case): scanner =
+// the snapshot engine's stance; structure = market evidence (directional
+// score sign); execution = which direction the micro-trend gate currently
+// allows. The final trade bias stays the model's job.
+type BiasBlock struct {
+	Scanner   string `json:"scanner"`             // long | short | none
+	Structure string `json:"structure"`           // long | short | mixed
+	Execution string `json:"execution"`           // long_only | short_only | both | none | unknown
+}
+
 // SignalOptions carries the evaluation moment, the strategy's primary
 // timeframe, and the quant layer's true 1h OI change. All indicator features
 // are self-computed from closed bars — no display toggles involved.
@@ -292,6 +375,18 @@ type SignalOptions struct {
 	RiskPct             float64 // RiskPerTradePct (prompt default 1.5)
 	MinPositionSizeUSDT float64 // risk_control.min_position_size; default 12 when unset
 	SLMinATRMult        float64 // stop noise floor multiplier; <=0 = no floor
+	// Hard-entry gate inputs (09-15 review): the program re-evaluates the
+	// strategy's own gates per direction so the model never re-derives them.
+	MinRR             float64 // risk_control.min_risk_reward_ratio; <=0 = RR verdict skipped
+	LimitEntryEnabled bool    // anchors gate the limit path when true; false = market-order default
+	EntryTimingGate   bool    // micro-trend alignment is a HARD block only when enabled (executor parity)
+	StockWeekendBlock bool    // symbol is a bstock AND US market weekend AND policy enabled
+	// ShortFundingCrowdPctP is the configured per-8h settlement crowding
+	// threshold in PERCENT (coin_source.short_scan_funding_rate_pct, default
+	// 0.03). Scaled to the symbol's real settle interval, it defines the
+	// "high" the funding_rollover condition rolls off — same number that
+	// annualizes into strategy prompt condition ①.
+	ShortFundingCrowdPctP float64
 }
 
 // ComputeSymbolSignals builds the normalized signal block for one symbol from
@@ -427,18 +522,41 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// fixed ×3 understates 4h/1h listings by 2-8× and made the structured
 	// signal disagree with the scanner's properly annualized figure.
 	if d.FundingRate != nil && *d.FundingRate != 0 { // rate 0 → ann 0, no annualization needed
-		perDay := 3.0
-		if data.FundingSettleHours > 0 {
-			perDay = 24.0 / data.FundingSettleHours
-			if perDay < 1 {
-				perDay = 1
-			}
-		}
-		ann := *d.FundingRate * perDay * 365 * 100
+		ann := annualizeFunding(*d.FundingRate, data.FundingSettleHours)
 		d.FundingAnnualizedPct = &ann
 		if data.FundingSettleHours > 0 {
 			h := data.FundingSettleHours
 			d.FundingSettleHours = &h
+		}
+	}
+	// Program-verified crowding condition ② (review 09-15 point 6): the
+	// settled rate 3 intervals ago sat above the symbol-scaled crowding
+	// threshold and the live forward rate is now below it. Same definition the
+	// short scanner uses (market.FundingRolloverDetected) — the scanner keeps
+	// its looser snapshot threshold, but "回落" can no longer mean two things
+	// in one prompt. History missing → field absent = UNKNOWN.
+	if len(data.FundingHistory) >= 4 && d.FundingRate != nil {
+		settle := 8.0
+		if data.FundingSettleHours > 0 {
+			settle = data.FundingSettleHours
+		}
+		// Condition ①'s threshold (per 8h, percent) scaled to this symbol's
+		// real interval: annualized X over frPct×3×365 ⇒ raw > frPct/100 ×
+		// settle/8 per settlement.
+		threshPct := opt.ShortFundingCrowdPctP
+		if threshPct <= 0 {
+			threshPct = 0.03
+		}
+		threshRaw := threshPct / 100 * settle / 8
+		prev := data.FundingHistory[len(data.FundingHistory)-4]
+		cur := *d.FundingRate
+		from := annualizeFunding(prev, settle)
+		to := annualizeFunding(cur, settle)
+		d.FundingRollover = &FundingRolloverState{
+			Detected:          market.FundingRolloverDetected(prev, cur, threshRaw),
+			FromAnnualizedPct: &from,
+			ToAnnualizedPct:   &to,
+			SettlesBack:       3,
 		}
 	}
 
@@ -674,12 +792,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		riskUSD := opt.EquityUSDT * opt.RiskPct / 100
 		// Stop distance d (in %) at which notional exactly equals the minimum.
 		maxStopPct := riskUSD / opt.MinPositionSizeUSDT * 100
-		floorPct := 0.0
-		if opt.SLMinATRMult > 0 {
-			if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
-				floorPct = opt.SLMinATRMult * t1h.ATRPct
-			}
-		}
+		floorPct := stopFloorPct(sig, opt.SLMinATRMult)
 		ms := &MinSizeCheck{
 			Feasible:           floorPct <= maxStopPct,
 			MinPositionSizeUsd: opt.MinPositionSizeUSDT,
@@ -693,6 +806,13 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		}
 		sig.MinSize = ms
 	}
+
+	// Program verdict of the "three hard gates" per direction + bias source
+	// layering (review 2026-09-15 points 1-3/5/7/8/10): the model reads the
+	// verdict and explains it instead of re-scanning structure and
+	// re-assembling blockers every cycle.
+	sig.HardGate = computeHardEntryGate(sig, opt)
+	sig.Bias = computeBiasBlock(sig, opt)
 
 	sig.DataComplete = complete && sig.Price > 0
 	if !complete {
@@ -708,6 +828,205 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		sig.Warnings = append(sig.Warnings, "derivatives: long/short account and top-trader ratios unavailable — crowd-positioning UNKNOWN")
 	}
 	return sig, nil
+}
+
+// annualizeFunding converts a raw per-settlement funding rate to an
+// annualized percent on the symbol's real settlement interval (8h×3/day
+// fallback when unknown, per-day clamped at ≥1).
+func annualizeFunding(rate, settleHours float64) float64 {
+	perDay := 3.0
+	if settleHours > 0 {
+		perDay = 24.0 / settleHours
+		if perDay < 1 {
+			perDay = 1
+		}
+	}
+	return rate * perDay * 365 * 100
+}
+
+// stopFloorPct mirrors the executor's noise floor (SLMinATRMult × ATR(1h),
+// closed bars) — 0 when no floor is configured. Single source for the
+// min_size block and the hard-entry gate.
+func stopFloorPct(sig *SymbolSignal, mult float64) float64 {
+	if mult <= 0 {
+		return 0
+	}
+	if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
+		return mult * t1h.ATRPct
+	}
+	return 0
+}
+
+func round2(x float64) float64 { return math.Round(x*100) / 100 }
+
+// computeHardEntryGate evaluates, per direction, every program-decidable
+// open blocker — micro-trend (when the timing gate is enabled, mirroring the
+// executor's config switch), limit-anchor suppression, structural RR upper
+// bound at the best-case stop, data sufficiency, min-size dead zone,
+// loss-streak ban, stock weekend. allowed = nothing failed.
+func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
+	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
+	evaluate := func(isLong bool) *DirectionGate {
+		g := &DirectionGate{}
+		anchor := sig.LimitBuyPrice
+		if !isLong {
+			anchor = sig.LimitSellPrice
+		}
+		g.LimitAllowed = anchor > 0
+		if opt.LimitEntryEnabled && anchor > 0 {
+			g.EntryPrice, g.EntryBasis = anchor, "limit_anchor"
+		} else {
+			g.EntryPrice, g.EntryBasis = sig.Price, "live_price"
+		}
+		g.StopFloorPct = round2(floorPct)
+		if floorPct > 0 {
+			g.RR = scanRR(g.EntryPrice, g.EntryBasis, floorPct, sig.Timeframes, isLong, opt.MinRR)
+		}
+		add := func(code string) { g.Failed = append(g.Failed, code) }
+		if opt.EntryTimingGate && sig.ExecutionFilter != nil {
+			if isLong && !sig.ExecutionFilter.LongAllowed {
+				add("MICRO_TREND_NOT_LONG")
+			}
+			if !isLong && !sig.ExecutionFilter.ShortAllowed {
+				add("MICRO_TREND_NOT_SHORT")
+			}
+		}
+		if opt.LimitEntryEnabled && !g.LimitAllowed {
+			add("LIMIT_ANCHOR_SUPPRESSED")
+		}
+		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
+			add(fmt.Sprintf("RR_MAX_%.2f", g.RR.BestRR))
+		}
+		if sig.DataQuality != nil && !sig.DataQuality.Sufficient {
+			add("DATA_INSUFFICIENT")
+		}
+		if sig.MinSize != nil && !sig.MinSize.Feasible {
+			add("MIN_SIZE_DEAD_ZONE")
+		}
+		if sig.LossStreak != nil {
+			add("LOSS_STREAK_BANNED")
+		}
+		if opt.StockWeekendBlock {
+			add("STOCK_WEEKEND")
+		}
+		g.Allowed = len(g.Failed) == 0
+		return g
+	}
+	return &HardEntryGate{Long: evaluate(true), Short: evaluate(false)}
+}
+
+// scanRR walks EVERY structural target on the take-profit side across ALL
+// timeframe blocks, near→far, deduped within 0.05% (same tolerance as the
+// S/R builder), computing each one's RR at the noise-floor stop — the best
+// case, since any wider stop lowers the ratio. first_rr_ge_target is the
+// rule-mandated pick (nearest qualifying level); best_rr is the definitive
+// upper bound used to declare the RR gate structurally failed.
+func scanRR(entry float64, basis string, floorPct float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
+	var targets []float64
+	for _, tf := range tfs {
+		if tf == nil {
+			continue
+		}
+		src := tf.Resistance
+		if !isLong {
+			src = tf.Support
+		}
+		for _, l := range src {
+			if l <= 0 {
+				continue
+			}
+			if isLong && l > entry {
+				targets = append(targets, l)
+			}
+			if !isLong && l < entry {
+				targets = append(targets, l)
+			}
+		}
+	}
+	if isLong {
+		sort.Float64s(targets) // ascending = near→far above
+	} else {
+		sort.Sort(sort.Reverse(sort.Float64Slice(targets))) // descending = near→far below
+	}
+	var uniq []float64
+	for _, t := range targets {
+		if !inList(uniq, t, entry) {
+			uniq = append(uniq, t)
+		}
+	}
+	direction := "long"
+	if !isLong {
+		direction = "short"
+	}
+	stop := entry * (1 - floorPct/100)
+	if !isLong {
+		stop = entry * (1 + floorPct/100)
+	}
+	out := &RRScan{
+		Direction:       direction,
+		EntryPrice:      entry,
+		EntryBasis:      basis,
+		StopDistancePct: round2(floorPct),
+		StopPrice:       stop,
+		MinRR:           round2(minRR),
+		TargetsScanned:  len(uniq),
+	}
+	best, bestT := 0.0, 0.0
+	for _, t := range uniq {
+		dist := (t - entry) / entry * 100
+		if !isLong {
+			dist = (entry - t) / entry * 100
+		}
+		v := dist / floorPct
+		if v > best {
+			best, bestT = v, t
+		}
+		if minRR > 0 && !out.Usable && v >= minRR-1e-9 {
+			out.FirstRRGeTarget = t
+			out.Usable = true
+		}
+	}
+	if len(uniq) > 0 {
+		out.BestTarget = bestT
+		out.BestRR = round2(best)
+	}
+	return out
+}
+
+// computeBiasBlock names each directional read by its SOURCE (review point
+// 3): the scanner's snapshot stance, the market-structure consensus, and the
+// execution window — the model must phrase them as different things, never
+// as one "strong short evidence".
+func computeBiasBlock(sig *SymbolSignal, opt SignalOptions) *BiasBlock {
+	b := &BiasBlock{Scanner: "none"}
+	if opt.ScannerBias == "short" || opt.ScannerBias == "long" {
+		b.Scanner = opt.ScannerBias
+	}
+	score := 0
+	if sig.SignalConflict != nil {
+		score = sig.SignalConflict.DirectionalScore
+	}
+	switch {
+	case score >= 20:
+		b.Structure = "long"
+	case score <= -20:
+		b.Structure = "short"
+	default:
+		b.Structure = "mixed"
+	}
+	switch {
+	case sig.ExecutionFilter == nil:
+		b.Execution = "unknown"
+	case sig.ExecutionFilter.LongAllowed && sig.ExecutionFilter.ShortAllowed:
+		b.Execution = "both"
+	case sig.ExecutionFilter.LongAllowed:
+		b.Execution = "long_only"
+	case sig.ExecutionFilter.ShortAllowed:
+		b.Execution = "short_only"
+	default:
+		b.Execution = "none"
+	}
+	return b
 }
 
 // computeTFSignal scores one timeframe: closed-candle settlement, trend

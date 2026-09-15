@@ -41,7 +41,10 @@ var (
 // fundingIntervalHours returns the symbol's real funding settlement interval
 // in hours, measured from recent settlement timestamps (0 = unknown).
 // The interval is fixed per listing (8h default; some new listings 4h/1h)
-// and changes rarely, so it is cached for a day.
+// and changes rarely, so it is cached for a day. The measurement rides on
+// the same /fapi/v1/fundingRate call that feeds the rollover history
+// (funding_history.go) — one endpoint call per 5-minute cache window serves
+// both.
 func fundingIntervalHours(symbol string) float64 {
 	if cached, ok := fundingIntervalMap.Load(symbol); ok {
 		c := cached.(*FundingIntervalCache)
@@ -49,15 +52,13 @@ func fundingIntervalHours(symbol string) float64 {
 			return c.Hours
 		}
 	}
-	var raw []struct {
-		FundingTime int64 `json:"fundingTime"`
-	}
-	if err := binanceGetJSON("/fapi/v1/fundingRate?symbol="+symbol+"&limit=4", &raw); err != nil || len(raw) < 2 {
+	_, times, ok := fundingHistory(symbol)
+	if !ok || len(times) < 2 {
 		return 0
 	}
 	var gaps []float64
-	for i := 1; i < len(raw); i++ {
-		h := float64(raw[i].FundingTime-raw[i-1].FundingTime) / 3.6e6
+	for i := 1; i < len(times); i++ {
+		h := float64(times[i]-times[i-1]) / 3.6e6
 		if h > 0 && h <= 24 {
 			gaps = append(gaps, h)
 		}
@@ -184,9 +185,13 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		oiData = &OIData{Latest: 0, Average: 0}
 	}
 
-	// Get Funding Rate + measured settlement interval
+	// Get Funding Rate + measured settlement interval + settled history
 	fundingRate, fundingErr := getFundingRate(symbol)
 	fundingSettleHours := fundingIntervalHours(symbol)
+	fundingRates, _, histOK := fundingHistory(symbol)
+	if !histOK {
+		fundingRates = nil
+	}
 
 	// Calculate intraday series data
 	intradayData := calculateIntradaySeries(klines3m)
@@ -206,6 +211,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		FundingRate:        fundingRate,
 		FundingRateOK:      fundingErr == nil,
 		FundingSettleHours: fundingSettleHours,
+		FundingHistory:     fundingRates,
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
 	}, nil
@@ -347,9 +353,13 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		oiData = &OIData{Latest: 0, Average: 0}
 	}
 
-	// Get Funding Rate + measured settlement interval
+	// Get Funding Rate + measured settlement interval + settled history
 	fundingRate, fundingErr := getFundingRate(symbol)
 	fundingSettleHours := fundingIntervalHours(symbol)
+	fundingRates, _, histOK := fundingHistory(symbol)
+	if !histOK {
+		fundingRates = nil
+	}
 
 	return &Data{
 		Symbol:             symbol,
@@ -364,6 +374,7 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		FundingRate:        fundingRate,
 		FundingRateOK:      fundingErr == nil,
 		FundingSettleHours: fundingSettleHours,
+		FundingHistory:     fundingRates,
 		TimeframeData:      timeframeData,
 	}, nil
 }

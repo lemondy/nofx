@@ -172,6 +172,45 @@ var ValidBlockingFactors = []string{
 	"STRUCTURE_CONFLICT", "WAIT_PULLBACK",
 }
 
+// ValidWaitStates is the per-coin trading state machine (user review
+// 2026-09-15 point 11): "wait" alone carries too little information.
+// BLOCKED = one or more hard gates fail and the near-term path needs more
+// than a tick (per hard_entry_gate.failed); WATCH_* = the directional read
+// stands but an entry blocker must clear first; READY_* = every hard gate
+// passes, only the price/trigger event is missing. Meaningful on wait
+// decisions only; it maps onto decision_stage via WaitStateToStage.
+var ValidWaitStates = []string{"BLOCKED", "WATCH_LONG", "WATCH_SHORT", "READY_LONG", "READY_SHORT"}
+
+// IsValidWaitState reports whether s is in ValidWaitStates.
+func IsValidWaitState(s string) bool {
+	for _, v := range ValidWaitStates {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// WaitStateToStage maps a declared wait_state onto the existing
+// decision_stage enum (READY_*→READY, WATCH_*→WATCH; BLOCKED→NO_SETUP only
+// when no direction survives the block, otherwise→WATCH) — an explicit
+// declaration overrides the DeriveWaitStage fallback so the two never
+// contradict in the dataset.
+func WaitStateToStage(waitState, waitBias string) string {
+	switch waitState {
+	case "READY_LONG", "READY_SHORT":
+		return "READY"
+	case "WATCH_LONG", "WATCH_SHORT":
+		return "WATCH"
+	case "BLOCKED":
+		if waitBias == "long" || waitBias == "short" {
+			return "WATCH" // direction stands under a hard block — still a watch, not a no-setup
+		}
+		return "NO_SETUP"
+	}
+	return ""
+}
+
 // DeriveWaitStage derives the lifecycle stage of a wait decision from its
 // direction bias and blockers (schema-redundancy audit 09-13): no bias = no
 // directional embryo (NO_SETUP); a bias with only the soft "wait for price"
@@ -287,6 +326,13 @@ type Decision struct {
 	// edge (true NO TRADE). Directional verdicts live here and in
 	// directional_score — never re-phrased inside no_trade_reason.
 	WaitBias string `json:"wait_bias,omitempty"`
+	// WaitState + NextTrigger complete the trade state machine (review
+	// 2026-09-15 points 11/12): wait_state ∈ ValidWaitStates, and next_trigger
+	// is ONE sentence naming the required event and ending with the mandate
+	// that ALL hard gates are re-checked when it fires — a trigger event is
+	// never permission to trade.
+	WaitState   string `json:"wait_state,omitempty"`
+	NextTrigger string `json:"next_trigger,omitempty"`
 }
 
 // FullDecision AI's complete decision (including chain of thought)

@@ -120,6 +120,28 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		return fmt.Errorf("invalid wait_bias %q (must be long/short or empty)", d.WaitBias)
 	}
 
+	// wait_state / next_trigger hygiene (review 2026-09-15 points 11/12):
+	// unknown tags, non-wait carriers and states contradicting wait_bias are
+	// STRIPPED, never batch-fatal — this is dataset annotation, not a risk
+	// gate. A directional state back-fills wait_bias (they are two views of
+	// one verdict, and the enum is the stricter source).
+	if d.Action != "wait" {
+		d.WaitState, d.NextTrigger = "", ""
+	} else if d.WaitState != "" {
+		conflict := (strings.HasSuffix(d.WaitState, "_LONG") && d.WaitBias == "short") ||
+			(strings.HasSuffix(d.WaitState, "_SHORT") && d.WaitBias == "long")
+		if !IsValidWaitState(d.WaitState) || conflict {
+			d.WaitState = ""
+		} else if strings.HasSuffix(d.WaitState, "_LONG") {
+			d.WaitBias = "long"
+		} else if strings.HasSuffix(d.WaitState, "_SHORT") {
+			d.WaitBias = "short"
+		}
+		if rt := []rune(d.NextTrigger); len(rt) > 180 {
+			d.NextTrigger = string(rt[:180])
+		}
+	}
+
 	// Backtest-dataset hygiene: strip non-vocabulary tags, clamp quality.
 	if len(d.BlockingFactors) > 0 {
 		d.BlockingFactors = NormalizeBlockingFactors(d.BlockingFactors)
@@ -140,10 +162,14 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		d.ManagementQuality = &q
 	}
 	// wait stage is DERIVED, not declared (schema-redundancy audit 09-13):
-	// wait_bias + blocking_factors fully determine NO_SETUP/WATCH/READY, so
-	// the model no longer states it — one less field to keep consistent.
+	// an explicit wait_state wins; otherwise wait_bias + blocking_factors
+	// fully determine NO_SETUP/WATCH/READY.
 	if d.Action == "wait" {
-		d.Stage = DeriveWaitStage(d.WaitBias, d.BlockingFactors)
+		if st := WaitStateToStage(d.WaitState, d.WaitBias); st != "" {
+			d.Stage = st
+		} else {
+			d.Stage = DeriveWaitStage(d.WaitBias, d.BlockingFactors)
+		}
 	}
 	if d.EntryQuality != nil {
 		q := *d.EntryQuality

@@ -3,6 +3,7 @@ package breakout
 import (
 	"fmt"
 	"math"
+	"nofx/market"
 	"sort"
 	"strconv"
 	"strings"
@@ -267,7 +268,12 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 		}
 		if len(f) >= 4 {
 			prev := f[len(f)-4].Rate
-			sig.FundingRollover = prev > 0.0001 && cur < prev
+			// Single shared definition of "rate rolled over from a high"
+			// (review 09-15 point 6): the scanner keeps its looser snapshot
+			// threshold (0.01%/period), while the structured signal applies
+			// the configured crowding threshold — same predicate, same
+			// 3-settlement lookback, no divergent wording per source.
+			sig.FundingRollover = market.FundingRolloverDetected(prev, cur, 0.0001)
 		}
 		fundPart := clamp100(sigmoidScore(cur*100, 0.05, 0.04))
 		oiPart := 0.0
