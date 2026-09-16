@@ -294,3 +294,25 @@ func TestStopPriceForSide(t *testing.T) {
 		t.Fatalf("empty list → 0, got %v", got)
 	}
 }
+
+// Limit-entry lifetime is max(30min, N × scan interval) — time-based, not
+// cycle-counted (user 09-16: cycles change length when the scan interval is
+// retuned, so "3 cycles" could mean 9 or 60 minutes).
+func TestLimitEntryLifetime(t *testing.T) {
+	cases := []struct {
+		cycles int
+		cycle  time.Duration
+		want   time.Duration
+	}{
+		{3, 5 * time.Minute, 30 * time.Minute},  // 15min < floor → 30min
+		{3, 20 * time.Minute, time.Hour},        // 60min > floor
+		{10, 5 * time.Minute, 50 * time.Minute}, // high multiplier scales
+		{0, 5 * time.Minute, 30 * time.Minute},  // unset multiplier → default 3
+		{3, 0, 30 * time.Minute},                // unset interval → default 5m, floor binds
+	}
+	for _, c := range cases {
+		if got := limitEntryLifetime(c.cycles, c.cycle); got != c.want {
+			t.Errorf("limitEntryLifetime(%d, %v) = %v, want %v", c.cycles, c.cycle, got, c.want)
+		}
+	}
+}

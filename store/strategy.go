@@ -389,7 +389,9 @@ type RiskControlConfig struct {
 	SLMinATRMult float64 `json:"sl_min_atr_mult"`
 	// Limit entry state machine: the AI may emit open_long_limit /
 	// open_short_limit with price = trigger level; the system places a LIMIT
-	// order and cancels it after LimitEntryMaxCycles cycles unfilled. (CODE ENFORCED)
+	// order cancels it after max(30min, LimitEntryMaxCycles × scan interval)
+	// unfilled — time-based, since cycle length varies with the scan
+	// interval. (CODE ENFORCED)
 	LimitEntryEnabled   bool `json:"limit_entry_enabled"`
 	LimitEntryMaxCycles int  `json:"limit_entry_max_cycles"`
 	// LimitEntryOffsetPct is the pre-computed limit-entry anchor offset from

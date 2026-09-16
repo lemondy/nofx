@@ -401,6 +401,7 @@ func (at *AutoTrader) processPendingEntries() {
 	if at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles > 0 {
 		maxCycles = at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles
 	}
+	lifetime := limitEntryLifetime(maxCycles, at.config.ScanInterval)
 
 	for _, sym := range symbols {
 		pe := snapshot[sym]
@@ -443,11 +444,11 @@ func (at *AutoTrader) processPendingEntries() {
 					continue
 				}
 			}
-			if pe.Cycles >= maxCycles {
+			if age := time.Since(pe.PlacedAt); age >= lifetime {
 				_ = at.cancelPending(pe)
-				logger.Infof("📌 [%s] Limit entry %s expired after %d cycles — cancelled for re-evaluation", at.name, pe.Symbol, pe.Cycles)
+				logger.Infof("📌 [%s] Limit entry %s expired after %s (lifetime max(30min, %d×%v)) — cancelled for re-evaluation", at.name, pe.Symbol, age.Round(time.Second), maxCycles, at.config.ScanInterval)
 			} else {
-				logger.Infof("📌 [%s] Limit entry %s pending (%d/%d cycles)", at.name, pe.Symbol, pe.Cycles, maxCycles)
+				logger.Infof("📌 [%s] Limit entry %s pending (%d/%d cycles, age %s of %s)", at.name, pe.Symbol, pe.Cycles, maxCycles, age.Round(time.Second), lifetime)
 			}
 		}
 	}
@@ -469,4 +470,23 @@ func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
 	}
 	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价单已撤销 %s</b>\n<i>%s @ %.6g 未成交,撤销重评</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
 	return err
+}
+
+// limitEntryLifetime resolves a limit order's unfilled lifetime: the older
+// rule expired orders after N decision cycles, but cycles vary in length
+// when the scan interval changes, so "3 cycles" could mean 9 or 60 minutes.
+// The binding lifetime is max(30min, N × scan interval) — short-enough
+// cycles still get the 30-minute minimum, longer ones scale the window.
+func limitEntryLifetime(maxCycles int, scanInterval time.Duration) time.Duration {
+	if maxCycles <= 0 {
+		maxCycles = 3
+	}
+	if scanInterval <= 0 {
+		scanInterval = 5 * time.Minute
+	}
+	lifetime := time.Duration(maxCycles) * scanInterval
+	if min := 30 * time.Minute; lifetime < min {
+		return min
+	}
+	return lifetime
 }
