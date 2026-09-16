@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
+
+	"gorm.io/gorm"
 )
 
 // TraderStats trading statistics metrics
@@ -19,6 +22,9 @@ type TraderStats struct {
 	AvgWin         float64 `json:"avg_win"`
 	AvgLoss        float64 `json:"avg_loss"`
 	MaxDrawdownPct float64 `json:"max_drawdown_pct"`
+	// WindowDays: stats only cover trades closed within the last N days.
+	// 0 (omitted in JSON) = full history.
+	WindowDays int `json:"window_days,omitempty"`
 }
 
 // GetPositionStats gets position statistics
@@ -60,10 +66,35 @@ func (s *PositionStore) GetPositionStats(traderID string) (map[string]interface{
 // against it (a hardcoded 10k base shrank a ~9% account drawdown to 0.2%).
 // Pass 0 when unknown (falls back to a 100 USDT base).
 func (s *PositionStore) GetFullStats(traderID string, initialEquity float64) (*TraderStats, error) {
-	stats := &TraderStats{}
+	return s.getStats(traderID, initialEquity, 0)
+}
+
+// GetRollingStats computes closed-trade statistics over a rolling window:
+// only trades closed within the last windowDays days count. windowDays <= 0
+// means full history (same basis as GetFullStats). The window is a
+// query-time filter — no rows are deleted, moved, or archived, so the full
+// history always stays intact in trader_positions.
+func (s *PositionStore) GetRollingStats(traderID string, initialEquity float64, windowDays int) (*TraderStats, error) {
+	return s.getStats(traderID, initialEquity, windowDays)
+}
+
+func (s *PositionStore) getStats(traderID string, initialEquity float64, windowDays int) (*TraderStats, error) {
+	stats := &TraderStats{WindowDays: windowDays}
+
+	var exitCutoff int64
+	if windowDays > 0 {
+		exitCutoff = time.Now().Add(-time.Duration(windowDays) * 24 * time.Hour).UnixMilli()
+	}
+	filtered := func() *gorm.DB {
+		q := s.db.Model(&TraderPosition{}).Where("trader_id = ? AND status = ?", traderID, "CLOSED")
+		if exitCutoff > 0 {
+			q = q.Where("exit_time >= ?", exitCutoff)
+		}
+		return q
+	}
 
 	var count int64
-	if err := s.db.Model(&TraderPosition{}).Where("trader_id = ? AND status = ?", traderID, "CLOSED").Count(&count).Error; err != nil {
+	if err := filtered().Count(&count).Error; err != nil {
 		return nil, err
 	}
 	if count == 0 {
@@ -71,8 +102,7 @@ func (s *PositionStore) GetFullStats(traderID string, initialEquity float64) (*T
 	}
 
 	var positions []TraderPosition
-	err := s.db.Where("trader_id = ? AND status = ?", traderID, "CLOSED").
-		Order("exit_time ASC").
+	err := filtered().Order("exit_time ASC").
 		Find(&positions).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to query position statistics: %w", err)

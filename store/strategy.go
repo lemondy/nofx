@@ -109,6 +109,13 @@ type StrategyConfig struct {
 	Indicators IndicatorConfig `json:"indicators"`
 	// custom prompt (appended at the end)
 	CustomPrompt string `json:"custom_prompt,omitempty"`
+	// StatsWindowDays is the rolling window (in days) for the trading stats
+	// the AI sees (PF/win-rate/expectancy in strategy_health). Only trades
+	// closed within the window feed those numbers. 0 or absent = 30 days
+	// (default), a negative value = full history (window disabled). The
+	// window changes what is REPORTED to the AI only — no trades are ever
+	// deleted or moved.
+	StatsWindowDays int `json:"stats_window_days,omitempty"`
 	// risk control configuration
 	RiskControl RiskControlConfig `json:"risk_control"`
 	// editable sections of System Prompt
@@ -455,6 +462,24 @@ type RiskControlConfig struct {
 // NewStrategyStore creates a new StrategyStore
 func NewStrategyStore(db *gorm.DB) *StrategyStore {
 	return &StrategyStore{db: db}
+}
+
+// DefaultStatsWindowDays is the rolling stats window when the strategy
+// config leaves stats_window_days unset.
+const DefaultStatsWindowDays = 30
+
+// EffectiveStatsWindowDays resolves the stats window in days: 0 means
+// "full history" (explicitly negative config), otherwise the window length
+// (DefaultStatsWindowDays when unset/0).
+func (c *StrategyConfig) EffectiveStatsWindowDays() int {
+	switch {
+	case c.StatsWindowDays < 0:
+		return 0
+	case c.StatsWindowDays == 0:
+		return DefaultStatsWindowDays
+	default:
+		return c.StatsWindowDays
+	}
 }
 
 func (s *StrategyStore) initTables() error {

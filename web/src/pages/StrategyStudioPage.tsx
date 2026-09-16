@@ -41,6 +41,7 @@ import { GridConfigEditor, defaultGridConfig } from '../components/strategy/Grid
 import { TokenEstimateBar } from '../components/strategy/TokenEstimateBar'
 import { DeepVoidBackground } from '../components/common/DeepVoidBackground'
 import { t } from '../i18n/translations'
+import { riskControl, ts } from '../i18n/strategy-translations'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -609,12 +610,51 @@ export function StrategyStudioPage() {
  title: tr('riskControl'),
  forStrategyType: 'ai_trading' as const,
  content: editingConfig && (
+ <>
  <RiskControlEditor
  config={editingConfig.risk_control}
  onChange={(riskControl) => updateConfig('risk_control', riskControl)}
  disabled={selectedStrategy?.is_default}
  language={language}
  />
+ <div
+ className="p-4 rounded-lg mt-6"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {ts(riskControl.statsWindow, language)}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {ts(riskControl.statsWindowDesc, language)}
+ </p>
+ <input
+ type="number"
+ value={editingConfig.stats_window_days ?? 0}
+ onChange={(e) =>
+ updateConfig(
+ 'stats_window_days',
+ e.target.value === '' ? 0 : parseInt(e.target.value)
+ )
+ }
+ disabled={selectedStrategy?.is_default}
+ min={-1}
+ max={365}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {(editingConfig.stats_window_days ?? 0) === 0
+ ? language === 'zh' ? '当前生效: 近 30 天(默认)' : 'Effective: last 30 days (default)'
+ : (editingConfig.stats_window_days ?? 0) < 0
+ ? language === 'zh' ? '当前生效: 全量历史' : 'Effective: full history'
+ : language === 'zh' ? `当前生效: 近 ${editingConfig.stats_window_days} 天` : `Effective: last ${editingConfig.stats_window_days} days`}
+ </p>
+ </div>
+ </>
  ),
  },
  {

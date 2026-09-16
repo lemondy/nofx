@@ -764,33 +764,61 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				})
 			}
 		}
-		// Get trading statistics for AI context
-		stats, err := at.store.Position().GetFullStats(at.id, at.initialBalance)
+		// Get trading statistics for AI context. Rolling window (config
+		// stats_window_days, default 30; negative = full history): only
+		// trades closed inside the window feed PF/win-rate/expectancy, so a
+		// strategy that improved is not permanently dragged down by ancient
+		// losses. Nothing is deleted — the window is a query-time filter.
+		statsWindow := strategyConfig.EffectiveStatsWindowDays()
+		windowLabel := fmt.Sprintf("%dd window", statsWindow)
+		if statsWindow <= 0 {
+			windowLabel = "full history"
+		}
+		stats, err := at.store.Position().GetRollingStats(at.id, at.initialBalance, statsWindow)
 		if err != nil {
 			logger.Infof("⚠️ [%s] Failed to get trading stats: %v", at.name, err)
 		} else if stats == nil {
-			logger.Infof("⚠️ [%s] GetFullStats returned nil", at.name)
+			logger.Infof("⚠️ [%s] GetRollingStats returned nil", at.name)
 		} else if stats.TotalTrades == 0 {
-			logger.Infof("⚠️ [%s] GetFullStats returned 0 trades (traderID=%s)", at.name, at.id)
+			logger.Infof("⚠️ [%s] Trading stats: 0 closed trades in %s (traderID=%s) — strategy_health omitted", at.name, windowLabel, at.id)
 		} else {
 			maxDD := stats.MaxDrawdownPct
 			// Prefer the real equity curve when available: it includes
-			// unrealized swings that closed-trade PnL never shows.
-			if snaps, err := at.store.Equity().GetLatest(at.id, 2000); err == nil && len(snaps) > 1 {
-				peak := snaps[0].TotalEquity
-				var dd float64
-				for _, sn := range snaps {
-					if sn.TotalEquity > peak {
-						peak = sn.TotalEquity
-					}
-					if peak > 0 {
-						if d := (peak - sn.TotalEquity) / peak * 100; d > dd {
-							dd = d
+			// unrealized swings that closed-trade PnL never shows. The
+			// curve is clipped to the same window so DD and PF describe
+			// the same period.
+			snapLimit := 2000
+			if statsWindow > 0 {
+				// ~5min snapshot cadence (288/day) plus headroom.
+				snapLimit = statsWindow*288 + 100
+			}
+			if snaps, err := at.store.Equity().GetLatest(at.id, snapLimit); err == nil && len(snaps) > 1 {
+				if statsWindow > 0 {
+					cutoff := time.Now().Add(-time.Duration(statsWindow) * 24 * time.Hour)
+					filtered := snaps[:0]
+					for _, sn := range snaps {
+						if sn.Timestamp.After(cutoff) {
+							filtered = append(filtered, sn)
 						}
 					}
+					snaps = filtered
 				}
-				if dd > 0 {
-					maxDD = dd
+				if len(snaps) > 1 {
+					peak := snaps[0].TotalEquity
+					var dd float64
+					for _, sn := range snaps {
+						if sn.TotalEquity > peak {
+							peak = sn.TotalEquity
+						}
+						if peak > 0 {
+							if d := (peak - sn.TotalEquity) / peak * 100; d > dd {
+								dd = d
+							}
+						}
+					}
+					if dd > 0 {
+						maxDD = dd
+					}
 				}
 			}
 			ctx.TradingStats = &kernel.TradingStats{
@@ -802,9 +830,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				AvgWin:         stats.AvgWin,
 				AvgLoss:        stats.AvgLoss,
 				MaxDrawdownPct: maxDD,
+				WindowDays:     stats.WindowDays,
 			}
-			logger.Infof("📈 [%s] Trading stats: %d trades, %.1f%% win rate, PF=%.2f, Sharpe=%.2f, DD=%.1f%%",
-				at.name, stats.TotalTrades, stats.WinRate, stats.ProfitFactor, stats.SharpeRatio, stats.MaxDrawdownPct)
+			logger.Infof("📈 [%s] Trading stats (%s): %d trades, %.1f%% win rate, PF=%.2f, Sharpe=%.2f, DD=%.1f%%",
+				at.name, windowLabel, stats.TotalTrades, stats.WinRate, stats.ProfitFactor, stats.SharpeRatio, stats.MaxDrawdownPct)
 		}
 	} else {
 		logger.Infof("⚠️ [%s] Store is nil, cannot get recent trades", at.name)

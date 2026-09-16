@@ -47,6 +47,9 @@ export interface StrategyConfig {
   coin_source: CoinSourceConfig;
   indicators: IndicatorConfig;
   custom_prompt?: string;
+  // Rolling window (days) for the trading stats the AI sees (PF/win-rate).
+  // 0/absent = 30 days default, negative = full history.
+  stats_window_days?: number;
   risk_control: RiskControlConfig;
   prompt_sections?: PromptSectionsConfig;
   // Grid trading configuration (only used when strategy_type is 'grid_trading')

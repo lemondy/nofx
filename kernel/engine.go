@@ -92,6 +92,7 @@ type TradingStats struct {
 	AvgWin         float64 `json:"avg_win"`          // Average win
 	AvgLoss        float64 `json:"avg_loss"`         // Average loss
 	MaxDrawdownPct float64 `json:"max_drawdown_pct"` // Maximum drawdown (%)
+	WindowDays     int     `json:"window_days,omitempty"` // Rolling stats window in days; 0 = full history
 }
 
 // RecentOrder recently completed order (for AI input)

@@ -338,38 +338,46 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		// Get language from strategy config
 		lang := e.GetLanguage()
 
-		// Win/Loss ratio
-		var winLossRatio float64
-		if ctx.TradingStats.AvgLoss > 0 {
-			winLossRatio = ctx.TradingStats.AvgWin / ctx.TradingStats.AvgLoss
+	// Win/Loss ratio
+	var winLossRatio float64
+	if ctx.TradingStats.AvgLoss > 0 {
+		winLossRatio = ctx.TradingStats.AvgWin / ctx.TradingStats.AvgLoss
+	}
+
+	// Stats window label: the numbers below only cover trades closed within
+	// the window (config stats_window_days); 0 = full history.
+	windowLabel := "全部历史"
+	if ctx.TradingStats.WindowDays > 0 {
+		windowLabel = fmt.Sprintf("近%d天", ctx.TradingStats.WindowDays)
+	}
+
+	if lang == LangChinese {
+		sb.WriteString("## 历史交易统计\n")
+		sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
+			windowLabel,
+			ctx.TradingStats.TotalTrades,
+			ctx.TradingStats.ProfitFactor,
+			ctx.TradingStats.SharpeRatio,
+			winLossRatio))
+		sb.WriteString(fmt.Sprintf("总盈亏: %+.2f USDT | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%\n",
+			ctx.TradingStats.TotalPnL,
+			ctx.TradingStats.AvgWin,
+			ctx.TradingStats.AvgLoss,
+			ctx.TradingStats.MaxDrawdownPct))
+
+		// Performance hints based on profit factor, sharpe, and drawdown
+		// ⑲ machine-readable edge status: NEGATIVE_EDGE tightens the
+		// trade-selection bar instead of relying on prose encouragement.
+		edge := "POSITIVE_EDGE"
+		if ctx.TradingStats.ProfitFactor < 0.9 {
+			edge = "NEGATIVE_EDGE"
+		} else if ctx.TradingStats.ProfitFactor < 1.1 {
+			edge = "NO_EDGE"
 		}
-
-		if lang == LangChinese {
-			sb.WriteString("## 历史交易统计\n")
-			sb.WriteString(fmt.Sprintf("总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
-				ctx.TradingStats.TotalTrades,
-				ctx.TradingStats.ProfitFactor,
-				ctx.TradingStats.SharpeRatio,
-				winLossRatio))
-			sb.WriteString(fmt.Sprintf("总盈亏: %+.2f USDT | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%\n",
-				ctx.TradingStats.TotalPnL,
-				ctx.TradingStats.AvgWin,
-				ctx.TradingStats.AvgLoss,
-				ctx.TradingStats.MaxDrawdownPct))
-
-			// Performance hints based on profit factor, sharpe, and drawdown
-			// ⑲ machine-readable edge status: NEGATIVE_EDGE tightens the
-			// trade-selection bar instead of relying on prose encouragement.
-			edge := "POSITIVE_EDGE"
-			if ctx.TradingStats.ProfitFactor < 0.9 {
-				edge = "NEGATIVE_EDGE"
-			} else if ctx.TradingStats.ProfitFactor < 1.1 {
-				edge = "NO_EDGE"
-			}
-			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f)\n", edge, ctx.TradingStats.ProfitFactor, expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)))
-			if edge == "NEGATIVE_EDGE" {
-				sb.WriteString("⚠️ 当前策略整体无正期望(PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置,其余一律 hold 并在 no_trade_reason 写明\n")
-			}
+		sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f, 窗口 %s)\n", edge, ctx.TradingStats.ProfitFactor, expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss), windowLabel))
+		if edge == "NEGATIVE_EDGE" {
+			sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置,其余一律 hold 并在 no_trade_reason 写明\n", windowLabel))
+		}
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("表现: 良好 - 保持当前策略\n")
 			} else if ctx.TradingStats.ProfitFactor < 1 {
@@ -380,8 +388,13 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 				sb.WriteString("表现: 正常 - 有优化空间\n")
 			}
 		} else {
+			enWindow := "all history"
+			if ctx.TradingStats.WindowDays > 0 {
+				enWindow = fmt.Sprintf("last %d days", ctx.TradingStats.WindowDays)
+			}
 			sb.WriteString("## Historical Trading Statistics\n")
-			sb.WriteString(fmt.Sprintf("Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
+			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
+				enWindow,
 				ctx.TradingStats.TotalTrades,
 				ctx.TradingStats.ProfitFactor,
 				ctx.TradingStats.SharpeRatio,

@@ -182,6 +182,8 @@ export const gridRisk = {
 // ============================================================================
 export const riskControl = {
   positionLimits: { zh: '仓位限制', en: 'Position Limits', es: 'Límites de Posición' },
+  statsWindow: { zh: 'AI 自评统计窗口（天）', en: 'AI Self-Assessment Stats Window (days)', es: 'Ventana de Estadísticas IA (días)' },
+  statsWindowDesc: { zh: 'AI 看到的交易统计(PF/胜率/strategy_health)只统计最近 N 天内平仓的交易;0=默认 30 天,负数=全量历史。仅影响呈现给 AI 的数字,不删除任何数据', en: 'Trading stats the AI sees (PF/win-rate/strategy_health) only count trades closed within the last N days; 0 = default 30, negative = full history. Reporting only — no data is deleted', es: 'Las estadísticas que ve la IA (PF/win-rate) solo cuentan trades cerrados en los últimos N días; 0 = 30 por defecto, negativo = historial completo' },
   maxPositions: { zh: '最大持仓数量', en: 'Max Positions', es: 'Máximo de Posiciones' },
   maxPositionsDesc: { zh: '同时持有的最大币种数量', en: 'Maximum coins held simultaneously', es: 'Monedas máximas simultáneas' },
   earlyCloseMinHours: { zh: '提前平仓最短持仓时长（小时）', en: 'Early-Close Min Hold (hours)', es: 'Cierre Anticipado: Horas Mínimas' },
