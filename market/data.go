@@ -34,8 +34,8 @@ type FundingIntervalCache struct {
 }
 
 var (
-	fundingIntervalMap sync.Map  // map[string]*FundingIntervalCache
-	fundingIntervalTTL           = 24 * time.Hour
+	fundingIntervalMap sync.Map // map[string]*FundingIntervalCache
+	fundingIntervalTTL = 24 * time.Hour
 )
 
 // fundingIntervalHours returns the symbol's real funding settlement interval
@@ -82,7 +82,7 @@ func Get(symbol string) (*Data, error) {
 
 // GetWithExchange retrieves market data for the specified token using exchange-specific data
 func GetWithExchange(symbol, exchange string) (*Data, error) {
-	var klines3m, klines4h []Kline
+	var klines3m, klines4h, klines1h []Kline
 	var err error
 	// Normalize symbol
 	symbol = Normalize(symbol)
@@ -125,6 +125,21 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from CoinAnk (%s): %v", exchange, err)
 		}
+	}
+
+	// 1-hour K-lines (best-effort): the stop-band FLOOR yardstick is
+	// ATR(1h) and the vol-target/trailing yardsticks read it too — without
+	// this series those gates silently skipped (the ATR helpers return 0 on
+	// missing data). On failure the floor's fallback chain rides 4h: a
+	// wider but still-enforced floor.
+	if useHyperliquidAPI {
+		klines1h, err = getKlinesFromHyperliquid(symbol, "1h", 100)
+	} else {
+		klines1h, err = getKlinesFromCoinAnk(symbol, "1h", exchange, 100)
+	}
+	if err != nil {
+		logger.Infof("⚠️ Failed to get %s 1h K-line (%v) — stop-floor ATR falls back to 4h", symbol, err)
+		klines1h = nil
 	}
 
 	// Check if data is empty
@@ -199,6 +214,14 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	// Calculate longer-term data
 	longerTermData := calculateLongerTermData(klines4h)
 
+	// TimeframeData drives every execution-side volatility yardstick: the
+	// stop-band floor (1.5×ATR(1h)) and cap (max(2×ATR(4h), 8%)) plus the
+	// vol-target/trailing ATR all read it. Leaving it nil silently disabled
+	// the whole family — the cap degenerated to the fixed 8% and the floor
+	// never enforced (09-16 AKEUSDT: a healthy 11.45% structural stop was
+	// rejected by the degenerate 8% cap the prompt never promised).
+	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h)
+
 	return &Data{
 		Symbol:             symbol,
 		CurrentPrice:       currentPrice,
@@ -212,8 +235,9 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		FundingRateOK:      fundingErr == nil,
 		FundingSettleHours: fundingSettleHours,
 		FundingHistory:     fundingRates,
-		IntradaySeries:    intradayData,
-		LongerTermContext: longerTermData,
+		IntradaySeries:     intradayData,
+		LongerTermContext:  longerTermData,
+		TimeframeData:      TimeframeData,
 	}, nil
 }
 
@@ -914,4 +938,21 @@ func isStaleData(klines []Kline, symbol string) bool {
 	// Price frozen but has volume: might be extremely low volatility market, allow but log warning
 	logger.Infof("⚠️  %s detected extreme price stability (no fluctuation for %d consecutive periods), but volume is normal", symbol, stalePriceThreshold)
 	return false
+}
+
+// executionTimeframeData builds the TimeframeData map the execution-side
+// risk gates read (3m/4h always fetched; 1h best-effort — its absence makes
+// the stop-floor fall back to 4h, a wider but still-enforced floor).
+func executionTimeframeData(klines3m, klines1h, klines4h []Kline) map[string]*TimeframeSeriesData {
+	tf := map[string]*TimeframeSeriesData{}
+	if len(klines3m) > 0 {
+		tf["3m"] = calculateTimeframeSeries(klines3m, "3m", len(klines3m))
+	}
+	if len(klines1h) > 0 {
+		tf["1h"] = calculateTimeframeSeries(klines1h, "1h", len(klines1h))
+	}
+	if len(klines4h) > 0 {
+		tf["4h"] = calculateTimeframeSeries(klines4h, "4h", len(klines4h))
+	}
+	return tf
 }

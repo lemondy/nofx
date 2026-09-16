@@ -649,3 +649,37 @@ func TestRefreshFormingCandle(t *testing.T) {
 		t.Fatalf("downward patch wrong: %+v", sd4.Klines[0])
 	}
 }
+
+// GetWithExchange must populate TimeframeData — every execution-side
+// volatility yardstick (stop-band floor 1.5×ATR(1h), cap 2×ATR(4h),
+// vol-target/trailing) reads it. It used to be left nil, so all of those
+// gates silently ran on ATR=0: the cap degenerated to the fixed 8% and
+// rejected healthy wide stops (AKEUSDT 09-16) while the floor never
+// enforced at all.
+func TestExecutionTimeframeData(t *testing.T) {
+	mk := func(n int, base float64) []Kline {
+		ks := make([]Kline, n)
+		p := base
+		for i := range ks {
+			p *= 1.003
+			ks[i] = Kline{OpenTime: int64(i), Open: p * 0.999, High: p * 1.002, Low: p * 0.997, Close: p, Volume: 10}
+		}
+		return ks
+	}
+
+	tf := executionTimeframeData(mk(100, 2.4), mk(100, 2.4), mk(100, 2.4))
+	for _, key := range []string{"3m", "1h", "4h"} {
+		if tf[key] == nil || len(tf[key].Klines) == 0 {
+			t.Fatalf("timeframe %q missing from execution data", key)
+		}
+	}
+
+	// 1h fetch failed (best-effort): floor's ATR chain rides 4h instead.
+	tf = executionTimeframeData(mk(100, 2.4), nil, mk(100, 2.4))
+	if tf["1h"] != nil {
+		t.Fatal("1h must be absent when its fetch failed")
+	}
+	if tf["3m"] == nil || tf["4h"] == nil {
+		t.Fatal("3m/4h must always be present")
+	}
+}
