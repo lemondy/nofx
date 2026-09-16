@@ -13,20 +13,23 @@ import (
 func TestWaitStateHygiene(t *testing.T) {
 	// Valid directional state back-fills wait_bias and maps onto the stage.
 	d := Decision{Symbol: "CHIPUSDT", Action: "wait", WaitState: "WATCH_SHORT", NextTrigger: "0.03854 破位确认 + RECHECK_ALL_HARD_GATES"}
-	if err := validateDecision(&d, 52, 10, 5, 10, 1.5, 12, false); err != nil {
+	if err := validateDecision(&d, 52, 10, 5, 10, 1.5, 12, false, nil); err != nil {
 		t.Fatalf("valid wait_state rejected: %v", err)
 	}
 	if d.WaitBias != "short" {
 		t.Errorf("wait_bias = %q, want back-filled short", d.WaitBias)
 	}
-	if d.Stage != "WATCH" {
-		t.Errorf("stage = %q, want WATCH", d.Stage)
+	if d.Stage != "READY" {
+		// 09-16: the declared state no longer wins — with no gate snapshot the
+		// stage falls back to the bias/blockers rule (short bias, no
+		// substantive blocker → READY).
+		t.Errorf("stage = %q, want READY (declared state is ignored)", d.Stage)
 	}
 
 	// Contradicting state (WATCH_LONG under a short bias) is stripped; the
 	// bias survives, the stage falls back to derivation.
 	d2 := Decision{Symbol: "XUSDT", Action: "wait", WaitBias: "short", WaitState: "WATCH_LONG", BlockingFactors: []string{"TIMING_GATE"}}
-	if err := validateDecision(&d2, 52, 10, 5, 10, 1.5, 12, false); err != nil {
+	if err := validateDecision(&d2, 52, 10, 5, 10, 1.5, 12, false, nil); err != nil {
 		t.Fatalf("conflicting wait_state must not error: %v", err)
 	}
 	if d2.WaitState != "" {
@@ -41,7 +44,7 @@ func TestWaitStateHygiene(t *testing.T) {
 
 	// Unknown enum value is stripped silently.
 	d3 := Decision{Symbol: "XUSDT", Action: "wait", WaitState: "READY_WE"}
-	if err := validateDecision(&d3, 52, 10, 5, 10, 1.5, 12, false); err != nil {
+	if err := validateDecision(&d3, 52, 10, 5, 10, 1.5, 12, false, nil); err != nil {
 		t.Fatalf("unknown wait_state must not error: %v", err)
 	}
 	if d3.WaitState != "" {
@@ -49,10 +52,15 @@ func TestWaitStateHygiene(t *testing.T) {
 	}
 
 	// BLOCKED keeps its direction as a WATCH under the stage mapping
-	// (ZEC case: short bias stands, the block is entry mechanics).
+	// (ZEC case: short bias stands, the block is entry mechanics) — the
+	// derived BLOCKED comes from the gate snapshot now, not the declaration.
+	gatesBlocked := map[string]*GateState{"zecusdt": {LongAllowed: false, ShortAllowed: false}}
 	d4 := Decision{Symbol: "ZECUSDT", Action: "wait", WaitBias: "short", WaitState: "BLOCKED"}
-	if err := validateDecision(&d4, 52, 10, 5, 10, 1.5, 12, false); err != nil {
+	if err := validateDecision(&d4, 52, 10, 5, 10, 1.5, 12, false, gatesBlocked["zecusdt"]); err != nil {
 		t.Fatalf("blocked+state rejected: %v", err)
+	}
+	if d4.WaitState != "BLOCKED" {
+		t.Errorf("derived wait_state = %q, want BLOCKED (both gates failed)", d4.WaitState)
 	}
 	if d4.Stage != "WATCH" {
 		t.Errorf("BLOCKED with a surviving bias → stage %q, want WATCH", d4.Stage)
@@ -60,7 +68,7 @@ func TestWaitStateHygiene(t *testing.T) {
 
 	// Non-wait actions never carry the annotation.
 	d5 := Decision{Symbol: "XUSDT", Action: "hold", WaitState: "READY_LONG", NextTrigger: "junk"}
-	if err := validateDecision(&d5, 52, 10, 5, 10, 1.5, 12, false); err != nil {
+	if err := validateDecision(&d5, 52, 10, 5, 10, 1.5, 12, false, nil); err != nil {
 		t.Fatalf("hold rejected: %v", err)
 	}
 	if d5.WaitState != "" || d5.NextTrigger != "" {
@@ -69,9 +77,13 @@ func TestWaitStateHygiene(t *testing.T) {
 
 	// next_trigger is clamped to the dataset column width.
 	long := "事" + strings.Repeat("x", 400)
-	d6 := Decision{Symbol: "XUSDT", Action: "wait", WaitState: "WATCH_LONG", NextTrigger: long}
-	if err := validateDecision(&d6, 52, 10, 5, 10, 1.5, 12, false); err != nil {
+	gatesOpen := map[string]*GateState{"xusdt": {LongAllowed: true, ShortAllowed: false}}
+	d6 := Decision{Symbol: "XUSDT", Action: "wait", WaitBias: "long", WaitState: "WATCH_LONG", NextTrigger: long}
+	if err := validateDecision(&d6, 52, 10, 5, 10, 1.5, 12, false, gatesOpen["xusdt"]); err != nil {
 		t.Fatalf("wait rejected: %v", err)
+	}
+	if d6.WaitState != "READY_LONG" {
+		t.Errorf("derived wait_state = %q, want READY_LONG (long gate allowed)", d6.WaitState)
 	}
 	if r := []rune(d6.NextTrigger); len(r) > 180 {
 		t.Errorf("next_trigger not clamped: %d runes", len(r))

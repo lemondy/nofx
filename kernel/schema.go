@@ -88,7 +88,7 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			DescZH:    "自系统启动以来的总收益率，+15.87%表示盈利15.87%",
 			DescEN:    "Total return since inception, +15.87% means 15.87% profit",
 		},
-		"Margin": {
+		"MarginUsage": {
 			NameZH:    "保证金使用率",
 			NameEN:    "Margin Usage Rate",
 			Unit:      "%",
@@ -174,7 +174,7 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			DescZH: "3x表示价格变动1%，持仓盈亏变动3%。杠杆越高，风险越大",
 			DescEN: "3x means 1% price move = 3% position PnL. Higher leverage = higher risk",
 		},
-		"Margin": {
+		"MarginUsed": {
 			NameZH:    "占用保证金",
 			NameEN:    "Margin Used",
 			Unit:      "USDT",

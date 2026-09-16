@@ -61,10 +61,17 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("# Hard Constraints (Risk Control)\n\n")
 	sb.WriteString("## CODE ENFORCED (Backend validation, cannot be bypassed):\n")
 	sb.WriteString(fmt.Sprintf("- Max Positions: %d coins simultaneously\n", riskControl.MaxPositions))
-	sb.WriteString(fmt.Sprintf("- Position Value Limit (Altcoins): max %.0f USDT (= equity %.0f × %.1fx)\n",
-		accountEquity*altcoinPosValueRatio, accountEquity, altcoinPosValueRatio))
-	sb.WriteString(fmt.Sprintf("- Position Value Limit (BTC/ETH): max %.0f USDT (= equity %.0f × %.1fx)\n",
-		accountEquity*btcEthPosValueRatio, accountEquity, btcEthPosValueRatio))
+	if altcoinPosValueRatio == btcEthPosValueRatio {
+		// Identical multipliers: one line — two identical rows read as if
+		// there were differentiated handling when there is none (09-16 audit).
+		sb.WriteString(fmt.Sprintf("- Position Value Limit (all symbols): max %.0f USDT (= equity %.2f × %.1fx)\n",
+			accountEquity*altcoinPosValueRatio, accountEquity, altcoinPosValueRatio))
+	} else {
+		sb.WriteString(fmt.Sprintf("- Position Value Limit (Altcoins): max %.0f USDT (= equity %.2f × %.1fx)\n",
+			accountEquity*altcoinPosValueRatio, accountEquity, altcoinPosValueRatio))
+		sb.WriteString(fmt.Sprintf("- Position Value Limit (BTC/ETH): max %.0f USDT (= equity %.2f × %.1fx)\n",
+			accountEquity*btcEthPosValueRatio, accountEquity, btcEthPosValueRatio))
+	}
 	sb.WriteString(fmt.Sprintf("- Max Margin Usage: ≤%.0f%%\n", riskControl.MaxMarginUsage*100))
 	sb.WriteString(fmt.Sprintf("- Min Position Size: ≥%.0f USDT\n", riskControl.MinPositionSize))
 	// Margin-budget reality check (audit 09-13): the value-ratio limits and
@@ -134,12 +141,12 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString(promptSections.EntryStandards)
 		sb.WriteString("\n\nYou have the following indicator data:\n")
 		e.writeAvailableIndicators(&sb)
-		sb.WriteString(fmt.Sprintf("\n**Confidence ≥ %d** required to open positions.\n\n", riskControl.MinConfidence))
+		sb.WriteString("\n")
 	} else {
 		sb.WriteString("# 🎯 Entry Standards (Strict)\n\n")
 		sb.WriteString("Only open positions when multiple signals resonate. You have:\n")
 		e.writeAvailableIndicators(&sb)
-		sb.WriteString(fmt.Sprintf("\nFeel free to use any effective analysis method, but **confidence ≥ %d** required to open positions; avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, reopening immediately after closing, etc.\n\n", riskControl.MinConfidence))
+		sb.WriteString("\nFeel free to use any effective analysis method, but avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, reopening immediately after closing, etc.\n\n")
 	}
 
 	// 6. Decision process (editable)
@@ -203,7 +210,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("  - `partial_close_long` / `partial_close_short`(部分平仓): 输出 `close_fraction`(0<frac≤0.5)平掉对应比例,用于按结构位分批止盈/减仓;每仓位累计部分平仓 ≤75%(程序强制),全平用 close_*;受最短持仓/提前平仓门约束(同 close)\n")
 	sb.WriteString("  - 程序自动机制仍在: 1R 减仓 50%+保本、1.5R 跟踪止损、25% 全平、回撤保护——这些动作是**补充**,不是替代\n")
 	sb.WriteString("- `wait_bias`: wait 决策的方向语义,枚举 \"long\"/\"short\"/留空——见上三类分类;它承载方向判断,directional_score 是它的证据,no_trade_reason 不承载方向判断\n")
-	sb.WriteString("- **`wait_state` + `next_trigger`(wait 决策必填,交易状态机)**: wait_state 逐字枚举 BLOCKED|WATCH_LONG|WATCH_SHORT|READY_LONG|READY_SHORT,以该币 `hard_entry_gate` 程序判定为准: 两个方向都 allowed=false 且无可主张的市价例外→BLOCKED;方向成立但有入场拦路(锚点/闸门/RR 等,failed 非空)→WATCH_*;全部硬门通过只差价格触发事件→READY_*。`next_trigger` 对 WATCH_*/READY_* 必填: 一句话写\"触发事件 + RECHECK_ALL_HARD_GATES\"——触发事件只是**重评条件**,事件发生后一切硬门(止损结构/RR≥min/时点/锚点呼吸/min_size/数据质量)必须重新全过,它绝不是开仓许可;禁止只写\"等15m转down\"这类单事件表述(转down≠可开仓)。**时间语义纪律**: 决策在下一周期快照自动重评,禁止输出任何以天/周为尺度的搁置结论(\"下周重评\"\"本周不再关注\"等均为错误措辞)\n")
+	sb.WriteString("- **`wait_state` 不要输出(程序自动派生)**: 程序按你的 wait_bias + 该币 hard_entry_gate 机械推导(bias=long 且 long 侧 allowed → READY_LONG,否则 WATCH_SHORT/READY_SHORT 镜像;无 bias 且两方向都 blocked → BLOCKED)——你只需在 wait_bias 里给出方向判断。**`next_trigger` 对 WATCH_*/READY_* 必填**(你自己按 hard_entry_gate 判断处于哪类): 一句话写\"触发事件 + RECHECK_ALL_HARD_GATES\"——触发事件只是**重评条件**,事件发生后一切硬门(止损结构/RR≥min/时点/锚点呼吸/min_size/数据质量)必须重新全过,它绝不是开仓许可;禁止只写\"等15m转down\"这类单事件表述(转down≠可开仓)。**时间语义纪律**: 决策在下一周期快照自动重评,禁止输出任何以天/周为尺度的搁置结论(\"下周重评\"\"本周不再关注\"等均为错误措辞)\n")
 	sb.WriteString("- **`management_quality` + `management_flags`(IN_POSITION hold 必填,数据集字段)**: management_quality 是你对\"继续持有\"这个判断的诚实自评 0-100(90+: 趋势完好+结构无损+浮盈保护已到位;70-89: 持有理由成立但需盯一个风险;50-69: 边缘,理由在弱化;<50: 该考虑离场——此时应输出 close/partial 而不是低分 hold)。management_flags 固定枚举(逐字): BREAKEVEN_WARRANTED|PARTIAL_WARRANTED|TRAIL_SUFFICIENT|TREND_INTACT|STRUCTURE_WEAKENING|CHOP_RISK|VOL_SPIKE|EVENT_RISK。**若你认为该保本/该部分止盈,正确动作是输出 adjust_stop_loss / partial_close_*,而不是 hold+flag**——hold+flag 的语义是\"我判断了,但程序阶梯/时机还没到,暂不动作\"\n")
 	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK。其中 `LOSS_STREAK_BAN` **只允许用于快照 JSON 里有 `loss_streak` 字段的币**——那是程序按成交记录算出的连亏禁开期;快照没有该字段 = 程序判定未熔断,给这样的币标 LOSS_STREAK_BAN 属于标签造假(09-15 审计:模型曾给刚连胜两笔的币标此标签 17 次)。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
 	sb.WriteString("- **STRICT JSON**: Output raw JSON only — no placeholders (`?`, `？`, `N/A`, `—`) or trailing commas for unknown values. If a value is unknown, use `0` or omit the field entirely\n")
@@ -308,7 +315,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	}
 
 	// Account information
-	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Balance %.2f (%.1f%%) | PnL %+.2f%% | Margin %.1f%% | Positions %d\n\n",
+	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Balance %.2f (%.1f%%) | PnL %+.2f%% | MarginUsage %.1f%% | Positions %d\n\n",
 		ctx.Account.TotalEquity,
 		ctx.Account.AvailableBalance,
 		(ctx.Account.AvailableBalance/ctx.Account.TotalEquity)*100,
@@ -681,7 +688,7 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 		priceLabel = "Last"
 	}
 
-	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f %s %.4f | Qty %.4f | Position Value %.2f USDT | Margin ROI %+.2f%% | Price Return %+.2f%% | Unrealized PnL %+.2f USDT | Peak PnL %.2f%% (margin basis) | Leverage %dx | Margin %.0f | Liq Price %.4f%s\n\n",
+	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f %s %.4f | Qty %.4f | Position Value %.2f USDT | Margin ROI %+.2f%% | Price Return %+.2f%% | Unrealized PnL %+.2f USDT | Peak PnL %.2f%% (margin basis) | Leverage %dx | MarginUsed %.0f | Liq Price %.4f%s\n\n",
 		index, pos.Symbol, strings.ToUpper(pos.Side),
 		pos.EntryPrice, priceLabel, displayPrice, pos.Quantity, positionValue, pos.UnrealizedPnLPct, pos.PriceReturnPct, pos.UnrealizedPnL, pos.PeakPnLPct,
 		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
@@ -1219,6 +1226,21 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 				}
 			}
 			ctx.RRCeilings[market.Normalize(data.Symbol)] = rc
+			// Capture the hard-gate verdicts so wait_state can be derived
+			// program-side from (wait_bias, gate) instead of model judgment.
+			if ctx.GateStates == nil {
+				ctx.GateStates = make(map[string]*GateState)
+			}
+			gs := &GateState{}
+			if sig.HardGate != nil {
+				if sig.HardGate.Long != nil {
+					gs.LongAllowed = sig.HardGate.Long.Allowed
+				}
+				if sig.HardGate.Short != nil {
+					gs.ShortAllowed = sig.HardGate.Short.Allowed
+				}
+			}
+			ctx.GateStates[market.Normalize(data.Symbol)] = gs
 		}
 		// Data-incomplete symbols are barred from trading — nothing beyond
 		// the DO-NOT block is rendered for them.

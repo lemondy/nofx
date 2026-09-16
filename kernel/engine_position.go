@@ -72,16 +72,16 @@ func correctLimitAnchors(decisions []Decision, anchors map[string]*LimitAnchor, 
 	}
 }
 
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool) error {
+func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool, gateStates map[string]*GateState) error {
 	for i := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols[market.Normalize(decisions[i].Symbol)]); err != nil {
+		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols[market.Normalize(decisions[i].Symbol)], gateStates[market.Normalize(decisions[i].Symbol)]); err != nil {
 			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, hasPosition bool) error {
+func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, hasPosition bool, gs *GateState) error {
 	validActions := map[string]bool{
 		"open_long":        true,
 		"open_short":       true,
@@ -163,6 +163,14 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	// Everything else is a pure (action, hasPosition) lookup — the model's
 	// declaration, if any, is overwritten.
 	if d.Action == "wait" {
+		// wait_state is DERIVED from (wait_bias, hard gate) — program truth
+		// replaces whatever the model declared (09-16 schema-redundancy).
+		// Missing gate snapshot (data-incomplete symbol) → empty state, the
+		// stage falls back to the bias/blockers rule below.
+		d.WaitState = DeriveWaitStateFromGate(d.WaitBias, gs)
+		if d.WaitState == "" || d.WaitState == "BLOCKED" {
+			d.NextTrigger = "" // only WATCH_*/READY_* carry a re-check trigger
+		}
 		if st := WaitStateToStage(d.WaitState, d.WaitBias); st != "" {
 			d.Stage = st
 		} else {

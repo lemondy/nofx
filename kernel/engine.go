@@ -142,6 +142,12 @@ type Context struct {
 	// wait snapshot promised — quantifying how much RR decays between the
 	// trigger event and the fill (lower entry, nearer target).
 	RRCeilings map[string]*RRCeiling `json:"-"`
+
+	// GateStates records per symbol the hard_entry_gate verdicts the model
+	// was SHOWN (allowed per direction) at prompt-build time. wait_state is
+	// derived from these + wait_bias — the model no longer outputs it
+	// (schema-redundancy audit 09-16).
+	GateStates map[string]*GateState `json:"-"`
 	BTCETHLeverage     int                                `json:"-"`
 	AltcoinLeverage    int                                `json:"-"`
 	Timeframes         []string                           `json:"-"`
@@ -160,6 +166,44 @@ type RRCeiling struct {
 	ShortRR     float64
 	LongUsable  bool
 	ShortUsable bool
+}
+
+// GateState is the per-symbol hard_entry_gate verdict snapshot the wait_state
+// derivation reads (both directions' allowed flags as shown to the model).
+type GateState struct {
+	LongAllowed  bool
+	ShortAllowed bool
+}
+
+// DeriveWaitStateFromGate resolves the wait_state enum mechanically from the
+// program's own hard_entry_gate verdicts plus the model's directional bias
+// (schema-redundancy audit 09-16 — the model no longer outputs wait_state;
+// every input is backend-known). Precedence per the enum's definition: both
+// directions blocked → BLOCKED (regardless of bias — the ZEC case: the bias
+// survives a mechanical block as a WATCH at the stage layer); else the bias
+// direction decides READY_* (gate allowed, only the price trigger pending)
+// vs WATCH_* (gate failed); no bias with a gate still open → "" (no
+// directional embryo — NO_SETUP territory, wait_state stays empty).
+func DeriveWaitStateFromGate(waitBias string, gs *GateState) string {
+	if gs == nil {
+		return ""
+	}
+	if !gs.LongAllowed && !gs.ShortAllowed {
+		return "BLOCKED"
+	}
+	switch waitBias {
+	case "long":
+		if gs.LongAllowed {
+			return "READY_LONG"
+		}
+		return "WATCH_LONG"
+	case "short":
+		if gs.ShortAllowed {
+			return "READY_SHORT"
+		}
+		return "WATCH_SHORT"
+	}
+	return ""
 }
 
 // MinPositionSizeDefaultUSDT mirrors the executor's enforceMinPositionSize
