@@ -72,16 +72,16 @@ func correctLimitAnchors(decisions []Decision, anchors map[string]*LimitAnchor, 
 	}
 }
 
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
+func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64) error {
 	for i := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio); err != nil {
+		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize); err != nil {
 			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
+func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64) error {
 	validActions := map[string]bool{
 		"open_long":        true,
 		"open_short":       true,
@@ -213,17 +213,17 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("position size must be greater than 0: %.2f", d.PositionSizeUSD)
 		}
 
-		const minPositionSizeGeneral = 12.0
-		const minPositionSizeBTCETH = 60.0
-
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			if d.PositionSizeUSD < minPositionSizeBTCETH {
-				return fmt.Errorf("%s opening amount too small (%.2f USDT), must be ≥%.2f USDT", d.Symbol, d.PositionSizeUSD, minPositionSizeBTCETH)
-			}
-		} else {
-			if d.PositionSizeUSD < minPositionSizeGeneral {
-				return fmt.Errorf("opening amount too small (%.2f USDT), must be ≥%.2f USDT", d.PositionSizeUSD, minPositionSizeGeneral)
-			}
+		// The binding minimum is the strategy-config min_position_size
+		// (user 09-16: never hardcode — the snapshot min_size block and the
+		// executor enforce the SAME config value; a hardcoded 12 here once
+		// rejected openings the strategy's min 5 had declared legal).
+		// ≤0/0 passed in means the caller skipped resolution — apply the
+		// executor-mirrored default rather than silently disabling the floor.
+		if minPositionSize <= 0 {
+			minPositionSize = MinPositionSizeDefaultUSDT
+		}
+		if d.PositionSizeUSD < minPositionSize {
+			return fmt.Errorf("opening amount too small (%.2f USDT), must be ≥%.2f USDT (strategy min_position_size)", d.PositionSizeUSD, minPositionSize)
 		}
 
 		tolerance := maxPositionValue * 0.01

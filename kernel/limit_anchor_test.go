@@ -155,24 +155,24 @@ func TestHasScannerConflict(t *testing.T) {
 // New position-management actions: enum acceptance + required-field guards.
 func TestValidateManagementActions(t *testing.T) {
 	d := Decision{Symbol: "T", Action: "adjust_stop_loss", StopLoss: 0}
-	if err := validateDecision(&d, 100, 3, 3, 1, 1); err == nil || !strings.Contains(err.Error(), "requires stop_loss") {
+	if err := validateDecision(&d, 100, 3, 3, 1, 1, 12); err == nil || !strings.Contains(err.Error(), "requires stop_loss") {
 		t.Fatalf("adjust_stop_loss without stop_loss must fail: %v", err)
 	}
 	d.StopLoss = 101
-	if err := validateDecision(&d, 100, 3, 3, 1, 1); err != nil {
+	if err := validateDecision(&d, 100, 3, 3, 1, 1, 12); err != nil {
 		t.Fatalf("adjust_stop_loss with price must pass: %v", err)
 	}
 	p := Decision{Symbol: "T", Action: "partial_close_long", CloseFraction: 0.6}
-	if err := validateDecision(&p, 100, 3, 3, 1, 1); err == nil || !strings.Contains(err.Error(), "close_fraction") {
+	if err := validateDecision(&p, 100, 3, 3, 1, 1, 12); err == nil || !strings.Contains(err.Error(), "close_fraction") {
 		t.Fatalf("fraction > 0.5 must fail: %v", err)
 	}
 	p.CloseFraction = 0.5
-	if err := validateDecision(&p, 100, 3, 3, 1, 1); err != nil {
+	if err := validateDecision(&p, 100, 3, 3, 1, 1, 12); err != nil {
 		t.Fatalf("fraction 0.5 must pass: %v", err)
 	}
 	p.Action = "partial_close_short"
 	p.CloseFraction = 0
-	if err := validateDecision(&p, 100, 3, 3, 1, 1); err == nil {
+	if err := validateDecision(&p, 100, 3, 3, 1, 1, 12); err == nil {
 		t.Fatal("fraction 0 must fail")
 	}
 }

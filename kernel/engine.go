@@ -171,6 +171,19 @@ type RRCeiling struct {
 // separate, weaker check further down the order path. Keep defaults in sync.
 const MinPositionSizeDefaultUSDT = 12.0
 
+// EffectiveMinPositionSize resolves the binding minimum opening notional from
+// the strategy config (risk_control.min_position_size, web strategy page);
+// ≤0/unset falls back to MinPositionSizeDefaultUSDT. Single source shared by
+// the decision validator and the snapshot min_size block — a hardcoded 12 in
+// the validator once rejected an 8.66 USDT opening the strategy (min 5) had
+// told the model was legal.
+func (e *StrategyEngine) EffectiveMinPositionSize() float64 {
+	if v := e.config.RiskControl.MinPositionSize; v > 0 {
+		return v
+	}
+	return MinPositionSizeDefaultUSDT
+}
+
 // ValidDecisionStages is the setup lifecycle enum (⑯): NO_SETUP = nothing
 // forming; WATCH = setup forming, conditions tracked; READY = conditions met,
 // waiting for the trigger; TRIGGERED = firing the entry/exit now;

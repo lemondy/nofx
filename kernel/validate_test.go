@@ -14,6 +14,7 @@ func TestLeverageFallback(t *testing.T) {
 		altcoinLeverage int
 		wantLeverage    int // Expected leverage after correction
 		wantError       bool
+		minPositionSize float64 // strategy-config min opening notional (USDT)
 	}{
 		{
 			name: "Altcoin leverage exceeded - auto-correct to limit",
@@ -28,6 +29,7 @@ func TestLeverageFallback(t *testing.T) {
 			accountEquity:   100,
 			btcEthLeverage:  10,
 			altcoinLeverage: 5, // Limit 5x
+			minPositionSize: 12,
 			wantLeverage:    5, // Should be corrected to 5
 			wantError:       false,
 		},
@@ -44,6 +46,7 @@ func TestLeverageFallback(t *testing.T) {
 			accountEquity:   100,
 			btcEthLeverage:  10, // Limit 10x
 			altcoinLeverage: 5,
+			minPositionSize: 12,
 			wantLeverage:    10, // Should be corrected to 10
 			wantError:       false,
 		},
@@ -61,6 +64,7 @@ func TestLeverageFallback(t *testing.T) {
 			btcEthLeverage:  10,
 			altcoinLeverage: 5,
 			wantLeverage:    5, // Stays unchanged
+			minPositionSize: 12,
 			wantError:       false,
 		},
 		{
@@ -77,6 +81,7 @@ func TestLeverageFallback(t *testing.T) {
 			btcEthLeverage:  10,
 			altcoinLeverage: 5,
 			wantLeverage:    0,
+			minPositionSize: 12,
 			wantError:       true,
 		},
 	}
@@ -84,7 +89,7 @@ func TestLeverageFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Use default position value ratios for testing (10x for BTC/ETH, 1.5x for altcoins)
-			err := validateDecision(&tt.decision, tt.accountEquity, tt.btcEthLeverage, tt.altcoinLeverage, 10.0, 1.5)
+			err := validateDecision(&tt.decision, tt.accountEquity, tt.btcEthLeverage, tt.altcoinLeverage, 10.0, 1.5, tt.minPositionSize)
 
 			// Check error status
 			if (err != nil) != tt.wantError {
@@ -113,4 +118,43 @@ func stringContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// The binding minimum opening notional is the STRATEGY CONFIG's
+// min_position_size — never a hardcoded constant (user 09-16: the validator's
+// hardcoded 12 rejected an 8.66 USDT opening the strategy (min 5) had told
+// the model was legal; the snapshot min_size block and the executor already
+// used the config value).
+func TestMinPositionSizeUsesStrategyConfig(t *testing.T) {
+	decision := Decision{
+		Symbol:          "QCOMUSDT",
+		Action:          "open_long",
+		Leverage:        3,
+		PositionSizeUSD: 8.66,
+		StopLoss:        180,
+		TakeProfit:      200,
+	}
+
+	// Strategy min 5 → 8.66 is legal (the exact rejected-in-production case).
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 5); err != nil {
+		t.Fatalf("config min 5 must accept 8.66 USDT: %v", err)
+	}
+	// BTC/ETH previously carried a hardcoded 60 — the config value rules there
+	// too now (the exchange's own min-notional stays the last-resort check).
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 5); err != nil {
+		t.Fatalf("BTC/ETH min must also follow the config: %v", err)
+	}
+	btc := decision
+	btc.Symbol = "BTCUSDT"
+	if err := validateDecision(&btc, 52, 10, 5, 0.5, 1.5, 5); err != nil {
+		t.Fatalf("config min 5 must accept 8.66 USDT on BTCUSDT: %v", err)
+	}
+
+	// Unset config (≤0) falls back to the executor-mirrored 12.
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 0); err == nil {
+		t.Fatal("fallback min 12 must reject 8.66 USDT")
+	}
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 12); err == nil {
+		t.Fatal("explicit min 12 must reject 8.66 USDT")
+	}
 }
