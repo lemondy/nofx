@@ -187,9 +187,12 @@ export interface TraderStats {
   sharpe_ratio: number
   total_pnl: number
   total_fee: number
+  total_win: number
+  total_loss: number
   avg_win: number
   avg_loss: number
   max_drawdown_pct: number
+  window_days?: number
 }
 
 // Matches Go SymbolStats struct exactly

@@ -520,7 +520,7 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
  <div className="space-y-6">
  {/* Overall Stats - Row 1: Core Metrics */}
  {stats && (
- <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+ <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
  <StatCard
  icon="📊"
  title={t('positionHistory.totalTrades', language)}
@@ -553,6 +553,20 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
  language={language}
  />
  <StatCard
+ icon="✅"
+ title={t('positionHistory.totalWin', language)}
+ value={'+' + formatNumber(stats.total_win || 0)}
+ color="#2E7D4F"
+ language={language}
+ />
+ <StatCard
+ icon="❌"
+ title={t('positionHistory.totalLoss', language)}
+ value={'-' + formatNumber(stats.total_loss || 0)}
+ color="#C0392B"
+ language={language}
+ />
+ <StatCard
  icon="📈"
  title={t('positionHistory.profitFactor', language)}
  value={(stats.profit_factor || 0).toFixed(2)}
@@ -561,6 +575,12 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
  metricKey="profit_factor"
  language={language}
  />
+ </div>
+ )}
+
+ {/* Overall Stats - Row 2: Advanced Metrics */}
+ {stats && (
+ <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
  <StatCard
  icon="⚖️"
  title={t('positionHistory.plRatio', language)}
@@ -570,12 +590,6 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
  metricKey="expectancy"
  language={language}
  />
- </div>
- )}
-
- {/* Overall Stats - Row 2: Advanced Metrics */}
- {stats && (
- <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
  <StatCard
  icon="📉"
  title={t('positionHistory.sharpeRatio', language)}

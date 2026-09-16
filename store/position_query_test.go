@@ -64,6 +64,9 @@ func TestGetRollingStatsWindow(t *testing.T) {
 	if full.ProfitFactor != 3.0/21.0 {
 		t.Fatalf("full PF = %.4f, want %.4f", full.ProfitFactor, 3.0/21.0)
 	}
+	if full.TotalWin != 3 || full.TotalLoss != 21 {
+		t.Fatalf("full totals = win %.2f / loss %.2f, want 3 / 21", full.TotalWin, full.TotalLoss)
+	}
 
 	rolling, err := st.Position().GetRollingStats("T1", 100, 30)
 	if err != nil {

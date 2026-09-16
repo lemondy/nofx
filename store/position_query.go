@@ -19,6 +19,8 @@ type TraderStats struct {
 	SharpeRatio    float64 `json:"sharpe_ratio"`
 	TotalPnL       float64 `json:"total_pnl"`
 	TotalFee       float64 `json:"total_fee"`
+	TotalWin       float64 `json:"total_win"`  // Σ realized_pnl of winning trades (gross, pre-fee)
+	TotalLoss      float64 `json:"total_loss"` // Σ |realized_pnl| of losing trades (gross, pre-fee)
 	AvgWin         float64 `json:"avg_win"`
 	AvgLoss        float64 `json:"avg_loss"`
 	MaxDrawdownPct float64 `json:"max_drawdown_pct"`
@@ -129,6 +131,8 @@ func (s *PositionStore) getStats(traderID string, initialEquity float64, windowD
 	if stats.TotalTrades > 0 {
 		stats.WinRate = float64(stats.WinTrades) / float64(stats.TotalTrades) * 100
 	}
+	stats.TotalWin = totalWin
+	stats.TotalLoss = totalLoss
 	if totalLoss > 0 {
 		stats.ProfitFactor = totalWin / totalLoss
 	}
