@@ -202,6 +202,42 @@ func TestStopMoveTightens(t *testing.T) {
 	}
 }
 
+// Breakeven-or-better gate (user directive 09-16, NEARUSDT case): a tighten
+// that still locks a loss is rejected — no profit, nothing to protect. The
+// NEAR tighten parked the SL (2.438) below entry (2.456) under a 5m support
+// cluster; a single 5m wick (2.432) swept it fifteen minutes before price
+// broke the structure high, while the pre-tighten stop (2.4) was never
+// touched.
+func TestStopMoveLocksProfit(t *testing.T) {
+	const entry = 2.456
+	// Long: loss-locking "tighten" (the NEAR case) must be rejected.
+	if stopMoveLocksProfit("long", entry, 2.438) {
+		t.Fatal("long tighten below entry locks a loss — must be rejected")
+	}
+	// Breakeven exactly, and anything above entry up to the mark, is legal.
+	if !stopMoveLocksProfit("long", entry, entry) {
+		t.Fatal("long tighten to exactly entry (breakeven) must pass")
+	}
+	if !stopMoveLocksProfit("long", entry, 2.47) {
+		t.Fatal("long tighten above entry must pass")
+	}
+	// Short mirror.
+	if stopMoveLocksProfit("short", entry, 2.47) {
+		t.Fatal("short tighten above entry locks a loss — must be rejected")
+	}
+	if !stopMoveLocksProfit("short", entry, entry) {
+		t.Fatal("short tighten to exactly entry (breakeven) must pass")
+	}
+	if !stopMoveLocksProfit("short", entry, 2.44) {
+		t.Fatal("short tighten below entry must pass")
+	}
+	// Unknown entry (exchange data glitch) fails the predicate — the executor
+	// treats that as gate-skipped with a WARN, never as a silent pass.
+	if stopMoveLocksProfit("long", 0, 2.47) {
+		t.Fatal("missing entry must not validate")
+	}
+}
+
 func TestPartialCumulativeCap(t *testing.T) {
 	// The cap lives in executePartialCloseWithRecord via partialTrimmed —
 	// assert the arithmetic contract: cumulative 0.5 + 0.25 allowed (0.75),

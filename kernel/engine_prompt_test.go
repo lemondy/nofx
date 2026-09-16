@@ -418,6 +418,8 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 		"`wait_state` + `next_trigger`",
 		"READY_LONG", "WATCH_SHORT", "BLOCKED",
 		"重评条件", "禁止输出任何以天/周为尺度的搁置结论",
+		"只允许收紧到保本或更好(CODE ENFORCED)",
+		"仍锁定亏损的移动",
 	} {
 		if !strings.Contains(sys, want) {
 			t.Errorf("system prompt missing %q", want)

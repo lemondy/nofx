@@ -909,6 +909,25 @@ func stopMoveTightens(side string, currentSL, newSL, markPrice float64) bool {
 	return newSL < currentSL && newSL > markPrice
 }
 
+// stopMoveLocksProfit enforces the breakeven-or-better rule (user directive
+// 09-16, NEARUSDT case): an AI tighten may only fire once it locks in
+// breakeven or better — long newSL >= entry, short newSL <= entry. A
+// "tighten" that still locks a loss just squeezes the escape room into
+// short-timeframe noise: the NEAR stop parked under a 5m support cluster was
+// swept by a single 5m wick (2.438, wick 2.432) fifteen minutes before price
+// broke the very structure high the tighten claimed to keep room for, and the
+// pre-tighten stop (2.4) was never touched. Cutting risk on a LOSING position
+// is the close path (early-close gate), not a loss-locking stop.
+func stopMoveLocksProfit(side string, entryPrice, newSL float64) bool {
+	if entryPrice <= 0 || newSL <= 0 {
+		return false
+	}
+	if side == "long" {
+		return newSL >= entryPrice
+	}
+	return newSL <= entryPrice
+}
+
 // stopPriceForSide returns the stop trigger of the position-side's stop
 // order from the open-order list (0 when none).
 func stopPriceForSide(orders []types.OpenOrder, side string) float64 {
@@ -942,13 +961,14 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 		return err
 	}
 	var side string
-	var markPrice, currentSL float64
+	var markPrice, currentSL, entryPrice float64
 	for _, pos := range positions {
 		if pos["symbol"] != decision.Symbol {
 			continue
 		}
 		pside, _ := pos["side"].(string)
 		mp, _ := pos["markPrice"].(float64)
+		ep, _ := pos["entryPrice"].(float64)
 		sl := at.GetRecordedStopLoss(decision.Symbol, pside)
 		if sl <= 0 {
 			// Recorded stop lost (restart, pre-upgrade position): the
@@ -960,12 +980,12 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 			}
 		}
 		if stopMoveTightens(pside, sl, decision.StopLoss, mp) {
-			side, markPrice, currentSL = pside, mp, sl
+			side, markPrice, currentSL, entryPrice = pside, mp, sl, ep
 			break
 		}
 		// Remember the first position for an accurate error message.
 		if side == "" {
-			side, markPrice, currentSL = pside, mp, sl
+			side, markPrice, currentSL, entryPrice = pside, mp, sl, ep
 		}
 	}
 	if side == "" {
@@ -981,6 +1001,19 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 	if !stopMoveTightens(side, currentSL, decision.StopLoss, markPrice) {
 		return fmt.Errorf("❌ [RISK CONTROL] adjust_stop_loss %s rejected: new SL %.6g must TIGHTEN (current %.6g, mark %.6g) — never widen, never cross the mark",
 			decision.Symbol, decision.StopLoss, currentSL, markPrice)
+	}
+	// Breakeven-or-better (user directive 09-16, NEARUSDT case): a tighten
+	// that still locks a loss is rejected — with no profit there is nothing
+	// to "protect", and parking the stop inside short-timeframe noise (below
+	// a 5m support cluster) converts intact higher-TF theses into realized
+	// losses on routine wicks. Risk reduction on a losing position belongs to
+	// the close path (early-close gate), not a loss-locking stop.
+	if entryPrice > 0 && !stopMoveLocksProfit(side, entryPrice, decision.StopLoss) {
+		return fmt.Errorf("❌ [RISK CONTROL] adjust_stop_loss %s rejected: new SL %.6g still locks a LOSS (entry %.6g, current SL %.6g) — tighten is only allowed to breakeven or better; to cut risk on a losing position use close (early-close gate), never a short-timeframe noise stop",
+			decision.Symbol, decision.StopLoss, entryPrice, currentSL)
+	}
+	if entryPrice <= 0 {
+		logger.Infof("⚠️ [%s] adjust_stop_loss %s: entry price unavailable from exchange data — breakeven gate skipped (tighten-only still enforced)", at.name, decision.Symbol)
 	}
 	if err := at.moveStopExchange(decision.Symbol, side, decision.StopLoss); err != nil {
 		return err
