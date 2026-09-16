@@ -136,6 +136,7 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		riskConfig.BTCETHMaxPositionValueRatio,
 		riskConfig.AltcoinMaxPositionValueRatio,
 		engine.EffectiveMinPositionSize(),
+		positionSymbolsFromContext(ctx),
 	)
 
 	if decision != nil {
@@ -253,7 +254,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 // AI Response Parsing
 // ============================================================================
 
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool) (*FullDecision, error) {
 	cotTrace := extractCoTTrace(aiResponse)
 
 	decisions, err := extractDecisions(aiResponse)
@@ -264,7 +265,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		}, fmt.Errorf("failed to extract decisions: %w", err)
 	}
 
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize); err != nil {
+	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
 			Decisions: decisions,
@@ -517,4 +518,20 @@ func summarizeTail(s string, n int) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+// positionSymbolsFromContext builds the open-position symbol set the stage
+// derivation reads (hold: IN_POSITION vs NO_SETUP). Symbols are normalized
+// so "NEAR" and "NEARUSDT" forms match.
+func positionSymbolsFromContext(ctx *Context) map[string]bool {
+	set := map[string]bool{}
+	if ctx == nil {
+		return set
+	}
+	for _, p := range ctx.Positions {
+		if p.Symbol != "" {
+			set[market.Normalize(p.Symbol)] = true
+		}
+	}
+	return set
 }

@@ -89,7 +89,7 @@ func TestLeverageFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Use default position value ratios for testing (10x for BTC/ETH, 1.5x for altcoins)
-			err := validateDecision(&tt.decision, tt.accountEquity, tt.btcEthLeverage, tt.altcoinLeverage, 10.0, 1.5, tt.minPositionSize)
+			err := validateDecision(&tt.decision, tt.accountEquity, tt.btcEthLeverage, tt.altcoinLeverage, 10.0, 1.5, tt.minPositionSize, false)
 
 			// Check error status
 			if (err != nil) != tt.wantError {
@@ -136,25 +136,67 @@ func TestMinPositionSizeUsesStrategyConfig(t *testing.T) {
 	}
 
 	// Strategy min 5 → 8.66 is legal (the exact rejected-in-production case).
-	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 5); err != nil {
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 5, true); err != nil {
 		t.Fatalf("config min 5 must accept 8.66 USDT: %v", err)
 	}
 	// BTC/ETH previously carried a hardcoded 60 — the config value rules there
 	// too now (the exchange's own min-notional stays the last-resort check).
-	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 5); err != nil {
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 5, true); err != nil {
 		t.Fatalf("BTC/ETH min must also follow the config: %v", err)
 	}
 	btc := decision
 	btc.Symbol = "BTCUSDT"
-	if err := validateDecision(&btc, 52, 10, 5, 0.5, 1.5, 5); err != nil {
+	if err := validateDecision(&btc, 52, 10, 5, 0.5, 1.5, 5, true); err != nil {
 		t.Fatalf("config min 5 must accept 8.66 USDT on BTCUSDT: %v", err)
 	}
 
 	// Unset config (≤0) falls back to the executor-mirrored 12.
-	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 0); err == nil {
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 0, false); err == nil {
 		t.Fatal("fallback min 12 must reject 8.66 USDT")
 	}
-	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 12); err == nil {
+	if err := validateDecision(&decision, 52, 10, 5, 0.5, 1.5, 12, false); err == nil {
 		t.Fatal("explicit min 12 must reject 8.66 USDT")
+	}
+}
+
+// decision_stage is fully derived (schema-redundancy audit 09-16): action +
+// backend-known position state determine it — the model no longer outputs the
+// field, so an action/stage contradiction is impossible by construction.
+func TestDeriveDecisionStage(t *testing.T) {
+	cases := []struct {
+		action      string
+		hasPosition bool
+		want        string
+	}{
+		{"open_long", false, "TRIGGERED"},
+		{"open_short", false, "TRIGGERED"},
+		{"open_long_limit", false, "TRIGGERED"},
+		{"open_short_limit", false, "TRIGGERED"},
+		{"close_long", true, "EXIT"},
+		{"partial_close_short", true, "EXIT"},
+		{"adjust_stop_loss", true, "IN_POSITION"},
+		{"hold", true, "IN_POSITION"},
+		{"hold", false, "NO_SETUP"},
+		{"unknown", false, "NO_SETUP"},
+	}
+	for _, c := range cases {
+		if got := DeriveDecisionStage(c.action, c.hasPosition); got != c.want {
+			t.Errorf("DeriveDecisionStage(%q, %v) = %s, want %s", c.action, c.hasPosition, got, c.want)
+		}
+	}
+	// End-to-end: validateDecision overwrites whatever the model declared.
+	d := Decision{Symbol: "TUSDT", Action: "hold", Stage: "TRIGGERED"} // contradictory on purpose
+	if err := validateDecision(&d, 100, 3, 3, 1, 1, 12, true); err != nil {
+		t.Fatalf("hold must validate: %v", err)
+	}
+	if d.Stage != "IN_POSITION" {
+		t.Fatalf("declared stage %q survived; want derived IN_POSITION", d.Stage)
+	}
+	d2 := Decision{Symbol: "TUSDT", Action: "hold", Stage: "TRIGGERED"}
+	if err := validateDecision(&d2, 100, 3, 3, 1, 1, 12, false); err != nil {
+		t.Fatalf("flat hold must validate: %v", err)
+	}
+	if d2.Stage != "NO_SETUP" {
+		t.Fatalf("declared stage %q survived; want derived NO_SETUP", d2.Stage)
 	}
 }

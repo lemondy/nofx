@@ -258,6 +258,28 @@ func DeriveWaitStage(waitBias string, blockingFactors []string) string {
 	return "READY"
 }
 
+// DeriveDecisionStage resolves the lifecycle stage of a NON-wait decision
+// from (action, hasPosition) — a pure lookup (schema-redundancy audit
+// 09-16): both inputs are backend-known before the model speaks, so the
+// stage carries zero model judgment and is no longer requested as output.
+// open_* → TRIGGERED; close_*/partial_close_* → EXIT; adjust_stop_loss and
+// hold-on-a-position → IN_POSITION; hold without a position → NO_SETUP.
+// wait keeps DeriveWaitStage (wait_bias + blocking_factors).
+func DeriveDecisionStage(action string, hasPosition bool) string {
+	switch {
+	case strings.HasPrefix(action, "open_"):
+		return "TRIGGERED"
+	case strings.HasPrefix(action, "close_") || strings.HasPrefix(action, "partial_close_"):
+		return "EXIT"
+	case action == "adjust_stop_loss":
+		return "IN_POSITION"
+	case action == "hold" && hasPosition:
+		return "IN_POSITION"
+	default:
+		return "NO_SETUP"
+	}
+}
+
 // NormalizeBlockingFactors drops tags outside the vocabulary (keeps order,
 // dedupes) and returns the cleaned slice.
 // ValidManagementFlags is the closed vocabulary for Decision.ManagementFlags.

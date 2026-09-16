@@ -65,7 +65,7 @@ func TestExtractDecisionsAcceptsEmptyArray(t *testing.T) {
 // Full decision parse path with reasoning text around the empty array.
 func TestParseFullDecisionResponseWithEmptyArray(t *testing.T) {
 	resp := "analysis preamble\n```json [] ```"
-	fd, err := parseFullDecisionResponse(resp, 1000, 10, 5, 0.5, 0.5, 12)
+	fd, err := parseFullDecisionResponse(resp, 1000, 10, 5, 0.5, 0.5, 12, nil)
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}

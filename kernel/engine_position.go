@@ -72,16 +72,16 @@ func correctLimitAnchors(decisions []Decision, anchors map[string]*LimitAnchor, 
 	}
 }
 
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64) error {
+func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool) error {
 	for i := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize); err != nil {
+		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols[market.Normalize(decisions[i].Symbol)]); err != nil {
 			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64) error {
+func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, hasPosition bool) error {
 	validActions := map[string]bool{
 		"open_long":        true,
 		"open_short":       true,
@@ -108,10 +108,6 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	if (d.Action == "partial_close_long" || d.Action == "partial_close_short") &&
 		(d.CloseFraction <= 0 || d.CloseFraction > 0.5) {
 		return fmt.Errorf("partial_close requires close_fraction in (0, 0.5] — full exits use close_*")
-	}
-
-	if err := ValidateDecisionStage(d); err != nil {
-		return err
 	}
 
 	// wait_bias: empty | long | short, only meaningful on wait (hold keeps
@@ -161,15 +157,19 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		}
 		d.ManagementQuality = &q
 	}
-	// wait stage is DERIVED, not declared (schema-redundancy audit 09-13):
-	// an explicit wait_state wins; otherwise wait_bias + blocking_factors
-	// fully determine NO_SETUP/WATCH/READY.
+	// Stage is DERIVED, never declared (schema-redundancy audit: waits
+	// 09-13, all actions 09-16). wait: an explicit wait_state wins;
+	// otherwise wait_bias + blocking_factors determine NO_SETUP/WATCH/READY.
+	// Everything else is a pure (action, hasPosition) lookup — the model's
+	// declaration, if any, is overwritten.
 	if d.Action == "wait" {
 		if st := WaitStateToStage(d.WaitState, d.WaitBias); st != "" {
 			d.Stage = st
 		} else {
 			d.Stage = DeriveWaitStage(d.WaitBias, d.BlockingFactors)
 		}
+	} else {
+		d.Stage = DeriveDecisionStage(d.Action, hasPosition)
 	}
 	if d.EntryQuality != nil {
 		q := *d.EntryQuality
@@ -279,16 +279,3 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	return nil
 }
 
-// ValidateDecisionStage checks the ⑯ lifecycle enum (empty = legacy decision,
-// allowed for backward compatibility).
-func ValidateDecisionStage(d *Decision) error {
-	if d.Stage == "" {
-		return nil
-	}
-	for _, st := range ValidDecisionStages {
-		if d.Stage == st {
-			return nil
-		}
-	}
-	return fmt.Errorf("invalid decision_stage %q (must be one of: %s)", d.Stage, strings.Join(ValidDecisionStages, "/"))
-}

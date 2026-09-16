@@ -13,7 +13,7 @@ import (
 func TestWaitStateHygiene(t *testing.T) {
 	// Valid directional state back-fills wait_bias and maps onto the stage.
 	d := Decision{Symbol: "CHIPUSDT", Action: "wait", WaitState: "WATCH_SHORT", NextTrigger: "0.03854 破位确认 + RECHECK_ALL_HARD_GATES"}
-	if err := validateDecision(&d, 52, 10, 5, 10, 1.5, 12); err != nil {
+	if err := validateDecision(&d, 52, 10, 5, 10, 1.5, 12, false); err != nil {
 		t.Fatalf("valid wait_state rejected: %v", err)
 	}
 	if d.WaitBias != "short" {
@@ -26,7 +26,7 @@ func TestWaitStateHygiene(t *testing.T) {
 	// Contradicting state (WATCH_LONG under a short bias) is stripped; the
 	// bias survives, the stage falls back to derivation.
 	d2 := Decision{Symbol: "XUSDT", Action: "wait", WaitBias: "short", WaitState: "WATCH_LONG", BlockingFactors: []string{"TIMING_GATE"}}
-	if err := validateDecision(&d2, 52, 10, 5, 10, 1.5, 12); err != nil {
+	if err := validateDecision(&d2, 52, 10, 5, 10, 1.5, 12, false); err != nil {
 		t.Fatalf("conflicting wait_state must not error: %v", err)
 	}
 	if d2.WaitState != "" {
@@ -41,7 +41,7 @@ func TestWaitStateHygiene(t *testing.T) {
 
 	// Unknown enum value is stripped silently.
 	d3 := Decision{Symbol: "XUSDT", Action: "wait", WaitState: "READY_WE"}
-	if err := validateDecision(&d3, 52, 10, 5, 10, 1.5, 12); err != nil {
+	if err := validateDecision(&d3, 52, 10, 5, 10, 1.5, 12, false); err != nil {
 		t.Fatalf("unknown wait_state must not error: %v", err)
 	}
 	if d3.WaitState != "" {
@@ -51,7 +51,7 @@ func TestWaitStateHygiene(t *testing.T) {
 	// BLOCKED keeps its direction as a WATCH under the stage mapping
 	// (ZEC case: short bias stands, the block is entry mechanics).
 	d4 := Decision{Symbol: "ZECUSDT", Action: "wait", WaitBias: "short", WaitState: "BLOCKED"}
-	if err := validateDecision(&d4, 52, 10, 5, 10, 1.5, 12); err != nil {
+	if err := validateDecision(&d4, 52, 10, 5, 10, 1.5, 12, false); err != nil {
 		t.Fatalf("blocked+state rejected: %v", err)
 	}
 	if d4.Stage != "WATCH" {
@@ -60,7 +60,7 @@ func TestWaitStateHygiene(t *testing.T) {
 
 	// Non-wait actions never carry the annotation.
 	d5 := Decision{Symbol: "XUSDT", Action: "hold", WaitState: "READY_LONG", NextTrigger: "junk"}
-	if err := validateDecision(&d5, 52, 10, 5, 10, 1.5, 12); err != nil {
+	if err := validateDecision(&d5, 52, 10, 5, 10, 1.5, 12, false); err != nil {
 		t.Fatalf("hold rejected: %v", err)
 	}
 	if d5.WaitState != "" || d5.NextTrigger != "" {
@@ -70,7 +70,7 @@ func TestWaitStateHygiene(t *testing.T) {
 	// next_trigger is clamped to the dataset column width.
 	long := "事" + strings.Repeat("x", 400)
 	d6 := Decision{Symbol: "XUSDT", Action: "wait", WaitState: "WATCH_LONG", NextTrigger: long}
-	if err := validateDecision(&d6, 52, 10, 5, 10, 1.5, 12); err != nil {
+	if err := validateDecision(&d6, 52, 10, 5, 10, 1.5, 12, false); err != nil {
 		t.Fatalf("wait rejected: %v", err)
 	}
 	if r := []rune(d6.NextTrigger); len(r) > 180 {
