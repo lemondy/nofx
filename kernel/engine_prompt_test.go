@@ -99,10 +99,11 @@ func TestPerCoinPromptIsJSONOnly(t *testing.T) {
 	if !strings.Contains(out, `"oi_current_base":1234.5`) {
 		t.Fatal("OI current fold missing")
 	}
-	// The conflict-resolution instruction is part of the static legend; the
-	// flag itself only appears on real conflicts (all-up structure → none).
-	if !strings.Contains(out, "MUST resolve the conflict explicitly") {
-		t.Fatal("conflict instruction legend missing")
+	// The conflict-resolution instruction lives in the static legend, which is
+	// now rendered ONCE per prompt (not per coin) — the per-coin block must be
+	// JSON-only. (Legend presence is asserted in TestPromptProgramTruthGateWording.)
+	if strings.Contains(out, "MUST resolve the conflict explicitly") {
+		t.Fatal("per-coin block must not repeat the legend (deduped to once-per-prompt)")
 	}
 	if strings.Contains(out, `"directional_conflict":true`) {
 		t.Fatal("all-up structure must not flag a conflict")
@@ -352,6 +353,7 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.MinRiskRewardRatio = 1.5
 	cfg.RiskControl.SLMinATRMult = 1.5
+	cfg.RiskControl.OpenRejectSupplyPct = 0.5 // renders the anchor-offset/breathing params line
 	cfg.CoinSource.SourceType = "short_scan"
 	engine := NewStrategyEngine(cfg)
 
@@ -374,15 +376,21 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 	out := engine.formatMarketData(data, nil, nil, nil)
 	for _, want := range []string{
 		`"hard_entry_gate"`, `"rr_scan"`, `"bias"`, `"funding_rollover"`,
-		"MAX_STRUCTURAL_RR",
-		"不等于市场空头证据强",
-		"这只是限价路径被禁≠该方向整体禁止",
-		"数据新鲜度优先级",
-		"严禁参与 entry/SL/TP/RR 精确计算",
-		"stop_price 仅是门槛校验口径",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("per-coin block missing %q", want)
+		}
+	}
+	// The coin-independent legend must NOT be repeated per coin — it is
+	// rendered once before the first signal block. Duplicating it across 8+
+	// candidates wasted ~21k chars every cycle.
+	for _, gone := range []string{
+		"数据新鲜度优先级", "MAX_STRUCTURAL_RR", "不等于市场空头证据强",
+		"这只是限价路径被禁≠该方向整体禁止", "严禁参与 entry/SL/TP/RR 精确计算",
+		"stop_price 仅是门槛校验口径",
+	} {
+		if strings.Contains(out, gone) {
+			t.Errorf("per-coin block must not repeat legend %q", gone)
 		}
 	}
 
@@ -393,10 +401,16 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 		"derivatives.funding_rollover.detected",
 		"禁止从 scanner patterns",
 		"RECHECK_ALL_HARD_GATES",
+		"数据新鲜度优先级",
+		"不要把 limit_entry_offset_pct 当成呼吸阈值",
 	} {
 		if !strings.Contains(user, want) {
 			t.Errorf("user prompt missing %q", want)
 		}
+	}
+	// Legend appears exactly once in the whole prompt (dedup guard).
+	if n := strings.Count(user, "数据新鲜度优先级"); n != 1 {
+		t.Errorf("legend rendered %d times, want exactly 1", n)
 	}
 
 	sys := engine.BuildSystemPrompt(100, "")
