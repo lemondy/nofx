@@ -578,8 +578,11 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		}
 
 		// Confluence bonus: more agreeing sources → stronger the level.
+		// Clamped to the 0-100 dim scale — a high base score times 1.16
+		// would otherwise overflow it and leak +2.5 points into RawScore
+		// (user audit 2026-09-17; Structure caps at 100 the same way).
 		if rep.Confluence > 1 {
-			rep.Dims.Price *= math.Min(1+0.08*float64(rep.Confluence-1), 1.16)
+			rep.Dims.Price = math.Min(100, rep.Dims.Price*math.Min(1+0.08*float64(rep.Confluence-1), 1.16))
 		}
 
 		// Room-to-run: distance from the current price to the nearest opposing

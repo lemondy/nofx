@@ -86,6 +86,36 @@ func TestExtendedNoDimDoubleCharge(t *testing.T) {
 	}
 }
 
+// The confluence bonus must not push the Price dim past the 0-100 scale
+// (Structure caps at 100 the same way). Clustered level families drive
+// confluence ≥ 2 → ×1.08 on a base score of ~97 would overflow to ~105.
+func TestPriceDimClampedAt100(t *testing.T) {
+	const level = 100.0
+	k := make([]Kline, 34)
+	for i := range k {
+		var c float64
+		if i < 20 {
+			c = 95.0
+		} else {
+			c = 101.0
+		}
+		k[i] = Kline{OpenTime: int64(i), Open: c, High: c + 0.2, Low: c - 0.1, Close: c}
+	}
+	// Three independent source families clustered within 0.5×ATR (~0.15).
+	levels := []Level{
+		{Name: "20d_high", Price: level},
+		{Name: "60d_high", Price: level},
+		{Name: "vpvr_poc", Price: level},
+	}
+	rep := computeTF("1h", DirUp, k, levels, &shared{})
+	if rep.Confluence < 2 {
+		t.Fatalf("confluence = %d, want ≥2 for the overflow case", rep.Confluence)
+	}
+	if rep.Dims.Price > 100 {
+		t.Fatalf("Price dim = %.2f overflows the 0-100 scale", rep.Dims.Price)
+	}
+}
+
 // Timestamp sanity for the tuning cadence change: weekly, not 72h.
 func TestTuningCadenceConstants(t *testing.T) {
 	// The scheduler builds its ticker inline; pin the intent via the interval
