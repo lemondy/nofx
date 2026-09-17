@@ -51,9 +51,10 @@ type ShortSignal struct {
 	Confirmed        bool            `json:"confirmed"` // at least one topping confirmation printed
 	Score            float64         `json:"score"`     // 0-100 composite short suitability
 	Percentile       float64         `json:"percentile"`
-	Grade            string          `json:"grade"`                // strong / medium / weak / noise
-	BtcRegime        string          `json:"btc_regime,omitempty"` // btc_bull / btc_bear / chop (macro gate context)
-	Universe         string          `json:"universe,omitempty"`   // "gainer" (24h涨幅榜) | "near_high" (距90日高点<5%磨顶池)
+	Grade            string          `json:"grade"`                    // strong / medium / weak / noise
+	BtcRegime        string          `json:"btc_regime,omitempty"`     // btc_bull / btc_bear / chop (macro gate context)
+	Universe         string          `json:"universe,omitempty"`       // "gainer" (24h涨幅榜) | "near_high" (距90日高点<5%磨顶池)
+	NearHighAlso     bool            `json:"near_high_also,omitempty"` // also passed the grinding-top screen (90d-high + 4h div) — pool cut must apply the near_high OI-floor exemption
 	Components       ShortComponents `json:"components"`
 	Reasons          []string        `json:"reasons,omitempty"`
 	GeneratedAt      time.Time       `json:"generated_at"`
@@ -659,19 +660,12 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 
 	// Merge the slow-top universe (grinding tops near their 90d high with 4h
 	// bearish divergence — invisible to a 24h-gainer screen). Gainer results
-	// win symbol collisions; slow entries arrive pre-filtered and capped.
-	for _, sig := range slowTopSnapshot() {
-		dup := false
-		for i := range out {
-			if out[i].Symbol == sig.Symbol {
-				dup = true
-				break
-			}
-		}
-		if !dup {
-			out = append(out, sig)
-		}
-	}
+	// win symbol collisions (they ranked on the live 24h board), but a
+	// colliding coin carries NearHighAlso: it equally passed the grinding-top
+	// screen, so the pool cut must not re-impose the gainer-side OI floor the
+	// slow-top universe is exempt from (user audit 2026-09-17 — the exemption
+	// used to die silently on exactly this collision).
+	out = mergeShortScans(out, slowTopSnapshot())
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	n := len(out)
 	for i := range out {
@@ -690,6 +684,28 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 		out = out[:limit]
 	}
 	return out, now, nil
+}
+
+// mergeShortScans merges the slow-top universe into the gainer ranking.
+// Symbol collisions keep the gainer entry (same AnalyzeShort score either
+// way) but stamp NearHighAlso — see the ScanShorts merge comment.
+func mergeShortScans(gainers, slowTops []ShortSignal) []ShortSignal {
+	out := make([]ShortSignal, len(gainers), len(gainers)+len(slowTops))
+	copy(out, gainers)
+	for _, sig := range slowTops {
+		dup := false
+		for i := range out {
+			if out[i].Symbol == sig.Symbol {
+				out[i].NearHighAlso = true
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, sig)
+		}
+	}
+	return out
 }
 
 // bandFade tapers the score linearly outside [lo, hi]: below lo or above hi

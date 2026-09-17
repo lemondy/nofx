@@ -2,6 +2,41 @@ package breakout
 
 import "testing"
 
+// A symbol in BOTH the gainer ranking and the slow-top screen keeps its
+// gainer entry but must carry NearHighAlso — the pool cut exempts it from
+// the gainer-side OI floor (the whole point of the near_high exemption).
+// Before the fix the collision silently dropped the flag and the floor ate
+// the coin (user audit 2026-09-17).
+func TestMergeShortScansCollisionKeepsExemption(t *testing.T) {
+	gainers := []ShortSignal{
+		{Symbol: "PUMPUSDT", Universe: "gainer", Score: 80},
+		{Symbol: "GRINDUSDT", Universe: "gainer", Score: 60, OIValueMillions: 9}, // also a grinding top
+		{Symbol: "OTHERUSDT", Universe: "gainer", Score: 40},
+	}
+	slowTops := []ShortSignal{
+		{Symbol: "GRINDUSDT", Universe: "near_high", Score: 60, OIValueMillions: 9},
+		{Symbol: "PUREGRINDUSDT", Universe: "near_high", Score: 58},
+	}
+	out := mergeShortScans(gainers, slowTops)
+	if len(out) != 4 {
+		t.Fatalf("merged len = %d, want 4", len(out))
+	}
+	bySym := map[string]ShortSignal{}
+	for _, s := range out {
+		bySym[s.Symbol] = s
+	}
+	g := bySym["GRINDUSDT"]
+	if g.Universe != "gainer" || !g.NearHighAlso {
+		t.Fatalf("collision: universe=%q nearHighAlso=%v — want gainer label kept + flag set", g.Universe, g.NearHighAlso)
+	}
+	if bySym["PUREGRINDUSDT"].Universe != "near_high" || bySym["PUREGRINDUSDT"].NearHighAlso {
+		t.Fatalf("pure slow-top entry mangled: universe=%q nearHighAlso=%v (own near_high needs no flag)", bySym["PUREGRINDUSDT"].Universe, bySym["PUREGRINDUSDT"].NearHighAlso)
+	}
+	if bySym["PUMPUSDT"].NearHighAlso {
+		t.Fatal("non-colliding gainer must not carry the flag")
+	}
+}
+
 // AnalyzeShort must record the latest OI notional so callers can apply the
 // strategy's min-OI liquidity threshold before taking the top-N candidates.
 func TestAnalyzeShortRecordsOIValue(t *testing.T) {

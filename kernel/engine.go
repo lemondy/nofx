@@ -32,13 +32,13 @@ type PositionInfo struct {
 	Leverage         int     `json:"leverage"`
 	UnrealizedPnL    float64 `json:"unrealized_pnl"`
 	UnrealizedPnLPct float64 `json:"unrealized_pnl_pct"` // 保证金口径 ROI (含杠杆)
-	PriceReturnPct   float64 `json:"price_return_pct"`    // 标的价格涨跌幅 (不含杠杆) — ②拆开两种口径
-	PeakPnLPct       float64 `json:"peak_pnl_pct"` // Historical peak profit percentage
+	PriceReturnPct   float64 `json:"price_return_pct"`   // 标的价格涨跌幅 (不含杠杆) — ②拆开两种口径
+	PeakPnLPct       float64 `json:"peak_pnl_pct"`       // Historical peak profit percentage
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
-	UpdateTime       int64   `json:"update_time"` // Position update timestamp (milliseconds)
-	StopLossPrice    float64 `json:"stop_loss_price"`    // Trigger price of the protective SL order currently on the exchange (0 = none found)
-	TakeProfitPrice  float64 `json:"take_profit_price"`  // Trigger price of the protective TP order currently on the exchange (0 = none found)
+	UpdateTime       int64   `json:"update_time"`       // Position update timestamp (milliseconds)
+	StopLossPrice    float64 `json:"stop_loss_price"`   // Trigger price of the protective SL order currently on the exchange (0 = none found)
+	TakeProfitPrice  float64 `json:"take_profit_price"` // Trigger price of the protective TP order currently on the exchange (0 = none found)
 }
 
 // AccountInfo account information
@@ -71,7 +71,7 @@ type CandidateCoin struct {
 	// OPPOSITE directional conclusions (short_scan short vs piggy_dash up)
 	// — surfaced as signal_conflict type SCANNER_VS_SCANNER so the model
 	// must resolve it instead of silently receiving both hints.
-	ScannerConflict bool   `json:"scanner_conflict,omitempty"`
+	ScannerConflict bool `json:"scanner_conflict,omitempty"`
 }
 
 // OITopData open interest growth top data (for AI decision reference)
@@ -84,14 +84,14 @@ type OITopData struct {
 
 // TradingStats trading statistics (for AI input)
 type TradingStats struct {
-	TotalTrades    int     `json:"total_trades"`     // Total number of trades (closed)
-	WinRate        float64 `json:"win_rate"`         // Win rate (%)
-	ProfitFactor   float64 `json:"profit_factor"`    // Profit factor
-	SharpeRatio    float64 `json:"sharpe_ratio"`     // Sharpe ratio
-	TotalPnL       float64 `json:"total_pnl"`        // Total profit/loss
-	AvgWin         float64 `json:"avg_win"`          // Average win
-	AvgLoss        float64 `json:"avg_loss"`         // Average loss
-	MaxDrawdownPct float64 `json:"max_drawdown_pct"` // Maximum drawdown (%)
+	TotalTrades    int     `json:"total_trades"`          // Total number of trades (closed)
+	WinRate        float64 `json:"win_rate"`              // Win rate (%)
+	ProfitFactor   float64 `json:"profit_factor"`         // Profit factor
+	SharpeRatio    float64 `json:"sharpe_ratio"`          // Sharpe ratio
+	TotalPnL       float64 `json:"total_pnl"`             // Total profit/loss
+	AvgWin         float64 `json:"avg_win"`               // Average win
+	AvgLoss        float64 `json:"avg_loss"`              // Average loss
+	MaxDrawdownPct float64 `json:"max_drawdown_pct"`      // Maximum drawdown (%)
 	WindowDays     int     `json:"window_days,omitempty"` // Rolling stats window in days; 0 = full history
 }
 
@@ -133,7 +133,7 @@ type Context struct {
 	// the closed-trade record). The prompt instructs the model to cite
 	// LOSS_STREAK_BAN only for symbols present here.
 	LossStreakBanned map[string]time.Time    `json:"-"`
-	LimitAnchors       map[string]*LimitAnchor            `json:"-"` // pre-computed open_*_limit anchors per symbol (prompt-build time)
+	LimitAnchors     map[string]*LimitAnchor `json:"-"` // pre-computed open_*_limit anchors per symbol (prompt-build time)
 	// RRCeilings records per symbol the rr_scan best_rr the model was SHOWN
 	// per direction at prompt-build time (program values, not model echoes).
 	// This powers the "cost of waiting for the micro-trend" dataset (user
@@ -147,10 +147,10 @@ type Context struct {
 	// was SHOWN (allowed per direction) at prompt-build time. wait_state is
 	// derived from these + wait_bias — the model no longer outputs it
 	// (schema-redundancy audit 09-16).
-	GateStates map[string]*GateState `json:"-"`
-	BTCETHLeverage     int                                `json:"-"`
-	AltcoinLeverage    int                                `json:"-"`
-	Timeframes         []string                           `json:"-"`
+	GateStates      map[string]*GateState `json:"-"`
+	BTCETHLeverage  int                   `json:"-"`
+	AltcoinLeverage int                   `json:"-"`
+	Timeframes      []string              `json:"-"`
 }
 
 // LimitAnchor carries the pre-computed limit-entry prices for one symbol —
@@ -936,7 +936,16 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64) ([]
 		}
 		// OI data unavailable (0) can't be judged — keep, matching the
 		// market-data layer which only filters when OI is present.
-		if sig.OIValueMillions > 0 && sig.OIValueMillions < minOIMillions {
+		// NearHighAlso: the coin ALSO passed the grinding-top screen (whose
+		// $30M/day liquidity prefilter justifies the same OI-floor exemption
+		// the near_high universe gets). Without this the exemption died
+		// silently whenever a grinding top also ranked in the 24h Top50 —
+		// the collision kept the gainer label and the floor ate the coin
+		// (user audit 2026-09-17). The label stays "gainer" on purpose: the
+		// prompt's funding-crowding exemption is keyed on universe=near_high
+		// and its rationale (normalized funding) does not hold for an active
+		// top-50 pumper.
+		if sig.OIValueMillions > 0 && sig.OIValueMillions < minOIMillions && !sig.NearHighAlso {
 			skipped = append(skipped, fmt.Sprintf("%s(%.1fM)", sig.Symbol, sig.OIValueMillions))
 			continue
 		}
@@ -999,10 +1008,10 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 		Sources:          []string{"short_scan"},
 		ScannerDirection: "short",
 		ShortScore:       sig.Score,
-		ShortGrade:      sig.Grade,
-		ShortFundingAnn: sig.FundingAnnualPct,
-		ShortScanAtMs:   scanAt.UnixMilli(),
-		ShortUniverse:   sig.Universe,
+		ShortGrade:       sig.Grade,
+		ShortFundingAnn:  sig.FundingAnnualPct,
+		ShortScanAtMs:    scanAt.UnixMilli(),
+		ShortUniverse:    sig.Universe,
 	}
 	if sig.Universe == "near_high" {
 		c.ShortReasons = append(c.ShortReasons, "磨顶:距90日高点<5%")
