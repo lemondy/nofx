@@ -899,9 +899,20 @@ func (at *AutoTrader) minHoldBlocksClose(symbol, side string, markPrice float64)
 
 // stopMoveTightens validates an AI stop-loss move: tighten-only, never widen,
 // never cross the mark (audit-proof guard for the adjust_stop_loss action).
+// currentSL <= 0 means NO known stop (recorded state lost and the exchange
+// holds none — the LITEUSDT 09-17 case): a correctly-sided new stop then
+// ADDS protection where none exists and is allowed through; the breakeven
+// gate still applies, and moveStopExchange cancels-then-places so a hidden
+// stop can never duplicate.
 func stopMoveTightens(side string, currentSL, newSL, markPrice float64) bool {
-	if currentSL <= 0 || newSL <= 0 || markPrice <= 0 {
+	if newSL <= 0 || markPrice <= 0 {
 		return false
+	}
+	if currentSL <= 0 {
+		if side == "long" {
+			return newSL < markPrice
+		}
+		return newSL > markPrice
 	}
 	if side == "long" {
 		return newSL > currentSL && newSL < markPrice

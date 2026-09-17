@@ -190,6 +190,20 @@ func TestStopMoveTightens(t *testing.T) {
 	if stopMoveTightens("long", 98, 103, 102) {
 		t.Fatal("crossing the mark must fail")
 	}
+	// No known stop (current 0 — restart-wiped recorded state, no exchange
+	// order): a correctly-sided new stop ADDS protection and is allowed.
+	if !stopMoveTightens("long", 0, 100, 102) {
+		t.Fatal("adding a stop to an unprotected long must pass")
+	}
+	if stopMoveTightens("long", 0, 103, 102) {
+		t.Fatal("stop above the mark on an unprotected long must fail")
+	}
+	if !stopMoveTightens("short", 0, 98, 96) {
+		t.Fatal("adding a stop to an unprotected short must pass")
+	}
+	if stopMoveTightens("short", 0, 95, 96) {
+		t.Fatal("stop below the mark on an unprotected short must fail")
+	}
 	// Short mirror: tighten = new below current, above mark.
 	if !stopMoveTightens("short", 102, 100, 98) {
 		t.Fatal("short tighten must pass")
