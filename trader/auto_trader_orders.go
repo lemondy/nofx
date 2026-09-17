@@ -42,7 +42,6 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actio
 	}
 }
 
-
 // stampEntryPath tags the entry context (timing-TF trend) for path
 // attribution stats — rally-window shorts vs down-trend shorts vs future
 // bb_ride market entries must be separately measurable (user 09-13 #2).
@@ -151,7 +150,6 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		return err
 	}
 
-
 	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
 	// the prompt states the budget, this enforces it (audit 09-13 #2).
 	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
@@ -188,6 +186,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	at.SetRecordedStopLoss(decision.Symbol, "long", decision.StopLoss)
+	at.SetInitialStopLoss(decision.Symbol, "long", decision.StopLoss) // 1R anchor — write-once, immune to later tighten
 	// Peak PnL is per-position state — a re-opened symbol must not inherit
 	// the previous trade's peak (stale peaks poison the drawdown monitors).
 	at.ClearPeakPnLCache(decision.Symbol, "long")
@@ -294,7 +293,6 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		return err
 	}
 
-
 	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
 	// the prompt states the budget, this enforces it (audit 09-13 #2).
 	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
@@ -331,6 +329,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
+	at.SetInitialStopLoss(decision.Symbol, "short", decision.StopLoss) // 1R anchor — write-once, immune to later tighten
 	// Peak PnL is per-position state — see the open_long note above.
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 
@@ -439,6 +438,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice)
 
 	at.ClearRecordedStopLoss(decision.Symbol, "long")
+	at.ClearInitialStopLoss(decision.Symbol, "long")
 	at.ClearPeakPnLCache(decision.Symbol, "long")
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -505,6 +505,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice)
 
 	at.ClearRecordedStopLoss(decision.Symbol, "short")
+	at.ClearInitialStopLoss(decision.Symbol, "short")
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 	logger.Infof("  ✓ Position closed successfully")
 	return nil

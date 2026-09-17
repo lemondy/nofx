@@ -201,6 +201,7 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
 	posKey := row.Symbol + "_" + row.Side
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	at.SetRecordedStopLoss(row.Symbol, row.Side, row.StopLoss)
+	at.SetInitialStopLoss(row.Symbol, row.Side, row.StopLoss) // 1R anchor — write-once
 	at.ClearPeakPnLCache(row.Symbol, row.Side)
 	positionSide := "LONG"
 	if row.Side == "short" {

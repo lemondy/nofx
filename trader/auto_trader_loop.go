@@ -389,10 +389,10 @@ func (at *AutoTrader) runCycle() error {
 				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
 				Symbol: d.Symbol, Direction: direction, Action: d.Action,
 				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,
-				WaitState:   d.WaitState,
-				NextTrigger: d.NextTrigger, // clamped to the dataset column width at validation
-				GateRR:      gateRR,
-				GateUsable:  gateUsable,
+				WaitState:       d.WaitState,
+				NextTrigger:     d.NextTrigger, // clamped to the dataset column width at validation
+				GateRR:          gateRR,
+				GateUsable:      gateUsable,
 				BlockingFactors: store.MarshalBlockingFactors(blockingFactors),
 				MgmtQuality:     mgmtQuality,
 				MgmtFlags:       store.MarshalBlockingFactors(d.ManagementFlags),
@@ -635,6 +635,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			// Drop the recorded stop-loss along with the position
 			at.positionStopLossMutex.Lock()
 			delete(at.positionStopLoss, key)
+			delete(at.positionInitialStopLoss, key)
 			at.positionStopLossMutex.Unlock()
 			// And the peak-PnL cache — otherwise the next position on the
 			// same symbol_side inherits a dead trade's peak.

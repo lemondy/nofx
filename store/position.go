@@ -116,8 +116,12 @@ type TraderPosition struct {
 	Status             string  `gorm:"column:status;default:OPEN;index:idx_positions_status" json:"status"`
 	CloseReason        string  `gorm:"column:close_reason;default:''" json:"close_reason"`
 	Source             string  `gorm:"column:source;default:system" json:"source"`
-	CreatedAt          int64   `gorm:"column:created_at" json:"created_at"`   // Unix milliseconds UTC
-	UpdatedAt          int64   `gorm:"column:updated_at" json:"updated_at"`   // Unix milliseconds UTC
+	// InitialStopLoss is the OPENING-risk stop captured at entry (write-once).
+	// It anchors the 1R profit lock — later stop moves (AI tighten, trailing,
+	// breakeven) rewrite only the live stop and must not pull the R bar along.
+	InitialStopLoss float64 `gorm:"column:initial_stop_loss;default:0" json:"initial_stop_loss"`
+	CreatedAt       int64   `gorm:"column:created_at" json:"created_at"` // Unix milliseconds UTC
+	UpdatedAt       int64   `gorm:"column:updated_at" json:"updated_at"` // Unix milliseconds UTC
 }
 
 // TableName returns the table name
@@ -161,6 +165,8 @@ func (s *PositionStore) InitTables() error {
 
 			// Just ensure index exists
 			s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_exchange_pos_unique ON trader_positions(exchange_id, exchange_position_id) WHERE exchange_position_id != ''`)
+			// New columns on the existing table — AutoMigrate is skipped above.
+			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS initial_stop_loss DOUBLE PRECISION DEFAULT 0`)
 			return nil
 		}
 	}
@@ -198,14 +204,14 @@ func (s *PositionStore) Create(pos *TraderPosition) error {
 func (s *PositionStore) ClosePosition(id int64, exitPrice float64, exitOrderID string, realizedPnL float64, fee float64, closeReason string) error {
 	nowMs := time.Now().UTC().UnixMilli()
 	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"exit_price":   exitPrice,
+		"exit_price":    exitPrice,
 		"exit_order_id": exitOrderID,
-		"exit_time":    nowMs,
-		"realized_pnl": realizedPnL,
-		"fee":          fee,
-		"status":       "CLOSED",
-		"close_reason": closeReason,
-		"updated_at":   nowMs,
+		"exit_time":     nowMs,
+		"realized_pnl":  realizedPnL,
+		"fee":           fee,
+		"status":        "CLOSED",
+		"close_reason":  closeReason,
+		"updated_at":    nowMs,
 	}).Error
 }
 
@@ -311,15 +317,15 @@ func (s *PositionStore) ClosePositionFully(id int64, exitPrice float64, exitOrde
 	}
 
 	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"quantity":       quantity,
-		"exit_price":     exitPrice,
-		"exit_order_id":  exitOrderID,
-		"exit_time":      exitTimeMs,
-		"realized_pnl":   totalRealizedPnL,
-		"fee":            totalFee,
-		"status":         "CLOSED",
-		"close_reason":   closeReason,
-		"updated_at":     time.Now().UTC().UnixMilli(),
+		"quantity":      quantity,
+		"exit_price":    exitPrice,
+		"exit_order_id": exitOrderID,
+		"exit_time":     exitTimeMs,
+		"realized_pnl":  totalRealizedPnL,
+		"fee":           totalFee,
+		"status":        "CLOSED",
+		"close_reason":  closeReason,
+		"updated_at":    time.Now().UTC().UnixMilli(),
 	}).Error
 }
 
@@ -500,6 +506,21 @@ func (s *PositionStore) CreateOpenPosition(pos *TraderPosition) error {
 	}
 
 	return nil
+}
+
+// SetInitialStopLossIfEmpty records the opening-risk stop on the trader's OPEN
+// row for (symbol, side), first write only — a fixed anchor the 1R profit lock
+// can measure against across stop adjustments and restarts. side accepts
+// either case. Returns whether a row was stamped.
+func (s *PositionStore) SetInitialStopLossIfEmpty(traderID, symbol, side string, sl float64) (bool, error) {
+	if sl <= 0 {
+		return false, nil
+	}
+	res := s.db.Model(&TraderPosition{}).
+		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ? AND initial_stop_loss = 0",
+			traderID, symbol, strings.ToUpper(side), "OPEN").
+		Update("initial_stop_loss", sl)
+	return res.RowsAffected > 0, res.Error
 }
 
 // ClosePositionWithAccurateData closes a position with accurate data from exchange

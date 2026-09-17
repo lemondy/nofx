@@ -416,6 +416,7 @@ func (at *AutoTrader) processPendingEntries() {
 			posKey := pe.Symbol + "_" + pe.Side
 			at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 			at.SetRecordedStopLoss(pe.Symbol, pe.Side, pe.StopLoss)
+			at.SetInitialStopLoss(pe.Symbol, pe.Side, pe.StopLoss) // 1R anchor — write-once
 			// Fresh position — never inherit a previous trade's peak PnL.
 			at.ClearPeakPnLCache(pe.Symbol, pe.Side)
 			positionSide := "LONG"

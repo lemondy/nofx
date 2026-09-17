@@ -29,11 +29,11 @@ const (
 // risk_control (limit_entry_offset_mode / _atr_mult / _min_pct / _max_pct,
 // with LimitEntryOffsetPct as the fixed value).
 type AnchorOffsetConfig struct {
-	Mode    string
+	Mode     string
 	FixedPct float64
-	ATRMult float64
-	MinPct  float64
-	MaxPct  float64
+	ATRMult  float64
+	MinPct   float64
+	MaxPct   float64
 }
 
 // AnchorOffsetFromRiskControl extracts the anchor-offset parameters from the
@@ -43,11 +43,11 @@ func AnchorOffsetFromRiskControl(rc *store.RiskControlConfig) AnchorOffsetConfig
 		return AnchorOffsetConfig{}
 	}
 	return AnchorOffsetConfig{
-		Mode:    rc.LimitEntryOffsetMode,
+		Mode:     rc.LimitEntryOffsetMode,
 		FixedPct: rc.LimitEntryOffsetPct,
-		ATRMult: rc.LimitEntryOffsetATRMult,
-		MinPct:  rc.LimitEntryOffsetMinPct,
-		MaxPct:  rc.LimitEntryOffsetMaxPct,
+		ATRMult:  rc.LimitEntryOffsetATRMult,
+		MinPct:   rc.LimitEntryOffsetMinPct,
+		MaxPct:   rc.LimitEntryOffsetMaxPct,
 	}
 }
 
@@ -214,16 +214,16 @@ func ProfitLockRMult(rc *store.RiskControlConfig) float64 {
 }
 
 // ProfitLockTargets returns (breakeven, trim) for a position given its R
-// multiple — the two 1R actions of the profit lock. currentSL is the LIVE
-// recorded stop (not necessarily the trade's original stop) and is what
-// gates the breakeven check: once breakeven has already fired once, the
-// caller's recorded stop equals entry, so initialDist collapses to 0 and
-// this function short-circuits to (false, false) — that is the mechanism
-// that makes repeated per-cycle calls idempotent (breakeven arms exactly
-// once) without separate "already armed" bookkeeping. Callers that read
-// initialSL and currentSL from the same "recorded stop" source (as
-// auto_trader_vol.go does) get this idempotency for free; do not special-case
-// it away by tracking the two separately.
+// multiple — the two 1R actions of the profit lock. initialSL is the
+// OPENING-risk stop the position was planned with (the fixed R anchor; the
+// trader persists it per position and never rewrites it); currentSL is the
+// LIVE recorded stop and is what gates the breakeven check: once breakeven
+// has armed, the live stop sits at entry, so the breakeven condition goes
+// false and arms exactly once — idempotent with no separate bookkeeping.
+// initialSL and currentSL are intentionally different numbers — do not
+// collapse the anchor onto the live stop: every tighten above entry would
+// then lower the 1R bar (ONDOUSDT 2026-09-17: +0.49% read as 1.89R after two
+// tightens, trimming at 0.352 instead of true 1R 0.3578).
 func ProfitLockTargets(side string, entry, initialSL, currentSL, markPrice, lockR float64) (bool, bool) {
 	if lockR <= 0 || entry <= 0 || initialSL <= 0 || markPrice <= 0 {
 		return false, false

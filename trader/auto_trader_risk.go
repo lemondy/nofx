@@ -270,6 +270,7 @@ func (at *AutoTrader) emergencyClosePosition(symbol, side string) error {
 	}
 
 	at.ClearRecordedStopLoss(symbol, side)
+	at.ClearInitialStopLoss(symbol, side)
 	return nil
 }
 
@@ -1131,6 +1132,10 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		if !needSL && at.GetRecordedStopLoss(symbol, side) <= 0 {
 			if sp := at.exchangeStopPrice(symbol, side); sp > 0 {
 				at.SetRecordedStopLoss(symbol, side, sp)
+				// First sight of this position after a restart: freeze its
+				// stop as the 1R anchor (write-once) when none is persisted —
+				// the exchange stop predates any in-process tightening here.
+				at.SetInitialStopLoss(symbol, side, sp)
 				logger.Infof("🔧 [%s] Protection watchdog: seeded recorded SL %s %s = %.6g from exchange", at.name, symbol, side, sp)
 			}
 		}
@@ -1234,6 +1239,43 @@ func (at *AutoTrader) ClearRecordedStopLoss(symbol, side string) {
 	delete(at.positionStopLoss, symbol+"_"+side)
 }
 
+// SetInitialStopLoss freezes the OPENING stop of a position — the anchor the
+// 1R profit lock measures risk against. Write-once: AI tighten, trailing and
+// breakeven move the LIVE stop (SetRecordedStopLoss) and must not pull the R
+// bar along (ONDOUSDT 2026-09-17: two tightens compressed the R distance
+// 2.14% → 0.26%, trimming 50% at +0.49% "1.89R"). The value is also stamped
+// onto the OPEN position row (set-if-empty) so the anchor survives restarts.
+func (at *AutoTrader) SetInitialStopLoss(symbol, side string, price float64) {
+	if price <= 0 {
+		return
+	}
+	key := symbol + "_" + side
+	at.positionStopLossMutex.Lock()
+	if at.positionInitialStopLoss[key] <= 0 {
+		at.positionInitialStopLoss[key] = price
+	}
+	at.positionStopLossMutex.Unlock()
+	if at.store != nil {
+		if _, err := at.store.Position().SetInitialStopLossIfEmpty(at.id, symbol, side, price); err != nil {
+			logger.Infof("⚠️ [%s] initial-stop persist failed for %s %s: %v", at.name, symbol, side, err)
+		}
+	}
+}
+
+// GetInitialStopLoss returns the frozen opening-risk stop for a position.
+func (at *AutoTrader) GetInitialStopLoss(symbol, side string) float64 {
+	at.positionStopLossMutex.RLock()
+	defer at.positionStopLossMutex.RUnlock()
+	return at.positionInitialStopLoss[symbol+"_"+side]
+}
+
+// ClearInitialStopLoss drops the frozen opening-risk stop after close.
+func (at *AutoTrader) ClearInitialStopLoss(symbol, side string) {
+	at.positionStopLossMutex.Lock()
+	defer at.positionStopLossMutex.Unlock()
+	delete(at.positionInitialStopLoss, symbol+"_"+side)
+}
+
 // regimeLineOf returns the SLOW EMA (regime line) of the timing timeframe —
 // the structural line a dip/bounce entry must respect: longs on pullback
 // need price ABOVE it (a dip that broke it is a candidate reversal), shorts
@@ -1289,7 +1331,6 @@ func finestSubHourTrend(data *market.Data) (string, string) {
 	}
 	return bestTF, kernel.TimeframeTrend(data, bestTF)
 }
-
 
 // ============================================================================
 // Hard Risk Gates (CODE ENFORCED, strategy risk_control driven)

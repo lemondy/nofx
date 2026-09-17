@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"math"
 	"nofx/kernel"
-	"strings"
 	"nofx/logger"
 	"nofx/market"
 	notify "nofx/telegram/notify"
+	"strings"
 	"time"
 )
 
@@ -198,18 +198,21 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		// ── 1R profit lock (user 2026-09-12): breakeven stop + 50% trim ──
 		if lockR := kernel.ProfitLockRMult(&at.config.StrategyConfig.RiskControl); lockR > 0 {
 			entry := posEntryPrice(pos)
-			// currentStop is deliberately the SAME value as initialSL here:
-			// GetRecordedStopLoss (read into initialSL above) always returns
-			// the LIVE recorded stop, not the trade's original one — once
-			// breakeven fires below, SetRecordedStopLoss overwrites it to
-			// `entry`, so next cycle's initialSL/currentStop are both `entry`.
-			// ProfitLockTargets then sees initialDist == 0 and short-circuits
-			// to (false, false), which is what makes this call idempotent
-			// (breakeven arms exactly once) without any extra "already armed"
-			// bookkeeping. Do not replace this with a separately-tracked
-			// "original" stop — that would break the self-limiting behavior.
-			currentStop := initialSL
-			breakeven, trim := kernel.ProfitLockTargets(side, entry, initialSL, currentStop, markPrice, lockR)
+			// The R anchor is the OPENING stop — the plan the position was
+			// sized against — deliberately NOT the live recorded stop. Every
+			// tighten above entry would otherwise compress the R distance and
+			// fire the trim on pocket change (ONDOUSDT 2026-09-17: live SL
+			// tightened 0.3428 → 0.3512 made +0.49% read as 1.89R → 50%
+			// trimmed at 0.352 instead of true 1R at 0.3578). initialSL here
+			// carries the live stop only as a legacy fallback for positions
+			// with no persisted anchor.
+			//
+			// The live stop (passed as currentSL) still gates breakeven: once
+			// armed, SetRecordedStopLoss overwrites it to `entry`, so the
+			// breakeven condition goes false and arms exactly once — no extra
+			// "already armed" bookkeeping. Trim idempotency is r1TrimDone.
+			anchorSL := at.initialStopAnchor(symbol, side, initialSL)
+			breakeven, trim := kernel.ProfitLockTargets(side, entry, anchorSL, initialSL, markPrice, lockR)
 			if breakeven {
 				if err := at.moveStopExchange(symbol, side, entry); err != nil {
 					logger.Infof("⚠️ [%s] Breakeven SL place failed for %s: %v", at.name, symbol, err)
@@ -290,6 +293,34 @@ func posEntryPrice(pos map[string]interface{}) float64 {
 		return v
 	}
 	return 0
+}
+
+// initialStopAnchor resolves the opening-risk stop for the 1R lock: the stop
+// planned at entry, frozen per position (in-memory write-once + set-if-empty
+// stamp on the OPEN position row) so stop adjustments and restarts can't pull
+// the R bar along. Resolution order: in-memory anchor → persisted row → the
+// live recorded stop as a legacy fallback (pre-anchor positions), which then
+// freezes deterministically on first sight.
+func (at *AutoTrader) initialStopAnchor(symbol, side string, liveSL float64) float64 {
+	if sl := at.GetInitialStopLoss(symbol, side); sl > 0 {
+		// Re-stamp on every scan: the position row is created by trade sync
+		// shortly after open, later than the in-memory anchor — this heals
+		// the row cheaply (the UPDATE is a no-op once stamped).
+		at.SetInitialStopLoss(symbol, side, sl)
+		return sl
+	}
+	if at.store != nil {
+		// Position rows store side as "LONG"/"SHORT"; the exchange feed here
+		// is lowercase.
+		if pos, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, strings.ToUpper(side)); err == nil && pos != nil && pos.InitialStopLoss > 0 {
+			at.SetInitialStopLoss(symbol, side, pos.InitialStopLoss)
+			return pos.InitialStopLoss
+		}
+	}
+	if liveSL > 0 {
+		at.SetInitialStopLoss(symbol, side, liveSL)
+	}
+	return liveSL
 }
 
 // reducePosition closes part of a position (market).
