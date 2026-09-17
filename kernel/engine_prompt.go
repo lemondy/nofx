@@ -139,15 +139,16 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// 5. Entry standards (editable)
 	if promptSections.EntryStandards != "" {
 		sb.WriteString(promptSections.EntryStandards)
-		sb.WriteString("\n\nYou have the following indicator data:\n")
-		e.writeAvailableIndicators(&sb)
-		sb.WriteString("\n")
+		sb.WriteString("\n\n")
 	} else {
 		sb.WriteString("# 🎯 Entry Standards (Strict)\n\n")
-		sb.WriteString("Only open positions when multiple signals resonate. You have:\n")
-		e.writeAvailableIndicators(&sb)
-		sb.WriteString("\nFeel free to use any effective analysis method, but avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, reopening immediately after closing, etc.\n\n")
+		sb.WriteString("Only open positions when multiple signals resonate. Feel free to use any effective analysis method, but avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, reopening immediately after closing, etc.\n\n")
 	}
+	// Data-shape pointer (09-16 audit): the old per-indicator checklist was a
+	// stale parallel document — the real payload is the Structured Signal
+	// with program-precomputed fields, documented once in the user prompt.
+	sb.WriteString("📊 行情与衍生数据一律以每周期输入里的 Structured Signal 快照为准——hard_entry_gate / rr_scan / bias / bb_ride / short_ride / funding_rollover 等关键字段均已由程序预计算,直接采用,禁止从原始 K 线自行重算 RR/止损;字段结构以输入中的「Structured Signal 字段说明」为唯一权威,本提示不再维护第二份字段清单。\n\n")
+
 
 	// 6. Decision process (editable)
 	if promptSections.DecisionProcess != "" {
@@ -227,73 +228,6 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	return sb.String()
 }
 
-func (e *StrategyEngine) writeAvailableIndicators(sb *strings.Builder) {
-	indicators := e.config.Indicators
-	kline := indicators.Klines
-
-	sb.WriteString(fmt.Sprintf("- %s price series", kline.PrimaryTimeframe))
-	if kline.EnableMultiTimeframe {
-		sb.WriteString(fmt.Sprintf(" + %s K-line series\n", kline.LongerTimeframe))
-	} else {
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableEMA {
-		sb.WriteString("- EMA indicators")
-		if len(indicators.EMAPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.EMAPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableMACD {
-		sb.WriteString("- MACD indicators\n")
-	}
-
-	if indicators.EnableRSI {
-		sb.WriteString("- RSI indicators")
-		if len(indicators.RSIPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.RSIPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableATR {
-		sb.WriteString("- ATR indicators")
-		if len(indicators.ATRPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.ATRPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableBOLL {
-		sb.WriteString("- Bollinger Bands (BOLL) - Upper/Middle/Lower bands")
-		if len(indicators.BOLLPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.BOLLPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableVolume {
-		sb.WriteString("- Volume data\n")
-	}
-
-	if indicators.EnableOI {
-		sb.WriteString("- Open Interest (OI) data\n")
-	}
-
-	if indicators.EnableFundingRate {
-		sb.WriteString("- Funding rate\n")
-	}
-
-	if len(e.config.CoinSource.StaticCoins) > 0 || e.config.CoinSource.UseAI500 || e.config.CoinSource.UseOITop {
-		sb.WriteString("- AI500 / OI_Top filter tags (if available)\n")
-	}
-
-	if indicators.EnableQuantData {
-		sb.WriteString("- Quantitative data (institutional/retail fund flow, position changes, multi-period price changes)\n")
-	}
-}
 
 // ============================================================================
 // Prompt Building - User Prompt
@@ -359,7 +293,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	}
 
 	if lang == LangChinese {
-		sb.WriteString("## 历史交易统计\n")
+		sb.WriteString("## 历史交易统计(近30天滚动窗口;账户行 PnL 为自启动以来累计,两者口径不同)\n")
 		sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
 			windowLabel,
 			ctx.TradingStats.TotalTrades,
@@ -399,7 +333,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			if ctx.TradingStats.WindowDays > 0 {
 				enWindow = fmt.Sprintf("last %d days", ctx.TradingStats.WindowDays)
 			}
-			sb.WriteString("## Historical Trading Statistics\n")
+			sb.WriteString("## Historical Trading Statistics (30d rolling window; the account PnL is a since-start cumulative — different bases)\n")
 			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
 				enWindow,
 				ctx.TradingStats.TotalTrades,
