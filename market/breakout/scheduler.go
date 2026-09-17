@@ -1,7 +1,11 @@
 package breakout
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +45,33 @@ var defaultScheduler = &Scheduler{
 	Interval:   5 * time.Minute,
 }
 
+// Tune-attempt marker: the durable "we last ran a tuning pass at T" record.
+// Deliberately separate from params.json — BacktestAt only updates when a
+// pass CHANGES values, so a steady-state pass that finds nothing to adjust
+// would leave the stale marker in place and re-trigger forever. Written on
+// every COMPLETED pass; failures leave it alone (the 10-min retry handles
+// them). Override in tests via setTuneMarkerPath.
+var tuneMarkerPath = "data/breakout_last_tune"
+
+func setTuneMarkerPath(p string) { tuneMarkerPath = p }
+
+func lastTuneAttempt() time.Time {
+	b, err := os.ReadFile(tuneMarkerPath)
+	if err != nil {
+		return time.Time{}
+	}
+	ms, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
+}
+
+func markTuneAttempt() {
+	_ = os.MkdirAll(filepath.Dir(tuneMarkerPath), 0o755)
+	_ = os.WriteFile(tuneMarkerPath, []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)), 0o644)
+}
+
 // DefaultScheduler returns the process-wide scheduler.
 func DefaultScheduler() *Scheduler { return defaultScheduler }
 
@@ -62,29 +93,44 @@ func (s *Scheduler) Start() {
 		s.mu.Unlock()
 		s.runOnce(nil)
 
-		// Tuning loop: first pass shortly after the first snapshot, then weekly —
-		// 72h let the sigmoids overfit one regime's tail. A FAILED pass (429 on
-		// the shared proxy IP, transient API errors) retries after 10 minutes
-		// instead of sleeping the full week — one rate-limit blip used to cost
-		// seven days of tuning.
+		// Breakout tuning: due-ness reads the DURABLE marker file (written on
+		// every completed pass, changed or not — BacktestAt in params.json
+		// only moves when values actually changed, which would re-trigger
+		// hourly in the no-change case). The old blind 168h ticker reset on
+		// every deploy and could starve tuning indefinitely; a failed pass
+		// (429 on the shared proxy IP) still retries after 10 minutes.
 		go func() {
 			time.Sleep(30 * time.Second)
-			pendingRetry := !s.runTuning()
-			tuneTicker := time.NewTicker(168 * time.Hour)
-			retryTicker := time.NewTicker(10 * time.Minute)
-			defer tuneTicker.Stop()
-			defer retryTicker.Stop()
+			const tuneInterval = 7 * 24 * time.Hour
+			pendingRetry := false
+			due := func() bool {
+				la := lastTuneAttempt()
+				return la.IsZero() || time.Since(la) >= tuneInterval
+			}
+			run := func() {
+				if s.runTuning() {
+					markTuneAttempt()
+					pendingRetry = false
+				} else {
+					pendingRetry = true
+				}
+			}
+			if due() {
+				run()
+			}
+			hour := time.NewTicker(time.Hour)
+			retry := time.NewTicker(10 * time.Minute)
+			defer hour.Stop()
+			defer retry.Stop()
 			for {
 				select {
-				case <-tuneTicker.C:
-					if !s.runTuning() {
-						pendingRetry = true
+				case <-hour.C:
+					if due() {
+						run()
 					}
-				case <-retryTicker.C:
+				case <-retry.C:
 					if pendingRetry {
-						if s.runTuning() {
-							pendingRetry = false
-						}
+						run()
 					}
 				case <-s.stop:
 					return
@@ -94,26 +140,29 @@ func (s *Scheduler) Start() {
 
 		// Slow-top short universe: a separate, cheaper cadence (30 min) —
 		// its prefilter costs one 1d-klines call per liquid perp. The same
-		// loop samples short signals hourly and runs the weight tuner daily.
+		// loop samples short signals hourly and runs the short-weight tuner
+		// on every slow tick: RunShortTuner is idempotent (Evaluated flags)
+		// and cheap (one batched ticker call), so the 30-min cadence makes
+		// evaluation catch up within half an hour of samples maturing —
+		// restart-proof, unlike the old 24h ticker that a deploy could reset
+		// forever (the tuner never fired again after 09-07).
 		go func() {
 			refreshSlowTops()
+			RunShortTuner(time.Now())
 			slowTicker := time.NewTicker(30 * time.Minute)
 			sampleTicker := time.NewTicker(time.Hour)
-			tuneTicker := time.NewTicker(24 * time.Hour)
 			defer slowTicker.Stop()
 			defer sampleTicker.Stop()
-			defer tuneTicker.Stop()
 			for {
 				select {
 				case <-slowTicker.C:
 					refreshSlowTops()
+					RunShortTuner(time.Now())
 				case <-sampleTicker.C:
 					shorts, at := s.ShortSnapshot()
 					if len(shorts) > 0 {
 						SampleShortSignals(shorts, at)
 					}
-				case <-tuneTicker.C:
-					RunShortTuner(time.Now())
 				case <-s.stop:
 					return
 				}

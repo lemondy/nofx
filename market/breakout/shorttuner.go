@@ -50,7 +50,7 @@ var shortWeightKeys = []string{
 // DefaultShortWeights mirrors the designed composite (sums to 1.0).
 func DefaultShortWeights() map[string]float64 {
 	return map[string]float64{
-		"stretch":     0.10,
+		"stretch": 0.10,
 		// overbought down-weighted (audit 2026-09-12 #2): RSI pinned high is a
 		// STRONG-TREND feature, not a reversal signal — 0.15 was the largest
 		// weight and fired hardest exactly when shorting is worst. The freed
@@ -165,8 +165,16 @@ func SampleShortSignals(signals []ShortSignal, now time.Time) {
 }
 
 // RunShortTuner evaluates matured samples and nudges the component weights.
-// Called on the scheduler's daily tick; every step is best-effort.
+// Called on the scheduler's 30-min slow tick (and once at goroutine start) —
+// the old blind 24h ticker reset on every deploy and the tuner never fired
+// again after 09-07 (user request 2026-09-17). Idempotent: Evaluated flags
+// keep re-runs free; every step is best-effort and panic-recovered.
 func RunShortTuner(now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("🩸 Short tuner panicked (recovered): %v", r)
+		}
+	}()
 	shortTunerMu.Lock()
 	defer shortTunerMu.Unlock()
 	samples := readSamples()
