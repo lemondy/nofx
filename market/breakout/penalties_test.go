@@ -1,6 +1,7 @@
 package breakout
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -46,6 +47,42 @@ func TestPenaltyConstants(t *testing.T) {
 	}
 	if crowdMaxPenalty != 0.30 {
 		t.Fatalf("crowdMaxPenalty = %.2f, want 0.30", crowdMaxPenalty)
+	}
+}
+
+// Extended must be charged ONCE: the cross-section headline multiplier
+// (extendedPenalty in Analyze) is the only extended haircut. The Price dim
+// used to also take ×0.8 for the same 1h extended fact — dim ×0.8 feeding
+// the 1h TF score, then ×0.65 on the combined result, stacking to ≈×0.62
+// (user audit 2026-09-17). This test pins the dim back to the raw
+// breakout-strength sigmoid.
+func TestExtendedNoDimDoubleCharge(t *testing.T) {
+	// 1h series: 20 bars below the 100 level, then 14 bars holding above it
+	// with no retest (lows stay well clear of level + 0.25×ATR) → cross age
+	// 13 ≥ crossWindowBars and held ⇒ extended, confirmed.
+	const level = 100.0
+	k := make([]Kline, 34)
+	for i := range k {
+		var c float64
+		if i < 20 {
+			c = 95.0
+		} else {
+			c = 101.0
+		}
+		k[i] = Kline{OpenTime: int64(i), Open: c, High: c + 0.2, Low: c - 0.1, Close: c}
+	}
+	levels := []Level{{Name: "20d_high", Price: level}}
+
+	rep := computeTF("1h", DirUp, k, levels, &shared{})
+	if rep.Pattern != PatternExtended {
+		t.Fatalf("pattern = %q, want extended (crossAge=%d)", rep.Pattern, rep.CrossAgeBars)
+	}
+	if !rep.Confirmed {
+		t.Fatal("extended-with-hold must be confirmed — confirmPenalty is a different branch")
+	}
+	want := sigmoidScore(rep.ATRStrength, GetParams().PriceATRCenter, GetParams().PriceATRWidth)
+	if math.Abs(rep.Dims.Price-want) > 1e-9 {
+		t.Fatalf("Price dim = %.4f, want raw sigmoid %.4f — a dim-level extended discount is back", rep.Dims.Price, want)
 	}
 }
 

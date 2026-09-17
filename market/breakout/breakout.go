@@ -51,6 +51,15 @@ const (
 // lowest-win-rate entry style. The label alone left the score untouched and
 // an extended symbol could still grade strong on Price+Volume+Flow; now the
 // chase is discounted at the source instead of relying on downstream vetting.
+//
+// SINGLE charge by design (user audit 2026-09-17): this multiplier is the
+// only extended haircut. The Price dim used to ALSO take ×0.8 for the same
+// 1h extended fact — dim discount feeding the 1h TF score, then this ×0.65
+// on the combined result — stacking to ≈×0.62; the dim discount was removed.
+// Scope notes: a 15m-only extension (1h not extended) takes no score hit —
+// that is a timing concern owned by the entry-timing gates, not the scanner.
+// "Extended AND lost the level" (held=false) is a different, worse fact: it
+// fails confirmation and takes confirmPenalty ×0.5 at TF level on top.
 const extendedPenalty = 0.65
 
 const (
@@ -555,8 +564,13 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		case held:
 			rep.Pattern = PatternExtended
 			rep.Confirmed = true
-			rep.Dims.Price *= 0.8
-			rep.Notes = append(rep.Notes, "突破后持续延伸且未回踩，追入动能分衰减 ×0.8")
+			// No dim-level discount here: the chase charge lives ONCE at the
+			// cross-section (extendedPenalty on the 1h headline in Analyze).
+			// Charging both — this ×0.8 feeding the 1h score, then ×0.65 on
+			// the combined result — stacked to ≈×0.62 on one binary fact
+			// (user audit 2026-09-17). The label still lands in Notes and the
+			// report so the entry-quality caveat stays visible downstream.
+			rep.Notes = append(rep.Notes, "突破后持续延伸且未回踩(追高形态,综合分在截面统一折价 ×0.65)")
 		default:
 			rep.Pattern = PatternExtended
 			rep.Confirmed = false
