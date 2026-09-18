@@ -718,9 +718,20 @@ func TestDirectionHintRendering(t *testing.T) {
 		},
 	}
 	for _, c := range ctx.CandidateCoins {
-		ctx.MarketDataMap[c.Symbol] = &market.Data{Symbol: c.Symbol, CurrentPrice: 1}
+		// Real bars across all three role TFs: a fully data-less candidate is
+		// double-blocked by the hard gate (DATA_INSUFFICIENT) and compresses
+		// to one line — the scanner_hint contract only applies to renderable
+		// candidates.
+		now := time.Now()
+		tfs := map[string]*market.TimeframeSeriesData{
+			"15m": buildTF("15m", now, 80, 1.0, false),
+			"1h":  buildTF("1h", now, 80, 1.0, false),
+			"4h":  buildTF("4h", now, 80, 1.0, false),
+		}
+		ctx.MarketDataMap[c.Symbol] = &market.Data{Symbol: c.Symbol, CurrentPrice: 1, TimeframeData: tfs}
 	}
 	prompt := engine.BuildUserPrompt(ctx)
+	sys := engine.BuildSystemPrompt(100, "")
 
 	if !strings.Contains(prompt, `"direction_bias":"short"`) {
 		t.Fatal("scanner_hint JSON with direction_bias missing")
@@ -728,16 +739,16 @@ func TestDirectionHintRendering(t *testing.T) {
 	if !strings.Contains(prompt, `"score":68`) || !strings.Contains(prompt, `"patterns":["假突破"]`) {
 		t.Fatal("scanner_hint evidence fields missing")
 	}
-	if !strings.Contains(prompt, "仅辅助证据,非交易结论") {
+	if !strings.Contains(sys, "均为程序化扫描的辅助证据,不是交易结论") {
 		t.Fatal("auxiliary-evidence framing missing")
 	}
-	if !strings.Contains(prompt, "由你综合全部数据独立判断") {
+	if !strings.Contains(sys, "由你综合全部数据独立判断") {
 		t.Fatal("final-judgment framing missing")
 	}
 	if !strings.Contains(prompt, `"generated_at_utc":"2026-09-05T12:00:00Z"`) {
 		t.Fatal("scanner snapshot timestamp missing")
 	}
-	if !strings.Contains(prompt, "以 Structured Signal 为准") {
+	if !strings.Contains(sys, "以 Structured Signal 为准") {
 		t.Fatal("live-funding-priority guidance missing")
 	}
 	if strings.Contains(prompt, "不做多") || strings.Contains(prompt, "【空头候选") {

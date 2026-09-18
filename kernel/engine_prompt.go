@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"nofx/market"
-	"nofx/provider/nofxos"
 	"nofx/store"
 	"strconv"
 	"strings"
@@ -21,6 +20,14 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	var sb strings.Builder
 	riskControl := e.config.RiskControl
 	promptSections := e.config.PromptSections
+
+	// ⑦ Prompt-cache stability (09-18 token audit): every byte of the system
+	// prompt sits in the cacheable prefix, so equity-derived SIZING EXAMPLES
+	// are quantized to 5 USDT steps — a per-cycle equity drift of cents used
+	// to rewrite them every cycle and defeat provider prefix caching. The
+	// exact equity still reaches the model through the user prompt's account
+	// line, and every sizing gate computes on the exact figure programmatically.
+	accountEquity = math.Round(accountEquity/5) * 5
 
 	// 0. Data Dictionary & Schema (ensure AI understands all fields)
 	lang := e.GetLanguage()
@@ -149,7 +156,6 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// with program-precomputed fields, documented once in the user prompt.
 	sb.WriteString("📊 行情与衍生数据一律以每周期输入里的 Structured Signal 快照为准——hard_entry_gate / rr_scan / bias / bb_ride / short_ride / funding_rollover 等关键字段均已由程序预计算,直接采用,禁止从原始 K 线自行重算 RR/止损;字段结构以输入中的「Structured Signal 字段说明」为唯一权威,本提示不再维护第二份字段清单。\n\n")
 
-
 	// 6. Decision process (editable)
 	if promptSections.DecisionProcess != "" {
 		sb.WriteString(promptSections.DecisionProcess)
@@ -217,6 +223,21 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("- **STRICT JSON**: Output raw JSON only — no placeholders (`?`, `？`, `N/A`, `—`) or trailing commas for unknown values. If a value is unknown, use `0` or omit the field entirely\n")
 	sb.WriteString("- **`0` 的语义例外(价格字段)**: 对 `price` / `stop_loss` / `take_profit`,以及输入里的 `limit_buy_price` / `limit_sell_price`,`0` 严格等于\"不可交易/被抑制\",绝不是占位符——这些字段绝不能输出 0,也不确定时省略字段并把原因写进 no_trade_reason\n\n")
 
+	// ⑦ Static per-strategy blocks (09-18 token audit): the field legend,
+	// Strategy Parameters and the scanner/candidate boundary rules are
+	// byte-identical every cycle — they live HERE in the system prompt
+	// (head of the cached prefix) instead of being re-sent inside the user
+	// prompt every cycle. The user prompt then carries per-cycle data only.
+	sb.WriteString("# Structured Signal 字段说明（适用于每个 Structured Signal 块）\n")
+	sb.WriteString(signalBlockLegend)
+	sb.WriteString("\n")
+	if paramsText := e.strategyParamsText(); paramsText != "" {
+		sb.WriteString(paramsText)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("> scanner_hint / 扫描评分 / patterns 均为程序化扫描的辅助证据,不是交易结论,且为扫描时刻的快照(见 generated_at_utc)。方向、时机、是否交易由你综合全部数据独立判断——可以采信、质疑或推翻扫描结果,但必须在推理中给出自己的依据。资金费率尤其如此:暴涨币的 funding 可能在几分钟内漂移数倍,当前状态以各币 Structured Signal 的 derivatives.funding_annualized_pct 为准(程序已按该币真实结算间隔 funding_settle_hours 年化,无需自行换算;与 hint 数字冲突时以 Structured Signal 为准)。\n")
+	sb.WriteString("> **short_scan 候选的默认姿态(稳定规则,勿逐次重判)**: short_scan 按涨幅大入选,候选的 1h/4h 结构天然还是多头——scanner 说可空、结构说多头不是偶发冲突,是该引擎的常态。默认姿态: 顶部确认信号(顶背离/假突破/破 EMA20/费率回落——后者只认 derivatives.funding_rollover.detected)之外,**还必须 execution_filter.short_allowed=true(15m 微趋势已转)才允许做空**;仅凭确认信号而 15m 仍 up → 输出 wait + wait_bias=short + wait_state=WATCH_SHORT,触发事件写\"15m 微趋势转 down + RECHECK_ALL_HARD_GATES\"(转 down 只是重评条件,届时 RR/锚点/资金费率等一切硬门重新全过)。entry_timing_gate 开启时这同时是硬规则(15m 逆势 open_short 会被程序拒单)\n\n")
+
 	// 8. Custom Prompt
 	if e.config.CustomPrompt != "" {
 		sb.WriteString("# 📌 Personalized Trading Strategy\n\n")
@@ -228,199 +249,18 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	return sb.String()
 }
 
-
 // ============================================================================
 // Prompt Building - User Prompt
 // ============================================================================
 
-// BuildUserPrompt builds User Prompt based on strategy configuration
-func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
-	var sb strings.Builder
-
-	// System status
-	sb.WriteString(fmt.Sprintf("Time: %s | Period: #%d | Runtime: %d minutes\n\n",
-		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
-
-	// BTC market
-	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
-	}
-
-	// Account information. "Available" is DERIVED (equity − Σposition margin)
-	// rather than the exchange availableBalance: Binance withholds margin for
-	// things this prompt cannot see (manual orders elsewhere on the account,
-	// maintenance buffers), which printed 52.62 "Balance" next to 77.32
-	// equity + 13.94 position margin on 09-18 — unreconcilable from every
-	// other number here, and it silently shrank any model-side sizing math
-	// by a third. The breaker state is program-truth (same formula as the
-	// executor gate), so the model never has to guess whether reduce-only
-	// mode is active from the stats block's HISTORICAL max-drawdown.
-	available := ctx.Account.TotalEquity - ctx.Account.MarginUsed
-	availablePct := 0.0
-	if ctx.Account.TotalEquity > 0 {
-		availablePct = available / ctx.Account.TotalEquity * 100
-	}
-	breakerState := ""
-	if ctx.InitialBalanceUSDT > 0 {
-		if acctBreaker := e.config.RiskControl.AccountMaxDrawdownPct; acctBreaker > 0 {
-			ddPct := (ctx.InitialBalanceUSDT - ctx.Account.TotalEquity) / ctx.InitialBalanceUSDT * 100
-			if ddPct >= acctBreaker {
-				breakerState = fmt.Sprintf(" | AccountBreaker ON (drawdown %.1f%% ≥ %.1f%% vs initial — reduce-only, all opens blocked)", ddPct, acctBreaker)
-			} else {
-				breakerState = fmt.Sprintf(" | AccountBreaker OFF (equity vs initial %+.1f%%)", (ctx.Account.TotalEquity-ctx.InitialBalanceUSDT)/ctx.InitialBalanceUSDT*100)
-			}
-		}
-	}
-	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Available (equity−margin) %.2f (%.1f%%) | PnL %+.2f%% since start | MarginUsage %.1f%% | Positions %d%s\n\n",
-		ctx.Account.TotalEquity,
-		available,
-		availablePct,
-		ctx.Account.TotalPnLPct,
-		ctx.Account.MarginUsedPct,
-		ctx.Account.PositionCount,
-		breakerState))
-
-	// Recently completed orders (placed before positions to ensure visibility)
-	if len(ctx.RecentOrders) > 0 {
-		sb.WriteString("## Recent Completed Trades\n")
-		for i, order := range ctx.RecentOrders {
-			resultStr := "Profit"
-			if order.RealizedPnL < 0 {
-				resultStr = "Loss"
-			}
-			sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f Exit %.4f | %s: %+.2f USDT (%+.2f%%) | %s→%s (%s)\n",
-				i+1, order.Symbol, order.Side,
-				order.EntryPrice, order.ExitPrice,
-				resultStr, order.RealizedPnL, order.PnLPct,
-				order.EntryTime, order.ExitTime, order.HoldDuration))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Historical trading statistics (helps AI understand past performance)
-	if ctx.TradingStats != nil && ctx.TradingStats.TotalTrades > 0 {
-		// Get language from strategy config
-		lang := e.GetLanguage()
-
-	// Win/Loss ratio
-	var winLossRatio float64
-	if ctx.TradingStats.AvgLoss > 0 {
-		winLossRatio = ctx.TradingStats.AvgWin / ctx.TradingStats.AvgLoss
-	}
-
-	// Stats window label: the numbers below only cover trades closed within
-	// the window (config stats_window_days); 0 = full history.
-	windowLabel := "全部历史"
-	if ctx.TradingStats.WindowDays > 0 {
-		windowLabel = fmt.Sprintf("近%d天", ctx.TradingStats.WindowDays)
-	}
-
-	if lang == LangChinese {
-		sb.WriteString("## 历史交易统计(近30天滚动窗口;账户行 PnL 为自启动以来累计,两者口径不同)\n")
-		sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
-			windowLabel,
-			ctx.TradingStats.TotalTrades,
-			ctx.TradingStats.ProfitFactor,
-			ctx.TradingStats.SharpeRatio,
-			winLossRatio))
-		sb.WriteString(fmt.Sprintf("总盈亏: %+.2f USDT | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(窗口内历史序列峰值,非当前净值回撤;当前净值 vs 初始见账户行 AccountBreaker)\n",
-			ctx.TradingStats.TotalPnL,
-			ctx.TradingStats.AvgWin,
-			ctx.TradingStats.AvgLoss,
-			ctx.TradingStats.MaxDrawdownPct))
-
-		// Performance hints based on profit factor, sharpe, and drawdown
-		// ⑲ machine-readable edge status: NEGATIVE_EDGE tightens the
-		// trade-selection bar instead of relying on prose encouragement.
-		edge := "POSITIVE_EDGE"
-		if ctx.TradingStats.ProfitFactor < 0.9 {
-			edge = "NEGATIVE_EDGE"
-		} else if ctx.TradingStats.ProfitFactor < 1.1 {
-			edge = "NO_EDGE"
-		}
-		sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f, 窗口 %s)\n", edge, ctx.TradingStats.ProfitFactor, expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss), windowLabel))
-		if edge == "NEGATIVE_EDGE" {
-			sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置,其余一律 hold 并在 no_trade_reason 写明\n", windowLabel))
-		}
-			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
-				sb.WriteString("表现: 良好 - 保持当前策略\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
-				sb.WriteString("表现: 需改进 - 提高盈亏比，优化止盈止损\n")
-			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
-				sb.WriteString("表现: 风险偏高 - 减少仓位，控制回撤\n")
-			} else {
-				sb.WriteString("表现: 正常 - 有优化空间\n")
-			}
-		} else {
-			enWindow := "all history"
-			if ctx.TradingStats.WindowDays > 0 {
-				enWindow = fmt.Sprintf("last %d days", ctx.TradingStats.WindowDays)
-			}
-			sb.WriteString("## Historical Trading Statistics (30d rolling window; the account PnL is a since-start cumulative — different bases)\n")
-			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
-				enWindow,
-				ctx.TradingStats.TotalTrades,
-				ctx.TradingStats.ProfitFactor,
-				ctx.TradingStats.SharpeRatio,
-				winLossRatio))
-			sb.WriteString(fmt.Sprintf("Total PnL: %+.2f USDT | Avg Win: +%.2f | Avg Loss: -%.2f | Max Drawdown: %.1f%% (historical series peak within window, NOT current equity drawdown — see AccountBreaker in the account line)\n",
-				ctx.TradingStats.TotalPnL,
-				ctx.TradingStats.AvgWin,
-				ctx.TradingStats.AvgLoss,
-				ctx.TradingStats.MaxDrawdownPct))
-
-			// Performance hints based on profit factor, sharpe, and drawdown
-			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
-				sb.WriteString("Performance: GOOD - maintain current strategy\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
-				sb.WriteString("Performance: NEEDS IMPROVEMENT - improve win/loss ratio, optimize TP/SL\n")
-			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
-				sb.WriteString("Performance: HIGH RISK - reduce position size, control drawdown\n")
-			} else {
-				sb.WriteString("Performance: NORMAL - room for optimization\n")
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	// Review-derived rules (hard rules + soft lessons from past trade reviews)
-	if ctx.RulesText != "" {
-		sb.WriteString(ctx.RulesText)
-	}
-
-	// Structured Signal field dictionary — coin-independent, so it is rendered
-	// exactly once here (before the first signal block) rather than once per
-	// coin. Both the positions and candidate sections below embed signal JSON.
-	sb.WriteString("## Structured Signal 字段说明（适用于下方每一个 Structured Signal 块）\n")
-	sb.WriteString(signalBlockLegend)
-	sb.WriteString("\n")
-
-	// Position information
-	if len(ctx.Positions) > 0 {
-		sb.WriteString("## Current Positions\n")
-		for i, pos := range ctx.Positions {
-			sb.WriteString(e.formatPositionInfo(i+1, pos, ctx))
-		}
-	} else {
-		sb.WriteString("Current Positions: None\n\n")
-	}
-
-	// Candidate coins (exclude coins already in positions to avoid duplicate data)
-	positionSymbols := make(map[string]bool)
-	for _, pos := range ctx.Positions {
-		// Normalize symbol to handle both "ETH" and "ETHUSDT" formats
-		normalizedSymbol := market.Normalize(pos.Symbol)
-		positionSymbols[normalizedSymbol] = true
-	}
-
-	// Strategy parameters for short-scan strategies: surface the configured
-	// funding-rate crowding threshold so the AI's entry rules follow the UI
-	// config instead of numbers hard-coded in prompt text.
+// strategyParamsText renders the "## Strategy Parameters" block — pure
+// strategy-config text, byte-identical every cycle (09-18 token audit ⑦:
+// it moved into the system prompt where provider-side prompt caching can
+// pin it; the user prompt carries only per-cycle data).
+func (e *StrategyEngine) strategyParamsText() string {
+	var params strings.Builder
 	cs := e.config.CoinSource
 	{
-		var params strings.Builder
 		if cs.SourceType == "short_scan" || (cs.SourceType == "mixed" && cs.UseShortScan) {
 			frPct := cs.ShortScanFundingRatePct
 			if frPct <= 0 {
@@ -504,11 +344,189 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			}
 			params.WriteString(fmt.Sprintf("- 连亏熔断(程序强制): 某币在 24h 内连续 %d 笔亏损平仓后,该币接下来 24h 禁止再开仓,开仓决策会被程序直接拦截。熔断判定与解除由程序按成交记录计算:当前熔断中的币会在其快照 JSON 里标注 `loss_streak` 块(含 until_utc 解除时间);**快照没有 `loss_streak` 字段的币一律视为未熔断**,不要自行推测某个币\"应该被熔断了\"。近期交易里已经连亏的币不要尝试抄底翻本,把机会让给趋势健康的标的\n", maxLosses))
 		}
-		if params.Len() > 0 {
-			sb.WriteString("## Strategy Parameters\n")
-			sb.WriteString(params.String())
-			sb.WriteString("\n")
+	}
+	if params.Len() == 0 {
+		return ""
+	}
+	return "## Strategy Parameters\n" + params.String() + "\n"
+}
+
+// BuildUserPrompt builds User Prompt based on strategy configuration
+func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
+	var sb strings.Builder
+
+	// System status
+	sb.WriteString(fmt.Sprintf("Time: %s | Period: #%d | Runtime: %d minutes\n\n",
+		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
+
+	// BTC market
+	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
+		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
+			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
+			btcData.CurrentMACD, btcData.CurrentRSI7))
+	}
+
+	// Account information. "Available" is DERIVED (equity − Σposition margin)
+	// rather than the exchange availableBalance: Binance withholds margin for
+	// things this prompt cannot see (manual orders elsewhere on the account,
+	// maintenance buffers), which printed 52.62 "Balance" next to 77.32
+	// equity + 13.94 position margin on 09-18 — unreconcilable from every
+	// other number here, and it silently shrank any model-side sizing math
+	// by a third. The breaker state is program-truth (same formula as the
+	// executor gate), so the model never has to guess whether reduce-only
+	// mode is active from the stats block's HISTORICAL max-drawdown.
+	available := ctx.Account.TotalEquity - ctx.Account.MarginUsed
+	availablePct := 0.0
+	if ctx.Account.TotalEquity > 0 {
+		availablePct = available / ctx.Account.TotalEquity * 100
+	}
+	breakerState := ""
+	if ctx.InitialBalanceUSDT > 0 {
+		if acctBreaker := e.config.RiskControl.AccountMaxDrawdownPct; acctBreaker > 0 {
+			ddPct := (ctx.InitialBalanceUSDT - ctx.Account.TotalEquity) / ctx.InitialBalanceUSDT * 100
+			if ddPct >= acctBreaker {
+				breakerState = fmt.Sprintf(" | AccountBreaker ON (drawdown %.1f%% ≥ %.1f%% vs initial — reduce-only, all opens blocked)", ddPct, acctBreaker)
+			} else {
+				breakerState = fmt.Sprintf(" | AccountBreaker OFF (equity vs initial %+.1f%%)", (ctx.Account.TotalEquity-ctx.InitialBalanceUSDT)/ctx.InitialBalanceUSDT*100)
+			}
 		}
+	}
+	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Available (equity−margin) %.2f (%.1f%%) | PnL %+.2f%% since start | MarginUsage %.1f%% | Positions %d%s\n\n",
+		ctx.Account.TotalEquity,
+		available,
+		availablePct,
+		ctx.Account.TotalPnLPct,
+		ctx.Account.MarginUsedPct,
+		ctx.Account.PositionCount,
+		breakerState))
+
+	// Recently completed orders (placed before positions to ensure visibility)
+	if len(ctx.RecentOrders) > 0 {
+		sb.WriteString("## Recent Completed Trades\n")
+		for i, order := range ctx.RecentOrders {
+			resultStr := "Profit"
+			if order.RealizedPnL < 0 {
+				resultStr = "Loss"
+			}
+			sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f Exit %.4f | %s: %+.2f USDT (%+.2f%%) | %s→%s (%s)\n",
+				i+1, order.Symbol, order.Side,
+				order.EntryPrice, order.ExitPrice,
+				resultStr, order.RealizedPnL, order.PnLPct,
+				order.EntryTime, order.ExitTime, order.HoldDuration))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Historical trading statistics (helps AI understand past performance)
+	if ctx.TradingStats != nil && ctx.TradingStats.TotalTrades > 0 {
+		// Get language from strategy config
+		lang := e.GetLanguage()
+
+		// Win/Loss ratio
+		var winLossRatio float64
+		if ctx.TradingStats.AvgLoss > 0 {
+			winLossRatio = ctx.TradingStats.AvgWin / ctx.TradingStats.AvgLoss
+		}
+
+		// Stats window label: the numbers below only cover trades closed within
+		// the window (config stats_window_days); 0 = full history.
+		windowLabel := "全部历史"
+		if ctx.TradingStats.WindowDays > 0 {
+			windowLabel = fmt.Sprintf("近%d天", ctx.TradingStats.WindowDays)
+		}
+
+		if lang == LangChinese {
+			sb.WriteString("## 历史交易统计(近30天滚动窗口;账户行 PnL 为自启动以来累计,两者口径不同)\n")
+			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
+				windowLabel,
+				ctx.TradingStats.TotalTrades,
+				ctx.TradingStats.ProfitFactor,
+				ctx.TradingStats.SharpeRatio,
+				winLossRatio))
+			sb.WriteString(fmt.Sprintf("总盈亏: %+.2f USDT | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(窗口内历史序列峰值,非当前净值回撤;当前净值 vs 初始见账户行 AccountBreaker)\n",
+				ctx.TradingStats.TotalPnL,
+				ctx.TradingStats.AvgWin,
+				ctx.TradingStats.AvgLoss,
+				ctx.TradingStats.MaxDrawdownPct))
+
+			// Performance hints based on profit factor, sharpe, and drawdown
+			// ⑲ machine-readable edge status: NEGATIVE_EDGE tightens the
+			// trade-selection bar instead of relying on prose encouragement.
+			edge := "POSITIVE_EDGE"
+			if ctx.TradingStats.ProfitFactor < 0.9 {
+				edge = "NEGATIVE_EDGE"
+			} else if ctx.TradingStats.ProfitFactor < 1.1 {
+				edge = "NO_EDGE"
+			}
+			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f, 窗口 %s)\n", edge, ctx.TradingStats.ProfitFactor, expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss), windowLabel))
+			if edge == "NEGATIVE_EDGE" {
+				sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置,其余一律 hold 并在 no_trade_reason 写明\n", windowLabel))
+			}
+			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
+				sb.WriteString("表现: 良好 - 保持当前策略\n")
+			} else if ctx.TradingStats.ProfitFactor < 1 {
+				sb.WriteString("表现: 需改进 - 提高盈亏比，优化止盈止损\n")
+			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
+				sb.WriteString("表现: 风险偏高 - 减少仓位，控制回撤\n")
+			} else {
+				sb.WriteString("表现: 正常 - 有优化空间\n")
+			}
+		} else {
+			enWindow := "all history"
+			if ctx.TradingStats.WindowDays > 0 {
+				enWindow = fmt.Sprintf("last %d days", ctx.TradingStats.WindowDays)
+			}
+			sb.WriteString("## Historical Trading Statistics (30d rolling window; the account PnL is a since-start cumulative — different bases)\n")
+			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
+				enWindow,
+				ctx.TradingStats.TotalTrades,
+				ctx.TradingStats.ProfitFactor,
+				ctx.TradingStats.SharpeRatio,
+				winLossRatio))
+			sb.WriteString(fmt.Sprintf("Total PnL: %+.2f USDT | Avg Win: +%.2f | Avg Loss: -%.2f | Max Drawdown: %.1f%% (historical series peak within window, NOT current equity drawdown — see AccountBreaker in the account line)\n",
+				ctx.TradingStats.TotalPnL,
+				ctx.TradingStats.AvgWin,
+				ctx.TradingStats.AvgLoss,
+				ctx.TradingStats.MaxDrawdownPct))
+
+			// Performance hints based on profit factor, sharpe, and drawdown
+			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
+				sb.WriteString("Performance: GOOD - maintain current strategy\n")
+			} else if ctx.TradingStats.ProfitFactor < 1 {
+				sb.WriteString("Performance: NEEDS IMPROVEMENT - improve win/loss ratio, optimize TP/SL\n")
+			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
+				sb.WriteString("Performance: HIGH RISK - reduce position size, control drawdown\n")
+			} else {
+				sb.WriteString("Performance: NORMAL - room for optimization\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Review-derived rules (hard rules + soft lessons from past trade reviews)
+	if ctx.RulesText != "" {
+		sb.WriteString(ctx.RulesText)
+	}
+
+	// (⑦) The Structured Signal field legend moved to the system prompt —
+	// static text, part of the cached prefix.
+
+	// Position information
+	if len(ctx.Positions) > 0 {
+		sb.WriteString("## Current Positions\n")
+		for i, pos := range ctx.Positions {
+			sb.WriteString(e.formatPositionInfo(i+1, pos, ctx))
+		}
+	} else {
+		sb.WriteString("Current Positions: None\n\n")
+	}
+
+	// Candidate coins (exclude coins already in positions to avoid duplicate data)
+	positionSymbols := make(map[string]bool)
+	for _, pos := range ctx.Positions {
+		// Normalize symbol to handle both "ETH" and "ETHUSDT" formats
+		normalizedSymbol := market.Normalize(pos.Symbol)
+		positionSymbols[normalizedSymbol] = true
 	}
 
 	// History-demotion: candidates where this trader has been repeatedly
@@ -544,8 +562,25 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	for _, coin := range rendered {
 		marketData := ctx.MarketDataMap[coin.Symbol]
 		displayedCount++
-
+		var quantData *QuantData
+		if ctx.QuantDataMap != nil {
+			quantData = ctx.QuantDataMap[coin.Symbol]
+		}
 		sourceTags := e.formatCoinSourceTag(coin.Sources)
+		sig := e.computeCoinSignal(marketData, quantData, ctx, &coin)
+		// 09-18 token audit ①: a candidate whose BOTH directions carry a
+		// no-exception blocker (RR_MAX / MICRO_TREND / DATA_INSUFFICIENT /
+		// MIN_SIZE / LOSS_STREAK / STOCK_WEEKEND / VENDOR_DIVERGENCE) can
+		// only ever produce a mechanical wait — reading its full 3.5-4.5k
+		// chars of JSON adds nothing. Compress to one line; a direction whose
+		// only block is LIMIT_ANCHOR_SUPPRESSED keeps the full JSON (the
+		// market-order exception paths read evidence from it). GateStates /
+		// RRCeilings bookkeeping already ran inside computeCoinSignal.
+		if sig != nil && bothDirectionsHardBlocked(sig) {
+			sb.WriteString(fmt.Sprintf("### %d. %s%s — 双向硬门拦截,本期 wait(细节省略)\n%s\n\n",
+				displayedCount, coin.Symbol, sourceTags, renderBlockedCoinLine(sig)))
+			continue
+		}
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
 		// Scanner output is EVIDENCE, not a conclusion: neutral structured
 		// hint, no prescriptive direction instruction.
@@ -585,37 +620,22 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		if wroteNote {
 			sb.WriteString("\n")
 		}
-		var quantData *QuantData
-		if ctx.QuantDataMap != nil {
-			quantData = ctx.QuantDataMap[coin.Symbol]
+		if sig != nil {
+			sb.WriteString(e.renderSignalBlock(sig))
+		} else {
+			sb.WriteString(e.formatMarketData(marketData, quantData, ctx, &coin))
 		}
-		sb.WriteString(e.formatMarketData(marketData, quantData, ctx, &coin))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
 
-	// Get language for market data formatting
-	nofxosLang := nofxos.LangEnglish
-	if e.GetLanguage() == LangChinese {
-		nofxosLang = nofxos.LangChinese
-	}
-
-	// OI Ranking data (market-wide open interest changes)
-	if ctx.OIRankingData != nil {
-		sb.WriteString(nofxos.FormatOIRankingForAI(ctx.OIRankingData, nofxosLang, interestingSymbols(ctx)))
-		sb.WriteString("\n> ⚠️ 边界: 以上排行仅为市场整体情绪/资金轮动的宏观参考(聚合口径,条目未必可交易,且价格为最多5分钟前的快照)。**实际可交易标的仅限上方 Candidate Coins 里带完整结构化信号的 symbol** —— 不要对榜单中出现但不在候选池里的币做任何决策,也不要把榜单数字当作这些币的完整行情;榜单价格严禁参与 entry/SL/TP/RR 精确计算(与 Structured Signal 现价冲突时,一律以 Structured Signal 为准)。\n")
-	}
-
-	// NetFlow Ranking data (market-wide fund flow)
-	if ctx.NetFlowRankingData != nil {
-		sb.WriteString(nofxos.FormatNetFlowRankingForAI(ctx.NetFlowRankingData, nofxosLang, interestingSymbols(ctx)))
-		sb.WriteString("\n> ⚠️ 边界: 以上资金流榜单仅为宏观情绪参考(价格为快照值)。实际可交易标的仅限 Candidate Coins 中带完整结构化信号的 symbol;榜单价格严禁参与 entry/SL/TP/RR 精确计算,冲突时以 Structured Signal 现价为准。\n")
-	}
-
-	// Price Ranking data (market-wide gainers/losers)
-	if ctx.PriceRankingData != nil {
-		sb.WriteString(nofxos.FormatPriceRankingForAI(ctx.PriceRankingData, nofxosLang, interestingSymbols(ctx), fresh60mForInteresting(ctx)))
-		sb.WriteString("\n> ⚠️ 边界: 以上涨跌幅榜单仅为市场情绪/资金轮动的宏观参考(价格为最多5分钟前的快照)。实际可交易标的仅限 Candidate Coins 中带完整结构化信号的 symbol;榜单价格严禁参与 entry/SL/TP/RR 精确计算,冲突时以 Structured Signal 现价为准。\n")
+	// 09-18 token audit ⑥: the three ranking blocks self-describe as
+	// context-only ("严禁参与 entry/SL/TP/RR 精算") — render them as a few
+	// regime lines instead of full tables. Full tables available in the
+	// web UI; the model never needed them for decisions.
+	if line := e.formatMarketContext(ctx); line != "" {
+		sb.WriteString(line)
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("---\n\n")
@@ -684,10 +704,122 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 		if ctx.QuantDataMap != nil {
 			quantData = ctx.QuantDataMap[pos.Symbol]
 		}
+		if sig := e.computeCoinSignal(marketData, quantData, ctx, nil); sig != nil {
+			// 09-18 token audit ②: when close/partial cannot pass the
+			// close gates this cycle, the 4-TF JSON adds nothing the model
+			// can act on — render one management line. Near-stop danger
+			// (price within 0.5×ATR(1h) of the recorded stop) keeps the
+			// full data so the model sees WHY the position is dangerous.
+			if locked, reason := positionCloseLocked(pos, marketData, &e.config.RiskControl); locked {
+				nearStop := false
+				if pos.StopLossPrice > 0 && displayPrice > 0 {
+					dist := math.Abs(displayPrice-pos.StopLossPrice) / displayPrice * 100
+					if t1h := sig.Timeframes["1h"]; t1h != nil && t1h.ATRPct > 0 && dist <= 0.5*t1h.ATRPct {
+						nearStop = true
+					}
+				}
+				if !nearStop {
+					sl, tp := "—", "—"
+					if pos.StopLossPrice > 0 {
+						sl = strconv.FormatFloat(pos.StopLossPrice, 'f', 4, 64)
+					}
+					if pos.TakeProfitPrice > 0 {
+						tp = strconv.FormatFloat(pos.TakeProfitPrice, 'f', 4, 64)
+					}
+					sb.WriteString(fmt.Sprintf("=== %s — 平仓门锁定,本期结构数据省略 ===\n%s | SL %s | TP %s | 浮亏/浮盈 ROI %+.2f%% — 输出 hold;仍可 adjust_stop_loss(仅收紧到更优,程序校验)\n\n",
+						pos.Symbol, reason, sl, tp, marginROI))
+					return sb.String()
+				}
+			}
+			sb.WriteString(e.renderSignalBlock(sig))
+			sb.WriteString("\n")
+			return sb.String()
+		}
 		sb.WriteString(e.formatMarketData(marketData, quantData, ctx, nil))
 		sb.WriteString("\n")
 	}
 
+	return sb.String()
+}
+
+// formatMarketContext compresses the three market-wide ranking blocks (OI
+// change / institution netflow / price movers) into a few regime lines
+// (09-18 token audit ⑥): the blocks self-describe as context-only, so the
+// full tables were ~2k chars of tokens the model is forbidden to price with.
+// Candidate/position symbols get their rows; the rest is market flavor.
+func (e *StrategyEngine) formatMarketContext(ctx *Context) string {
+	if ctx.OIRankingData == nil && ctx.NetFlowRankingData == nil && ctx.PriceRankingData == nil {
+		return ""
+	}
+	interesting := interestingSymbols(ctx)
+	var oiParts, flowIn, flowOut, movers []string
+
+	if d := ctx.OIRankingData; d != nil {
+		own, other := 0, 0
+		for _, p := range d.TopPositions {
+			tag := fmt.Sprintf("%s OI%+.1f%%($%+.0fK,价%+.1f%%)", p.Symbol, p.OIDeltaPercent, p.OIDeltaValue/1000, p.PriceDeltaPercent)
+			if interesting[p.Symbol] && own < 3 {
+				oiParts = append(oiParts, tag)
+				own++
+			} else if !interesting[p.Symbol] && other < 2 {
+				oiParts = append(oiParts, tag)
+				other++
+			}
+			if own >= 3 && other >= 2 {
+				break
+			}
+		}
+	}
+	if d := ctx.NetFlowRankingData; d != nil {
+		own, other := 0, 0
+		for _, p := range d.InstitutionFutureTop {
+			tag := fmt.Sprintf("%s +%0.1fM", p.Symbol, p.Amount/1e6)
+			if interesting[p.Symbol] && own < 3 {
+				flowIn = append(flowIn, tag)
+				own++
+			} else if !interesting[p.Symbol] && other < 2 {
+				flowIn = append(flowIn, tag)
+				other++
+			}
+			if own >= 3 && other >= 2 {
+				break
+			}
+		}
+		for _, p := range d.InstitutionFutureLow {
+			if len(flowOut) < 2 {
+				flowOut = append(flowOut, fmt.Sprintf("%s %0.1fM", p.Symbol, p.Amount/1e6))
+			}
+		}
+	}
+	if d := ctx.PriceRankingData; d != nil {
+		if dur, ok := d.Durations["4h"]; ok {
+			for i, it := range dur.Top {
+				if i >= 3 {
+					break
+				}
+				movers = append(movers, fmt.Sprintf("%s %+.1f%%", it.Symbol, it.PriceDelta*100))
+			}
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("> 市场语境(宏观参考,严禁参与 entry/SL/TP/RR 精算;榜外币不可决策,价格快照与 Structured Signal 冲突时以后者为准)\n")
+	if len(oiParts) > 0 {
+		sb.WriteString("- 持仓量变化(1h): " + strings.Join(oiParts, " | ") + "\n")
+	}
+	if len(flowIn) > 0 || len(flowOut) > 0 {
+		line := "- 机构资金流(1h):"
+		if len(flowIn) > 0 {
+			line += " 流入 " + strings.Join(flowIn, " ")
+		}
+		if len(flowOut) > 0 {
+			line += " | 流出 " + strings.Join(flowOut, " ")
+		}
+		sb.WriteString(line + "\n")
+	}
+	if len(movers) > 0 {
+		sb.WriteString("- 4h涨跌幅前列: " + strings.Join(movers, " ") + "\n")
+	}
 	return sb.String()
 }
 
@@ -1062,7 +1194,15 @@ func fmtPx(v float64) string {
 // Market Data Formatting
 // ============================================================================
 
-func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantData, ctx *Context, coin *CandidateCoin) string {
+// computeCoinSignal builds the SignalOptions for one symbol, runs the signal
+// layer, and records the program-side bookkeeping the decision validator and
+// datasets read (anchors / RR ceilings / gate states). Returns nil when the
+// data cannot support a signal — callers fall back to the legacy dump.
+// Split from formatMarketData for the 09-18 token audit: the candidate and
+// position renderers need the signal VERDICT before choosing how much to
+// render (double-blocked candidates and close-locked positions compress to
+// one line), while the bookkeeping must still happen every cycle.
+func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantData, ctx *Context, coin *CandidateCoin) *SymbolSignal {
 	// Signal layer: structured, normalized feature block replaces the raw
 	// candle dump. Falls back to the legacy text dump only if computation fails.
 	opt := SignalOptions{
@@ -1233,9 +1373,17 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 		}
 		// Data-incomplete symbols are barred from trading — nothing beyond
 		// the DO-NOT block is rendered for them.
+		return sig
+	}
+	return nil
+}
+
+// formatMarketData renders the full structured-signal block for one symbol
+// (legacy candle dump when the signal layer cannot produce a signal).
+func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantData, ctx *Context, coin *CandidateCoin) string {
+	if sig := e.computeCoinSignal(data, quantData, ctx, coin); sig != nil {
 		return e.renderSignalBlock(sig)
 	}
-
 	var sb strings.Builder
 	indicators := e.config.Indicators
 
@@ -1377,6 +1525,121 @@ func (e *StrategyEngine) renderSignalBlock(sig *SymbolSignal) string {
 	sb.WriteString(RenderSignalJSON(sig))
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+// noExceptionCodePrefixes: gate codes that admit NO market-order exception
+// path — a direction carrying one of these is mechanically dead this cycle
+// (the exception survives only on a bare LIMIT_ANCHOR_SUPPRESSED, mirroring
+// the prompt's hard-gate rule).
+var noExceptionCodePrefixes = []string{
+	"RR_MAX_", "MICRO_TREND_", "LOSS_STREAK_BANNED", "MIN_SIZE_DEAD_ZONE",
+	"DATA_INSUFFICIENT", "STOCK_WEEKEND", "VENDOR_DIVERGENCE_",
+}
+
+func directionHardBlocked(g *DirectionGate) bool {
+	if g == nil {
+		return false
+	}
+	for _, code := range g.Failed {
+		for _, p := range noExceptionCodePrefixes {
+			if strings.HasPrefix(code, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bothDirectionsHardBlocked: the candidate can only ever produce a mechanical
+// wait — its full JSON need not be rendered (09-18 token audit ①: 7 of 8
+// candidates in the audited cycle were double-blocked yet shipped 3.5-4.5k
+// chars of JSON each).
+func bothDirectionsHardBlocked(sig *SymbolSignal) bool {
+	return sig != nil && sig.HardGate != nil &&
+		directionHardBlocked(sig.HardGate.Long) && directionHardBlocked(sig.HardGate.Short)
+}
+
+// renderBlockedCoinLine: the one-line compression for a double-blocked
+// candidate — the failed codes ARE the decision content.
+func renderBlockedCoinLine(sig *SymbolSignal) string {
+	fmtDir := func(g *DirectionGate) string {
+		if g == nil {
+			return "unknown"
+		}
+		if len(g.Failed) == 0 {
+			return "allowed"
+		}
+		return strings.Join(g.Failed, "+")
+	}
+	return fmt.Sprintf("- long: %s | short: %s → 输出 wait,no_trade_reason 逐项引用上述阻断码,不要再展开分析",
+		fmtDir(sig.HardGate.Long), fmtDir(sig.HardGate.Short))
+}
+
+// oneHAgainstCandles counts the trailing consecutive CLOSED 1h candles that
+// run AGAINST the position side (long → bearish, short → bullish); the
+// forming bar is dropped. Mirror of the trader's early-close evidence
+// counter — the prompt-side close-lock compression must never disagree with
+// the gate it mirrors.
+func oneHAgainstCandles(data *market.Data, side string) int {
+	if data == nil {
+		return 0
+	}
+	tf, ok := data.TimeframeData["1h"]
+	if !ok || tf == nil || len(tf.Klines) < 2 {
+		return 0
+	}
+	bars := tf.Klines[:len(tf.Klines)-1]
+	n := 0
+	for i := len(bars) - 1; i >= 0; i-- {
+		b := bars[i]
+		if b.Close == b.Open {
+			break // doji: no direction, breaks the streak
+		}
+		against := (side == "long" && b.Close < b.Open) || (side == "short" && b.Close > b.Open)
+		if !against {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// positionCloseLocked mirrors the trader's early-close/min-hold close gates:
+// when an AI close/partial cannot pass this cycle, the position's full TF
+// JSON adds nothing but tokens (09-18 audit ②) — render one management line
+// instead. Fail-open: unknown hold age renders full data (a gate must never
+// trap a position it cannot see). Exchange SL/TP triggers and the
+// drawdown-protect close are program paths, unaffected by either gate.
+func positionCloseLocked(pos PositionInfo, data *market.Data, rc *store.RiskControlConfig) (bool, string) {
+	if pos.UpdateTime <= 0 {
+		return false, "" // age unknown — full data, don't guess
+	}
+	held := time.Since(time.UnixMilli(pos.UpdateTime))
+	// Hard-exit bypass: mark already at/beyond the recorded stop.
+	if pos.StopLossPrice > 0 {
+		if (strings.EqualFold(pos.Side, "long") && pos.MarkPrice <= pos.StopLossPrice) ||
+			(strings.EqualFold(pos.Side, "short") && pos.MarkPrice >= pos.StopLossPrice) {
+			return false, ""
+		}
+	}
+	var locks []string
+	if hours := EarlyCloseHours(rc); hours > 0 && held < time.Duration(hours)*time.Hour {
+		if oneHAgainstCandles(data, strings.ToLower(pos.Side)) < 2 {
+			locks = append(locks, fmt.Sprintf("持仓不足%dh且1h逆向收盘<2根", hours))
+		}
+	}
+	if minHold := rc.MinHoldMinutes; minHold > 0 && held < time.Duration(minHold)*time.Minute {
+		locks = append(locks, fmt.Sprintf("持仓不足%dmin", minHold))
+	}
+	if len(locks) == 0 {
+		return false, ""
+	}
+	heldMin := int(held.Minutes())
+	heldStr := fmt.Sprintf("%dmin", heldMin)
+	if heldMin >= 60 {
+		heldStr = fmt.Sprintf("%dh%dm", heldMin/60, heldMin%60)
+	}
+	return true, fmt.Sprintf("持仓%s | 本期 close/partial 被程序锁定(%s,未触发硬退出)", heldStr, strings.Join(locks, "、"))
 }
 func boolZhEN(b bool) string {
 	if b {

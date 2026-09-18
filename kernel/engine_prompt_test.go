@@ -19,9 +19,8 @@ func TestBuildUserPromptInjectsFundingThreshold(t *testing.T) {
 	cfg.CoinSource.ShortScanFundingRatePct = 0.05
 
 	engine := NewStrategyEngine(cfg)
-	ctx := &Context{MarketDataMap: map[string]*market.Data{}}
 
-	prompt := engine.BuildUserPrompt(ctx)
+	prompt := engine.BuildSystemPrompt(100, "")
 	i := strings.Index(prompt, "Strategy Parameters")
 	if i < 0 {
 		t.Fatalf("Strategy Parameters block missing from prompt:\n%s", prompt)
@@ -42,7 +41,7 @@ func TestBuildUserPromptFundingThresholdDefault(t *testing.T) {
 	cfg.CoinSource.SourceType = "short_scan"
 
 	engine := NewStrategyEngine(cfg)
-	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	prompt := engine.BuildSystemPrompt(100, "")
 	if !strings.Contains(prompt, "0.0300%") {
 		t.Fatalf("default funding threshold 0.0300%% not injected:\n%s", prompt)
 	}
@@ -54,7 +53,7 @@ func TestBuildUserPromptNoFundingBlockWithoutShortScan(t *testing.T) {
 	cfg.CoinSource.SourceType = "ai500"
 
 	engine := NewStrategyEngine(cfg)
-	if strings.Contains(engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}}), "做空资金费率拥挤阈值") {
+	if strings.Contains(engine.BuildSystemPrompt(100, ""), "做空资金费率拥挤(二选一") {
 		t.Fatalf("funding block injected for a non-short-scan strategy")
 	}
 }
@@ -158,7 +157,7 @@ func TestStopBandWordingMatchesExecutor(t *testing.T) {
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.SLMinATRMult = 1.5
 	engine := NewStrategyEngine(cfg)
-	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	prompt := engine.BuildSystemPrompt(100, "")
 	if !strings.Contains(prompt, "d ≥ 1.5×ATR(1h)(噪声下限)且 d ≤ 上限") {
 		t.Fatalf("floor variant missing floor clause:\n%s", extractStopLine(prompt))
 	}
@@ -175,7 +174,7 @@ func TestStopBandWordingMatchesExecutor(t *testing.T) {
 	// must NOT invent the 1.5 default — the executor enforces no floor.
 	cfg0 := &store.StrategyConfig{}
 	engine0 := NewStrategyEngine(cfg0)
-	prompt0 := engine0.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	prompt0 := engine0.BuildSystemPrompt(100, "")
 	if !strings.Contains(prompt0, "只需满足: d ≤ 上限") || !strings.Contains(prompt0, "未启用噪声下限") {
 		t.Fatalf("floor-less variant wrong:\n%s", extractStopLine(prompt0))
 	}
@@ -212,7 +211,7 @@ func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.MinRiskRewardRatio = 1.5
 	engine := NewStrategyEngine(cfg)
-	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"rr_scan",
 		"全部时间块(含 execution_tf/15m)全部 resistance/support",
@@ -294,7 +293,7 @@ func TestTpTierAction(t *testing.T) {
 	}
 	// Prompt renders the ladder and drops the frequency-cap wording.
 	engine := NewStrategyEngine(&store.StrategyConfig{})
-	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{"程序自动市价减仓 50%", "止损移至开仓价保本", "程序自动全部平仓"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("TP ladder missing %q", want)
@@ -331,7 +330,7 @@ func TestBuildUserPromptRallyWindow(t *testing.T) {
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.EntryTimingGate = true
 	engine := NewStrategyEngine(cfg)
-	prompt := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"做空需 down/rally(下跌趋势中的反弹=空头入场窗)",
 		"空单——尤其反弹追空/急跌追空——取上半段 0.4-0.5",
@@ -394,7 +393,7 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 		}
 	}
 
-	user := engine.BuildUserPrompt(&Context{MarketDataMap: map[string]*market.Data{}})
+	sys1 := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"开仓硬门(程序判定,禁止自行重算)",
 		"严禁照抄为 stop_loss",
@@ -404,12 +403,12 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 		"数据新鲜度优先级",
 		"不要把 limit_entry_offset_pct 当成呼吸阈值",
 	} {
-		if !strings.Contains(user, want) {
-			t.Errorf("user prompt missing %q", want)
+		if !strings.Contains(sys1, want) {
+			t.Errorf("system prompt missing %q", want)
 		}
 	}
 	// Legend appears exactly once in the whole prompt (dedup guard).
-	if n := strings.Count(user, "数据新鲜度优先级"); n != 1 {
+	if n := strings.Count(sys1, "数据新鲜度优先级"); n != 1 {
 		t.Errorf("legend rendered %d times, want exactly 1", n)
 	}
 

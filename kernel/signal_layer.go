@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,34 +26,34 @@ type TFSignal struct {
 	// Trend-window return: the change over the last `lookback` closed bars —
 	// a WINDOW, not the bar timeframe (1h bars × 20 = 20h window). The window
 	// span itself is in return_window_hours.
-	ReturnPct         float64   `json:"trend_window_return_pct"`
-	ReturnWindowHrs   float64   `json:"return_window_hours"`                  // real-world span of the trend window (lookback × bar duration)
-	PrevHourChangePct *float64  `json:"prev_hour_close_change_pct,omitempty"` // last FULLY CLOSED hour vs the one before (closed data only)
-	ATRPct            float64   `json:"atr_pct"`                              // ATR14 / price × 100
-	ATRPercentile     *float64  `json:"atr_percentile,omitempty"`             // current ATR% rank within this TF's own ATR history (0-100)
-	VolumeRatio       *float64  `json:"volume_ratio"`                         // last closed volume / 20-bar avg
-	Volume            float64   `json:"volume"`                               // last CLOSED bar volume, base units (kline source native)
-	VolumeChangePct   float64   `json:"volume_change_pct"`                    // last closed volume vs previous closed bar, %
+	ReturnPct         float64  `json:"trend_window_return_pct"`
+	ReturnWindowHrs   float64  `json:"return_window_hours"`                  // real-world span of the trend window (lookback × bar duration)
+	PrevHourChangePct *float64 `json:"prev_hour_close_change_pct,omitempty"` // last FULLY CLOSED hour vs the one before (closed data only)
+	ATRPct            float64  `json:"atr_pct"`                              // ATR14 / price × 100
+	ATRPercentile     *float64 `json:"atr_percentile,omitempty"`             // current ATR% rank within this TF's own ATR history (0-100)
+	VolumeRatio       *float64 `json:"volume_ratio"`                         // last closed volume / 20-bar avg
+	Volume            float64  `json:"volume"`                               // last CLOSED bar volume, base units (kline source native)
+	VolumeChangePct   float64  `json:"volume_change_pct"`                    // last closed volume vs previous closed bar, %
 	// Support/Resistance are ALWAYS emitted (possibly []) — an empty array is
 	// meaningful ("no swing level remains on this side of the LIVE price;
 	// price is making new highs/lows inside the window") and must stay
 	// legible, not vanish from the JSON (09-18 audit #6: BTC 1h/4h showed no
 	// resistance key at all while price was above every 4h structure high).
-	Support           []float64 `json:"support"`                    // nearest swing lows, ascending; [] = none below live price
-	Resistance        []float64 `json:"resistance"`                 // nearest swing highs, descending; [] = none above live price
-	SupportDistPct    []float64 `json:"support_dist_pct"`           // pre-computed (level-anchor)/anchor×100, index-aligned with Support
-	ResistanceDistPct []float64 `json:"resistance_dist_pct"`        // pre-computed, index-aligned with Resistance
-	MACDHist          *float64  `json:"macd_hist,omitempty"`                  // normalized by price
-	MACDTrend         string    `json:"macd_trend,omitempty"`                 // rising / falling / flat
-	RSI14             *float64  `json:"rsi,omitempty"`                        // 0-100
-	StochRSIK         *float64  `json:"stoch_rsi_k,omitempty"`                // StochRSI %K (14,14,3,3), 0-100
-	StochRSID         *float64  `json:"stoch_rsi_d,omitempty"`                // StochRSI %D (3-SMA of K), 0-100
-	EMAFast           *float64  `json:"ema_fast,omitempty"`                   // EMA20
-	EMASlow           *float64  `json:"ema_slow,omitempty"`                   // EMA50
-	LastClosedCandle  string    `json:"last_closed_candle"`                   // bullish / bearish / doji
-	LastClose         float64   `json:"last_close"`                           // last CLOSED candle close
-	StructureHigh     *float64  `json:"structure_high"`                       // highest close in window
-	StructureLow      *float64  `json:"structure_low"`                        // lowest close in window
+	Support           []float64 `json:"support"`               // nearest swing lows, ascending; [] = none below live price
+	Resistance        []float64 `json:"resistance"`            // nearest swing highs, descending; [] = none above live price
+	SupportDistPct    []float64 `json:"support_dist_pct"`      // pre-computed (level-anchor)/anchor×100, index-aligned with Support
+	ResistanceDistPct []float64 `json:"resistance_dist_pct"`   // pre-computed, index-aligned with Resistance
+	MACDHist          *float64  `json:"macd_hist,omitempty"`   // normalized by price
+	MACDTrend         string    `json:"macd_trend,omitempty"`  // rising / falling / flat
+	RSI14             *float64  `json:"rsi,omitempty"`         // 0-100
+	StochRSIK         *float64  `json:"stoch_rsi_k,omitempty"` // StochRSI %K (14,14,3,3), 0-100
+	StochRSID         *float64  `json:"stoch_rsi_d,omitempty"` // StochRSI %D (3-SMA of K), 0-100
+	EMAFast           *float64  `json:"ema_fast,omitempty"`    // EMA20
+	EMASlow           *float64  `json:"ema_slow,omitempty"`    // EMA50
+	LastClosedCandle  string    `json:"last_closed_candle"`    // bullish / bearish / doji
+	LastClose         float64   `json:"last_close"`            // last CLOSED candle close
+	StructureHigh     *float64  `json:"structure_high"`        // highest close in window
+	StructureLow      *float64  `json:"structure_low"`         // lowest close in window
 	// Structure distances use the SAME convention as support_dist_pct /
 	// resistance_dist_pct: (level − LIVE price)/live×100. NEGATIVE
 	// structure_high_dist_pct means the live price has already cleared the
@@ -68,8 +69,8 @@ type TFSignal struct {
 // DerivSignal carries derivatives context.
 type DerivSignal struct {
 	FundingRate           *float64 `json:"funding_rate,omitempty"`
-	FundingAnnualizedPct  *float64 `json:"funding_annualized_pct,omitempty"` // 预计算: rate × (24/settle_hours) × 365 × 100,按实测结算间隔年化,模型直接使用不再自行年化
-	FundingSettleHours    *float64 `json:"funding_settle_hours,omitempty"`   // 实测结算间隔(小时);缺失时年化按 8h 口径
+	FundingAnnualizedPct  *float64 `json:"funding_annualized_pct,omitempty"`    // 预计算: rate × (24/settle_hours) × 365 × 100,按实测结算间隔年化,模型直接使用不再自行年化
+	FundingSettleHours    *float64 `json:"funding_settle_hours,omitempty"`      // 实测结算间隔(小时);缺失时年化按 8h 口径
 	OIChange1hPct         *float64 `json:"oi_change_1h_pct,omitempty"`          // true 1h change (quant layer)
 	OIVsAvgPct            *float64 `json:"oi_vs_avg_pct,omitempty"`             // current OI vs its period average
 	PriceChange1hLivePct  *float64 `json:"price_change_60m_live_pct,omitempty"` // LIVE price vs ~60 minutes ago (self-computed from the finest ≤1h klines). NOT a candle-close figure.
@@ -294,17 +295,17 @@ type MinSizeCheck struct {
 // picks. first_rr_ge_target is the level the TP rule demands: the nearest
 // target whose RR clears min_rr — the model adopts it instead of re-deriving.
 type RRScan struct {
-	Direction       string  `json:"direction"`                 // long | short
-	EntryPrice      float64 `json:"entry_price"`               // the anchor the scan assumed
-	EntryBasis      string  `json:"entry_basis"`               // limit_anchor | live_price
-	StopDistancePct float64 `json:"stop_distance_pct"`         // noise floor (best-case stop) in %
-	StopPrice       float64 `json:"stop_price"`                // entry ∓ floor distance
-	MinRR           float64 `json:"min_rr"`                    // strategy min_risk_reward_ratio in effect
-	TargetsScanned  int     `json:"targets_scanned"`           // distinct structural levels scanned
-	BestTarget      float64 `json:"best_target,omitempty"`     // farthest scanned level (max RR)
-	BestRR          float64 `json:"best_rr"`                   // upper-bound RR — < min_rr ⇒ RR fails for sure
+	Direction       string  `json:"direction"`                    // long | short
+	EntryPrice      float64 `json:"entry_price"`                  // the anchor the scan assumed
+	EntryBasis      string  `json:"entry_basis"`                  // limit_anchor | live_price
+	StopDistancePct float64 `json:"stop_distance_pct"`            // noise floor (best-case stop) in %
+	StopPrice       float64 `json:"stop_price"`                   // entry ∓ floor distance
+	MinRR           float64 `json:"min_rr"`                       // strategy min_risk_reward_ratio in effect
+	TargetsScanned  int     `json:"targets_scanned"`              // distinct structural levels scanned
+	BestTarget      float64 `json:"best_target,omitempty"`        // farthest scanned level (max RR)
+	BestRR          float64 `json:"best_rr"`                      // upper-bound RR — < min_rr ⇒ RR fails for sure
 	FirstRRGeTarget float64 `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
-	Usable          bool    `json:"usable"`                    // a qualifying target exists
+	Usable          bool    `json:"usable"`                       // a qualifying target exists
 }
 
 // DirectionGate is the program's per-direction open verdict for one symbol —
@@ -314,11 +315,11 @@ type RRScan struct {
 type DirectionGate struct {
 	Allowed      bool     `json:"allowed"`
 	EntryPrice   float64  `json:"entry_price"`
-	EntryBasis   string   `json:"entry_basis"`        // limit_anchor | live_price
-	LimitAllowed bool     `json:"limit_allowed"`      // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
+	EntryBasis   string   `json:"entry_basis"`   // limit_anchor | live_price
+	LimitAllowed bool     `json:"limit_allowed"` // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
 	StopFloorPct float64  `json:"stop_floor_pct,omitempty"`
-	RR           *RRScan  `json:"rr_scan,omitempty"`  // nil when no noise floor is configured (best-case RR undefined)
-	Failed       []string `json:"failed,omitempty"`   // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
+	RR           *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
+	Failed       []string `json:"failed,omitempty"`  // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -333,9 +334,9 @@ type HardEntryGate struct {
 // score sign); execution = which direction the micro-trend gate currently
 // allows. The final trade bias stays the model's job.
 type BiasBlock struct {
-	Scanner   string `json:"scanner"`             // long | short | none
-	Structure string `json:"structure"`           // long | short | mixed
-	Execution string `json:"execution"`           // long_only | short_only | both | none | unknown
+	Scanner   string `json:"scanner"`   // long | short | none
+	Structure string `json:"structure"` // long | short | mixed
+	Execution string `json:"execution"` // long_only | short_only | both | none | unknown
 }
 
 // SignalOptions carries the evaluation moment, the strategy's primary
@@ -435,19 +436,19 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// the anchors themselves are computed AFTER the TF loop below (they read
 	// the primary TF's ATR).
 	offsetCfg := AnchorOffsetConfig{
-		Mode:    opt.LimitEntryOffsetMode,
+		Mode:     opt.LimitEntryOffsetMode,
 		FixedPct: opt.LimitEntryOffsetPct,
-		ATRMult: opt.LimitEntryOffsetATRMult,
-		MinPct:  opt.LimitEntryOffsetMinPct,
-		MaxPct:  opt.LimitEntryOffsetMaxPct,
+		ATRMult:  opt.LimitEntryOffsetATRMult,
+		MinPct:   opt.LimitEntryOffsetMinPct,
+		MaxPct:   opt.LimitEntryOffsetMaxPct,
 	}
 
 	sig := &SymbolSignal{
-		Symbol:         strings.ToUpper(symbol),
-		TimestampUTC:   now.UTC().Format(time.RFC3339),
-		Price:          data.CurrentPrice,
-		PrimaryTF:      opt.PrimaryTF,
-		Timeframes:     map[string]*TFSignal{},
+		Symbol:       strings.ToUpper(symbol),
+		TimestampUTC: now.UTC().Format(time.RFC3339),
+		Price:        data.CurrentPrice,
+		PrimaryTF:    opt.PrimaryTF,
+		Timeframes:   map[string]*TFSignal{},
 	}
 
 	// Deterministic timeframe ordering.
@@ -1734,12 +1735,87 @@ func btcCorrelation(symCloses, btcCloses []float64) *BTCCorrelation {
 }
 
 // RenderSignalJSON renders one symbol's signal block as compact JSON.
+// RenderSignalJSON renders the structured signal as compact JSON with
+// decision-grade numeric precision (09-18 token audit ④): raw float64
+// marshaling printed 15-18% junk digits (1.5343639999999998,
+// -19.394719896973594). Prices keep 6 significant digits; any *_pct /
+// *percent* field keeps 2 decimals — both far below the granularity any
+// entry/SL/TP decision operates at. Counts/strings/timestamps untouched.
 func RenderSignalJSON(sig *SymbolSignal) string {
 	data, err := json.Marshal(sig)
 	if err != nil {
 		return fmt.Sprintf("signal serialization failed: %v", err)
 	}
-	return string(data)
+	var generic interface{}
+	if json.Unmarshal(data, &generic) != nil {
+		return string(data)
+	}
+	rounded, err := json.Marshal(roundJSONNumbers(generic, ""))
+	if err != nil {
+		return string(data)
+	}
+	return string(rounded)
+}
+
+// roundJSONNumbers walks decoded JSON and rounds floats by field convention:
+// keys ending _pct or containing "percent" → 2 decimals, everything else → 6
+// significant digits (funding_rate 0.00033705 survives intact; oi/volume
+// bases lose only sub-1-unit noise). Array children inherit their key.
+func roundJSONNumbers(v interface{}, key string) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, child := range t {
+			t[k] = roundJSONNumbers(child, k)
+		}
+		return t
+	case []interface{}:
+		for i, child := range t {
+			t[i] = roundJSONNumbers(child, key)
+		}
+		return t
+	case float64:
+		if strings.HasSuffix(key, "_pct") || strings.Contains(key, "percent") {
+			return roundToDecimalPlaces(t, 2)
+		}
+		return roundSignificant(t, 6)
+	default:
+		return v
+	}
+}
+
+// roundToDecimalPlaces rounds to n digits after the decimal point via
+// FormatFloat/ParseFloat — math.Round(v*10^n)/10^n re-multiplies the scaling
+// error back in (100198×0.001 → 100.19800000000001).
+func roundToDecimalPlaces(v float64, n int) float64 {
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return v
+	}
+	out, err := strconv.ParseFloat(strconv.FormatFloat(v, 'f', n, 64), 64)
+	if err != nil {
+		return v
+	}
+	return out
+}
+
+// roundSignificant rounds to n significant digits. Same FormatFloat trick as
+// roundToDecimalPlaces: the naive Round(v/pow)*pow reintroduces float noise.
+func roundSignificant(v float64, n int) float64 {
+	if v == 0 || math.IsInf(v, 0) || math.IsNaN(v) {
+		return v
+	}
+	exp := int(math.Floor(math.Log10(math.Abs(v))))
+	digits := n - 1 - exp
+	if digits > 20 {
+		digits = 20
+	}
+	if digits < -30 {
+		digits = -30
+	}
+	out, err := strconv.ParseFloat(strconv.FormatFloat(v, 'f', digits, 64), 64)
+	if err != nil {
+		return v
+	}
+	return out
 }
 
 // computeBreakoutState derives the breakout verdict (⑫) from the 1h closed

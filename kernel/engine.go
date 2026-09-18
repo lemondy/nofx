@@ -110,9 +110,9 @@ type RecentOrder struct {
 
 // Context trading context (complete information passed to AI)
 type Context struct {
-	CurrentTime        string                             `json:"current_time"`
-	RuntimeMinutes     int                                `json:"runtime_minutes"`
-	CallCount          int                                `json:"call_count"`
+	CurrentTime    string `json:"current_time"`
+	RuntimeMinutes int    `json:"runtime_minutes"`
+	CallCount      int    `json:"call_count"`
 	// InitialBalanceUSDT is the trader's starting balance — the baseline the
 	// account-level drawdown breaker measures against. Rendered with the
 	// account line so the model can see the CURRENT breaker state instead of

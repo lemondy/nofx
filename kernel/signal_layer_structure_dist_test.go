@@ -163,8 +163,8 @@ func TestFormatPositionInfoSameSourcePnL(t *testing.T) {
 	line := engine.formatPositionInfo(1, pos, ctx)
 	for _, want := range []string{
 		"Entry 19.2300 Last 19.2800",
-		"Margin ROI -1.30%",   // −0.26% × 5x
-		"Price Return -0.26%", // (19.23−19.28)/19.23
+		"Margin ROI -1.30%",    // −0.26% × 5x
+		"Price Return -0.26%",  // (19.23−19.28)/19.23
 		"Unrealized PnL -0.18", // −0.05 × 3.62
 	} {
 		if !strings.Contains(line, want) {
