@@ -372,6 +372,44 @@ export function RiskControlEditor({
  </span>
  </div>
  </div>
+
+ <div
+ className="p-4 rounded-lg"
+ style={{ background: '#F2EFE6', border: '1px solid #2E7D4F' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {ts(riskControl.riskPerTradePct, language)}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {ts(riskControl.riskPerTradePctDesc, language)}
+ </p>
+ <div className="flex items-center">
+ <input
+ type="number"
+ value={config.risk_per_trade_pct ?? 0}
+ onChange={(e) => {
+ const v = parseFloat(e.target.value)
+ updateField('risk_per_trade_pct', e.target.value === '' || isNaN(v) ? 0 : v)
+ }}
+ disabled={disabled}
+ min={0}
+ max={10}
+ step={0.1}
+ className="w-24 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ <span className="ml-2" style={{ color: '#6E6E60' }}>
+ %
+ </span>
+ </div>
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {`当前生效: ${(config.risk_per_trade_pct ?? 0) <= 0 ? '默认 1.5' : config.risk_per_trade_pct}%`}
+ </p>
+ </div>
  </div>
  </div>
 
