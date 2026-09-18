@@ -348,6 +348,12 @@ type RiskControlConfig struct {
 	// mid (a wide spread eats the limit-order edge and taxes market fills).
 	// 0 = default 0.5%; negative = disabled. Fail-open when no book. (CODE ENFORCED)
 	MaxSpreadPct float64 `json:"max_spread_pct"`
+	// MaxVendorDivergencePct: hard-block both directions when the vendor
+	// forming-close vs live ticker diverges beyond this % — entry/SL/TP are
+	// all priced off the live tick, so a large vendor gap invalidates the
+	// whole setup (MYXUSDT 09-18: −2.57%). 0 = default 2%; negative =
+	// disabled. Surfaced via hard_entry_gate.failed VENDOR_DIVERGENCE_x.xx.
+	MaxVendorDivergencePct float64 `json:"max_vendor_divergence_pct"`
 	// StockWeekendNoOpen: block new opens on Binance tokenized stocks
 	// (underlyingSubType "Stocks") during the US-market weekend (Sat/Sun ET)
 	// — weekend volatility and edge are poor until Binance supports 24h stock

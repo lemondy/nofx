@@ -265,3 +265,20 @@ func MaxSpreadPct(rc *store.RiskControlConfig) float64 {
 	}
 	return rc.MaxSpreadPct
 }
+
+// EffectiveMaxVendorDivergencePct resolves the vendor-vs-live divergence
+// hard-gate threshold (percent): 0/unset = 2% default; negative = gate
+// disabled (house convention, mirrors MaxSpreadPct). MYXUSDT showed −2.57%
+// vendor/live on 09-18 — every anchor/SL/TP priced off that tick is wrong.
+func EffectiveMaxVendorDivergencePct(rc *store.RiskControlConfig) float64 {
+	if rc == nil {
+		return 2
+	}
+	if rc.MaxVendorDivergencePct < 0 {
+		return -1 // disabled
+	}
+	if rc.MaxVendorDivergencePct == 0 {
+		return 2
+	}
+	return rc.MaxVendorDivergencePct
+}

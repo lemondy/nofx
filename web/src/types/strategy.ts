@@ -233,4 +233,7 @@ export interface RiskControlConfig {
   peak_drawdown_min_profit_pct?: number;
   // Giveback (of peak) that triggers the protective close (default 55)
   peak_drawdown_max_dd_pct?: number;
+  // Hard-block opens when the vendor-vs-live price diverges beyond this %
+  // (0 = default 2, negative = disabled) (CODE ENFORCED)
+  max_vendor_divergence_pct?: number;
 }

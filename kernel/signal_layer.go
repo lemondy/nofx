@@ -33,10 +33,15 @@ type TFSignal struct {
 	VolumeRatio       *float64  `json:"volume_ratio"`                         // last closed volume / 20-bar avg
 	Volume            float64   `json:"volume"`                               // last CLOSED bar volume, base units (kline source native)
 	VolumeChangePct   float64   `json:"volume_change_pct"`                    // last closed volume vs previous closed bar, %
-	Support           []float64 `json:"support,omitempty"`                    // nearest swing lows, ascending
-	Resistance        []float64 `json:"resistance,omitempty"`                 // nearest swing highs, descending
-	SupportDistPct    []float64 `json:"support_dist_pct,omitempty"`           // pre-computed (level-anchor)/anchor×100, index-aligned with Support
-	ResistanceDistPct []float64 `json:"resistance_dist_pct,omitempty"`        // pre-computed, index-aligned with Resistance
+	// Support/Resistance are ALWAYS emitted (possibly []) — an empty array is
+	// meaningful ("no swing level remains on this side of the LIVE price;
+	// price is making new highs/lows inside the window") and must stay
+	// legible, not vanish from the JSON (09-18 audit #6: BTC 1h/4h showed no
+	// resistance key at all while price was above every 4h structure high).
+	Support           []float64 `json:"support"`                    // nearest swing lows, ascending; [] = none below live price
+	Resistance        []float64 `json:"resistance"`                 // nearest swing highs, descending; [] = none above live price
+	SupportDistPct    []float64 `json:"support_dist_pct"`           // pre-computed (level-anchor)/anchor×100, index-aligned with Support
+	ResistanceDistPct []float64 `json:"resistance_dist_pct"`        // pre-computed, index-aligned with Resistance
 	MACDHist          *float64  `json:"macd_hist,omitempty"`                  // normalized by price
 	MACDTrend         string    `json:"macd_trend,omitempty"`                 // rising / falling / flat
 	RSI14             *float64  `json:"rsi,omitempty"`                        // 0-100
@@ -48,8 +53,16 @@ type TFSignal struct {
 	LastClose         float64   `json:"last_close"`                           // last CLOSED candle close
 	StructureHigh     *float64  `json:"structure_high"`                       // highest close in window
 	StructureLow      *float64  `json:"structure_low"`                        // lowest close in window
-	BarsUsed          int       `json:"closed_bars_used"`
-	UnclosedDropped   bool      `json:"unclosed_dropped"` // forming candle was dropped
+	// Structure distances use the SAME convention as support_dist_pct /
+	// resistance_dist_pct: (level − LIVE price)/live×100. NEGATIVE
+	// structure_high_dist_pct means the live price has already cleared the
+	// window high (price is printing new highs — the closed-candle structure
+	// lags and offers no overhead reference). 09-18 audit #6: BTC 4h showed
+	// structure_high 1.6% BELOW the live price with no marker at all.
+	StructureHighDistPct *float64 `json:"structure_high_dist_pct,omitempty"`
+	StructureLowDistPct  *float64 `json:"structure_low_dist_pct,omitempty"`
+	BarsUsed             int      `json:"closed_bars_used"`
+	UnclosedDropped      bool     `json:"unclosed_dropped"` // forming candle was dropped
 }
 
 // DerivSignal carries derivatives context.
@@ -305,7 +318,7 @@ type DirectionGate struct {
 	LimitAllowed bool     `json:"limit_allowed"`      // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
 	StopFloorPct float64  `json:"stop_floor_pct,omitempty"`
 	RR           *RRScan  `json:"rr_scan,omitempty"`  // nil when no noise floor is configured (best-case RR undefined)
-	Failed       []string `json:"failed,omitempty"`   // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND
+	Failed       []string `json:"failed,omitempty"`   // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -392,6 +405,14 @@ type SignalOptions struct {
 	// "high" the funding_rollover condition rolls off — same number that
 	// annualizes into strategy prompt condition ①.
 	ShortFundingCrowdPctP float64
+	// MaxVendorDivergencePct hard-blocks both directions when the vendor
+	// forming-close vs live ticker diverges beyond this percent
+	// (risk_control.max_vendor_divergence_pct; resolved by
+	// EffectiveMaxVendorDivergencePct: 0 = default 2, negative = disabled).
+	// A 2.6% vendor/live gap shifts every anchor/SL/TP off the real market
+	// (MYXUSDT 09-18) — entry, stop and target are all priced off the wrong
+	// tick. <=0 (disabled) skips the check.
+	MaxVendorDivergencePct float64
 }
 
 // ComputeSymbolSignals builds the normalized signal block for one symbol from
@@ -915,6 +936,11 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		if opt.StockWeekendBlock {
 			add("STOCK_WEEKEND")
 		}
+		if opt.MaxVendorDivergencePct > 0 &&
+			sig.DataFreshness != nil && sig.DataFreshness.VendorDivergencePct != nil &&
+			math.Abs(*sig.DataFreshness.VendorDivergencePct) > opt.MaxVendorDivergencePct {
+			add(fmt.Sprintf("VENDOR_DIVERGENCE_%.2f", *sig.DataFreshness.VendorDivergencePct))
+		}
 		g.Allowed = len(g.Failed) == 0
 		return g
 	}
@@ -1056,7 +1082,10 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	n := len(klines)
 	if n < 10 {
 		return &TFSignal{
-			Trend: "unknown", LastClosedCandle: "unknown",
+			Timeframe: tf,
+			Trend:     "unknown", LastClosedCandle: "unknown",
+			Support: []float64{}, Resistance: []float64{},
+			SupportDistPct: []float64{}, ResistanceDistPct: []float64{},
 			UnclosedDropped: dropped > 0, BarsUsed: n,
 		}, []string{fmt.Sprintf("%s: only %d closed bars after settlement", tf, n)}
 	}
@@ -1219,10 +1248,22 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	if anchor <= 0 {
 		anchor = last.Close
 	}
+	// Structure-vs-live distances: negative high-dist = live price ABOVE the
+	// window high (new highs printing, no overhead reference in this window);
+	// negative low-dist is the normal state (window low below price). Same
+	// (level − anchor)/anchor convention as the S/R dist arrays.
+	if anchor > 0 {
+		shDist := (structureHigh - anchor) / anchor * 100
+		slDist := (structureLow - anchor) / anchor * 100
+		sig.StructureHighDistPct = &shDist
+		sig.StructureLowDistPct = &slDist
+	}
 
 	pivHighs, pivLows := swingPivots(window, 2)
-	// Resistance: swing highs above price, nearest first.
-	var resist []float64
+	// Resistance: swing highs above price, nearest first. Starts non-nil so
+	// an empty side still marshals as [] — "no level on this side of the
+	// live price" is evidence, not an absence of data.
+	resist := []float64{}
 	for _, p := range pivHighs {
 		if p > anchor {
 			resist = append(resist, p)
@@ -1248,7 +1289,7 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	sig.Resistance = resist
 
 	// Support: swing lows below price, nearest first.
-	var supp []float64
+	supp := []float64{}
 	for _, p := range pivLows {
 		if p < anchor {
 			supp = append(supp, p)
@@ -1272,6 +1313,8 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 
 	// Pre-computed percentage distances from the live anchor — the model
 	// should not do its own arithmetic on levels.
+	sig.SupportDistPct = []float64{}
+	sig.ResistanceDistPct = []float64{}
 	if anchor > 0 {
 		for _, lvl := range sig.Support {
 			sig.SupportDistPct = append(sig.SupportDistPct, (lvl-anchor)/anchor*100)

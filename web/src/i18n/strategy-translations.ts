@@ -210,6 +210,8 @@ export const riskControl = {
   maxMarginUsageDesc: { zh: '保证金使用率上限，由代码强制执行', en: 'Maximum margin utilization, enforced by code', es: 'Límite de margen' },
   riskPerTradePct: { zh: '单笔风险预算（代码强制）', en: 'Per-Trade Risk Budget (CODE ENFORCED)', es: 'Riesgo por Operación (CÓDIGO)' },
   riskPerTradePctDesc: { zh: '单笔风险金额 = 权益 × 此%；仓位名义价值 = 风险金额 ÷ 止损距离%（程序强制缩仓，止损越宽仓位越小）；0 = 默认 1.5%。调杠杆只改变占用保证金，不改变此风险', en: 'Risk per trade = equity × this %; position notional = risk ÷ stop-distance% (size clamped by code — wider stop, smaller position); 0 = default 1.5%. Leverage changes margin used, not this risk', es: 'Riesgo = equity × %; posición = riesgo ÷ distancia de stop; 0 = 1.5 por defecto' },
+  vendorDivergence: { zh: '数据源偏差门 %（代码强制）', en: 'Vendor Divergence Gate % (CODE ENFORCED)', es: 'Umbral de Desviación % (CÓDIGO)' },
+  vendorDivergenceDesc: { zh: 'K线数据源与实时行情偏差超过此百分比时，该币双向开仓都被拦（VENDOR_DIVERGENCE）——entry/SL/TP 全按实时价定价，偏差过大使整套设置失真；0 = 默认 2%，负数 = 禁用', en: 'Blocks both directions when the candle-source vs live-price divergence exceeds this % (VENDOR_DIVERGENCE) — entry/SL/TP are all priced off the live tick; 0 = default 2%, negative = disabled', es: 'Bloquea aperturas si la desviación supera este %; 0 = 2 por defecto, negativo = desactivado' },
   entryRequirements: { zh: '开仓要求', en: 'Entry Requirements', es: 'Requisitos de Entrada' },
   minPositionSize: { zh: '最小开仓金额', en: 'Min Position Size', es: 'Tamaño Mínimo' },
   minPositionSizeDesc: { zh: 'USDT 最小名义价值', en: 'Minimum notional value in USDT', es: 'Valor mínimo en USDT' },

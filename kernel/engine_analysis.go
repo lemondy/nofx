@@ -89,6 +89,13 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		if err := fetchMarketDataWithStrategy(ctx, engine); err != nil {
 			return nil, fmt.Errorf("failed to fetch market data: %w", err)
 		}
+		// Header time must not predate the data it heads: CurrentTime was
+		// stamped at context build, BEFORE this fetch loop spent ~1min
+		// collecting 9 coins' klines/derivatives (09-18 audit #4: header
+		// 15:30:22 vs signal timestamps 15:31:36+ confused the model's
+		// freshness reasoning). Re-stamp at fetch completion — every signal
+		// timestamp is now ≤ the header.
+		ctx.CurrentTime = time.Now().UTC().Format("2006-01-02 15:04:05 UTC")
 	}
 
 	// Ensure OITopDataMap is initialized

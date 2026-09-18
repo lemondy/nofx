@@ -511,12 +511,14 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		unrealizedPnl := pos["unRealizedProfit"].(float64)
 		liquidationPrice := pos["liquidationPrice"].(float64)
 
-		// Calculate margin used (estimated)
+		// Calculate margin used (initial margin, entry-price basis — the
+		// standard ROI denominator; mark-price drift made the same position
+		// report a moving margin).
 		leverage := 10 // Default value, should actually be fetched from position info
 		if lev, ok := pos["leverage"].(float64); ok {
 			leverage = int(lev)
 		}
-		marginUsed := (quantity * markPrice) / float64(leverage)
+		marginUsed := (quantity * entryPrice) / float64(leverage)
 		totalMarginUsed += marginUsed
 
 		// Calculate P&L percentage (based on margin, considering leverage)
@@ -661,6 +663,12 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	}
 
 	// 4. Calculate total P&L
+	// Available margin is DERIVED (equity − Σposition margin), not the
+	// exchange availableBalance: Binance withholds margin for orders and
+	// buffers this prompt never sees (09-18 audit #2: exchange printed
+	// 52.62 available against 77.32 equity + 13.94 position margin —
+	// unreconcilable, and 32% low for any model-side sizing arithmetic).
+	availableBalance = totalEquity - totalMarginUsed
 	totalPnL := totalEquity - at.initialBalance
 	totalPnLPct := 0.0
 	if at.initialBalance > 0 {
@@ -685,6 +693,8 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		CallCount:       at.callCount,
 		BTCETHLeverage:  btcEthLeverage,
 		AltcoinLeverage: altcoinLeverage,
+		// Baseline for the account-breaker state shown in the account line.
+		InitialBalanceUSDT: at.initialBalance,
 		Account: kernel.AccountInfo{
 			TotalEquity:      totalEquity,
 			AvailableBalance: availableBalance,

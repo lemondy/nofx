@@ -113,6 +113,12 @@ type Context struct {
 	CurrentTime        string                             `json:"current_time"`
 	RuntimeMinutes     int                                `json:"runtime_minutes"`
 	CallCount          int                                `json:"call_count"`
+	// InitialBalanceUSDT is the trader's starting balance — the baseline the
+	// account-level drawdown breaker measures against. Rendered with the
+	// account line so the model can see the CURRENT breaker state instead of
+	// guessing from the stats block's historical max-drawdown (09-18 audit #5:
+	// "最大回撤 80.4%" is a closed-trade-series figure, not equity vs initial).
+	InitialBalanceUSDT float64                            `json:"-"`
 	Account            AccountInfo                        `json:"account"`
 	Positions          []PositionInfo                     `json:"positions"`
 	CandidateCoins     []CandidateCoin                    `json:"candidate_coins"`
@@ -243,7 +249,7 @@ var ValidBlockingFactors = []string{
 	"RR_LOW", "ANCHOR_SUPPRESSED", "TIMING_GATE", "BREAKOUT_UNCONFIRMED",
 	"RANGE_NO_DIRECTION", "CONFLICT_UNRESOLVED", "CROWDING_HIGH",
 	"LOSS_STREAK_BAN", "VOL_EXTREME", "DATA_INSUFFICIENT", "MIN_SIZE",
-	"STRUCTURE_CONFLICT", "WAIT_PULLBACK",
+	"STRUCTURE_CONFLICT", "WAIT_PULLBACK", "VENDOR_DIVERGENCE",
 }
 
 // ValidWaitStates is the per-coin trading state machine (user review

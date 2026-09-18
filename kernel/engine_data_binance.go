@@ -85,12 +85,23 @@ func binanceTopTickers(ctx context.Context) ([]binance24hrTicker, error) {
 		}
 	}
 	sort.Slice(usdt, func(i, j int) bool { return usdt[i].QuoteVolume > usdt[j].QuoteVolume })
-	if len(usdt) > binanceFetchLimit {
-		usdt = usdt[:binanceFetchLimit]
-	}
+	// Cache the FULL USDT-perp universe, volume-descending: per-symbol
+	// lookups (24h quote volume, quant price patch) must also find symbols
+	// outside the ranking depth, or their liquidity block silently vanishes
+	// (09-18: PIEVERSEUSDT had no liquidity field at all). Ranking consumers
+	// slice with binanceTickersTopN.
 	tickersCache = usdt
 	tickersFetched = time.Now()
 	return usdt, nil
+}
+
+// binanceTickersTopN returns the deepest-N symbols by 24h quote volume for
+// ranking consumers (the cache holds the full volume-sorted universe).
+func binanceTickersTopN(tickers []binance24hrTicker, n int) []binance24hrTicker {
+	if len(tickers) > n {
+		return tickers[:n]
+	}
+	return tickers
 }
 
 // binanceKlineChange returns the price change percent (x100) from the open of
@@ -375,7 +386,7 @@ func binanceOIRanking(ctx context.Context, duration string, limit int) (*nofxos.
 	if err != nil {
 		return nil, err
 	}
-	entries := mapParallel(tickers, func(t binance24hrTicker) (oiRankingEntry, error) {
+	entries := mapParallel(binanceTickersTopN(tickers, binanceFetchLimit), func(t binance24hrTicker) (oiRankingEntry, error) {
 		curBase, _, deltaBase, deltaValue, deltaPct, err := binanceOIDelta(ctx, t.Symbol, duration)
 		if err != nil || curBase <= 0 {
 			return oiRankingEntry{}, err
@@ -465,7 +476,7 @@ func binancePriceRanking(ctx context.Context, durations string, limit int) (*nof
 	if err != nil {
 		return nil, err
 	}
-	samples := mapParallel(tickers, func(t binance24hrTicker) (priceChangeSample, error) {
+	samples := mapParallel(binanceTickersTopN(tickers, binanceFetchLimit), func(t binance24hrTicker) (priceChangeSample, error) {
 		s := priceChangeSample{symbol: t.Symbol, price: t.LastPrice, chg24h: t.PriceChangePercent, quoteVol: t.QuoteVolume}
 		var err error
 		// Rolling 60-minute change (15m × 4) — the same canonical definition
