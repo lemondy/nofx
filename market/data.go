@@ -960,11 +960,22 @@ func isStaleData(klines []Kline, symbol string) bool {
 
 // executionTimeframeData builds the TimeframeData map the execution-side
 // risk gates read (3m/4h always fetched; 1h best-effort — its absence makes
-// the stop-floor fall back to 4h, a wider but still-enforced floor).
+// the stop-floor fall back to 4h, a wider but still-enforced floor). 15m is
+// AGGREGATED locally from the 3m series (5:1, zero extra vendor calls):
+// ComputeSymbolSignals treats 15m as the execution TF, and without this key
+// ExecutionATRPct silently fell back to the longest available series (4h
+// ATR ≈ 8× a quiet 15m's) — the supply-zone gate then rejected anchors the
+// prompt-side suppression had blessed on real 15m data, every cycle
+// (2026-09-19 BTCUSDT loop).
 func executionTimeframeData(klines3m, klines1h, klines4h []Kline) map[string]*TimeframeSeriesData {
 	tf := map[string]*TimeframeSeriesData{}
 	if len(klines3m) > 0 {
 		tf["3m"] = calculateTimeframeSeries(klines3m, "3m", len(klines3m))
+		// 100×3m bars ≈ 20×15m buckets — enough for ATR14 and the swing-pivot
+		// scan; computeTFSignal drops the trailing forming bucket natively.
+		if k15 := aggregateKlines(klines3m, 15*time.Minute); len(k15) > 0 {
+			tf["15m"] = calculateTimeframeSeries(k15, "15m", len(k15))
+		}
 	}
 	if len(klines1h) > 0 {
 		tf["1h"] = calculateTimeframeSeries(klines1h, "1h", len(klines1h))
@@ -973,4 +984,45 @@ func executionTimeframeData(klines3m, klines1h, klines4h []Kline) map[string]*Ti
 		tf["4h"] = calculateTimeframeSeries(klines4h, "4h", len(klines4h))
 	}
 	return tf
+}
+
+// aggregateKlines buckets klines into fixed-duration bars (OHLC extremes,
+// volume summed). Input must be ascending by OpenTime; a partial bucket at
+// either edge is kept — the trailing (usually forming) one is dropped
+// downstream by the timeframe settlement logic, exactly like a native
+// forming candle.
+func aggregateKlines(src []Kline, bucket time.Duration) []Kline {
+	if len(src) == 0 || bucket <= 0 {
+		return nil
+	}
+	bucketMs := bucket.Milliseconds()
+	out := make([]Kline, 0, len(src)/5+1)
+	curBucket := int64(math.MinInt64)
+	var cur *Kline
+	flush := func() {
+		if cur != nil {
+			out = append(out, *cur)
+			cur = nil
+		}
+	}
+	for _, k := range src {
+		b := k.OpenTime / bucketMs * bucketMs
+		if b != curBucket {
+			flush()
+			curBucket = b
+			cur = &Kline{
+				OpenTime: b, Open: k.Open, High: k.High, Low: k.Low, Close: k.Close,
+				Volume: k.Volume, CloseTime: b + bucketMs - 1,
+				QuoteVolume: k.QuoteVolume,
+			}
+			continue
+		}
+		cur.High = math.Max(cur.High, k.High)
+		cur.Low = math.Min(cur.Low, k.Low)
+		cur.Close = k.Close
+		cur.Volume += k.Volume
+		cur.QuoteVolume += k.QuoteVolume
+	}
+	flush()
+	return out
 }

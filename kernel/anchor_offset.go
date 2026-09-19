@@ -115,12 +115,17 @@ func (sig *SymbolSignal) AnchorATRPct() float64 {
 // (2026-09-10: threshold == offset on the 1h scale degenerates — a 0.5×ATR(1h)
 // corridor is so deep that price sits under some 1h pivot most of the time in
 // chop, suppressing ~80% of anchors; the spec's step-4 check is 0.5×ATR(执行周期)).
+// EXACT TF only: when the execution dataset lacked 15m this used to fall back
+// to the longest available series (4h ATR ≈ 8× a quiet 15m's) — the
+// supply-zone gate then ran a wildly inflated threshold against anchors the
+// prompt-side suppression had blessed, rejecting the same setup every cycle
+// (2026-09-19 BTCUSDT loop). Missing TF → 0 → AnchorBreathingPct's fixed
+// fallback, the same convention the prompt side uses when ATR is unavailable.
 func (sig *SymbolSignal) ExecutionATRPct() float64 {
 	if sig == nil {
 		return 0
 	}
-	tf := primaryTFSignal(sig, sig.RoleTFs.ExecutionTF)
-	if tf != nil {
+	if tf := sig.Timeframes[sig.RoleTFs.ExecutionTF]; tf != nil {
 		return tf.ATRPct
 	}
 	return 0

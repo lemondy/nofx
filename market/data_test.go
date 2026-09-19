@@ -683,3 +683,83 @@ func TestExecutionTimeframeData(t *testing.T) {
 		t.Fatal("3m/4h must always be present")
 	}
 }
+
+// 3m→15m aggregation must preserve OHLC extremes and sum volume per bucket —
+// the execution-side dataset's 15m series is built this way (zero extra
+// vendor calls), and the supply-zone breathing gate reads its ATR.
+func TestAggregateKlines15m(t *testing.T) {
+	base := time.Date(2026, 9, 19, 13, 0, 0, 0, time.UTC)
+	var src []Kline
+	// Bucket 13:00: bars at 0,3,6,9,12 min. Open=first, Close=last,
+	// High/Low = extremes, Volume summed.
+	mk := func(mins int, o, h, l, c, v float64) Kline {
+		return Kline{OpenTime: base.Add(time.Duration(mins) * time.Minute).UnixMilli(),
+			Open: o, High: h, Low: l, Close: c, Volume: v}
+	}
+	src = append(src,
+		mk(0, 100, 102, 99, 101, 3),
+		mk(3, 101, 104, 100, 103, 4),
+		mk(6, 103, 103.5, 98, 99, 5),
+		mk(9, 99, 101, 97, 100, 6),
+		mk(12, 100, 105, 100, 104, 7),
+		// Bucket 13:15: single bar
+		mk(15, 104, 106, 103, 105, 10),
+	)
+	got := aggregateKlines(src, 15*time.Minute)
+	if len(got) != 2 {
+		t.Fatalf("buckets = %d, want 2", len(got))
+	}
+	b0, b1 := got[0], got[1]
+	if b0.Open != 100 || b0.Close != 104 || b0.High != 105 || b0.Low != 97 {
+		t.Fatalf("bucket0 OHLC = %v/%v/%v/%v, want 100/105/97/104", b0.Open, b0.High, b0.Low, b0.Close)
+	}
+	if b0.Volume != 25 {
+		t.Fatalf("bucket0 volume = %v, want 25", b0.Volume)
+	}
+	if b0.OpenTime != base.UnixMilli() || b1.OpenTime != base.Add(15*time.Minute).UnixMilli() {
+		t.Fatalf("bucket OpenTimes not aligned to 15m boundaries: %v / %v", b0.OpenTime, b1.OpenTime)
+	}
+	if b1.Open != 104 || b1.High != 106 || b1.Volume != 10 {
+		t.Fatalf("bucket1 = %v", b1)
+	}
+	if aggregateKlines(nil, 15*time.Minute) != nil {
+		t.Fatal("empty input must yield nil")
+	}
+}
+
+// The execution-side dataset must carry a 15m series (aggregated from 3m) —
+// without it ExecutionATRPct used to fall back to the 4h ATR and the
+// supply-zone gate ran a ~8× inflated threshold (2026-09-19 BTCUSDT loop).
+func TestExecutionTimeframeDataHas15m(t *testing.T) {
+	base := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	var k3m []Kline
+	for i := 0; i < 100; i++ {
+		p := 81000 + float64(i%10)*2
+		k3m = append(k3m, Kline{
+			OpenTime: base.Add(time.Duration(i) * 3 * time.Minute).UnixMilli(),
+			Open:     p, High: p * 1.0015, Low: p * 0.9985, Close: p * 1.0002, Volume: 10,
+		})
+	}
+	var k4h []Kline
+	for i := 0; i < 100; i++ {
+		p := 80000 + float64(i)*5
+		k4h = append(k4h, Kline{
+			OpenTime: base.Add(time.Duration(i) * 4 * time.Hour).UnixMilli(),
+			Open:     p, High: p * 1.02, Low: p * 0.98, Close: p, Volume: 100,
+		})
+	}
+	tfd := executionTimeframeData(k3m, nil, k4h)
+	k15, ok := tfd["15m"]
+	if !ok {
+		t.Fatal("15m series missing from execution dataset")
+	}
+	// 100×3m bars span exactly 20 15m buckets.
+	if len(k15.Klines) != 20 {
+		t.Fatalf("15m bars = %d, want 20", len(k15.Klines))
+	}
+	// Last bucket = the trailing forming one (13:45+ open beyond the series)
+	// stays in place; the kernel's settlement logic drops it natively.
+	if last := k15.Klines[len(k15.Klines)-1]; last.Open <= 0 || last.High < last.Low {
+		t.Fatalf("last 15m bucket malformed: %+v", last)
+	}
+}
