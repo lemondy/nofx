@@ -115,16 +115,20 @@ func (s *PositionStore) getStats(traderID string, initialEquity float64, windowD
 
 	for _, pos := range positions {
 		stats.TotalTrades++
-		stats.TotalPnL += pos.RealizedPnL
+		// 09-19 audit 五-3: fees are REAL costs — net them per trade so PF /
+		// expectancy / 总盈亏 reflect what the account actually keeps
+		// (gross numbers flattered PF 0.73 → 0.79 on the 30d window).
+		net := pos.RealizedPnL - pos.Fee
+		stats.TotalPnL += net
 		stats.TotalFee += pos.Fee
-		pnls = append(pnls, pos.RealizedPnL)
+		pnls = append(pnls, net)
 
-		if pos.RealizedPnL > 0 {
+		if net > 0 {
 			stats.WinTrades++
-			totalWin += pos.RealizedPnL
-		} else if pos.RealizedPnL < 0 {
+			totalWin += net
+		} else if net < 0 {
 			stats.LossTrades++
-			totalLoss += -pos.RealizedPnL
+			totalLoss += -net
 		}
 	}
 

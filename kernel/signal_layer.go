@@ -120,6 +120,7 @@ type FundingRolloverState struct {
 // LiquiditySignal carries order-book tradability metrics.
 type LiquiditySignal struct {
 	SpreadBps         *float64 `json:"spread_bps,omitempty"`
+	SpreadPct         *float64 `json:"spread_pct,omitempty"` // LIVE book spread, % of mid (09-19 audit 五-7: the enforced gate was invisible)
 	Depth05PctUSD     *float64 `json:"depth_0_5pct_usd,omitempty"`
 	QuoteVolume24hUsd *float64 `json:"quote_volume_24h_usd,omitempty"` // absolute 24h turnover, for size/slip judgment
 }
@@ -311,16 +312,17 @@ type MinSizeCheck struct {
 // picks. first_rr_ge_target is the level the TP rule demands: the nearest
 // target whose RR clears min_rr — the model adopts it instead of re-deriving.
 type RRScan struct {
-	Direction       string  `json:"direction"`                    // long | short
-	EntryPrice      float64 `json:"entry_price"`                  // the anchor the scan assumed
-	EntryBasis      string  `json:"entry_basis"`                  // limit_anchor | live_price
-	StopDistancePct float64 `json:"stop_distance_pct"`            // METHODOLOGY stop (stop_plan) distance in % — the same stop the gate verdict is computed at
-	StopPrice       float64 `json:"stop_price"`                   // the methodology stop price — adopt as stop_loss verbatim
-	MinRR           float64 `json:"min_rr"`                       // strategy min_risk_reward_ratio in effect
-	TargetsScanned  int     `json:"targets_scanned"`              // distinct structural levels scanned
-	BestTarget      float64 `json:"best_target,omitempty"`        // farthest scanned level (max RR)
-	BestRR          float64 `json:"best_rr"`                      // RR upper bound AT THE METHODOLOGY STOP — < min_rr ⇒ RR fails for sure
-	FirstRRGeTarget float64 `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
+	Direction       string    `json:"direction"`                    // long | short
+	EntryPrice      float64   `json:"entry_price"`                  // the anchor the scan assumed
+	EntryBasis      string    `json:"entry_basis"`                  // limit_anchor | live_price
+	StopDistancePct float64   `json:"stop_distance_pct"`            // METHODOLOGY stop (stop_plan) distance in % — the same stop the gate verdict is computed at
+	StopPrice       float64   `json:"stop_price"`                   // the methodology stop price — adopt as stop_loss verbatim
+	MinRR           float64   `json:"min_rr"`                       // strategy min_risk_reward_ratio in effect
+	TargetsScanned  int       `json:"targets_scanned"`              // distinct structural levels scanned
+	Targets         []float64 `json:"targets,omitempty"`            // the deduped scanned levels themselves — self-verification (09-19 audit 五-6)
+	BestTarget      float64   `json:"best_target,omitempty"`        // farthest scanned level (max RR)
+	BestRR          float64   `json:"best_rr"`                      // RR upper bound AT THE METHODOLOGY STOP — < min_rr ⇒ RR fails for sure
+	FirstRRGeTarget float64   `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
 	// FirstTargetBeyondStructure: the adopted TP sits beyond EVERY timeframe's
 	// structure_high/low — no historical resistance/support reference exists
 	// there (the prompt requires the model to note the uncertainty).
@@ -350,7 +352,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -441,6 +443,10 @@ type SignalOptions struct {
 	// the netflow ranking) — one input of the long-squeeze mirror condition.
 	// nil = not in the inflow ranking.
 	NetInflowUSDT *float64
+	// SpreadPct: live order-book spread as % of mid (09-19 audit 五-7 — the
+	// spread gate is code-enforced but invisible to the model). 0/unset =
+	// book unavailable.
+	SpreadPct *float64
 	// MaxVendorDivergencePct hard-blocks both directions when the vendor
 	// forming-close vs live ticker diverges beyond this percent
 	// (risk_control.max_vendor_divergence_pct; resolved by
@@ -627,9 +633,12 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		}
 	}
 
-	if opt.QuoteVolume24hUsd > 0 {
-		v := opt.QuoteVolume24hUsd
-		sig.Liquidity = &LiquiditySignal{QuoteVolume24hUsd: &v}
+	if opt.QuoteVolume24hUsd > 0 || opt.SpreadPct != nil {
+		sig.Liquidity = &LiquiditySignal{SpreadPct: opt.SpreadPct}
+		if opt.QuoteVolume24hUsd > 0 {
+			v := opt.QuoteVolume24hUsd
+			sig.Liquidity.QuoteVolume24hUsd = &v
+		}
 	}
 	// Long-squeeze mirror (09-19 audit 七): negative funding + retail net
 	// short + institution inflow — three independent legs, ALL required.
@@ -739,13 +748,25 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		ef := &ExecutionFilter{MicroTF: microTF, MicroTrend: microTrend}
 		ef.LongAllowed = microTrend == "up" || microTrend == "pullback"
 		ef.ShortAllowed = microTrend == "down" || microTrend == "rally"
-		switch {
-		case ef.LongAllowed && !ef.ShortAllowed:
+		// 09-19 audit 六-②: an EMA gap inside 0.25×ATR(micro) is NOISE, not a
+		// trend — WLFI's 0.094% gap on 0.41% ATR flipped the gate every few
+		// bars and licensed counter-consensus shorts. Below the threshold the
+		// micro window is directionless (range semantics: both blocked).
+		tfm := sig.Timeframes[microTF]
+		if tfm != nil && tfm.EMAFast != nil && tfm.EMASlow != nil && tfm.ATRPct > 0 && sig.Price > 0 {
+			gapPct := math.Abs(*tfm.EMAFast-*tfm.EMASlow) / sig.Price * 100
+			if gapPct < 0.25*tfm.ATRPct {
+				ef.LongAllowed, ef.ShortAllowed = false, false
+				ef.MicroTrend = "range"
+				ef.Reason = fmt.Sprintf("EMA gap %.2f%% < 0.25×ATR %.2f%% — micro direction is noise", gapPct, tfm.ATRPct)
+			}
+		}
+		if ef.LongAllowed && !ef.ShortAllowed {
 			ef.Reason = "micro trend aligned for longs only"
-		case ef.ShortAllowed && !ef.LongAllowed:
+		} else if ef.ShortAllowed && !ef.LongAllowed {
 			ef.Reason = "micro trend aligned for shorts only"
-		default:
-			ef.Reason = "micro trend is " + microTrend + " — no directional alignment"
+		} else if ef.Reason == "" {
+			ef.Reason = "micro trend is " + ef.MicroTrend + " — no directional alignment"
 		}
 		sig.ExecutionFilter = ef
 	}
@@ -766,10 +787,14 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		case sig.ExecutionFilter.ShortAllowed && !sig.ExecutionFilter.LongAllowed:
 			execDir = "short"
 		}
+		// Structure direction = the SAME derivation as bias.structure
+		// (directional_score ±20) — the strict 1h&&4h=="up" reading missed
+		// WLFI (score +50 with 4h "rally"): the flag never fired on exactly
+		// the textbook case the system prompt cites.
 		structDir := ""
-		if tfUp {
+		if conflict.DirectionalScore >= 20 {
 			structDir = "long"
-		} else if tfDown {
+		} else if conflict.DirectionalScore <= -20 {
 			structDir = "short"
 		}
 		if execDir != "" && structDir != "" && execDir != structDir {
@@ -1013,7 +1038,10 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	// deduped at the same 0.05% tolerance as the S/R arrays.
 	var levels []float64
 	for name, tf := range sig.Timeframes {
-		if tf == nil || tfDuration(name) < 15*time.Minute {
+		// 15m–4h only: sub-15m is noise (see above), >4h (1d) pivots are a
+		// scale mismatch on an execution-TF trade (WLFI: a 0.90% "resistance"
+		// on a 5.25%-ATR daily bar nearly gated a 15m short).
+		if tf == nil || tfDuration(name) < 15*time.Minute || tfDuration(name) > 4*time.Hour {
 			continue
 		}
 		src := tf.Support
@@ -1135,7 +1163,13 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 				add("MICRO_TREND_NOT_SHORT")
 			}
 		}
-		if opt.LimitEntryEnabled && !g.LimitAllowed && !marketExceptionEvidence(sig) {
+		// 09-19 audit 三 (second round): the LimitEntryEnabled precondition
+		// made this fail-closed rule DEAD on market-default strategies whose
+		// strategy contract still says 默认限价 (WLFI short shipped
+		// allowed=true / failed=[] with every path dead). The anchor is
+		// suppressed by the breathing rule regardless of the mode flag, and
+		// the executor's supply-zone gate rejects those fills too — block it.
+		if !g.LimitAllowed && !marketExceptionEvidence(sig) {
 			add("LIMIT_ANCHOR_SUPPRESSED")
 		}
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
@@ -1159,6 +1193,14 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		// being the worst performer (ZEC: 7 trades, 29%, −1.61U).
 		if opt.TraderHistory != nil && opt.TraderHistory.ClosedTrades >= 5 && opt.TraderHistory.WinRatePct < 35 {
 			add("POOR_HISTORY")
+		}
+		// 09-19 audit 六-③: opening AGAINST a ≥50 directional consensus is the
+		// counter-trend slice of the loss ledger — zero-cost, score-based.
+		if sig.SignalConflict != nil {
+			sc := sig.SignalConflict.DirectionalScore
+			if (isLong && sc <= -50) || (!isLong && sc >= 50) {
+				add(fmt.Sprintf("CONSENSUS_OPPOSED_%d", sc))
+			}
 		}
 		if opt.MaxVendorDivergencePct > 0 {
 			// Same convention as funding_rollover: field absent = UNKNOWN =
@@ -1185,14 +1227,23 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 // rule-mandated pick (nearest qualifying level); best_rr is the definitive
 // upper bound used to declare the RR gate structurally failed.
 func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
-	var targets []float64
-	for _, tf := range tfs {
-		if tf == nil {
+	// scanRR needs the TF NAME for the 15m–4h window filter — rebuild pairs.
+	type tfLevels struct {
+		name string
+		tf   *TFSignal
+	}
+	var pairs []tfLevels
+	for name, tf := range tfs {
+		if tf == nil || tfDuration(name) < 15*time.Minute || tfDuration(name) > 4*time.Hour {
 			continue
 		}
-		src := tf.Resistance
+		pairs = append(pairs, tfLevels{name, tf})
+	}
+	var targets []float64
+	for _, p := range pairs {
+		src := p.tf.Resistance
 		if !isLong {
-			src = tf.Support
+			src = p.tf.Support
 		}
 		for _, l := range src {
 			if l <= 0 {
@@ -1236,6 +1287,7 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		StopPrice:       stopPrice,
 		MinRR:           round2(minRR),
 		TargetsScanned:  len(uniq),
+		Targets:         uniq,
 	}
 	// Global structure extremes across all timeframes — a TP beyond them has
 	// no historical reference (09-19 audit 六: TP 1648.08 vs structure_high 1588).

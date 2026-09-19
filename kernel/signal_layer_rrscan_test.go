@@ -36,9 +36,11 @@ func TestScanRRSagaMaxStructuralRR(t *testing.T) {
 	}
 	// entry = the shown limit anchor; floor = SLMinATRMult 1.5 × ATR(1h) 4.593 ≈ 6.89
 	scan := scanRR(0.020501, "limit_anchor", 6.89, 0.020501*(1-6.89/100), tfs, true, 1.5)
-	// 0.02139 appears twice across blocks; the 0.05%-tolerance dedup collapses them.
-	if scan.TargetsScanned != 4 {
-		t.Errorf("targets_scanned = %d, want 4 (dedup of the duplicated 0.02139)", scan.TargetsScanned)
+	// 0.02139 appears twice across blocks; the 0.05%-tolerance dedup collapses
+	// them. The 5m block's targets are EXCLUDED by the 15m-4h scan window
+	// (09-19 audit 五-5): 15m(2) + 1h(1) = 3.
+	if scan.TargetsScanned != 3 {
+		t.Errorf("targets_scanned = %d, want 3 (dedup + 5m excluded)", scan.TargetsScanned)
 	}
 	if scan.BestTarget != 0.02139 {
 		t.Errorf("best_target = %.6f, want 0.02139", scan.BestTarget)

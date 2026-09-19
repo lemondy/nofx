@@ -664,3 +664,31 @@ func binanceQuantSnapshot(symbol string) (*QuantData, error) {
 	quantMu.Unlock()
 	return data, nil
 }
+
+// binanceOrderBookSpreadPct measures the live order-book spread as a percent
+// of mid ((ask0 − bid0) / mid × 100, depth 5). 0 on any failure — the gate
+// itself is trader-side and fails open; the snapshot value is evidence.
+func binanceOrderBookSpreadPct(symbol string) float64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var book struct {
+		Bids [][2]string `json:"bids"`
+		Asks [][2]string `json:"asks"`
+	}
+	if err := binanceGet(ctx, "/fapi/v1/depth?symbol="+symbol+"&limit=5", &book); err != nil {
+		return 0
+	}
+	if len(book.Bids) == 0 || len(book.Asks) == 0 {
+		return 0
+	}
+	bid, err1 := strconv.ParseFloat(book.Bids[0][0], 64)
+	ask, err2 := strconv.ParseFloat(book.Asks[0][0], 64)
+	if err1 != nil || err2 != nil || bid <= 0 || ask < bid {
+		return 0
+	}
+	mid := (ask + bid) / 2
+	if mid <= 0 {
+		return 0
+	}
+	return (ask - bid) / mid * 100
+}

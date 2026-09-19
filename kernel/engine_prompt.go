@@ -177,18 +177,17 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// price levels are illustrative round numbers, internally consistent.
 	exRiskUSD := accountEquity * riskPctDefault / 100
 	exNotional := exRiskUSD / 0.03 // 3% stop distance in the example
-	exEntry := 65000.0
-	exStop := exEntry * 0.97
-	exTP := exEntry * 1.048 // 4.8% reward vs 3% risk = RR 1.6 ≥ min
-	if riskControl.LimitEntryEnabled {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long_limit\", \"price\": %.0f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 85, \"blocking_factors\": []},\n",
-			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exStop, exTP, exRiskUSD))
-	} else {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 85, \"blocking_factors\": []},\n",
-			riskControl.BTCETHMaxLeverage, exNotional, exStop, exTP, exRiskUSD))
-	}
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"no_trade_reason\": [\"挂单锚点被抑制\", \"15m 微趋势未转\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
-	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"hold\", \"management_quality\": 78, \"management_flags\": [\"TREND_INTACT\"]}\n")
+	// SHORT-limit geometry (the audit 四 case): SL ABOVE entry (+3%),
+	// TP BELOW entry (−4.8%, RR 1.6), risk_usd = notional × stop%;
+	// wait/hold rows carry every required field (wait: entry_quality +
+	// blocking_factors + next_trigger; hold: no_trade_reason).
+	exEntry := 150.0
+	exSL := exEntry * 1.03  // 154.50 — above entry for a short
+	exTP := exEntry * 0.952 // 142.80 — below entry for a short
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"open_short_limit\", \"price\": %.2f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 85, \"blocking_factors\": []},\n",
+		exEntry, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP, exRiskUSD))
+	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"entry_quality\": 55, \"blocking_factors\": [\"ANCHOR_SUPPRESSED\", \"TIMING_GATE\"], \"no_trade_reason\": [\"挂单锚点被抑制\", \"15m 微趋势未转\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
+	sb.WriteString("  {\"symbol\": \"ARUSDT\", \"action\": \"hold\", \"no_trade_reason\": [\"浮亏未达提前平仓条件\", \"15m 结构未破\"], \"management_quality\": 62, \"management_flags\": [\"STRUCTURE_WEAKENING\"]}\n")
 	sb.WriteString("]\n```\n")
 	sb.WriteString("</decision>\n\n")
 	sb.WriteString("## Field Description\n\n")
@@ -218,7 +217,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("  - 程序自动机制仍在: 1R 减仓 50%+保本、1.5R 跟踪止损、25% 全平、回撤保护——这些动作是**补充**,不是替代\n")
 	sb.WriteString("- `wait_bias`: wait 决策的方向语义,枚举 \"long\"/\"short\"/留空——见上三类分类;它承载方向判断,directional_score 是它的证据,no_trade_reason 不承载方向判断\n")
 	sb.WriteString("- **`management_quality` + `management_flags`(IN_POSITION hold 必填,数据集字段)**: management_quality 是你对\"继续持有\"这个判断的诚实自评 0-100(90+: 趋势完好+结构无损+浮盈保护已到位;70-89: 持有理由成立但需盯一个风险;50-69: 边缘,理由在弱化;<50: 该考虑离场——此时应输出 close/partial 而不是低分 hold)。management_flags 固定枚举(逐字): BREAKEVEN_WARRANTED|PARTIAL_WARRANTED|TRAIL_SUFFICIENT|TREND_INTACT|STRUCTURE_WEAKENING|CHOP_RISK|VOL_SPIKE|EVENT_RISK。**若你认为该保本/该部分止盈,正确动作是输出 adjust_stop_loss / partial_close_*,而不是 hold+flag**——hold+flag 的语义是\"我判断了,但程序阶梯/时机还没到,暂不动作\"\n")
-	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK|VENDOR_DIVERGENCE|POOR_HISTORY。其中 `LOSS_STREAK_BAN` **只允许用于快照 JSON 里有 `loss_streak` 字段的币**——那是程序按成交记录算出的连亏禁开期;快照没有该字段 = 程序判定未熔断,给这样的币标 LOSS_STREAK_BAN 属于标签造假(09-15 审计:模型曾给刚连胜两笔的币标此标签 17 次)。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。**`confidence` 与 `entry_quality` 是同一口径:填同一个数**(confidence 是执行端闸门字段,entry_quality 是数据集字段——不要给它们不同的值,也不要花预算分别计算)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
+	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK|VENDOR_DIVERGENCE|POOR_HISTORY|CONSENSUS_OPPOSED。其中 `LOSS_STREAK_BAN` **只允许用于快照 JSON 里有 `loss_streak` 字段的币**——那是程序按成交记录算出的连亏禁开期;快照没有该字段 = 程序判定未熔断,给这样的币标 LOSS_STREAK_BAN 属于标签造假(09-15 审计:模型曾给刚连胜两笔的币标此标签 17 次)。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。**`confidence` 与 `entry_quality` 是同一口径:填同一个数**(confidence 是执行端闸门字段,entry_quality 是数据集字段——不要给它们不同的值,也不要花预算分别计算)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
 	sb.WriteString("- **`next_trigger` 对方向性 wait(WATCH_*/READY_*)必填**: 一句话写「触发事件 + RECHECK_ALL_HARD_GATES」——触发事件只是重评条件,事件发生后一切硬门(止损结构/RR≥min/时点/锚点呼吸/min_size/数据质量)必须重新全过,绝不是开仓许可;禁止只写「等15m转down」这类单事件表述(转down≠可开仓)。**时间语义纪律**: 决策在下一周期快照自动重评,禁止输出任何以天/周为尺度的搁置结论(「下周重评」等均为错误措辞)\n")
 
 	sb.WriteString("- **STRICT JSON**: Output raw JSON only — no placeholders (`?`, `？`, `N/A`, `—`) or trailing commas for unknown values. If a value is unknown, use `0` or omit the field entirely\n")
@@ -277,7 +276,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString("- 入场时点(程序强制): 最细子小时周期(15m/30m)趋势必须与方向一致——做多需 up/pullback,做空需 down/rally(下跌趋势中的反弹=空头入场窗);range 无动能,顺势入场同样会被拦截\n")
 		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
-		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE 任一项时不存在任何例外\n")
+		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门(程序强制): K线数据源与实时行情偏差超过 %.1f%% 时,该币两个方向的开仓都被拦(VENDOR_DIVERGENCE)——entry/SL/TP 全部按实时价定价,数据源偏差过大使整套设置失真(09-18 MYXUSDT −2.57%% 教训);阈值可在策略页配置\n", v))
 		}
@@ -341,6 +340,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if noOpen := e.config.RiskControl.StockWeekendNoOpen; noOpen == nil || *noOpen {
 			params.WriteString("- 股票类代币周末禁开新仓(程序强制): DELL/SKHY 等 bstock 标的周末(美东周六/周日)波动率与胜率都低——候选里出现股票类代币时,本周末只允许 hold/close,不输出任何 open_*\n")
 		}
+		params.WriteString("- 共识反向门(程序强制): directional_score 绝对值 ≥ 50 时,禁止开与其符号相反方向的仓(CONSENSUS_OPPOSED_±score)——逆着 ≥50 的方向共识做单是 30 天亏损账本里逆势单的那部分;score 是多空证据的程序计分,不是你的自由判断\n")
 		params.WriteString("- 差历史硬门(程序强制): 某币近 5 笔以上平仓胜率 < 35% 时,其快照 trader_history 会带着这份记录,开仓被 POOR_HISTORY 拦截——「连亏的币把机会让给趋势健康的标的」不再是文字建议;快照无 trader_history 字段 = 该币无本地历史,不受此门约束\n")
 		if e.config.RiskControl.LossStreakBanEnabled {
 			maxLosses := e.config.RiskControl.LossStreakMaxLosses
@@ -437,13 +437,22 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 
 		// Stats window label: the numbers below only cover trades closed within
 		// the window (config stats_window_days); 0 = full history.
+		statsWindowDays := 0
+		if ctx.TradingStats != nil {
+			statsWindowDays = ctx.TradingStats.WindowDays
+		}
 		windowLabel := "全部历史"
 		if ctx.TradingStats.WindowDays > 0 {
 			windowLabel = fmt.Sprintf("近%d天", ctx.TradingStats.WindowDays)
 		}
 
 		if lang == LangChinese {
-			sb.WriteString("## 历史交易统计(近30天滚动窗口;账户行 PnL 为自启动以来累计,两者口径不同)\n")
+			if statsWindowDays > 0 {
+				sb.WriteString(fmt.Sprintf("## 历史交易统计(滚动窗口;账户行 PnL 为自启动以来累计,两者口径不同;本表只统计 %s 之后平仓的交易)\n",
+					time.Now().UTC().AddDate(0, 0, -statsWindowDays).Format("2006-01-02")))
+			} else {
+				sb.WriteString("## 历史交易统计(全部历史;账户行 PnL 为自启动以来累计,两者口径不同)\n")
+			}
 			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
 				windowLabel,
 				ctx.TradingStats.TotalTrades,
@@ -1257,6 +1266,10 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		}
 	}
 	opt.QuoteVolume24hUsd = binanceQuoteVolume24h(data.Symbol)
+	if sp := binanceOrderBookSpreadPct(data.Symbol); sp > 0 {
+		v := sp
+		opt.SpreadPct = &v
+	}
 	// Institution futures net inflow for this symbol (1h ranking) — feeds
 	// the long-squeeze mirror condition (09-19 audit 七).
 	if ctx != nil && ctx.NetFlowRankingData != nil {
@@ -1519,7 +1532,7 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 const signalBlockLegend = `Naming: each timeframe block reports ITS BAR GRANULARITY only. trend_window_return_pct = change over return_window_hours (window ≠ bar length). price_change_60m_live_pct / price_change_24h_live_pct = LIVE price vs 60m/24h ago. prev_hour_close_change_pct = last FULLY CLOSED hour, close-to-close. Do not mix them. All fields you need are in this JSON — read it carefully.
 Naming addendum: macd_hist = MACD LINE (EMA12−EMA26) ÷ price ×100 — NOT the signal histogram; macd_trend = line slope vs previous bar.
 Derived fields (program-computed, use directly — do not re-derive): role_tfs(execution/trend/regime 时间框架分工) | execution_filter(微趋势对齐预判: long_allowed/short_allowed, 开启入场时点闸门时为硬规则) | hard_entry_gate(程序对每方向开仓硬门的最终判定: allowed/entry_price/limit_allowed/stop_floor_pct/rr_scan/failed 阻断码列表——open_* 只允许输出在 allowed=true 的方向;wait/hold 的客观理由直接引用 failed,不要再自行组装三道门) | rr_scan(程序已遍历全部时间块的全部 S/R 结构位: best_rr=按方法论止损 stop_plan(最近对侧结构位+方向性缓冲)算出的 RR 上限,usable=false ⇒ 该方向 RR 门结构性不可能通过——结论措辞用 MAX_STRUCTURAL_RR=best_rr,而不是"最近阻力位 RR 不足";first_rr_ge_target=规则要求的最近达标结构位,开仓时 take_profit 直接采用它;stop_price(=stop_plan_price)就是方法论止损价,开仓 stop_loss 逐字采用它——RR 门按它计算,采用这对组合即保证真实 RR≥min_rr,见"止损(程序预计算)") | bias(方向判读的三个来源 scanner/structure/execution——"scanner=short" 只表示扫描器快照姿态偏空,不等于市场空头证据强,三者可以相反且都合法) | funding_rollover(程序按结算历史计算的"费率刚从高位回落": detected 是做空条件②的唯一可验证依据,字段缺失=历史拉取失败=UNKNOWN 按不满足处理) | limit_buy_price/limit_sell_price(0=锚点被程序抑制,该方向禁止挂单开仓,与 entry_rule_triggered 无关;注意: 这只是限价路径被禁≠该方向整体禁止——方向可开性只看 hard_entry_gate.allowed) | bb_ride/short_ride(15m 上轨/下轨骑行市价证据, 程序预算: 量能暴增+连续≥3 根同向收盘贴带; 分别对应市价例外二(多)/例外三(空)) | breakout.status(below|approach|broken_unconfirmed|confirmed|fake_break|retest_hold|extended, 相对1h结构位的突破判定,含量能/OI确认;extended=早已越过且未回踩) | directional_score(-100..+100 净方向共识,已剔除range噪音) | signal_conflict.types(SCANNER_VS_STRUCTURE|TIMEFRAME_SPLIT|SCANNER_VS_SCANNER|EXECUTION_VS_STRUCTURE — 两个扫描器对同一币给出相反方向,或 15m 微观窗口只放行与 1h+4h 结构相反的方向(ZEC 09-18: +100 看多共识下只许做空),必须先表态信哪个) | data_quality.sufficient(false=历史长度不足以支撑EMA50/MACD类长窗指标) | funding_rate(原始费率小数,不是百分比:0.0001 = 0.01% 每结算期,勿再×100或当百分比读) | funding_annualized_pct(费率年化百分比,已按 funding_settle_hours 实测结算间隔年化,拥挤度判断直接用它) | no_trade_reason(hold/wait必填)
-trend 字段是 EMA 斜率口径(ema_fast vs ema_slow + 价格相对 fast),trend_window_return_pct 是窗口端点收益——两者可以合法地方向相反(震荡反弹的下行趋势等),不是需要「解决」的矛盾。结构位与现价的相对位置(全部按 LIVE 价预计算,勿自行重算): support/resistance 数组已按现价过滤,空数组 [] 是明确证据——resistance:[] = 现价上方窗口内已无任何摆动高点(正在创新高,上方无结构参考),support:[] 同理镜像;structure_high_dist_pct / structure_low_dist_pct = (结构位−现价)/现价×100,与 support_dist_pct 同符号约定——structure_high_dist_pct 为负 = 现价已越过该周期结构高点(高TF结构位滞后于现价,严禁把它当"上方阻力"用,此时上方结构参考失效,做空止损口径需明确标注这一点);data_freshness.vendor_vs_live_divergence_pct = K线数据源与实时行情的偏差,绝对值超阈值时 hard_entry_gate 直接给两方向加 VENDOR_DIVERGENCE 阻断码(entry/SL/TP 全部按实时价定价,数据源偏差过大=整套设置失真)。
+trend 字段是 EMA 斜率口径(ema_fast vs ema_slow + 价格相对 fast),trend_window_return_pct 是窗口端点收益——两者可以合法地方向相反(震荡反弹的下行趋势等),不是需要「解决」的矛盾。结构位与现价的相对位置(全部按 LIVE 价预计算,勿自行重算): support/resistance 数组已按现价过滤,空数组 [] 是明确证据——resistance:[] = 现价上方窗口内已无任何摆动高点(正在创新高,上方无结构参考),support:[] 同理镜像;structure_high_dist_pct / structure_low_dist_pct = (结构位−现价)/现价×100,与 support_dist_pct 同符号约定——structure_high_dist_pct 为负 = 现价已越过该周期结构高点(高TF结构位滞后于现价,严禁把它当"上方阻力"用,此时上方结构参考失效,做空止损口径需明确标注这一点);data_freshness.vendor_vs_live_divergence_pct = K线数据源与实时行情的偏差,绝对值超阈值时 hard_entry_gate 直接给两方向加 VENDOR_DIVERGENCE 阻断码(entry/SL/TP 全部按实时价定价,数据源偏差过大=整套设置失真);liquidity.spread_pct = 程序实测盘口点差(占中间价),超阈值的币点差门会拦开仓
 数据新鲜度优先级: 同一字段冲突时取时间戳更新者——Structured Signal timestamp > 实时 derivatives/liquidity > scanner/rankings 快照。榜单与 hint 里的价格/费率是旧快照,严禁参与 entry/SL/TP/RR 精确计算(它们与结构化现价可差 1% 以上),只用于市场情绪/资金轮动语境。
 
 If signal_conflict.directional_conflict is true, you MUST resolve the conflict explicitly with your own evidence in the reasoning before any trade decision.
