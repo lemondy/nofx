@@ -179,6 +179,11 @@ type RRCeiling struct {
 type GateState struct {
 	LongAllowed  bool
 	ShortAllowed bool
+	// HardBlocked: BOTH directions carry a no-exception blocker — the coin
+	// can only ever produce a mechanical wait this cycle. Drives the
+	// regime-level skip (09-19 audit: all-candidates-blocked + no positions
+	// ⇒ the LLM call can only return a hold; synthesize it for free).
+	HardBlocked bool
 }
 
 // DeriveWaitStateFromGate resolves the wait_state enum mechanically from the

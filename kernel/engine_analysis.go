@@ -126,6 +126,40 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	// 3. Build User Prompt using strategy engine
 	userPrompt := engine.BuildUserPrompt(ctx)
 
+	// 3.5 Regime-level skip (09-19 audit): when EVERY candidate is
+	// double-blocked by the hard gate (no allowed direction, no
+	// exception-eligible path) AND there are no positions to manage, the
+	// LLM call can only ever return a hold — spending the tokens and the
+	// minutes to hear it is pure waste (the audited cycle: 80k chars for
+	// one hold, with ZEC the single variable). Synthesize the wait
+	// programmatically; the decision record still lands with full prompts.
+	// Anything alive — one allowed direction, one exception-eligible coin,
+	// one open position — makes the call as usual.
+	if len(ctx.Positions) == 0 && len(ctx.CandidateCoins) > 0 {
+		allBlocked := true
+		for _, coin := range ctx.CandidateCoins {
+			if gs, ok := ctx.GateStates[market.Normalize(coin.Symbol)]; ok && gs != nil && !gs.HardBlocked {
+				allBlocked = false
+				break
+			}
+		}
+		if allBlocked {
+			logger.Infof("⏭️  [Regime Skip] 全部 %d 个候选双向硬门拦截且无持仓 — 跳过本次 LLM 调用,程序合成 wait(下一周期快照自动重评)", len(ctx.CandidateCoins))
+			fd := &FullDecision{
+				Decisions: []Decision{{
+					Symbol:    "ALL",
+					Action:    "wait",
+					Reasoning: fmt.Sprintf("Regime skip: 全部 %d 个候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),且当前无持仓需要管理 — 程序直接合成 wait,本轮未调用 LLM;候选结构变化后下一周期快照自动重评", len(ctx.CandidateCoins)),
+				}},
+				SystemPrompt: systemPrompt,
+				UserPrompt:   userPrompt,
+				RawResponse:  "program-synthesized wait (regime skip)",
+				Timestamp:    time.Now(),
+			}
+			return fd, nil
+		}
+	}
+
 	// 4. Call AI API
 	aiCallStart := time.Now()
 	aiResponse, err := mcpClient.CallWithMessages(systemPrompt, userPrompt)

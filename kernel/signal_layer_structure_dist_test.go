@@ -126,7 +126,7 @@ func TestEffectiveMaxVendorDivergencePct(t *testing.T) {
 	cases := []struct {
 		in, want float64
 	}{
-		{0, 2},   // unset → default 2
+		{0, 1},   // unset → default 1 (user directive 09-19)
 		{-1, -1}, // negative → disabled
 		{3.5, 3.5},
 	}
@@ -136,8 +136,8 @@ func TestEffectiveMaxVendorDivergencePct(t *testing.T) {
 			t.Errorf("EffectiveMaxVendorDivergencePct(%v) = %v, want %v", c.in, got, c.want)
 		}
 	}
-	if got := EffectiveMaxVendorDivergencePct(nil); got != 2 {
-		t.Errorf("nil config = %v, want default 2", got)
+	if got := EffectiveMaxVendorDivergencePct(nil); got != 1 {
+		t.Errorf("nil config = %v, want default 1", got)
 	}
 }
 

@@ -706,6 +706,36 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		sig.ExecutionFilter = ef
 	}
 
+	// 09-19 audit: execution↔structure opposition. ZEC 09-18 read
+	// directional_score +100 (4 bull / 0 bear) while the execution filter
+	// permitted shorts only — the model was told to short a +100 consensus
+	// and the conflict machinery stayed silent. When the ONLY direction the
+	// micro window permits OPPOSES the 1h+4h structure read, flag it: the
+	// model must resolve the contradiction with evidence, and the
+	// market-order exceptions (which require directional_conflict=false)
+	// stay closed.
+	if sig.ExecutionFilter != nil {
+		execDir := ""
+		switch {
+		case sig.ExecutionFilter.LongAllowed && !sig.ExecutionFilter.ShortAllowed:
+			execDir = "long"
+		case sig.ExecutionFilter.ShortAllowed && !sig.ExecutionFilter.LongAllowed:
+			execDir = "short"
+		}
+		structDir := ""
+		if tfUp {
+			structDir = "long"
+		} else if tfDown {
+			structDir = "short"
+		}
+		if execDir != "" && structDir != "" && execDir != structDir {
+			conflict.DirectionalConflict = true
+			conflict.Types = append(conflict.Types, "EXECUTION_VS_STRUCTURE")
+			conflict.Note = fmt.Sprintf("execution filter (%s %s) allows only %s while 1h+4h structure reads %s — resolve the contradiction with evidence before trading",
+				sig.ExecutionFilter.MicroTF, sig.ExecutionFilter.MicroTrend, execDir, structDir)
+		}
+	}
+
 	// ⑨ Role timeframes.
 	sig.RoleTFs = RoleTimeframes{ExecutionTF: opt.PrimaryTF, TrendTF: "1h", RegimeTF: "4h"}
 
