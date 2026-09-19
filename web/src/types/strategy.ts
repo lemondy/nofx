@@ -111,6 +111,10 @@ export interface CoinSourceConfig {
   short_scan_limit?: number;
   // 做空扫描资金费率拥挤阈值（%，8h 费率）；0/缺省 = 默认 0.03
   short_scan_funding_rate_pct?: number;
+  // 历史涨幅池窗口（天）：近 N 天每日涨幅 Top20 合并进做空扫描宇宙；0/缺省 = 默认 7，负数 = 关闭
+  short_scan_history_days?: number;
+  // 历史涨幅池每轮额外分析上限（个）；0/缺省 = 默认 30
+  short_scan_history_max?: number;
   // 候选币最低 OI 持仓价值（百万 USD），低于则跳过；0/缺省 = 默认 15M
   min_oi_value_millions?: number;
   // Note: API URLs are now built automatically using nofxos_api_key from IndicatorConfig

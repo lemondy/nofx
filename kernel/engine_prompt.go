@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"nofx/market"
+	"nofx/market/breakout"
 	"nofx/store"
 	"strconv"
 	"strings"
@@ -271,6 +272,12 @@ func (e *StrategyEngine) strategyParamsText() string {
 			// already carries the properly annualized figure).
 			annPct := frPct * 1095
 			params.WriteString(fmt.Sprintf("- 做空资金费率拥挤(二选一,均为支撑证据而非必要条件): ① 费率年化 > %.1f%%(8h 结算口径即每期费率 > %.4f%%;非 8h 结算的币按真实结算间隔换算)——多头拥挤进行时,以各币 derivatives.funding_annualized_pct 实时值判断; 或 ② funding_rollover 费率刚从高位回落,以各币 derivatives.funding_rollover.detected=true 为唯一依据(程序按结算历史计算: 前 3 个结算期费率高于该阈值、当前前瞻费率已回落;from_annualized_pct 为回落前高点年化)——**禁止从 scanner patterns 里的\"资金费率回落\"字样认定条件②**,hint 是扫描时刻快照,且策略规定 hint 仅作辅助证据;快照没有 funding_rollover 字段 = 历史拉取失败 = 条件② UNKNOWN,按不满足处理(两者都不满足时不要仅因费率理由做空)。磨顶宇宙(universe=\"near_high\")的候选豁免此条件——缓慢磨顶的币费率通常已正常化,其确认信号是 4h 顶背离\n", annPct, frPct))
+			// Universe legend, generated through the same resolution the
+			// scanner uses (ResolveShortScanHistoryDays) — never a
+			// handwritten default.
+			if histDays := breakout.ResolveShortScanHistoryDays(cs.ShortScanHistoryDays); histDays > 0 {
+				params.WriteString(fmt.Sprintf("- 做空候选宇宙(universe)图例: gainer=24h涨幅榜;hist_gainer=历史涨幅池(近 %d 天每日涨幅 Top20 快照合并去重,币种可能已从当日 24h 榜淡出、处于冲高回落期——回落是进入扫描视野的原因,是否可做空仍看各维度确认信号);near_high=磨顶池(距90日高点<5%%,费率豁免见上条)。universe 仅标注候选来源,不改变打分规则\n", histDays))
+			}
 		}
 		if e.config.RiskControl.EntryTimingGate {
 			params.WriteString("- 入场时点(程序强制): 最细子小时周期(15m/30m)趋势必须与方向一致——做多需 up/pullback,做空需 down/rally(下跌趋势中的反弹=空头入场窗);range 无动能,顺势入场同样会被拦截\n")

@@ -63,7 +63,7 @@ type CandidateCoin struct {
 	ShortReasons    []string `json:"short_reasons,omitempty"`     // topping confirmations printed
 	ShortFundingAnn float64  `json:"short_funding_ann,omitempty"` // funding annualized % AT SCAN TIME
 	ShortScanAtMs   int64    `json:"short_scan_at_ms,omitempty"`  // when the scanner snapshot was taken
-	ShortUniverse   string   `json:"short_universe,omitempty"`    // "gainer" | "near_high" (磨顶池)
+	ShortUniverse   string   `json:"short_universe,omitempty"`    // "gainer" | "hist_gainer" (历史涨幅池) | "near_high" (磨顶池)
 	// ScannerDirection is the direction the scanning engine concluded for
 	// this symbol: short_scan ⇒ "short"; piggy_dash ⇒ "up"/"down".
 	ScannerDirection string `json:"scanner_direction,omitempty"`
@@ -631,7 +631,8 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	case "short_scan":
 		// 做空扫描: top 24h gainers ranked by short-suitability score.
 		// Like piggy_dash, selecting this source type IS the switch.
-		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions())
+		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+			coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 		if err != nil {
 			return nil, err
 		}
@@ -714,7 +715,8 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// type uses. Without this the mixed pool is long-only (AI500/OI-top/
 		// piggy-dash are all up-side selectors) and the model drifts long.
 		if coinSource.UseShortScan {
-			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions())
+			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 			if err != nil {
 				logger.Infof("⚠️  Failed to get short-scan coins: %v", err)
 			} else {
@@ -758,7 +760,8 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		}
 
 		if coinSource.UseShortScan {
-			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions())
+			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 			if err != nil {
 				logger.Infof("⚠️  Failed to get Short Scan coins: %v", err)
 			} else {
@@ -786,7 +789,8 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// symbolSources collapse — it labels the direction hints in the prompt.
 		shortMeta := make(map[string]CandidateCoin)
 		if coinSource.UseShortScan {
-			if shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions()); err == nil {
+			if shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax); err == nil {
 				for _, c := range shortCoins {
 					shortMeta[c.Symbol] = c
 				}
@@ -920,11 +924,17 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 // (做空扫描). Data is 100% Binance-derived: the 24h gainer list comes from
 // fapi ticker and each candidate is scored on RSI exhaustion, EMA extension,
 // upper-wick rejection, volume fade, funding crowding and OI build-up by
-// breakout.AnalyzeShort.
+// breakout.AnalyzeShort. The gainer history pool (历史涨幅池) merges the
+// past N days' recorded top-gainer snapshots back into the universe, so
+// coins that pumped days ago and have since rolled over — already off
+// today's board — still get scored.
 // The strategy's min OI value threshold is applied BEFORE taking the top-N:
 // the full ranked list is fetched, low-OI symbols are dropped, then the
 // strongest remaining short setups fill the candidate slots.
-func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64) ([]CandidateCoin, error) {
+// histDays/histMax are the RAW strategy config values; they sync into the
+// scanner here every cycle (UI saves take effect next cycle), because the
+// scheduler shares one scan cache and must resolve the same universe.
+func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, histDays, histMax int) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -933,6 +943,7 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64) ([]
 		// this keeps the built-in floor for any direct call.
 		minOIMillions = store.DefaultMinOIValueMillions
 	}
+	breakout.SetShortScanHistoryConfig(histDays, histMax)
 	// Full ranked universe (cached), so the OI filter happens before the
 	// top-N cut instead of wasting slots on coins that would be skipped later.
 	signals, scanAt, err := breakout.ScanShorts(breakout.ShortScanUniverse)
@@ -1013,8 +1024,8 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64) ([]
 	}
 	var syms []string
 	for _, c := range candidates {
-		if c.ShortUniverse == "near_high" {
-			syms = append(syms, c.Symbol+"(near_high)")
+		if c.ShortUniverse != "" && c.ShortUniverse != "gainer" {
+			syms = append(syms, c.Symbol+"("+c.ShortUniverse+")")
 		} else {
 			syms = append(syms, c.Symbol)
 		}
@@ -1037,6 +1048,12 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 	}
 	if sig.Universe == "near_high" {
 		c.ShortReasons = append(c.ShortReasons, "磨顶:距90日高点<5%")
+	}
+	if sig.Universe == "hist_gainer" {
+		// Provenance, true by construction: the coin is in this universe
+		// because it recorded a top gainer day within the window and has
+		// since left the live 24h board — neutral evidence, not a verdict.
+		c.ShortReasons = append(c.ShortReasons, "历史涨幅池:近几日曾大涨,已淡出24h涨幅榜")
 	}
 	// Keep the topping confirmations compact: the reasons list can be long.
 	if sig.BearishDiv4h {

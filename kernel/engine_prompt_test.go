@@ -513,3 +513,29 @@ func TestRiskBudgetSingleSource(t *testing.T) {
 		t.Error("default 1.5% must render consistently in prose and examples")
 	}
 }
+
+// The universe legend must render the gainer history pool window through the
+// SAME resolution the scanner uses — a handwritten "7" here would drift from
+// the config exactly like the prompt-example incidents (nofx-prompt-examples).
+func TestBuildSystemPromptRendersUniverseLegend(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.CoinSource.SourceType = "short_scan"
+
+	engine := NewStrategyEngine(cfg)
+	if !strings.Contains(engine.BuildSystemPrompt(100, ""), "近 7 天每日涨幅 Top20") {
+		t.Fatal("default window (7d) legend missing from system prompt")
+	}
+
+	cfg.CoinSource.ShortScanHistoryDays = 14
+	engine = NewStrategyEngine(cfg)
+	if !strings.Contains(engine.BuildSystemPrompt(100, ""), "近 14 天每日涨幅 Top20") {
+		t.Fatal("configured window (14d) legend missing from system prompt")
+	}
+
+	// Pool disabled → no hist_gainer legend at all.
+	cfg.CoinSource.ShortScanHistoryDays = -1
+	engine = NewStrategyEngine(cfg)
+	if strings.Contains(engine.BuildSystemPrompt(100, ""), "hist_gainer") {
+		t.Fatal("disabled pool must not render the universe legend")
+	}
+}

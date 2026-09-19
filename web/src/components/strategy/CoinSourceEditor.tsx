@@ -699,6 +699,78 @@ export function CoinSourceEditor({
  </p>
  </div>
 
+ <div>
+ <label className="block text-sm text-nofx-text mb-2">
+ {ts(coinSource.shortScanHistoryDays, language)}
+ </label>
+ <div className="flex items-center gap-2">
+ <input
+ type="number"
+ min={-1}
+ max={30}
+ value={config.short_scan_history_days ?? 0}
+ onChange={(e) =>
+ onChange({
+ ...config,
+ short_scan_history_days: Math.max(
+ -1,
+ Math.min(30, Number(e.target.value) || 0)
+ ),
+ })
+ }
+ disabled={disabled}
+ className="w-24 px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+ />
+ <span className="text-xs text-nofx-text-muted">
+ {ts(coinSource.shortScanHistoryDaysUnit, language)}
+ </span>
+ {(config.short_scan_history_days ?? 0) === 0 && (
+ <span className="text-xs text-nofx-text-muted">
+ ({ts(coinSource.shortScanHistoryDaysDefault, language)})
+ </span>
+ )}
+ </div>
+ <p className="text-xs pl-2 mt-1 text-nofx-text-muted">
+ {ts(coinSource.shortScanHistoryDaysDesc, language)}
+ </p>
+ </div>
+
+ <div>
+ <label className="block text-sm text-nofx-text mb-2">
+ {ts(coinSource.shortScanHistoryMax, language)}
+ </label>
+ <div className="flex items-center gap-2">
+ <input
+ type="number"
+ min={1}
+ max={100}
+ value={config.short_scan_history_max ?? 0}
+ onChange={(e) =>
+ onChange({
+ ...config,
+ short_scan_history_max: Math.max(
+ 1,
+ Math.min(100, Number(e.target.value) || 0)
+ ),
+ })
+ }
+ disabled={disabled}
+ className="w-24 px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+ />
+ <span className="text-xs text-nofx-text-muted">
+ {ts(coinSource.shortScanHistoryMaxUnit, language)}
+ </span>
+ {(config.short_scan_history_max ?? 0) === 0 && (
+ <span className="text-xs text-nofx-text-muted">
+ ({ts(coinSource.shortScanHistoryMaxDefault, language)})
+ </span>
+ )}
+ </div>
+ <p className="text-xs pl-2 mt-1 text-nofx-text-muted">
+ {ts(coinSource.shortScanHistoryMaxDesc, language)}
+ </p>
+ </div>
+
  <p className="text-xs pl-2 text-nofx-text-muted">
  {ts(coinSource.shortScanNote, language)}
  </p>

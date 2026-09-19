@@ -85,13 +85,11 @@ var (
 	shortScanInflight = false
 )
 
-// TopGainerSymbols returns up to limit USDT-M perps with the highest 24h
-// price-change percent (liquidity-filtered the same way as TopVolumeSymbols).
-func TopGainerSymbols(limit int) ([]struct {
-	Symbol string
-	ChgPct float64
-	Price  float64
-}, error) {
+// gainerTickerSnapshot fetches the 24h ticker once and returns the gainer
+// board (top `limit`, chg-desc) PLUS a live-quote index over every filtered
+// symbol — the history pool needs current quotes for coins that left the
+// board without paying a second API call.
+func gainerTickerSnapshot(limit int) ([]GainerQuote, map[string]GainerQuote, error) {
 	if limit <= 0 {
 		limit = ShortScanUniverse
 	}
@@ -103,13 +101,10 @@ func TopGainerSymbols(limit int) ([]struct {
 		QuoteVolume        string `json:"quoteVolume"`
 	}
 	if err := fetchJSON(u, &raw); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []struct {
-		Symbol string
-		ChgPct float64
-		Price  float64
-	}
+	board := make([]GainerQuote, 0, limit)
+	index := make(map[string]GainerQuote, 512)
 	for _, t := range raw {
 		if !strings.HasSuffix(t.Symbol, "USDT") || strings.Contains(t.Symbol, "_") {
 			continue
@@ -123,17 +118,22 @@ func TopGainerSymbols(limit int) ([]struct {
 		}
 		chg, _ := strconv.ParseFloat(t.PriceChangePercent, 64)
 		price, _ := strconv.ParseFloat(t.LastPrice, 64)
-		out = append(out, struct {
-			Symbol string
-			ChgPct float64
-			Price  float64
-		}{t.Symbol, chg, price})
+		q := GainerQuote{Symbol: t.Symbol, ChgPct: chg, Price: price}
+		index[t.Symbol] = q
+		board = append(board, q)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ChgPct > out[j].ChgPct })
-	if len(out) > limit {
-		out = out[:limit]
+	sort.Slice(board, func(i, j int) bool { return board[i].ChgPct > board[j].ChgPct })
+	if len(board) > limit {
+		board = board[:limit]
 	}
-	return out, nil
+	return board, index, nil
+}
+
+// TopGainerSymbols returns up to limit USDT-M perps with the highest 24h
+// price-change percent (liquidity-filtered the same way as TopVolumeSymbols).
+func TopGainerSymbols(limit int) ([]GainerQuote, error) {
+	board, _, err := gainerTickerSnapshot(limit)
+	return board, err
 }
 
 // AnalyzeShort computes the short-suitability score for one symbol. btc4h is
@@ -594,23 +594,53 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 		shortScanCacheMu.Unlock()
 	}()
 
-	gainers, err := TopGainerSymbols(ShortScanUniverse)
+	board, index, err := gainerTickerSnapshot(ShortScanUniverse)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("failed to list gainers: %w", err)
 	}
+	// Persist today's board into the gainer history pool (历史涨幅池) BEFORE
+	// analysis — the record is the durable asset; a failed analysis run must
+	// not lose the day's snapshot.
+	recordGainerHistory(board, time.Now())
+
+	// Work items: the live gainer board plus, when enabled, history-pool
+	// symbols that pumped within the window but already fell off today's
+	// board (universe=hist_gainer). Live quotes for history symbols come
+	// from the same ticker snapshot — analysis inputs stay current.
+	type shortScanItem struct {
+		symbol   string
+		chg      float64
+		universe string
+	}
+	items := make([]shortScanItem, 0, len(board)+shortScanHistoryMax())
+	covered := make(map[string]bool, len(board))
+	for _, g := range board {
+		items = append(items, shortScanItem{g.Symbol, g.ChgPct, "gainer"})
+		covered[g.Symbol] = true
+	}
+	if days := shortScanHistoryDays(); days > 0 {
+		extra := historyUniverseCandidates(loadGainerHistory(), time.Now(), days, index, covered, shortScanHistoryMax())
+		for _, q := range extra {
+			items = append(items, shortScanItem{q.Symbol, q.ChgPct, "hist_gainer"})
+		}
+		if len(extra) > 0 {
+			logger.Infof("🩸 Gainer history pool: +%d symbols over %dd window (universe=hist_gainer)", len(extra), days)
+		}
+	}
+
 	btc4h, _ := NewBinanceDS("BTCUSDT").Klines("4h", 84)
 
 	type res struct {
 		sig *ShortSignal
 	}
-	results := make([]res, len(gainers))
+	results := make([]res, len(items))
 	skipped := 0
 	var (
 		mu  sync.Mutex
 		wg  sync.WaitGroup
 		sem = make(chan struct{}, shortScanConcurrency)
 	)
-	for i, g := range gainers {
+	for i, it := range items {
 		wg.Add(1)
 		go func(idx int, symbol string, chg float64) {
 			defer wg.Done()
@@ -628,7 +658,7 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 				results[idx] = res{sig: sig}
 				mu.Unlock()
 			}
-		}(i, g.Symbol, g.ChgPct)
+		}(i, it.symbol, it.chg)
 	}
 	wg.Wait()
 	if skipped > 0 {
@@ -636,10 +666,10 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 	}
 
 	var out []ShortSignal
-	for _, r := range results {
+	for i, r := range results {
 		if r.sig != nil {
 			sig := *r.sig
-			sig.Universe = "gainer"
+			sig.Universe = items[i].universe
 			out = append(out, sig)
 		}
 	}

@@ -1758,6 +1758,9 @@ function shortUniverseBadge(
  if (universe === 'near_high') {
   return { label: t('dataPage.universe_near_high', language), color: '#C0392B' }
  }
+ if (universe === 'hist_gainer') {
+  return { label: t('dataPage.universe_hist_gainer', language), color: '#B8860B' }
+ }
  return { label: t('dataPage.universe_gainer', language), color: '#2E7D4F' }
 }
 

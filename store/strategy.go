@@ -214,6 +214,15 @@ type CoinSourceConfig struct {
 	// Minimum open-interest value (millions USD) for a candidate coin to be
 	// analyzed — lower-liquidity coins are skipped. 0 = built-in default (15M).
 	MinOIValueMillions float64 `json:"min_oi_value_millions,omitempty"`
+	// Gainer history pool (历史涨幅池): the past N days of daily top-gainer
+	// snapshots are merged (deduped) into the short-scan universe, so coins
+	// that pumped hard days ago and have since rolled over — already off
+	// today's 24h board — still get scored as short candidates.
+	// 0 = built-in default (7 days), negative = pool disabled.
+	ShortScanHistoryDays int `json:"short_scan_history_days,omitempty"`
+	// Cap on EXTRA history-pool symbols analyzed per scan (each costs ~6
+	// fapi calls every 5 min). 0 = built-in default (30).
+	ShortScanHistoryMax int `json:"short_scan_history_max,omitempty"`
 	// whether to use Hyperliquid All coins (all available perp pairs)
 	UseHyperAll bool `json:"use_hyper_all"`
 	// whether to use Hyperliquid Main coins (top N by 24h volume)
