@@ -88,6 +88,22 @@ type DerivSignal struct {
 	// Absent = history unavailable → the condition is UNKNOWN, never "not
 	// rolled over".
 	FundingRollover *FundingRolloverState `json:"funding_rollover,omitempty"`
+	// LongSqueeze is the MIRROR of the short-side crowding condition: a
+	// negative funding rate (shorts paying), retail-heavy long/short ratio
+	// and institution net inflow together form the standard squeeze setup —
+	// one independent confirmation for longs (09-19 audit 七, ZEC case:
+	// funding −10.47%, ratio 0.43, inflow +3.1M).
+	LongSqueeze *LongSqueezeState `json:"long_squeeze,omitempty"`
+}
+
+// LongSqueezeState: program-detected squeeze setup — annualized funding
+// below −5% (shorts paying), long/short account ratio below 1 (retail net
+// short), and positive institution net inflow.
+type LongSqueezeState struct {
+	Detected              bool     `json:"detected"`
+	FundingAnnualizedPct  *float64 `json:"funding_annualized_pct,omitempty"`
+	LongShortAccountRatio *float64 `json:"long_short_account_ratio,omitempty"`
+	NetInflowUSDT         *float64 `json:"net_inflow_usdt,omitempty"`
 }
 
 // FundingRolloverState: detected via market.FundingRolloverDetected — the
@@ -334,7 +350,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -421,6 +437,10 @@ type SignalOptions struct {
 	// "high" the funding_rollover condition rolls off — same number that
 	// annualizes into strategy prompt condition ①.
 	ShortFundingCrowdPctP float64
+	// NetInflowUSDT: this symbol's institution futures net inflow (1h, from
+	// the netflow ranking) — one input of the long-squeeze mirror condition.
+	// nil = not in the inflow ranking.
+	NetInflowUSDT *float64
 	// MaxVendorDivergencePct hard-blocks both directions when the vendor
 	// forming-close vs live ticker diverges beyond this percent
 	// (risk_control.max_vendor_divergence_pct; resolved by
@@ -466,9 +486,14 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		Timeframes:   map[string]*TFSignal{},
 	}
 
-	// Deterministic timeframe ordering.
+	// Deterministic timeframe ordering. Sub-15m blocks are DROPPED (09-19
+	// audit 八: ~450 chars/coin of dead JSON — role_tfs is 15m/1h/4h and no
+	// strategy rule reads anything finer; the micro-trend gate uses 15m/30m).
 	tfs := make([]string, 0, len(data.TimeframeData))
 	for tf := range data.TimeframeData {
+		if tfDuration(tf) < 15*time.Minute && tf != opt.PrimaryTF {
+			continue
+		}
 		tfs = append(tfs, tf)
 	}
 	sort.Slice(tfs, func(i, j int) bool { return tfDuration(tfs[i]) < tfDuration(tfs[j]) })
@@ -605,6 +630,18 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	if opt.QuoteVolume24hUsd > 0 {
 		v := opt.QuoteVolume24hUsd
 		sig.Liquidity = &LiquiditySignal{QuoteVolume24hUsd: &v}
+	}
+	// Long-squeeze mirror (09-19 audit 七): negative funding + retail net
+	// short + institution inflow — three independent legs, ALL required.
+	if d.FundingAnnualizedPct != nil && *d.FundingAnnualizedPct < -5 &&
+		d.LongShortAccountRatio != nil && *d.LongShortAccountRatio < 1 &&
+		opt.NetInflowUSDT != nil && *opt.NetInflowUSDT > 0 {
+		d.LongSqueeze = &LongSqueezeState{
+			Detected:              true,
+			FundingAnnualizedPct:  d.FundingAnnualizedPct,
+			LongShortAccountRatio: d.LongShortAccountRatio,
+			NetInflowUSDT:         opt.NetInflowUSDT,
+		}
 	}
 	if opt.TraderHistory != nil {
 		sig.TraderHistory = opt.TraderHistory
@@ -1115,6 +1152,13 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		}
 		if opt.StockWeekendBlock {
 			add("STOCK_WEEKEND")
+		}
+		// Poor-symbol history gate (09-19 audit 七): ≥5 closed trades with
+		// <35% win rate on THIS symbol — the prose warning ("连亏的币把机会
+		// 让给趋势健康的标的") was ignored, and the one tradeable coin kept
+		// being the worst performer (ZEC: 7 trades, 29%, −1.61U).
+		if opt.TraderHistory != nil && opt.TraderHistory.ClosedTrades >= 5 && opt.TraderHistory.WinRatePct < 35 {
+			add("POOR_HISTORY")
 		}
 		if opt.MaxVendorDivergencePct > 0 {
 			// Same convention as funding_rollover: field absent = UNKNOWN =

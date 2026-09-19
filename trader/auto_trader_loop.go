@@ -745,8 +745,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 
 	// 7. Add recent closed trades (if store is available)
 	if at.store != nil {
-		// Get recent 10 closed trades for AI context
-		recentTrades, err := at.store.Position().GetRecentTrades(at.id, 10)
+		// Get recent 5 closed trades for AI context (09-19 audit 八: per-symbol
+		// trader_history + the aggregate stats already cover it; the long tail
+		// was ~400 chars of review-only detail)
+		recentTrades, err := at.store.Position().GetRecentTrades(at.id, 5)
 		if err != nil {
 			logger.Infof("⚠️ [%s] Failed to get recent trades: %v", at.name, err)
 		} else {

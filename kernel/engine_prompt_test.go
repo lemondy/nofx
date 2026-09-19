@@ -425,8 +425,11 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 
 	sys := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		"wait_state` 不要输出", "next_trigger` 对 WATCH_*/READY_* 必填",
-		"READY_LONG", "WATCH_SHORT", "BLOCKED",
+		// 09-19 audit 八: the "don't output wait_state/decision_stage"
+		// documentation was deleted outright (teaching cost > value); the
+		// BEHAVIORAL contract survives in the slimmed next_trigger line.
+		"next_trigger` 对方向性 wait(WATCH_*/READY_*)必填",
+		"RECHECK_ALL_HARD_GATES",
 		"重评条件", "禁止输出任何以天/周为尺度的搁置结论",
 		"只允许收紧到保本或更好(CODE ENFORCED)",
 		"仍锁定亏损的移动",

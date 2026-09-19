@@ -114,21 +114,18 @@ func TestSignalLayerClosedCandleAndFeatures(t *testing.T) {
 		t.Errorf("fallback limit_buy_price = %.6f, want %.6f", sigZero.LimitBuyPrice, want)
 	}
 
-	// Closed-candle settlement on 5m
-	tf5s := sig.Timeframes["5m"]
-	if tf5s == nil {
-		t.Fatal("5m signal missing")
+	// 5m blocks are DROPPED (09-19 audit 八: sub-15m JSON is dead weight —
+	// role_tfs is 15m/1h/4h, no rule reads it). The settlement checks that
+	// used to run on the 5m block are pinned on the 15m block instead.
+	if _, ok := sig.Timeframes["5m"]; ok {
+		t.Fatal("5m block must be dropped from the signal JSON")
 	}
-	if tf5s.BarsUsed != 40 {
-		t.Errorf("5m: expected 40 closed bars used, got %d", tf5s.BarsUsed)
+	tf2h := sig.Timeframes["2h"] // the fixture's primary TF
+	if tf2h == nil {
+		t.Fatal("2h signal missing")
 	}
-	if !tf5s.UnclosedDropped {
-		t.Error("5m: forming candle should be dropped")
-	}
-	// Last closed = bar i=39 (the forming bar i=40 at `now` was dropped).
-	wantClose := 5.30 * (1 + 39*0.001)
-	if math.Abs(tf5s.LastClose-wantClose) > 1e-9 {
-		t.Errorf("5m last close: got %.6f want %.6f", tf5s.LastClose, wantClose)
+	if !tf2h.UnclosedDropped {
+		t.Error("2h: forming candle should be dropped")
 	}
 
 	// 2h trend should be "up" on a rising series with fast EMA above slow

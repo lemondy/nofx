@@ -158,15 +158,6 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			DescZH: "该持仓曾经达到的最高未实现盈亏。用于判断是否需要止盈",
 			DescEN: "Historical max unrealized PnL for this position. Used for take-profit decisions",
 		},
-		"Drawdown": {
-			NameZH:    "从峰值回撤",
-			NameEN:    "Drawdown from Peak",
-			Unit:      "%",
-			FormulaZH: "当前盈亏% - 峰值盈亏%",
-			FormulaEN: "Current PnL% - Peak PnL%",
-			DescZH:    "负值表示正在回撤。例如：峰值+5%，当前+3%，回撤=-2%",
-			DescEN:    "Negative = pulling back. E.g., Peak +5%, Current +3%, Drawdown = -2%",
-		},
 		"Leverage": {
 			NameZH: "杠杆倍数",
 			NameEN: "Leverage",
@@ -190,43 +181,15 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			DescZH: "价格触及此值时会被强制平仓。0.0000表示无爆仓风险",
 			DescEN: "Price at which position will be force-closed. 0.0000 = no liquidation risk",
 		},
-		"StopLossPrice": {
-			NameZH: "止损挂单",
-			NameEN: "SL Order",
-			Unit:   "USDT",
-			DescZH: "该仓位当前挂在交易所的保护性止损单触发价（实时查询，含程序 1R 保本/跟踪止损及 AI adjust_stop_loss 后的最新价）。未挂单=该仓位当前无保护，应视为风险缺口；需要改止损价时用 adjust_stop_loss 动作",
-			DescEN: "Trigger price of the protective stop-loss order currently on the exchange (live query, reflects trailing-stop moves). none = position is unprotected, treat as a risk gap",
-		},
-		"TakeProfitPrice": {
-			NameZH: "止盈挂单",
-			NameEN: "TP Order",
-			Unit:   "USDT",
-			DescZH: "该仓位当前挂在交易所的保护性止盈单触发价（实时查询）。未挂单=当前无止盈保护",
-			DescEN: "Trigger price of the protective take-profit order currently on the exchange (live query). none = no take-profit protection",
-		},
 	},
 
 	"MarketData": {
-		"Volume": {
-			NameZH: "成交量",
-			NameEN: "Volume",
-			Unit:   "base asset",
-			DescZH: "该时间段的交易量",
-			DescEN: "Trading volume in this period",
-		},
 		"OI": {
 			NameZH: "持仓量",
 			NameEN: "Open Interest",
 			Unit:   "USDT",
 			DescZH: "未平仓合约的总价值。持仓量增加=资金流入，减少=资金流出",
 			DescEN: "Total value of open contracts. Increasing OI = capital inflow, decreasing = outflow",
-		},
-		"OIChange": {
-			NameZH: "持仓量变化",
-			NameEN: "OI Change",
-			Unit:   "USDT & %",
-			DescZH: "1小时内持仓量的变化。用于判断市场真实资金流向",
-			DescEN: "OI change in 1 hour. Used to determine real capital flow direction",
 		},
 	},
 }

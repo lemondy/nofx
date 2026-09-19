@@ -128,14 +128,15 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 
 	// 3.5 Regime-level skip (09-19 audit): when EVERY candidate is
 	// double-blocked by the hard gate (no allowed direction, no
-	// exception-eligible path) AND there are no positions to manage, the
-	// LLM call can only ever return a hold — spending the tokens and the
-	// minutes to hear it is pure waste (the audited cycle: 80k chars for
-	// one hold, with ZEC the single variable). Synthesize the wait
-	// programmatically; the decision record still lands with full prompts.
-	// Anything alive — one allowed direction, one exception-eligible coin,
-	// one open position — makes the call as usual.
-	if len(ctx.Positions) == 0 && len(ctx.CandidateCoins) > 0 {
+	// exception-eligible path) AND every open position is close-locked this
+	// cycle (no legal close/partial path — positionCloseLocked mirrors the
+	// trader's gates), the LLM call can only ever return a hold — spending
+	// the tokens and the minutes to hear it is pure waste. Synthesize the
+	// wait programmatically; the decision record still lands with full
+	// prompts. Anything alive — one allowed direction, one
+	// exception-eligible coin, one position with a legal action — makes the
+	// call as usual.
+	if len(ctx.CandidateCoins) > 0 {
 		allBlocked := true
 		for _, coin := range ctx.CandidateCoins {
 			if gs, ok := ctx.GateStates[market.Normalize(coin.Symbol)]; ok && gs != nil && !gs.HardBlocked {
@@ -143,13 +144,22 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 				break
 			}
 		}
+		allLocked := true
+		for _, p := range ctx.Positions {
+			md := ctx.MarketDataMap[p.Symbol]
+			if locked, _ := positionCloseLocked(p, md, &engine.GetConfig().RiskControl); !locked {
+				allLocked = false // fail-open: unknown hold age or live data → call the LLM
+				break
+			}
+		}
+		allBlocked = allBlocked && allLocked
 		if allBlocked {
 			logger.Infof("⏭️  [Regime Skip] 全部 %d 个候选双向硬门拦截且无持仓 — 跳过本次 LLM 调用,程序合成 wait(下一周期快照自动重评)", len(ctx.CandidateCoins))
 			fd := &FullDecision{
 				Decisions: []Decision{{
 					Symbol:    "ALL",
 					Action:    "wait",
-					Reasoning: fmt.Sprintf("Regime skip: 全部 %d 个候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),且当前无持仓需要管理 — 程序直接合成 wait,本轮未调用 LLM;候选结构变化后下一周期快照自动重评", len(ctx.CandidateCoins)),
+					Reasoning: fmt.Sprintf("Regime skip: 全部 %d 个候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", len(ctx.CandidateCoins), map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
 				}},
 				SystemPrompt: systemPrompt,
 				UserPrompt:   userPrompt,
