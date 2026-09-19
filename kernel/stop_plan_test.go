@@ -210,3 +210,38 @@ func TestStopPlanZECStepOut(t *testing.T) {
 		t.Errorf("stop_plan_source = %q, want structure", l.StopPlanSource)
 	}
 }
+
+// The ZEC rejection (09-19 06:42 UTC): the model echoed its own 2.13% stop
+// against the gated plan and the executor's band check rejected the whole
+// output. The plan IS the trade — post-parse, the stop snaps to it (same
+// contract as the limit-anchor compliance).
+func TestCorrectStopLossToPlan(t *testing.T) {
+	gates := map[string]*GateState{
+		"ZECUSDT":    {LongStopPlanPrice: 1462.6, ShortStopPlanPrice: 1601.9},
+		"NOPLANUSDT": {}, // gate blocked with STOP_PLAN_* → nothing to snap to
+	}
+	decs := []Decision{
+		{Symbol: "ZECUSDT", Action: "open_long_limit", StopLoss: 1508.57}, // model's own math, 3% off
+		{Symbol: "ZECUSDT", Action: "open_short", StopLoss: 1602.5},       // within 0.05% echo tolerance
+		{Symbol: "ZECUSDT", Action: "open_long", StopLoss: 0},             // placeholder zero
+		{Symbol: "NOPLANUSDT", Action: "open_long", StopLoss: 100.0},      // no plan — untouched
+		{Symbol: "ETHUSDT", Action: "hold", StopLoss: 999.0},              // not an open — untouched
+	}
+	correctStopLossToPlan(decs, gates, StopPlanTolerancePct)
+
+	if decs[0].StopLoss != 1462.6 {
+		t.Errorf("drifting stop not snapped: %.4f, want 1462.6", decs[0].StopLoss)
+	}
+	if decs[1].StopLoss != 1602.5 {
+		t.Errorf("echo-tolerance stop was modified: %.4f", decs[1].StopLoss)
+	}
+	if decs[2].StopLoss != 1462.6 {
+		t.Errorf("placeholder zero not filled from plan: %.4f", decs[2].StopLoss)
+	}
+	if decs[3].StopLoss != 100.0 {
+		t.Errorf("no-plan symbol must pass through, got %.4f", decs[3].StopLoss)
+	}
+	if decs[4].StopLoss != 999.0 {
+		t.Errorf("non-open action must pass through, got %.4f", decs[4].StopLoss)
+	}
+}

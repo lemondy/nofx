@@ -1381,6 +1381,14 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				ShortAllowed: sig.HardGate != nil && sig.HardGate.Short != nil && sig.HardGate.Short.Allowed,
 				HardBlocked:  bothDirectionsHardBlocked(sig),
 			}
+			if sig.HardGate != nil {
+				if sig.HardGate.Long != nil {
+					gs.LongStopPlanPrice = sig.HardGate.Long.StopPlanPrice
+				}
+				if sig.HardGate.Short != nil {
+					gs.ShortStopPlanPrice = sig.HardGate.Short.StopPlanPrice
+				}
+			}
 			ctx.GateStates[market.Normalize(data.Symbol)] = gs
 		}
 		// Data-incomplete symbols are barred from trading — nothing beyond

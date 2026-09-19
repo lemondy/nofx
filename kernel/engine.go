@@ -179,6 +179,13 @@ type RRCeiling struct {
 type GateState struct {
 	LongAllowed  bool
 	ShortAllowed bool
+	// Precomputed methodology stops per direction (0 = no plan — the gate
+	// blocked the direction with STOP_PLAN_* or no floor is configured).
+	// Drives the post-parse stop-loss snap: the executed trade must equal
+	// the gated trade (09-19 audit: the model echoed its own 2.13% stop on
+	// ZEC against the plan and the executor rejected the whole output).
+	LongStopPlanPrice  float64
+	ShortStopPlanPrice float64
 	// HardBlocked: BOTH directions carry a no-exception blocker — the coin
 	// can only ever produce a mechanical wait this cycle. Drives the
 	// regime-level skip (09-19 audit: all-candidates-blocked + no positions

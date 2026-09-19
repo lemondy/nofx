@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"math"
 	"nofx/logger"
 	"nofx/market"
 	"strings"
@@ -83,17 +84,17 @@ func validateDecisions(decisions []Decision, accountEquity float64, btcEthLevera
 
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, hasPosition bool, gs *GateState) error {
 	validActions := map[string]bool{
-		"open_long":        true,
-		"open_short":       true,
-		"open_long_limit":  true,
-		"open_short_limit": true,
-		"close_long":       true,
-		"close_short":      true,
-		"adjust_stop_loss": true,
+		"open_long":           true,
+		"open_short":          true,
+		"open_long_limit":     true,
+		"open_short_limit":    true,
+		"close_long":          true,
+		"close_short":         true,
+		"adjust_stop_loss":    true,
 		"partial_close_long":  true,
 		"partial_close_short": true,
-		"hold":             true,
-		"wait":             true,
+		"hold":                true,
+		"wait":                true,
 	}
 
 	if !validActions[d.Action] {
@@ -287,3 +288,52 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	return nil
 }
 
+// StopPlanTolerancePct: same echo-drift allowance as the limit anchors — the
+// prompt's contract is verbatim adoption, so anything beyond rounding noise
+// gets snapped.
+const StopPlanTolerancePct = 0.05
+
+// correctStopLossToPlan snaps an open decision's stop_loss to the
+// precomputed stop_plan_price for its direction (09-19 audit: the model
+// echoed its own 2.13% stop on ZEC against the gated plan — the executor
+// band check rejected the whole output and the cycle's analysis was wasted).
+// The gated plan IS the trade: plan, gate and checkRR price the same stop,
+// so snapping makes the executed risk exactly the gated risk. Decisions on
+// symbols without a plan (gate blocked with STOP_PLAN_*, or no floor
+// configured) pass through untouched — the executor's own gates judge them.
+func correctStopLossToPlan(decisions []Decision, gates map[string]*GateState, tolerancePct float64) {
+	for i := range decisions {
+		d := &decisions[i]
+		isLong := strings.HasPrefix(d.Action, "open_long")
+		isShort := strings.HasPrefix(d.Action, "open_short")
+		if !isLong && !isShort {
+			continue
+		}
+		gs, ok := gates[market.Normalize(d.Symbol)]
+		if !ok || gs == nil {
+			continue
+		}
+		plan := gs.LongStopPlanPrice
+		if !isLong {
+			plan = gs.ShortStopPlanPrice
+		}
+		if plan <= 0 {
+			continue // no plan this direction — nothing authoritative to snap to
+		}
+		if d.StopLoss <= 0 {
+			// Placeholder zero from the "unknown → 0" output rule: copy the
+			// plan instead of tripping the missing-stop rejection.
+			logger.Infof("📐 [%s] %s placeholder stop_loss → stop_plan %.6g",
+				d.Symbol, d.Action, plan)
+			d.StopLoss = plan
+			continue
+		}
+		dev := (d.StopLoss - plan) / plan * 100
+		if math.Abs(dev) <= tolerancePct {
+			continue
+		}
+		logger.Infof("📐 [%s] %s stop_loss %.6g → stop_plan %.6g (%+.2f%% drift — the gated plan is the trade)",
+			d.Symbol, d.Action, d.StopLoss, plan, dev)
+		d.StopLoss = plan
+	}
+}
