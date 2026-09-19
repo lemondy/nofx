@@ -138,10 +138,17 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	// call as usual.
 	if len(ctx.CandidateCoins) > 0 {
 		allBlocked := true
+		renderedCount := 0
 		for _, coin := range ctx.CandidateCoins {
+			// The skip message cites the RENDERED count (position-overlap and
+			// data-less coins don't render — 09-19 audit: "9 个候选" over 6
+			// rendered blocks confused the reader).
 			if gs, ok := ctx.GateStates[market.Normalize(coin.Symbol)]; ok && gs != nil && !gs.HardBlocked {
 				allBlocked = false
 				break
+			}
+			if ctx.MarketDataMap[coin.Symbol] != nil {
+				renderedCount++
 			}
 		}
 		allLocked := true
@@ -159,7 +166,7 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 				Decisions: []Decision{{
 					Symbol:    "ALL",
 					Action:    "wait",
-					Reasoning: fmt.Sprintf("Regime skip: 全部 %d 个候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", len(ctx.CandidateCoins), map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
+					Reasoning: fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
 				}},
 				SystemPrompt: systemPrompt,
 				UserPrompt:   userPrompt,

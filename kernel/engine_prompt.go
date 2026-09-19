@@ -184,7 +184,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long_limit\", \"price\": %.0f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 85, \"blocking_factors\": []},\n",
 			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exStop, exTP, exRiskUSD))
 	} else {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 82, \"blocking_factors\": []},\n",
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 85, \"blocking_factors\": []},\n",
 			riskControl.BTCETHMaxLeverage, exNotional, exStop, exTP, exRiskUSD))
 	}
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"no_trade_reason\": [\"挂单锚点被抑制\", \"15m 微趋势未转\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
@@ -237,6 +237,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString("\n")
 	}
 	sb.WriteString("> scanner_hint / 扫描评分 / patterns 均为程序化扫描的辅助证据,不是交易结论,且为扫描时刻的快照(见 generated_at_utc)。方向、时机、是否交易由你综合全部数据独立判断——可以采信、质疑或推翻扫描结果,但必须在推理中给出自己的依据。资金费率尤其如此:暴涨币的 funding 可能在几分钟内漂移数倍,当前状态以各币 Structured Signal 的 derivatives.funding_annualized_pct 为准(程序已按该币真实结算间隔 funding_settle_hours 年化,无需自行换算;与 hint 数字冲突时以 Structured Signal 为准)。\n")
+	sb.WriteString("> **short_scan 候选的默认姿态(稳定规则,勿逐次重判)**: short_scan 按涨幅大入选,候选的 1h/4h 结构天然还是多头——scanner 说可空、结构说多头不是偶发冲突,是该引擎的常态。默认姿态: 顶部确认信号(顶背离/假突破/破 EMA20/费率回落——后者只认 derivatives.funding_rollover.detected)之外,**还必须 execution_filter.short_allowed=true(15m 微趋势已转)才允许做空**;仅凭确认信号而 15m 仍 up → 输出 wait + wait_bias=short(wait_state 由程序按 wait_bias 派生,勿输出),触发事件写\"15m 微趋势转 down + RECHECK_ALL_HARD_GATES\"(转 down 只是重评条件,届时 RR/锚点/资金费率等一切硬门重新全过)。entry_timing_gate 开启时这同时是硬规则(15m 逆势 open_short 会被程序拒单)\n\n")
 
 	// 8. Custom Prompt
 	if e.config.CustomPrompt != "" {
@@ -562,7 +563,6 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		rendered = append(rendered, coin)
 	}
 	sb.WriteString(fmt.Sprintf("## Candidate Coins (%d coins)\n\n", len(rendered)))
-	sb.WriteString("> **short_scan 候选的默认姿态(稳定规则,勿逐次重判)**: short_scan 按涨幅大入选,候选的 1h/4h 结构天然还是多头——scanner 说可空、结构说多头不是偶发冲突,是该引擎的常态。默认姿态: 顶部确认信号(顶背离/假突破/破 EMA20/费率回落——后者只认 derivatives.funding_rollover.detected)之外,**还必须 execution_filter.short_allowed=true(15m 微趋势已转)才允许做空**;仅凭确认信号而 15m 仍 up → 输出 wait + wait_bias=short + wait_state=WATCH_SHORT,触发事件写\"15m 微趋势转 down + RECHECK_ALL_HARD_GATES\"(转 down 只是重评条件,届时 RR/锚点/资金费率等一切硬门重新全过)。entry_timing_gate 开启时这同时是硬规则(15m 逆势 open_short 会被程序拒单)\n\n")
 	displayedCount := 0
 	for _, coin := range rendered {
 		marketData := ctx.MarketDataMap[coin.Symbol]
