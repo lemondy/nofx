@@ -475,3 +475,38 @@ func TestFormatMarketDataRecordsRRCeilings(t *testing.T) {
 		t.Errorf("ceiling without a floor = %+v, want zeros present (captured but empty)", c2)
 	}
 }
+
+// 09-19 audit: the sizing prose read the config (mac-nofx/Conservative 3.5%)
+// while BOTH examples hardcoded 1.5% — and the model sized from the example
+// (BTWUSDT opened at 1.5% risk against the 3.5% config). The configured
+// risk budget must be the SINGLE source: prose, examples, min_size and the
+// executor clamp all render/compute the same number.
+func TestRiskBudgetSingleSource(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.RiskControl.RiskPerTradePct = 3.5
+	engine := NewStrategyEngine(cfg)
+	sp := engine.BuildSystemPrompt(75, "")
+	for _, want := range []string{
+		"equity × 3.5% (risk budget)",
+		"75 × 3.5 ÷ 6.48 ≈ 40.5 USDT",
+		"风险金额3.5U",
+		"本策略当前风险预算就是正文这个 3.5%",
+	} {
+		if !strings.Contains(sp, want) {
+			t.Errorf("system prompt missing %q", want)
+		}
+	}
+	for _, gone := range []string{"× 1.5 ÷ 6.48", "风险金额1.5U", "名义价值50U"} {
+		if strings.Contains(sp, gone) {
+			t.Errorf("hardcoded 1.5%% example still present: %q", gone)
+		}
+	}
+
+	// Unset config falls back to the 1.5 legacy default — consistently, in
+	// prose AND examples.
+	engine0 := NewStrategyEngine(&store.StrategyConfig{})
+	sp0 := engine0.BuildSystemPrompt(100, "")
+	if !strings.Contains(sp0, "× 1.5 ÷ 6.48") || !strings.Contains(sp0, "风险金额1.5U") {
+		t.Error("default 1.5% must render consistently in prose and examples")
+	}
+}

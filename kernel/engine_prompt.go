@@ -127,9 +127,13 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString(fmt.Sprintf("- Lower bound: Min Position Size (%.0f USDT) — below it, skip the setup\n", riskControl.MinPositionSize))
 	sb.WriteString("- Upper bound: the Position Value Limit above\n")
 	// Example derives from the SAME live equity the Hard Constraints block
-	// prints — hardcoded example numbers drifted from reality (audit 09-13 #1).
-	sb.WriteString(fmt.Sprintf("- Example: equity %.0f, stop distance 6.48%% → %.0f × 1.5 ÷ 6.48 ≈ %.1f USDT notional (risk at stop = %.0f × 1.5%% ≈ %.2f USDT)\n",
-		accountEquity, accountEquity, accountEquity*1.5/6.48, accountEquity, accountEquity*0.015))
+	// prints — hardcoded example numbers drifted from reality (audit 09-13 #1)
+	// — and from the SAME riskPctDefault as the formula line: the percentage
+	// used to stay hardcoded at 1.5 while the config moved (mac-nofx ran 3.5%)
+	// and the model sized from the EXAMPLE (09-19 audit: BTWUSDT opened at
+	// 1.5% risk against a 3.5% config).
+	sb.WriteString(fmt.Sprintf("- Example: equity %.0f, stop distance 6.48%% → %.0f × %.1f ÷ 6.48 ≈ %.1f USDT notional (risk at stop = %.0f × %.1f%% ≈ %.2f USDT)\n",
+		accountEquity, accountEquity, riskPctDefault, accountEquity*riskPctDefault/6.48, accountEquity, riskPctDefault, accountEquity*riskPctDefault/100))
 	sb.WriteString("- Wider stop → smaller position. `confidence` decides WHETHER to open, never a multiplier on position value — do NOT size from Position Value Limit percentages\n")
 	sb.WriteString("- **DO NOT** just use available_balance as position_size_usd\n\n")
 
@@ -292,7 +296,12 @@ func (e *StrategyEngine) strategyParamsText() string {
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
-		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额1.5U → 名义价值50U → 3x杠杆保证金≈16.7U。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益与策略配置 min_position_size(策略页可改)预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小仓位的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct))
+		// 仓位示例从同一个 riskPct 求值(09-19 audit: 示例曾写死 1.5,配置已是
+		// 3.5,模型照示例开仓——BTWUSDT 实盘 1.5% 风险 vs 配置 3.5%)。
+		exRisk := riskPct // USDT of risk per 100U equity
+		exNotional := 100 * riskPct / 3.0
+		exMargin := exNotional / 3.0
+		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额%.1fU → 名义价值%.0fU → 3x杠杆保证金≈%.1fU——本策略当前风险预算就是正文这个 %.1f%%,示例与执行端缩仓同源。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益与策略配置 min_position_size(策略页可改)预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小仓位的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct, exRisk, exNotional, exMargin, riskPct))
 		params.WriteString(fmt.Sprintf("- 止盈(结构选位已由程序完成): 各币快照 `hard_entry_gate[direction].rr_scan` 就是\"从近到远遍历全部时间块(含 execution_tf/15m)全部 resistance/support 元素\"的程序结果——开仓时 `take_profit` 直接采用 `rr_scan.first_rr_ge_target`(该方向从近到远第一个 RR≥%.1f 的结构位,按 rr_scan.entry_price 口径计算);`rr_scan.usable=false` 表示连最窄允许止损下 RR 上限 best_rr 都 <%.1f,该方向 RR 门结构性失败,输出 wait 并在 blocking_factors 标 RR_LOW、no_trade_reason 引用 `MAX_STRUCTURAL_RR=best_rr`——禁止只看最近一个结构位就下\"无可用结构位\"结论,也不许跳到更远目标。个别币没有 rr_scan 字段(如未启用噪声下限)时退回手工规则: 逐项遍历全部数组取第一个 RR≥%.1f。该比例仍是程序硬门槛(开仓时按决策价与成交价双重校验 RR)。stop_plan_price + first_rr_ge_target 这一对就是「真实 RR≥min」的组合——SL 用前者、TP 用后者,不要只换其中一半\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
 		var tpParts []string
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
