@@ -182,26 +182,36 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("<decision>\n")
 	sb.WriteString("Step 2: JSON decision array\n\n")
 	sb.WriteString("```json\n[\n")
-	// Use the actual configured position value ratio for BTC/ETH in the example
-	examplePositionSize := accountEquity * btcEthPosValueRatio
+	// 09-19 audit: the old example taught FOUR violations — risk_usd 300
+	// exceeding notional 225, a market order against the limit-default,
+	// stale BTC price levels, and missing required self-assessment fields.
+	// LLMs weight examples over prose, so every number here is COMPUTED from
+	// the live config and the sizing formula (equity × risk%% ÷ stop%%);
+	// price levels are illustrative round numbers, internally consistent.
+	exRiskUSD := accountEquity * riskPctDefault / 100
+	exNotional := exRiskUSD / 0.03 // 3% stop distance in the example
+	exEntry := 65000.0
+	exStop := exEntry * 0.97
+	exTP := exEntry * 1.048 // 4.8% reward vs 3% risk = RR 1.6 ≥ min
 	if riskControl.LimitEntryEnabled {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short_limit\", \"price\": 100500, \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300},\n",
-			riskControl.BTCETHMaxLeverage, examplePositionSize))
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long_limit\", \"price\": %.0f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 85, \"blocking_factors\": []},\n",
+			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exStop, exTP, exRiskUSD))
 	} else {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300},\n",
-			riskControl.BTCETHMaxLeverage, examplePositionSize))
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.0f, \"take_profit\": %.0f, \"confidence\": 85, \"risk_usd\": %.2f, \"entry_quality\": 82, \"blocking_factors\": []},\n",
+			riskControl.BTCETHMaxLeverage, exNotional, exStop, exTP, exRiskUSD))
 	}
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\"}\n")
+	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"no_trade_reason\": [\"挂单锚点被抑制\", \"15m 微趋势未转\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
+	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"hold\", \"management_quality\": 78, \"management_flags\": [\"TREND_INTACT\"]}\n")
 	sb.WriteString("]\n```\n")
 	sb.WriteString("</decision>\n\n")
 	sb.WriteString("## Field Description\n\n")
-	actions := "open_long | open_short | close_long | close_short | adjust_stop_loss | partial_close_long | partial_close_short | hold | wait"
+	actions := "open_long_limit | open_short_limit | open_long | open_short | close_long | close_short | adjust_stop_loss | partial_close_long | partial_close_short | hold | wait"
 	if riskControl.LimitEntryEnabled {
-		actions += " | open_long_limit | open_short_limit"
+		actions += "(本策略默认限价入场: open_long/open_short 仅三类例外成立时可用)"
 	}
 	sb.WriteString("- `action`: " + actions + "\n")
 	sb.WriteString(fmt.Sprintf("- `confidence`: 0-100 (opening recommended ≥ %d)\n", riskControl.MinConfidence))
-	sb.WriteString("- Required when opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd; 限价开仓另需 `price`\n")
+	sb.WriteString("- Required when opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, entry_quality, blocking_factors; 限价开仓另需 `price`\n")
 	sb.WriteString("- **IMPORTANT**: All numeric values must be calculated numbers, NOT formulas/expressions (e.g., use `27.76` not `3000 * 0.01`)\n")
 	if riskControl.LimitEntryEnabled {
 		maxCycles := riskControl.LimitEntryMaxCycles
@@ -292,7 +302,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// 止损措辞与执行端逐字对齐 (09-19 RR audit): stop_plan 由程序按方法论
 		// 预计算(结构位+方向性缓冲,夹带),rr_scan/checkRR/模型采用三者同口径。
 		if floorMult := rc.SLMinATRMult; floorMult > 0 {
-			params.WriteString(fmt.Sprintf("- 止损(程序预计算,逐字采用): 各方向快照 hard_entry_gate 的 stop_plan_price 就是按方法论算好的止损——最近对侧结构位 + 方向性缓冲(空 0.5×ATR(1h)/多 0.4×ATR(1h),取宽端保证 RR 是下界),并夹进带内 [≥%.1f×ATR(1h) 噪声下限, ≤max(2×ATR(4h), 8%%)]。开仓时 stop_loss 逐字采用 stop_plan_price,禁止自行重算或改窄——RR 门已按它计算,采用它即保证真实 RR≥min_rr(执行端 checkRR 同口径,自选更宽止损会被拒)。failed 含 STOP_PLAN_NO_STRUCTURE(对侧无结构位,如创新高/新低后逆势)或 STOP_PLAN_OUT_OF_BAND(结构止损超出带上限)= 该方向无法按方法论设止损,放弃该设置\n", floorMult))
+			params.WriteString(fmt.Sprintf("- 止损(程序预计算,逐字采用): 各方向快照 hard_entry_gate 的 stop_plan_price 就是按方法论算好的止损——从近到远第一个使止损距离落进带内 [≥%.1f×ATR(1h) 噪声下限, ≤max(2×ATR(4h), 8%%)] 的对侧结构位 + 方向性缓冲(空 0.5×ATR(1h)/多 0.4×ATR(1h),取宽端保证 RR 是下界;stop_plan_source=structure 表示这是真实结构位,绝无 clamp 出来的无人区价位)。开仓时 stop_loss 逐字采用 stop_plan_price,禁止自行重算或改窄——RR 门已按它计算,采用它即保证真实 RR≥min_rr(执行端 checkRR 同口径,自选更宽止损会被拒)。failed 含 STOP_PLAN_NO_STRUCTURE(对侧无结构位,如创新高/新低后逆势)或 STOP_PLAN_OUT_OF_BAND(结构止损超出带上限)= 该方向无法按方法论设止损,放弃该设置\n", floorMult))
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
@@ -1529,36 +1539,16 @@ func (e *StrategyEngine) renderSignalBlock(sig *SymbolSignal) string {
 	return sb.String()
 }
 
-// noExceptionCodePrefixes: gate codes that admit NO market-order exception
-// path — a direction carrying one of these is mechanically dead this cycle
-// (the exception survives only on a bare LIMIT_ANCHOR_SUPPRESSED, mirroring
-// the prompt's hard-gate rule).
-var noExceptionCodePrefixes = []string{
-	"RR_MAX_", "MICRO_TREND_", "LOSS_STREAK_BANNED", "MIN_SIZE_DEAD_ZONE",
-	"DATA_INSUFFICIENT", "STOCK_WEEKEND", "VENDOR_DIVERGENCE_", "STOP_PLAN_",
-}
-
-func directionHardBlocked(g *DirectionGate) bool {
-	if g == nil {
-		return false
-	}
-	for _, code := range g.Failed {
-		for _, p := range noExceptionCodePrefixes {
-			if strings.HasPrefix(code, p) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // bothDirectionsHardBlocked: the candidate can only ever produce a mechanical
 // wait — its full JSON need not be rendered (09-18 token audit ①: 7 of 8
 // candidates in the audited cycle were double-blocked yet shipped 3.5-4.5k
-// chars of JSON each).
+// chars of JSON each). Since the 09-19 fail-closed change, allowed=false on
+// a direction means UNEXECUTABLE (anchor-suppressed without exception
+// evidence is blocked, not exception-eligible), so the both-directions
+// allowed check is the complete test.
 func bothDirectionsHardBlocked(sig *SymbolSignal) bool {
 	return sig != nil && sig.HardGate != nil &&
-		directionHardBlocked(sig.HardGate.Long) && directionHardBlocked(sig.HardGate.Short)
+		!sig.HardGate.Long.Allowed && !sig.HardGate.Short.Allowed
 }
 
 // renderBlockedCoinLine: the one-line compression for a double-blocked

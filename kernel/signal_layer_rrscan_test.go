@@ -135,11 +135,18 @@ func TestHardEntryGateSAGA(t *testing.T) {
 	if has(l.Failed, "MICRO_TREND") || has(l.Failed, "LIMIT_ANCHOR") {
 		t.Errorf("long failed list carries wrong blockers: %v", l.Failed)
 	}
-	if !has(l.Failed, "RR_MAX_") || len(l.Failed) != 1 {
-		t.Errorf("long failed = %v, want exactly one RR_MAX_x.xx code", l.Failed)
+	// 09-19 step-out: the nearest supports (0.02006/0.01989) sit 4-5% below
+	// the anchor — under the 6.89% noise floor — and the next one out
+	// (0.01814, 13.4%) overshoots the 8% cap. No structural stop lands in
+	// the band → OUT_OF_BAND, not an RR verdict at a clamped fantasy stop.
+	if !has(l.Failed, "STOP_PLAN_OUT_OF_BAND") || len(l.Failed) != 1 {
+		t.Errorf("long failed = %v, want exactly STOP_PLAN_OUT_OF_BAND (no in-band structural stop)", l.Failed)
+	}
+	if l.RR != nil {
+		t.Errorf("rr_scan must be absent without a stop plan, got %+v", l.RR)
 	}
 	if l.Allowed {
-		t.Error("long must be blocked (RR ceiling < min at the floor stop)")
+		t.Error("long must be blocked (no structural stop inside the band)")
 	}
 	s := g.Short
 	if !has(s.Failed, "MICRO_TREND_NOT_SHORT") {

@@ -107,9 +107,10 @@ func TestStopPlanNoStructureAndOutOfBand(t *testing.T) {
 	}
 }
 
-func TestStopPlanLongBufferAndFloorClamp(t *testing.T) {
-	// Long mirror: buffer takes the 0.4 end; a structure inside the noise
-	// floor clamps the plan up to the floor.
+func TestStopPlanStepOutRejectsNoMansLand(t *testing.T) {
+	// 09-19 audit 二: a too-tight structure must STEP OUT to the next one —
+	// never clamp up to the floor (the old code manufactured a 94.00 stop in
+	// no-man's-land between 99.5 and nothing, scoring RR off a fantasy stop).
 	sig := &SymbolSignal{
 		Price: 100.0,
 		Timeframes: map[string]*TFSignal{
@@ -118,16 +119,15 @@ func TestStopPlanLongBufferAndFloorClamp(t *testing.T) {
 		},
 		DataQuality: &DataQuality{Complete: true, Sufficient: true},
 	}
-	price, dist, code := methodStopPlan(sig, 100.0, 6.0, true)
-	if code != "" {
-		t.Fatalf("code = %q, want ok", code)
+	// Floor 6%: both supports sit 1.1-1.4% below — no structural stop lands
+	// in band → OUT_OF_BAND (放弃), never a clamped 94.00/6.00%.
+	if _, _, code := methodStopPlan(sig, 100.0, 6.0, true); code != "STOP_PLAN_OUT_OF_BAND" {
+		t.Errorf("code = %q, want STOP_PLAN_OUT_OF_BAND (no in-band structure)", code)
 	}
-	// 99.5 − 0.4×2%×100 = 98.7 → 1.3% < 6% floor → clamps to the floor.
-	if math.Abs(dist-6.0) > 1e-9 || math.Abs(price-94.0) > 1e-9 {
-		t.Errorf("plan = %.4f/%.2f%%, want floor-clamped 94.00/6.00%%", price, dist)
-	}
-	if p2, d2, c2 := methodStopPlan(sig, 100.0, 1.0, true); c2 != "" || math.Abs(p2-98.9) > 1e-9 || math.Abs(d2-1.1) > 1e-9 {
-		t.Errorf("wide-floor plan = %.4f/%.2f%% code=%q, want 98.90/1.10%% (nearest support 99.7 − 0.4×2%%)", p2, d2, c2)
+	// Wide-enough floor: the NEAREST structure wins, buffer on the 0.4 end.
+	price, dist, code2 := methodStopPlan(sig, 100.0, 1.0, true)
+	if code2 != "" || math.Abs(price-98.9) > 1e-9 || math.Abs(dist-1.1) > 1e-9 {
+		t.Errorf("plan = %.4f/%.2f%% code=%q, want 98.90/1.10%% (nearest support 99.7 − 0.4×2%%)", price, dist, code2)
 	}
 }
 
@@ -156,5 +156,57 @@ func TestStopPlanPromptWording(t *testing.T) {
 		if strings.Contains(sp, gone) {
 			t.Errorf("obsolete floor-scan wording still present: %q", gone)
 		}
+	}
+}
+
+// TestStopPlanZECStepOut — the audited ZEC long (09-19): the first cut
+// clamped the too-close 15m supports (d 1.01%/1.27% < floor 3.16%) up to the
+// floor, printing stop_plan_price 1503.59 — a no-man's-land stop between
+// structures 1545.95 and 1475.71 that scored RR 1.95 where the real
+// methodology stop scores 1.06. Step-out must land on the 1h structure.
+func TestStopPlanZECStepOut(t *testing.T) {
+	sig := &SymbolSignal{
+		Price: 1552.64,
+		Timeframes: map[string]*TFSignal{
+			"15m": {ATRPct: 0.92, Support: []float64{1550.03, 1545.95}, Resistance: []float64{1648.08}},
+			"1h":  {ATRPct: 2.11, Support: []float64{1475.71}},
+			"4h":  {ATRPct: 4.41}, // cap = 2×4.41 = 8.82%
+		},
+		DataQuality: &DataQuality{Complete: true, Sufficient: true},
+	}
+	entry := 1552.64
+	floor := 1.5 * 2.11 // 3.165%
+
+	price, dist, code := methodStopPlan(sig, entry, floor, true)
+	if code != "" {
+		t.Fatalf("code = %q, want ok (the 1h structure 1475.71 lands in band)", code)
+	}
+	wantStop := 1475.71 - 0.4*2.11/100*entry // ≈ 1462.6
+	if math.Abs(price-wantStop) > 1e-6 {
+		t.Errorf("stop_plan_price = %.2f, want %.2f (1h structure − 0.4×ATR buffer)", price, wantStop)
+	}
+	if math.Abs(dist-5.79) > 0.05 {
+		t.Errorf("stop_plan_pct = %.2f, want ≈5.79 (user's hand math)", dist)
+	}
+	if price >= 1545.95 {
+		t.Errorf("plan %.2f must sit BELOW the second structure — no clamp no-man's-land", price)
+	}
+	if old := entry * (1 - 0.0316); math.Abs(price-old) < 1 {
+		t.Errorf("plan reproduced the clamped fantasy stop %.2f", old)
+	}
+
+	// Gate level: at the REAL stop the 1648.08 target is RR 1.06 — the
+	// direction must now be RR-blocked, which the clamp had hidden behind a
+	// fake 1.95.
+	g := computeHardEntryGate(sig, SignalOptions{SLMinATRMult: 1.5, MinRR: 1.5})
+	l := g.Long
+	if l.Allowed || !has(l.Failed, "RR_MAX_") {
+		t.Errorf("long allowed=%v failed=%v, want RR_MAX block at the real stop", l.Allowed, l.Failed)
+	}
+	if l.RR == nil || math.Abs(l.RR.BestRR-1.06) > 0.02 {
+		t.Errorf("best_rr = %v, want ≈1.06 (TP 1648.08 at the 5.79%% stop)", l.RR)
+	}
+	if l.StopPlanSource != "structure" {
+		t.Errorf("stop_plan_source = %q, want structure", l.StopPlanSource)
 	}
 }

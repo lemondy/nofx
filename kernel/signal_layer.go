@@ -324,10 +324,13 @@ type DirectionGate struct {
 	// orders stopped at structure+buffer (systematically wider) — trades
 	// passed the gate at "1.5R" but executed at 1.3-1.4R. Now the plan, the
 	// gate and the executor's checkRR all price the same stop.
-	StopPlanPrice float64  `json:"stop_plan_price,omitempty"`
-	StopPlanPct   float64  `json:"stop_plan_pct,omitempty"`
-	RR            *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed        []string `json:"failed,omitempty"`  // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
+	StopPlanPrice float64 `json:"stop_plan_price,omitempty"`
+	StopPlanPct   float64 `json:"stop_plan_pct,omitempty"`
+	// StopPlanSource: "structure" — the plan is a real structure level ±
+	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
+	StopPlanSource string   `json:"stop_plan_source,omitempty"`
+	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -936,17 +939,24 @@ const (
 	methodStopBufferShort = 0.5
 )
 
-// methodStopPlan precomputes the METHODOLOGY stop for one direction: the
-// nearest opposite-side structure level (≥15m granularity — 5m pivots are
-// noise at a 1h-ATR buffer scale) plus the direction-aware buffer, clamped
-// into the band [noiseFloor, max(2×ATR(4h), 8%)].
+// methodStopPlan precomputes the METHODOLOGY stop for one direction by
+// STEPPING OUT along the ≥15m opposite-side structure levels, near→far
+// (5m pivots excluded — noise at a 1h-ATR buffer scale): the plan is the
+// FIRST structure whose buffer-extended stop distance lands inside the band
+// [noiseFloor, max(2×ATR(4h), 8%)]. The buffer takes the WIDE end of the
+// methodology's 0.3-0.5 band (short 0.5 / long 0.4 ×ATR(1h)) so the gate's
+// RR is a lower bound.
 //
-// 09-19 RR audit (user): the gate used to score RR at the noise-floor stop
-// while actual orders stopped at structure+buffer — systematically wider —
-// so "1.5R" trades executed at 1.3-1.4R (30d 盈亏比 1.08, PF 0.81 matches).
-// Codes: "" = ok; STOP_PLAN_NO_STRUCTURE = no level beyond entry (new
-// highs/lows — no structural stop exists); STOP_PLAN_OUT_OF_BAND = the
-// structure stop overshoots the band cap (放弃该设置 per methodology).
+// 09-19 audit (user): the first cut CLAMPED a too-close structure up to the
+// noise floor — manufacturing a stop in no-man's-land (ZEC long: plan
+// 1503.59 between structures 1545.95 and 1475.71) that scored RR 1.95 where
+// the real methodology stop (≈1463, d 5.79%) scores 1.06. Clamping is gone:
+// too-close structures step out; an accepted plan is always a real
+// structure ± buffer.
+//
+// Codes: "" = ok; STOP_PLAN_NO_STRUCTURE = no ≥15m level beyond entry (new
+// highs/lows); STOP_PLAN_OUT_OF_BAND = no structure lands inside the band
+// (nearest too tight, rest too wide — 放弃该设置 per methodology).
 func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (price, distPct float64, code string) {
 	t1h := sig.Timeframes["1h"]
 	if t1h == nil || t1h.ATRPct <= 0 {
@@ -958,11 +968,9 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	}
 	bufPrice := bufMult * t1h.ATRPct / 100 * entry
 
-	// Nearest structure level beyond the entry on the STOP side, at 15m or
-	// coarser granularity: longs stop below (support), shorts above
-	// (resistance) — the mirror of the scanRR target walk.
-	var level float64
-	found := false
+	// Stop-side structure levels, NEAR→FAR from the entry, ≥15m only,
+	// deduped at the same 0.05% tolerance as the S/R arrays.
+	var levels []float64
 	for name, tf := range sig.Timeframes {
 		if tf == nil || tfDuration(name) < 15*time.Minute {
 			continue
@@ -975,57 +983,87 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 			if l <= 0 {
 				continue
 			}
-			beyond := (isLong && l < entry) || (!isLong && l > entry)
-			if !beyond {
-				continue
-			}
-			if !found || (isLong && l > level) || (!isLong && l < level) {
-				level, found = l, true
+			if (isLong && l < entry) || (!isLong && l > entry) {
+				levels = append(levels, l)
 			}
 		}
 	}
-	if !found {
+	if isLong {
+		sort.Sort(sort.Reverse(sort.Float64Slice(levels))) // closest-to-entry first
+	} else {
+		sort.Float64s(levels) // closest-to-entry first
+	}
+	var uniq []float64
+	for _, l := range levels {
+		if !inList(uniq, l, entry) {
+			uniq = append(uniq, l)
+		}
+	}
+	if len(uniq) == 0 {
 		return 0, 0, "STOP_PLAN_NO_STRUCTURE"
 	}
 
-	if isLong {
-		price = level - bufPrice
-	} else {
-		price = level + bufPrice
-	}
-	distPct = math.Abs(price-entry) / entry * 100
-	// Never tighter than the noise floor: a structure sitting inside noise
-	// is governed by the floor, not the pivot.
-	if distPct < floorPct {
-		distPct = floorPct
-		if isLong {
-			price = entry * (1 - floorPct/100)
-		} else {
-			price = entry * (1 + floorPct/100)
-		}
-	}
-	// Band cap: max(2×ATR(4h), 8%) — same wide-of-the-two as the executor.
+	// Cap: max(2×ATR(4h), 8%) — same wide-of-the-two as the executor.
 	capPct := 8.0
 	if t4h := sig.Timeframes["4h"]; t4h != nil && t4h.ATRPct > 0 {
 		if c := 2 * t4h.ATRPct; c > capPct {
 			capPct = c
 		}
 	}
-	if distPct > capPct {
-		return 0, 0, "STOP_PLAN_OUT_OF_BAND"
+
+	for _, l := range uniq {
+		var sp float64
+		if isLong {
+			sp = l - bufPrice
+		} else {
+			sp = l + bufPrice
+		}
+		d := math.Abs(sp-entry) / entry * 100
+		if d < floorPct {
+			continue // too tight — step out to the next structure
+		}
+		if d > capPct {
+			break // farther structures only widen — nothing lands inside the band
+		}
+		return sp, d, ""
 	}
-	return price, distPct, ""
+	return 0, 0, "STOP_PLAN_OUT_OF_BAND"
+}
+
+// marketExceptionEvidence reports whether any of the three market-order
+// exceptions carries program-side evidence: breakout confirmed with volume
+// AND OI confirmation (exception one), the 15m upper-band ride (exception
+// two, longs), the lower-band ride (exception three, shorts).
+//
+// 09-19 audit: with the limit anchor suppressed these are the ONLY entry
+// paths — when none holds, the direction is unexecutable and must FAIL
+// CLOSED (ZEC long shipped allowed=true with limit_buy_price=0,
+// bb_ride=false, breakout=below: the model had to choose between breaking
+// the exception rules and fighting the gate).
+func marketExceptionEvidence(sig *SymbolSignal) bool {
+	if sig.BBRide != nil && sig.BBRide.Ride {
+		return true
+	}
+	if sig.ShortRide != nil && sig.ShortRide.Ride {
+		return true
+	}
+	if sig.Breakout != nil && sig.Breakout.Status == "confirmed" &&
+		sig.Breakout.VolumeConfirm && sig.Breakout.OIConfirm {
+		return true
+	}
+	return false
 }
 
 // computeHardEntryGate evaluates, per direction, every program-decidable
 // open blocker — micro-trend (when the timing gate is enabled, mirroring the
-// executor's config switch), limit-anchor suppression, structural RR at the
+// executor's config switch), limit-anchor suppression (fail-closed unless a
+// market exception carries program evidence), structural RR at the
 // METHODOLOGY stop (stop_plan), data sufficiency, min-size dead zone,
 // loss-streak ban, stock weekend. allowed = nothing failed.
 func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
 	evaluate := func(isLong bool) *DirectionGate {
-		g := &DirectionGate{}
+		g := &DirectionGate{Failed: []string{}}
 		anchor := sig.LimitBuyPrice
 		if !isLong {
 			anchor = sig.LimitSellPrice
@@ -1044,6 +1082,7 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			} else {
 				g.StopPlanPrice = price
 				g.StopPlanPct = round2(dist)
+				g.StopPlanSource = "structure"
 				g.RR = scanRR(g.EntryPrice, g.EntryBasis, dist, price, sig.Timeframes, isLong, opt.MinRR)
 			}
 		}
@@ -1055,7 +1094,7 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 				add("MICRO_TREND_NOT_SHORT")
 			}
 		}
-		if opt.LimitEntryEnabled && !g.LimitAllowed {
+		if opt.LimitEntryEnabled && !g.LimitAllowed && !marketExceptionEvidence(sig) {
 			add("LIMIT_ANCHOR_SUPPRESSED")
 		}
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
