@@ -298,12 +298,12 @@ type RRScan struct {
 	Direction       string  `json:"direction"`                    // long | short
 	EntryPrice      float64 `json:"entry_price"`                  // the anchor the scan assumed
 	EntryBasis      string  `json:"entry_basis"`                  // limit_anchor | live_price
-	StopDistancePct float64 `json:"stop_distance_pct"`            // noise floor (best-case stop) in %
-	StopPrice       float64 `json:"stop_price"`                   // entry ∓ floor distance
+	StopDistancePct float64 `json:"stop_distance_pct"`            // METHODOLOGY stop (stop_plan) distance in % — the same stop the gate verdict is computed at
+	StopPrice       float64 `json:"stop_price"`                   // the methodology stop price — adopt as stop_loss verbatim
 	MinRR           float64 `json:"min_rr"`                       // strategy min_risk_reward_ratio in effect
 	TargetsScanned  int     `json:"targets_scanned"`              // distinct structural levels scanned
 	BestTarget      float64 `json:"best_target,omitempty"`        // farthest scanned level (max RR)
-	BestRR          float64 `json:"best_rr"`                      // upper-bound RR — < min_rr ⇒ RR fails for sure
+	BestRR          float64 `json:"best_rr"`                      // RR upper bound AT THE METHODOLOGY STOP — < min_rr ⇒ RR fails for sure
 	FirstRRGeTarget float64 `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
 	Usable          bool    `json:"usable"`                       // a qualifying target exists
 }
@@ -313,13 +313,21 @@ type RRScan struct {
 // data + size) evaluated ONCE by code so the model sorts, explains and
 // chooses instead of re-assembling gates per cycle (review point 10).
 type DirectionGate struct {
-	Allowed      bool     `json:"allowed"`
-	EntryPrice   float64  `json:"entry_price"`
-	EntryBasis   string   `json:"entry_basis"`   // limit_anchor | live_price
-	LimitAllowed bool     `json:"limit_allowed"` // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
-	StopFloorPct float64  `json:"stop_floor_pct,omitempty"`
-	RR           *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed       []string `json:"failed,omitempty"`  // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
+	Allowed      bool    `json:"allowed"`
+	EntryPrice   float64 `json:"entry_price"`
+	EntryBasis   string  `json:"entry_basis"`   // limit_anchor | live_price
+	LimitAllowed bool    `json:"limit_allowed"` // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
+	StopFloorPct float64 `json:"stop_floor_pct,omitempty"`
+	// StopPlan is the precomputed METHODOLOGY stop (nearest opposite-side
+	// structure + direction-aware buffer, clamped into the band). 09-19 RR
+	// audit: the gate used to score RR at the noise-floor stop while actual
+	// orders stopped at structure+buffer (systematically wider) — trades
+	// passed the gate at "1.5R" but executed at 1.3-1.4R. Now the plan, the
+	// gate and the executor's checkRR all price the same stop.
+	StopPlanPrice float64  `json:"stop_plan_price,omitempty"`
+	StopPlanPct   float64  `json:"stop_plan_pct,omitempty"`
+	RR            *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
+	Failed        []string `json:"failed,omitempty"`  // machine codes: MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -887,10 +895,102 @@ func stopFloorPct(sig *SymbolSignal, mult float64) float64 {
 
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
 
+// Direction-aware structure-stop buffer, in ×ATR(1h). These are the WIDE end
+// of the methodology's 0.3-0.5 band (longs take the lower half 0.3-0.4 → 0.4;
+// shorts — especially bounce/chase shorts with longer wicks — take the upper
+// half 0.4-0.5 → 0.5). Pricing the stop plan at the wide end makes the gate's
+// RR a true LOWER bound: the model can only tighten into the band, never
+// manufacture a passing RR.
+const (
+	methodStopBufferLong  = 0.4
+	methodStopBufferShort = 0.5
+)
+
+// methodStopPlan precomputes the METHODOLOGY stop for one direction: the
+// nearest opposite-side structure level (≥15m granularity — 5m pivots are
+// noise at a 1h-ATR buffer scale) plus the direction-aware buffer, clamped
+// into the band [noiseFloor, max(2×ATR(4h), 8%)].
+//
+// 09-19 RR audit (user): the gate used to score RR at the noise-floor stop
+// while actual orders stopped at structure+buffer — systematically wider —
+// so "1.5R" trades executed at 1.3-1.4R (30d 盈亏比 1.08, PF 0.81 matches).
+// Codes: "" = ok; STOP_PLAN_NO_STRUCTURE = no level beyond entry (new
+// highs/lows — no structural stop exists); STOP_PLAN_OUT_OF_BAND = the
+// structure stop overshoots the band cap (放弃该设置 per methodology).
+func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (price, distPct float64, code string) {
+	t1h := sig.Timeframes["1h"]
+	if t1h == nil || t1h.ATRPct <= 0 {
+		return 0, 0, "STOP_PLAN_NO_STRUCTURE"
+	}
+	bufMult := methodStopBufferLong
+	if !isLong {
+		bufMult = methodStopBufferShort
+	}
+	bufPrice := bufMult * t1h.ATRPct / 100 * entry
+
+	// Nearest structure level beyond the entry on the STOP side, at 15m or
+	// coarser granularity: longs stop below (support), shorts above
+	// (resistance) — the mirror of the scanRR target walk.
+	var level float64
+	found := false
+	for name, tf := range sig.Timeframes {
+		if tf == nil || tfDuration(name) < 15*time.Minute {
+			continue
+		}
+		src := tf.Support
+		if !isLong {
+			src = tf.Resistance
+		}
+		for _, l := range src {
+			if l <= 0 {
+				continue
+			}
+			beyond := (isLong && l < entry) || (!isLong && l > entry)
+			if !beyond {
+				continue
+			}
+			if !found || (isLong && l > level) || (!isLong && l < level) {
+				level, found = l, true
+			}
+		}
+	}
+	if !found {
+		return 0, 0, "STOP_PLAN_NO_STRUCTURE"
+	}
+
+	if isLong {
+		price = level - bufPrice
+	} else {
+		price = level + bufPrice
+	}
+	distPct = math.Abs(price-entry) / entry * 100
+	// Never tighter than the noise floor: a structure sitting inside noise
+	// is governed by the floor, not the pivot.
+	if distPct < floorPct {
+		distPct = floorPct
+		if isLong {
+			price = entry * (1 - floorPct/100)
+		} else {
+			price = entry * (1 + floorPct/100)
+		}
+	}
+	// Band cap: max(2×ATR(4h), 8%) — same wide-of-the-two as the executor.
+	capPct := 8.0
+	if t4h := sig.Timeframes["4h"]; t4h != nil && t4h.ATRPct > 0 {
+		if c := 2 * t4h.ATRPct; c > capPct {
+			capPct = c
+		}
+	}
+	if distPct > capPct {
+		return 0, 0, "STOP_PLAN_OUT_OF_BAND"
+	}
+	return price, distPct, ""
+}
+
 // computeHardEntryGate evaluates, per direction, every program-decidable
 // open blocker — micro-trend (when the timing gate is enabled, mirroring the
-// executor's config switch), limit-anchor suppression, structural RR upper
-// bound at the best-case stop, data sufficiency, min-size dead zone,
+// executor's config switch), limit-anchor suppression, structural RR at the
+// METHODOLOGY stop (stop_plan), data sufficiency, min-size dead zone,
 // loss-streak ban, stock weekend. allowed = nothing failed.
 func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
@@ -907,10 +1007,16 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			g.EntryPrice, g.EntryBasis = sig.Price, "live_price"
 		}
 		g.StopFloorPct = round2(floorPct)
-		if floorPct > 0 {
-			g.RR = scanRR(g.EntryPrice, g.EntryBasis, floorPct, sig.Timeframes, isLong, opt.MinRR)
-		}
 		add := func(code string) { g.Failed = append(g.Failed, code) }
+		if floorPct > 0 {
+			if price, dist, code := methodStopPlan(sig, g.EntryPrice, floorPct, isLong); code != "" {
+				add(code)
+			} else {
+				g.StopPlanPrice = price
+				g.StopPlanPct = round2(dist)
+				g.RR = scanRR(g.EntryPrice, g.EntryBasis, dist, price, sig.Timeframes, isLong, opt.MinRR)
+			}
+		}
 		if opt.EntryTimingGate && sig.ExecutionFilter != nil {
 			if isLong && !sig.ExecutionFilter.LongAllowed {
 				add("MICRO_TREND_NOT_LONG")
@@ -950,11 +1056,12 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 
 // scanRR walks EVERY structural target on the take-profit side across ALL
 // timeframe blocks, near→far, deduped within 0.05% (same tolerance as the
-// S/R builder), computing each one's RR at the noise-floor stop — the best
-// case, since any wider stop lowers the ratio. first_rr_ge_target is the
+// S/R builder), computing each one's RR at the METHODOLOGY stop (structure +
+// buffer, band-clamped — the same stop the executor's checkRR validates).
+// first_rr_ge_target is the
 // rule-mandated pick (nearest qualifying level); best_rr is the definitive
 // upper bound used to declare the RR gate structurally failed.
-func scanRR(entry float64, basis string, floorPct float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
+func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
 	var targets []float64
 	for _, tf := range tfs {
 		if tf == nil {
@@ -991,16 +1098,19 @@ func scanRR(entry float64, basis string, floorPct float64, tfs map[string]*TFSig
 	if !isLong {
 		direction = "short"
 	}
-	stop := entry * (1 - floorPct/100)
-	if !isLong {
-		stop = entry * (1 + floorPct/100)
+	// 09-19 RR audit: stopPct/stopPrice are the METHODOLOGY stop (structure +
+	// buffer, band-clamped — see methodStopPlan), not the noise floor. The
+	// gate verdict, the adopted stop_loss and the executor's checkRR all
+	// price this same stop, so a passing scan IS a ≥min-RR trade.
+	if stopPct <= 0 {
+		stopPct = math.Abs(stopPrice-entry) / entry * 100
 	}
 	out := &RRScan{
 		Direction:       direction,
 		EntryPrice:      entry,
 		EntryBasis:      basis,
-		StopDistancePct: round2(floorPct),
-		StopPrice:       stop,
+		StopDistancePct: round2(stopPct),
+		StopPrice:       stopPrice,
 		MinRR:           round2(minRR),
 		TargetsScanned:  len(uniq),
 	}
@@ -1010,7 +1120,7 @@ func scanRR(entry float64, basis string, floorPct float64, tfs map[string]*TFSig
 		if !isLong {
 			dist = (entry - t) / entry * 100
 		}
-		v := dist / floorPct
+		v := dist / stopPct
 		if v > best {
 			best, bestT = v, t
 		}

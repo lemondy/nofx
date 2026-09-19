@@ -35,7 +35,7 @@ func TestScanRRSagaMaxStructuralRR(t *testing.T) {
 		"1h":  {Resistance: []float64{0.021034}},
 	}
 	// entry = the shown limit anchor; floor = SLMinATRMult 1.5 × ATR(1h) 4.593 ≈ 6.89
-	scan := scanRR(0.020501, "limit_anchor", 6.89, tfs, true, 1.5)
+	scan := scanRR(0.020501, "limit_anchor", 6.89, 0.020501*(1-6.89/100), tfs, true, 1.5)
 	// 0.02139 appears twice across blocks; the 0.05%-tolerance dedup collapses them.
 	if scan.TargetsScanned != 4 {
 		t.Errorf("targets_scanned = %d, want 4 (dedup of the duplicated 0.02139)", scan.TargetsScanned)
@@ -59,7 +59,7 @@ func TestScanRRShortAndFirstQualifying(t *testing.T) {
 		"15m": {Support: []float64{0.03854, 0.038148}},
 		"4h":  {Support: []float64{0.037931}},
 	}
-	scan := scanRR(0.0390875, "limit_anchor", 3.32, tfs, false, 1.5)
+	scan := scanRR(0.0390875, "limit_anchor", 3.32, 0.0390875*(1+3.32/100), tfs, false, 1.5)
 	if scan.Direction != "short" {
 		t.Errorf("direction = %s", scan.Direction)
 	}
@@ -77,7 +77,7 @@ func TestScanRRShortAndFirstQualifying(t *testing.T) {
 		"15m": {Support: []float64{0.0350, 0.0340}},
 		"4h":  {Support: []float64{0.0300}},
 	}
-	scan2 := scanRR(0.0390875, "limit_anchor", 3.32, tfs2, false, 1.5)
+	scan2 := scanRR(0.0390875, "limit_anchor", 3.32, 0.0390875*(1+3.32/100), tfs2, false, 1.5)
 	firstRR := (0.0390875 - 0.035) / 0.0390875 * 100 / 3.32
 	if firstRR < 1.5 {
 		t.Fatalf("fixture math wrong: first level RR %.2f should clear 1.5", firstRR)

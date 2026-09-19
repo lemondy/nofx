@@ -984,8 +984,8 @@ func TestAnchorSuppressionAgainstStructure(t *testing.T) {
 	// The raw-pivot scan runs on 1h only (2026-09-10): 15m minors inside the
 	// pullback corridor are noise at the 1h-scale threshold.
 	base := 0.0800
-	anchor := base * 0.995            // 0.0796
-	resistance := anchor * 1.0046     // 0.46% above the anchor — inside the zone
+	anchor := base * 0.995        // 0.0796
+	resistance := anchor * 1.0046 // 0.46% above the anchor — inside the zone
 	data := &market.Data{Symbol: "BULLAUSDT", CurrentPrice: base, TimeframeData: map[string]*market.TimeframeSeriesData{}}
 	t1h := &market.TimeframeSeriesData{Timeframe: "1h"}
 	for i := 0; i < 60; i++ {
@@ -1189,7 +1189,7 @@ func TestAuditFixes(t *testing.T) {
 	for i := range c {
 		c[i] = 100 + float64(i)*0.5 // steady climb
 	}
-	c[len(c)-1] = c[len(c)-2] - 1 // dip under the fast EMA
+	c[len(c)-1] = c[len(c)-2] - 1               // dip under the fast EMA
 	got := classifyTrend(c, 128.0, 120.0, true) // fast>slow, last<fast
 	if got != "pullback" {
 		t.Fatalf("uptrend dip classified %q, want pullback", got)
@@ -1206,7 +1206,7 @@ func TestRallyClassificationAndFilter(t *testing.T) {
 	for i := range c {
 		c[i] = 200 - float64(i)*0.5 // steady fall → last ≈ 170.5
 	}
-	c[len(c)-1] = 181 // bounce above fast(180), still under slow(185)
+	c[len(c)-1] = 181                           // bounce above fast(180), still under slow(185)
 	got := classifyTrend(c, 180.0, 185.0, true) // fast<slow, last>=fast
 	if got != "rally" {
 		t.Fatalf("downtrend bounce classified %q, want rally", got)

@@ -275,7 +275,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if e.config.RiskControl.EntryTimingGate {
 			params.WriteString("- 入场时点(程序强制): 最细子小时周期(15m/30m)趋势必须与方向一致——做多需 up/pullback,做空需 down/rally(下跌趋势中的反弹=空头入场窗);range 无动能,顺势入场同样会被拦截\n")
 		}
-		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/MICRO_TREND/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE 任一项时不存在任何例外\n")
+		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE 任一项时不存在任何例外\n")
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门(程序强制): K线数据源与实时行情偏差超过 %.1f%% 时,该币两个方向的开仓都被拦(VENDOR_DIVERGENCE)——entry/SL/TP 全部按实时价定价,数据源偏差过大使整套设置失真(09-18 MYXUSDT −2.57%% 教训);阈值可在策略页配置\n", v))
 		}
@@ -285,18 +285,15 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if riskPct <= 0 {
 			riskPct = 1.5
 		}
-		// 止损区间措辞必须与 validateOpenRisk 逐字对齐:上限 = max(2×ATR(4h), 8%)
-		// 取宽不取窄;噪声下限仅在 SLMinATRMult>0 时存在(执行端 mult<=0 不查
-		// 下限, prompt 不得虚构 1.5 默认值——曾在 VTHOUSDT 上把可执行的
-		// [-, 14.29%] 区间误报成 [12%, 14.29%] 而否掉整笔交易)。
-		stopBand := "上限 = max(2×ATR(4h), 8%)——缓冲与下限看 1h 节奏,宽止损上限看 4h 波动,二者取宽不取窄;ATR 用各币 JSON 里对应时间块的 atr_pct;结构位落在区间外时放弃该设置,不要硬凑。重要: 快照 rr_scan 里的 stop_price/stop_distance_pct 只是\"最紧允许止损\"口径的 RR 上限校验参考,严禁照抄为 stop_loss——实际止损必须按本方法论(结构位+缓冲)重新定位,通常比噪声下限更宽,实际 RR 也因此低于 best_rr;1h atr_percentile>80 时更不许贴下限的紧止损"
+		// 止损措辞与执行端逐字对齐 (09-19 RR audit): stop_plan 由程序按方法论
+		// 预计算(结构位+方向性缓冲,夹带),rr_scan/checkRR/模型采用三者同口径。
 		if floorMult := rc.SLMinATRMult; floorMult > 0 {
-			params.WriteString(fmt.Sprintf("- 止损(程序校验): 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(方向性微调: 空单——尤其反弹追空/急跌追空——取上半段 0.4-0.5,挤压行情的上影线更长;多单回调入场取下半段 0.3-0.4),止损距离 d%% 必须同时满足: d ≥ %.1f×ATR(1h)(噪声下限)且 d ≤ 上限,其中 %s\n", floorMult, stopBand))
+			params.WriteString(fmt.Sprintf("- 止损(程序预计算,逐字采用): 各方向快照 hard_entry_gate 的 stop_plan_price 就是按方法论算好的止损——最近对侧结构位 + 方向性缓冲(空 0.5×ATR(1h)/多 0.4×ATR(1h),取宽端保证 RR 是下界),并夹进带内 [≥%.1f×ATR(1h) 噪声下限, ≤max(2×ATR(4h), 8%%)]。开仓时 stop_loss 逐字采用 stop_plan_price,禁止自行重算或改窄——RR 门已按它计算,采用它即保证真实 RR≥min_rr(执行端 checkRR 同口径,自选更宽止损会被拒)。failed 含 STOP_PLAN_NO_STRUCTURE(对侧无结构位,如创新高/新低后逆势)或 STOP_PLAN_OUT_OF_BAND(结构止损超出带上限)= 该方向无法按方法论设止损,放弃该设置\n", floorMult))
 		} else {
-			params.WriteString(fmt.Sprintf("- 止损(程序校验): 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(方向性微调: 空单——尤其反弹追空/急跌追空——取上半段 0.4-0.5,挤压行情的上影线更长;多单回调入场取下半段 0.3-0.4),止损距离 d%% 只需满足: d ≤ 上限,其中 %s(本策略未启用噪声下限)\n", stopBand))
+			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
 		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额1.5U → 名义价值50U → 3x杠杆保证金≈16.7U。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益与策略配置 min_position_size(策略页可改)预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小仓位的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct))
-		params.WriteString(fmt.Sprintf("- 止盈(结构选位已由程序完成): 各币快照 `hard_entry_gate[direction].rr_scan` 就是\"从近到远遍历全部时间块(含 execution_tf/15m)全部 resistance/support 元素\"的程序结果——开仓时 `take_profit` 直接采用 `rr_scan.first_rr_ge_target`(该方向从近到远第一个 RR≥%.1f 的结构位,按 rr_scan.entry_price 口径计算);`rr_scan.usable=false` 表示连最窄允许止损下 RR 上限 best_rr 都 <%.1f,该方向 RR 门结构性失败,输出 wait 并在 blocking_factors 标 RR_LOW、no_trade_reason 引用 `MAX_STRUCTURAL_RR=best_rr`——禁止只看最近一个结构位就下\"无可用结构位\"结论,也不许跳到更远目标。个别币没有 rr_scan 字段(如未启用噪声下限)时退回手工规则: 逐项遍历全部数组取第一个 RR≥%.1f。该比例仍是程序硬门槛(开仓时按决策价与成交价双重校验 RR)\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
+		params.WriteString(fmt.Sprintf("- 止盈(结构选位已由程序完成): 各币快照 `hard_entry_gate[direction].rr_scan` 就是\"从近到远遍历全部时间块(含 execution_tf/15m)全部 resistance/support 元素\"的程序结果——开仓时 `take_profit` 直接采用 `rr_scan.first_rr_ge_target`(该方向从近到远第一个 RR≥%.1f 的结构位,按 rr_scan.entry_price 口径计算);`rr_scan.usable=false` 表示连最窄允许止损下 RR 上限 best_rr 都 <%.1f,该方向 RR 门结构性失败,输出 wait 并在 blocking_factors 标 RR_LOW、no_trade_reason 引用 `MAX_STRUCTURAL_RR=best_rr`——禁止只看最近一个结构位就下\"无可用结构位\"结论,也不许跳到更远目标。个别币没有 rr_scan 字段(如未启用噪声下限)时退回手工规则: 逐项遍历全部数组取第一个 RR≥%.1f。该比例仍是程序硬门槛(开仓时按决策价与成交价双重校验 RR)。stop_plan_price + first_rr_ge_target 这一对就是「真实 RR≥min」的组合——SL 用前者、TP 用后者,不要只换其中一半\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
 		var tpParts []string
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
 			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序自动市价减仓 50%%,同时止损移至开仓价保本;剩余 50%% 奔向结构位止盈", lockR))
@@ -310,7 +307,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if sp := MaxSpreadPct(&e.config.RiskControl); sp > 0 {
 			params.WriteString(fmt.Sprintf("- 点差门(程序强制): 盘口买卖价差 > %.2f%%(占中间价)的币种,任何 open_*/open_*_limit 都会被程序拒单——薄盘口的点差会吃掉限价优势并抬高市价成本,这类币直接放弃\n", sp))
 		}
-		params.WriteString("- 注意: 1h atr_percentile>80 时禁止贴下限的紧止损;资金费率极端拥挤时禁止逆势扛单;目标位越过 structure_high/low(历史新高新低区)时注明无历史阻力参考、不确定性大\n")
+		params.WriteString("- 注意: 资金费率极端拥挤时禁止逆势扛单;目标位越过 structure_high/low(历史新高新低区)时注明无历史阻力参考、不确定性大\n")
 		if e.config.RiskControl.VolTargetEnabled {
 			params.WriteString("- 波动率调仓(程序自动): 每周期按 权益×单笔风险%÷ATR(1h)% 重算目标仓位,80/120 滞后带外才调——>120% 程序自动减仓,<80% 时你可在信号仍有效的前提下评估加仓。不要因波动率变化去动 SL/TP\n")
 		}
@@ -1498,7 +1495,7 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 // once per coin — duplicating it across 8+ candidates wasted ~21k chars every cycle.
 const signalBlockLegend = `Naming: each timeframe block reports ITS BAR GRANULARITY only. trend_window_return_pct = change over return_window_hours (window ≠ bar length). price_change_60m_live_pct / price_change_24h_live_pct = LIVE price vs 60m/24h ago. prev_hour_close_change_pct = last FULLY CLOSED hour, close-to-close. Do not mix them. All fields you need are in this JSON — read it carefully.
 Naming addendum: macd_hist = MACD LINE (EMA12−EMA26) ÷ price ×100 — NOT the signal histogram; macd_trend = line slope vs previous bar.
-Derived fields (program-computed, use directly — do not re-derive): role_tfs(execution/trend/regime 时间框架分工) | execution_filter(微趋势对齐预判: long_allowed/short_allowed, 开启入场时点闸门时为硬规则) | hard_entry_gate(程序对每方向开仓硬门的最终判定: allowed/entry_price/limit_allowed/stop_floor_pct/rr_scan/failed 阻断码列表——open_* 只允许输出在 allowed=true 的方向;wait/hold 的客观理由直接引用 failed,不要再自行组装三道门) | rr_scan(程序已遍历全部时间块的全部 S/R 结构位: best_rr=按噪声下限止损距离算出的 RR 上限,usable=false ⇒ 该方向 RR 门结构性不可能通过——结论措辞用 MAX_STRUCTURAL_RR=best_rr,而不是"最近阻力位 RR 不足";first_rr_ge_target=规则要求的最近达标结构位,开仓时 take_profit 直接采用它;但 stop_price 仅是门槛校验口径,不是给你的止损值——实际 stop_loss 按止损方法论另算,见"止损(程序校验)") | bias(方向判读的三个来源 scanner/structure/execution——"scanner=short" 只表示扫描器快照姿态偏空,不等于市场空头证据强,三者可以相反且都合法) | funding_rollover(程序按结算历史计算的"费率刚从高位回落": detected 是做空条件②的唯一可验证依据,字段缺失=历史拉取失败=UNKNOWN 按不满足处理) | limit_buy_price/limit_sell_price(0=锚点被程序抑制,该方向禁止挂单开仓,与 entry_rule_triggered 无关;注意: 这只是限价路径被禁≠该方向整体禁止——方向可开性只看 hard_entry_gate.allowed) | bb_ride/short_ride(15m 上轨/下轨骑行市价证据, 程序预算: 量能暴增+连续≥3 根同向收盘贴带; 分别对应市价例外二(多)/例外三(空)) | breakout.status(below|approach|broken_unconfirmed|confirmed|fake_break|retest_hold|extended, 相对1h结构位的突破判定,含量能/OI确认;extended=早已越过且未回踩) | directional_score(-100..+100 净方向共识,已剔除range噪音) | signal_conflict.types(SCANNER_VS_STRUCTURE|TIMEFRAME_SPLIT|SCANNER_VS_SCANNER — 两个扫描器对同一币给出相反方向,必须先表态信哪个) | data_quality.sufficient(false=历史长度不足以支撑EMA50/MACD类长窗指标) | funding_rate(原始费率小数,不是百分比:0.0001 = 0.01% 每结算期,勿再×100或当百分比读) | funding_annualized_pct(费率年化百分比,已按 funding_settle_hours 实测结算间隔年化,拥挤度判断直接用它) | no_trade_reason(hold/wait必填)
+Derived fields (program-computed, use directly — do not re-derive): role_tfs(execution/trend/regime 时间框架分工) | execution_filter(微趋势对齐预判: long_allowed/short_allowed, 开启入场时点闸门时为硬规则) | hard_entry_gate(程序对每方向开仓硬门的最终判定: allowed/entry_price/limit_allowed/stop_floor_pct/rr_scan/failed 阻断码列表——open_* 只允许输出在 allowed=true 的方向;wait/hold 的客观理由直接引用 failed,不要再自行组装三道门) | rr_scan(程序已遍历全部时间块的全部 S/R 结构位: best_rr=按方法论止损 stop_plan(最近对侧结构位+方向性缓冲)算出的 RR 上限,usable=false ⇒ 该方向 RR 门结构性不可能通过——结论措辞用 MAX_STRUCTURAL_RR=best_rr,而不是"最近阻力位 RR 不足";first_rr_ge_target=规则要求的最近达标结构位,开仓时 take_profit 直接采用它;stop_price(=stop_plan_price)就是方法论止损价,开仓 stop_loss 逐字采用它——RR 门按它计算,采用这对组合即保证真实 RR≥min_rr,见"止损(程序预计算)") | bias(方向判读的三个来源 scanner/structure/execution——"scanner=short" 只表示扫描器快照姿态偏空,不等于市场空头证据强,三者可以相反且都合法) | funding_rollover(程序按结算历史计算的"费率刚从高位回落": detected 是做空条件②的唯一可验证依据,字段缺失=历史拉取失败=UNKNOWN 按不满足处理) | limit_buy_price/limit_sell_price(0=锚点被程序抑制,该方向禁止挂单开仓,与 entry_rule_triggered 无关;注意: 这只是限价路径被禁≠该方向整体禁止——方向可开性只看 hard_entry_gate.allowed) | bb_ride/short_ride(15m 上轨/下轨骑行市价证据, 程序预算: 量能暴增+连续≥3 根同向收盘贴带; 分别对应市价例外二(多)/例外三(空)) | breakout.status(below|approach|broken_unconfirmed|confirmed|fake_break|retest_hold|extended, 相对1h结构位的突破判定,含量能/OI确认;extended=早已越过且未回踩) | directional_score(-100..+100 净方向共识,已剔除range噪音) | signal_conflict.types(SCANNER_VS_STRUCTURE|TIMEFRAME_SPLIT|SCANNER_VS_SCANNER — 两个扫描器对同一币给出相反方向,必须先表态信哪个) | data_quality.sufficient(false=历史长度不足以支撑EMA50/MACD类长窗指标) | funding_rate(原始费率小数,不是百分比:0.0001 = 0.01% 每结算期,勿再×100或当百分比读) | funding_annualized_pct(费率年化百分比,已按 funding_settle_hours 实测结算间隔年化,拥挤度判断直接用它) | no_trade_reason(hold/wait必填)
 结构位与现价的相对位置(全部按 LIVE 价预计算,勿自行重算): support/resistance 数组已按现价过滤,空数组 [] 是明确证据——resistance:[] = 现价上方窗口内已无任何摆动高点(正在创新高,上方无结构参考),support:[] 同理镜像;structure_high_dist_pct / structure_low_dist_pct = (结构位−现价)/现价×100,与 support_dist_pct 同符号约定——structure_high_dist_pct 为负 = 现价已越过该周期结构高点(高TF结构位滞后于现价,严禁把它当"上方阻力"用,此时上方结构参考失效,做空止损口径需明确标注这一点);data_freshness.vendor_vs_live_divergence_pct = K线数据源与实时行情的偏差,绝对值超阈值时 hard_entry_gate 直接给两方向加 VENDOR_DIVERGENCE 阻断码(entry/SL/TP 全部按实时价定价,数据源偏差过大=整套设置失真)。
 数据新鲜度优先级: 同一字段冲突时取时间戳更新者——Structured Signal timestamp > 实时 derivatives/liquidity > scanner/rankings 快照。榜单与 hint 里的价格/费率是旧快照,严禁参与 entry/SL/TP/RR 精确计算(它们与结构化现价可差 1% 以上),只用于市场情绪/资金轮动语境。
 
@@ -1533,7 +1530,7 @@ func (e *StrategyEngine) renderSignalBlock(sig *SymbolSignal) string {
 // the prompt's hard-gate rule).
 var noExceptionCodePrefixes = []string{
 	"RR_MAX_", "MICRO_TREND_", "LOSS_STREAK_BANNED", "MIN_SIZE_DEAD_ZONE",
-	"DATA_INSUFFICIENT", "STOCK_WEEKEND", "VENDOR_DIVERGENCE_",
+	"DATA_INSUFFICIENT", "STOCK_WEEKEND", "VENDOR_DIVERGENCE_", "STOP_PLAN_",
 }
 
 func directionHardBlocked(g *DirectionGate) bool {

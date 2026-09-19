@@ -153,36 +153,40 @@ func TestIncompleteSymbolHidesQuantData(t *testing.T) {
 // contradictory (min vs max) and it flipped VTHOUSDT's verdict depending on
 // which sentence the model believed.
 func TestStopBandWordingMatchesExecutor(t *testing.T) {
-	// Strategy WITH a noise floor (1.5×ATR(1h), e.g. Balanced/做空).
+	// Strategy WITH a noise floor (1.5×ATR(1h), e.g. Balanced/做空): the
+	// prompt teaches ADOPTION of the precomputed stop plan (09-19 RR audit) —
+	// gate, plan and executor's checkRR price the same stop.
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.SLMinATRMult = 1.5
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildSystemPrompt(100, "")
-	if !strings.Contains(prompt, "d ≥ 1.5×ATR(1h)(噪声下限)且 d ≤ 上限") {
-		t.Fatalf("floor variant missing floor clause:\n%s", extractStopLine(prompt))
-	}
-	for _, want := range []string{"上限 = max(2×ATR(4h), 8%)", "取宽不取窄"} {
+	for _, want := range []string{
+		"止损(程序预计算,逐字采用)",
+		"stop_plan_price",
+		"≥1.5×ATR(1h) 噪声下限",
+		"max(2×ATR(4h), 8%)",
+		"STOP_PLAN_NO_STRUCTURE", "STOP_PLAN_OUT_OF_BAND",
+	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("floor variant missing %q:\n%s", want, extractStopLine(prompt))
 		}
 	}
-	if strings.Contains(prompt, "且 d ≤ 8%") {
-		t.Fatalf("contradictory min-style clause still present:\n%s", extractStopLine(prompt))
+	for _, gone := range []string{"且 d ≤ 8%", "严禁照抄为 stop_loss"} {
+		if strings.Contains(prompt, gone) {
+			t.Fatalf("obsolete wording still present: %q:\n%s", gone, extractStopLine(prompt))
+		}
 	}
 
-	// Strategy WITHOUT a floor (SLMinATRMult=0, e.g. Conservative): the prompt
-	// must NOT invent the 1.5 default — the executor enforces no floor.
+	// Strategy WITHOUT a floor (SLMinATRMult=0, e.g. Conservative): no
+	// rr_scan/stop_plan — manual methodology, no phantom 1.5 default.
 	cfg0 := &store.StrategyConfig{}
 	engine0 := NewStrategyEngine(cfg0)
 	prompt0 := engine0.BuildSystemPrompt(100, "")
-	if !strings.Contains(prompt0, "只需满足: d ≤ 上限") || !strings.Contains(prompt0, "未启用噪声下限") {
+	if !strings.Contains(prompt0, "止损(手工方法论)") || !strings.Contains(prompt0, "未启用噪声下限") {
 		t.Fatalf("floor-less variant wrong:\n%s", extractStopLine(prompt0))
 	}
 	if strings.Contains(prompt0, "d ≥ 1.5×ATR(1h)") {
 		t.Fatalf("floor-less strategy must not show a phantom 1.5×ATR floor:\n%s", extractStopLine(prompt0))
-	}
-	if strings.Contains(prompt0, "且 d ≤ 8%") {
-		t.Fatalf("contradictory min-style clause still present:\n%s", extractStopLine(prompt0))
 	}
 }
 
@@ -329,11 +333,12 @@ func TestBuildUserPromptManagementFields(t *testing.T) {
 func TestBuildUserPromptRallyWindow(t *testing.T) {
 	cfg := &store.StrategyConfig{}
 	cfg.RiskControl.EntryTimingGate = true
+	cfg.RiskControl.SLMinATRMult = 1.5 // the stop-plan line renders only with a floor
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"做空需 down/rally(下跌趋势中的反弹=空头入场窗)",
-		"空单——尤其反弹追空/急跌追空——取上半段 0.4-0.5",
+		"空 0.5×ATR(1h)/多 0.4×ATR(1h)",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("rally window prompt missing %q", want)
@@ -361,6 +366,12 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 	p := 5.0
 	for i := 0; i < 80; i++ {
 		p *= 1.002
+		if i%7 == 0 {
+			p *= 1.02 // swing high spikes → pivot highs
+		}
+		if i%11 == 0 {
+			p *= 0.97 // deep dips → pivot lows (S/R arrays → stop plans)
+		}
 		tfData.Klines = append(tfData.Klines, market.KlineBar{
 			Time: now.Add(time.Duration(i-80) * time.Hour).UnixMilli(),
 			Open: p * 0.999, High: p * 1.002, Low: p * 0.998, Close: p, Volume: 1000 + float64(i),
@@ -386,7 +397,7 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 	for _, gone := range []string{
 		"数据新鲜度优先级", "MAX_STRUCTURAL_RR", "不等于市场空头证据强",
 		"这只是限价路径被禁≠该方向整体禁止", "严禁参与 entry/SL/TP/RR 精确计算",
-		"stop_price 仅是门槛校验口径",
+		"stop_price 仅是门槛校验口径", "逐字采用 stop_plan_price",
 	} {
 		if strings.Contains(out, gone) {
 			t.Errorf("per-coin block must not repeat legend %q", gone)
@@ -396,7 +407,7 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 	sys1 := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"开仓硬门(程序判定,禁止自行重算)",
-		"严禁照抄为 stop_loss",
+		"stop_price(=stop_plan_price)就是方法论止损价",
 		"derivatives.funding_rollover.detected",
 		"禁止从 scanner patterns",
 		"RECHECK_ALL_HARD_GATES",
