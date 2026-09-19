@@ -1188,7 +1188,17 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		positionSide := strings.ToUpper(side) // LONG / SHORT
 		posKey := symbol + "_" + side
 		var repaired []string
-		if needSL {
+		// 09-19 user directive: a NAKED position (no SL order AND no recorded
+		// stop) gets protected, not just lamented — SL = 1.5×ATR(1h) from
+		// mark, TP at 1:2 RR, both computed fresh this cycle. The legacy
+		// recorded-price repair below still handles the has-record case.
+		if needSL && at.GetRecordedStopLoss(symbol, side) <= 0 {
+			if at.placeComputedProtection(symbol, side, positionSide, markPrice) {
+				continue // both legs placed from the computed plan — done here
+			}
+			logger.Infof("⚠️ [%s] Protection watchdog: %s has no SL order and no recorded stop — computed-protection failed, manual check", at.name, symbol)
+			at.alertUnprotectedPosition(symbol, side, "no SL order, no recorded stop, and the computed protection failed to place")
+		} else if needSL {
 			if sl := at.GetRecordedStopLoss(symbol, side); sl > 0 {
 				valid := (side == "long" && sl < markPrice) || (side == "short" && sl > markPrice)
 				if valid {
@@ -1230,6 +1240,63 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🛡️ 保护单补挂 %s</b>\n<i>%s(按开仓计划价自动补挂)</i>", notify.Escape(symbol), strings.Join(repaired, " + ")))
 		}
 	}
+}
+
+// placeComputedProtection: the naked-position fallback (09-19 user directive
+// — PONS sat unprotected for 8h because the old path could only alert). SL =
+// mark ± 1.5×ATR(1h), TP = mark ∓ 2× that distance (1:2 RR), prices rounded
+// to the symbol tick when the concrete trader exposes precision. Both legs
+// placed, the computed stop recorded (memory + write-once initial anchor) so
+// every downstream consumer treats it as the plan. Returns true when BOTH
+// legs are on the exchange.
+func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string, markPrice float64) bool {
+	data, err := market.GetWithTimeframes(symbol, []string{"1h"}, "1h", 99)
+	if err != nil || data == nil {
+		return false
+	}
+	tf := data.TimeframeData["1h"]
+	if tf == nil || tf.ATR14 <= 0 || markPrice <= 0 {
+		return false
+	}
+	atrPct := tf.ATR14 / markPrice * 100
+	dist := 1.5 * atrPct / 100 * markPrice
+	var sl, tp float64
+	if side == "long" {
+		sl, tp = markPrice-dist, markPrice+2*dist
+	} else {
+		sl, tp = markPrice+dist, markPrice-2*dist
+	}
+	if sl <= 0 || tp <= 0 || (side == "long" && (sl <= markPrice || tp <= markPrice)) ||
+		(side == "short" && (sl <= markPrice || tp >= markPrice)) {
+		return false
+	}
+	if pp, ok := at.trader.(interface {
+		GetSymbolPricePrecision(string) (int, error)
+	}); ok {
+		if prec, err := pp.GetSymbolPricePrecision(symbol); err == nil && prec >= 0 {
+			scale := math.Pow10(prec)
+			sl = math.Round(sl*scale) / scale
+			tp = math.Round(tp*scale) / scale
+		}
+	}
+
+	if err := at.trader.SetStopLoss(symbol, positionSide, 0, sl); err != nil {
+		logger.Infof("⚠️ [%s] Protection watchdog: computed SL place failed for %s: %v", at.name, symbol, err)
+		return false
+	}
+	if err := at.trader.SetTakeProfit(symbol, positionSide, 0, tp); err != nil {
+		logger.Infof("⚠️ [%s] Protection watchdog: computed TP place failed for %s: %v", at.name, symbol, err)
+		return false
+	}
+	at.SetRecordedStopLoss(symbol, side, sl)
+	at.SetInitialStopLoss(symbol, side, sl)
+	at.recordOpenTakeProfit(symbol, side, tp)
+	logger.Infof("🛡️ [%s] Protection watchdog: %s naked — computed protection placed: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h) %.2f%% from mark %.6g)",
+		at.name, symbol, sl, tp, atrPct, markPrice)
+	notify.Notify("ORDER", at.name, fmt.Sprintf(
+		"<b>🛡️ 裸仓自动保护 %s (%s)</b>\n<i>无挂单且无记录止损,已按最新价程序重算并挂出: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h)=%.2f%%)</i>",
+		notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], sl, tp, atrPct))
+	return true
 }
 
 // alertUnprotectedPosition pushes a Telegram alert when the watchdog finds a
