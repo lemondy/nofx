@@ -271,9 +271,9 @@ func TestPartialCumulativeCap(t *testing.T) {
 // without leverage; the budget comparison is a strict exceed check.
 func TestUsedMarginAndBudget(t *testing.T) {
 	positions := []map[string]interface{}{
-		{"positionAmt": 2.0, "markPrice": 50.0, "leverage": 10.0}, // 100/10 = 10
+		{"positionAmt": 2.0, "markPrice": 50.0, "leverage": 10.0},  // 100/10 = 10
 		{"positionAmt": -1.0, "markPrice": 200.0, "leverage": 5.0}, // 200/5 = 40
-		{"positionAmt": 3.0, "markPrice": 10.0}, // no leverage → skipped
+		{"positionAmt": 3.0, "markPrice": 10.0},                    // no leverage → skipped
 	}
 	if got := usedMarginOf(positions); got != 50 {
 		t.Fatalf("used margin = %v, want 50", got)

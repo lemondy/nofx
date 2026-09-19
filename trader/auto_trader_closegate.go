@@ -97,9 +97,10 @@ func buildCloseGateView(data *market.Data, side string, markPrice float64) *clos
 
 // closeRejectBreakoutBlocks decides whether an AI-initiated close of a LOSING
 // position must be blocked to give a nearby breakout/breakdown room:
-//  - the position is underwater (long below entry / short above entry),
-//  - the nearest opposite structure level is within thresholdPct of the mark,
-//  - the 15m structure is NOT yet broken (no confirmed reversal).
+//   - the position is underwater (long below entry / short above entry),
+//   - the nearest opposite structure level is within thresholdPct of the mark,
+//   - the 15m structure is NOT yet broken (no confirmed reversal).
+//
 // Exiting at a loss into a nearby level that rejected the price is exactly
 // where breakouts happen; the position still exits via its stop-loss, a
 // confirmed 15m structure break, or a normal profitable take-profit (all

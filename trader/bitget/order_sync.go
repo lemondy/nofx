@@ -48,7 +48,6 @@ func (t *BitgetTrader) GetTrades(startTime time.Time, limit int) ([]BitgetTrade,
 		return nil, fmt.Errorf("failed to get fill history: %w", err)
 	}
 
-
 	// Bitget fill structure - supports both one-way and hedge mode
 	type BitgetFill struct {
 		TradeID    string `json:"tradeId"`

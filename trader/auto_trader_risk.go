@@ -504,11 +504,45 @@ func (at *AutoTrader) validateOpenRisk(decision *kernel.Decision, entryPrice, fl
 	if floorMult := at.config.StrategyConfig.RiskControl.SLMinATRMult; floorMult > 0 && floorATRPct > 0 {
 		floor := floorMult * floorATRPct
 		if slDistPct < floor {
-			return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: stop distance %.2f%% below noise floor %.2f%% (%.1f×ATR(1h) %.2f%%) — widen to the next structure level",
-				decision.Action, decision.Symbol, slDistPct, floor, floorMult, floorATRPct)
+			// 09-19 PONS case: the stop that IS the gated stop_plan was
+			// rejected because the LIMIT anchor (a BETTER short entry, +1.2%)
+			// shrank the plan's percentage distance below the floor. The plan
+			// was validated in-band at the gate's snapshot basis, and the
+			// pre-computed anchor only shifts the basis in the favorable
+			// direction — the stop is still the real structure level, and RR
+			// is re-checked at this basis above. Exempt it.
+			if !at.stopMatchesGatedPlan(decision) {
+				return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: stop distance %.2f%% below noise floor %.2f%% (%.1f×ATR(1h) %.2f%%) — widen to the next structure level",
+					decision.Action, decision.Symbol, slDistPct, floor, floorMult, floorATRPct)
+			}
+			logger.Infof("📐 [%s] stop %.6g = gated stop_plan (d %.2f%% at the limit basis < %.2f%% floor) — in-band at the gate basis, allowed",
+				decision.Symbol, decision.StopLoss, slDistPct, floor)
 		}
 	}
 	return nil
+}
+
+// stopMatchesGatedPlan reports whether the decision's stop equals the
+// stop_plan_price the hard gate validated for this direction (± the same
+// 0.05% echo tolerance as the post-parse snap, which runs before validation
+// — plan-compliant stops arrive here already equalized).
+func (at *AutoTrader) stopMatchesGatedPlan(decision *kernel.Decision) bool {
+	if at.cycleGateStates == nil || decision.StopLoss <= 0 {
+		return false
+	}
+	gs, ok := at.cycleGateStates[market.Normalize(decision.Symbol)]
+	if !ok || gs == nil {
+		return false
+	}
+	plan := gs.LongStopPlanPrice
+	if strings.HasPrefix(decision.Action, "open_short") {
+		plan = gs.ShortStopPlanPrice
+	}
+	if plan <= 0 {
+		return false
+	}
+	dev := math.Abs(decision.StopLoss-plan) / plan * 100
+	return dev <= 0.05
 }
 
 // checkRR validates the risk-reward ratio at one price anchor.

@@ -436,3 +436,36 @@ func TestStopLossATRYardsticks(t *testing.T) {
 		t.Fatalf("floor fallback without 1h must use 4h ATR (%.4f)", got)
 	}
 }
+
+// 09-19 PONS case: the model adopted the gated stop_plan verbatim
+// (SL 0.705709, validated in-band at the snapshot basis 0.6712 / d 5.14%),
+// then hung it on a BETTER short entry (limit anchor 0.679254, +1.2%) — the
+// same structure stop read 3.89% at that basis, under the 4.44% floor. A
+// plan-equal stop is exempt from the floor: the gate basis already
+// validated it, and the anchor only shifts the entry in the favorable
+// direction. RR is still re-checked at this basis.
+func TestValidateOpenRiskGatedPlanExemptFromFloor(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{SLMinATRMult: 1.5, MinRiskRewardRatio: 1.5})
+	at.cycleGateStates = map[string]*kernel.GateState{
+		"PONSUSDT": {ShortStopPlanPrice: 0.705709, LongStopPlanPrice: 0.601333},
+	}
+
+	dec := &kernel.Decision{
+		Symbol: "PONSUSDT", Action: "open_short_limit", Price: 0.679254,
+		StopLoss: 0.705709, TakeProfit: 0.6099,
+	}
+	// entry = the limit anchor; ATR(1h) 2.96% → floor 4.44%; plan stop reads
+	// 3.89% at this basis.
+	if err := at.validateOpenRisk(dec, 0.679254, 2.96, 6.0); err != nil {
+		t.Fatalf("gated plan stop rejected: %v", err)
+	}
+
+	// A NON-plan stop below the floor must still be rejected.
+	dec2 := &kernel.Decision{
+		Symbol: "OTHERUSDT", Action: "open_short_limit", Price: 0.679254,
+		StopLoss: 0.705709, TakeProfit: 0.6099,
+	}
+	if err := at.validateOpenRisk(dec2, 0.679254, 2.96, 6.0); err == nil {
+		t.Fatal("non-plan below-floor stop passed — the exemption leaked")
+	}
+}

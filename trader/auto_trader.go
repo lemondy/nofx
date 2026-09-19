@@ -126,7 +126,8 @@ type AutoTrader struct {
 	exchangeID              string // Exchange account UUID
 	showInCompetition       bool   // Whether to show in competition page
 	config                  AutoTraderConfig
-	trader                  Trader // Use Trader interface (supports multiple platforms)
+	trader                  Trader                       // Use Trader interface (supports multiple platforms)
+	cycleGateStates         map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
 	mcpClient               mcp.AIClient
 	store                   *store.Store           // Data storage (decision records, etc.)
 	strategyEngine          *kernel.StrategyEngine // Strategy engine (uses strategy configuration)

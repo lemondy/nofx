@@ -245,9 +245,9 @@ func (t *LighterTraderV2) GetActiveOrders(symbol string) ([]OrderResponse, error
 
 	// Parse response - Lighter API uses "orders" field, not "data"
 	var apiResp struct {
-		Code    int              `json:"code"`
-		Message string           `json:"message"`
-		Orders  []OrderResponse  `json:"orders"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Orders  []OrderResponse `json:"orders"`
 	}
 
 	if err := json.Unmarshal(body, &apiResp); err != nil {

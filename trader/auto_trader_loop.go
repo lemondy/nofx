@@ -709,6 +709,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		SymbolStats:    at.loadSymbolStats(),
 		CandidateCoins: candidateCoins,
 	}
+	// Plan-parity: the executor's band/RR checks exempt stops that equal the
+	// gated stop_plan — they need this cycle's gate verdicts.
+	at.cycleGateStates = ctx.GateStates
+
 	// Loss-streak circuit breaker: program-computed ban map (one store pass),
 	// mirrored into each symbol's snapshot so the model reads the verdict
 	// instead of self-judging it (09-15 label-abuse fix). Nil = nothing banned.

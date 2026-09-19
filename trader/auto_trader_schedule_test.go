@@ -15,11 +15,11 @@ func TestNextAlignedWait(t *testing.T) {
 		return time.Date(2026, 9, 10, h, m, s, 0, loc)
 	}
 	cases := []struct {
-		name         string
-		interval     time.Duration
-		now          time.Time
-		wantMinSec   string // the next boundary's hh:mm:ss
-		wantWait     time.Duration
+		name       string
+		interval   time.Duration
+		now        time.Time
+		wantMinSec string // the next boundary's hh:mm:ss
+		wantWait   time.Duration
 	}{
 		{"5m mid-interval", 5 * time.Minute, at(10, 2, 0), "10:05:00", 3 * time.Minute},
 		{"5m exactly on boundary", 5 * time.Minute, at(10, 5, 0), "10:10:00", 5 * time.Minute},
