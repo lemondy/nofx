@@ -167,7 +167,10 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			client.Log.Warnf("⚠️  AI API call failed, retrying (%d/%d)...", attempt, maxRetries)
+			// 09-19: the retry line used to swallow lastErr — a night of
+			// "context deadline exceeded" failures was invisible at the
+			// retry point and only surfaced in the final aggregate error.
+			client.Log.Warnf("⚠️  AI API call failed (attempt %d/%d): %v — retrying", attempt-1, maxRetries, lastErr)
 		}
 
 		// Streamable OpenAI-compatible providers use SSE streaming: headers
@@ -177,7 +180,7 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 		var result string
 		var err error
 		if client.Cfg.StreamDecisions && client.streamableProvider() {
-			result, err = client.callStreamSingle(systemPrompt, userPrompt)
+			result, err = client.callStreamSingle(systemPrompt, userPrompt, streamHardCap(attempt))
 		} else {
 			result, err = client.Hooks.Call(systemPrompt, userPrompt)
 		}
@@ -854,12 +857,27 @@ func (client *Client) streamableProvider() bool {
 	return false
 }
 
+// streamHardCap returns the per-attempt hard cap for streaming calls.
+// Attempt 1 fails fast at 300s; the retry escalates to 600s. Evidence
+// (DB 09-18, mac-nofx/GLM): successful generations ran 253-299s — exactly on
+// the old fixed 300s cap — so any provider slow-phase tipped BOTH attempts
+// into "context deadline exceeded" and the whole cycle failed. The 90s idle
+// watchdog still bounds genuinely hung connections; only slow-but-flowing
+// streams ever reach the hard cap.
+func streamHardCap(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 300 * time.Second
+	}
+	return 600 * time.Second
+}
+
 // callStreamSingle performs one streaming attempt: same request shape as the
-// non-stream flow plus stream=true, with a 90s idle watchdog and a 300s hard
-// cap. Long reasoning generations stream chunks continuously, so the idle
-// watchdog — not the total timeout — is what bounds a hung connection; the
-// hard cap only backstops providers that keep the socket dripping.
-func (client *Client) callStreamSingle(systemPrompt, userPrompt string) (string, error) {
+// non-stream flow plus stream=true, with a 90s idle watchdog and a hard cap
+// (300s on the first attempt, 600s on retries — see streamHardCap). Long
+// reasoning generations stream chunks continuously, so the idle watchdog —
+// not the total timeout — is what bounds a hung connection; the hard cap
+// only backstops providers that keep the socket dripping.
+func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap time.Duration) (string, error) {
 	messages := []map[string]interface{}{
 		{"role": "system", "content": systemPrompt},
 		{"role": "user", "content": userPrompt},
@@ -888,13 +906,13 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string) (string,
 		return "", err
 	}
 
-	// Same (SSRF-safe) transport with a 300s cap. Big strategy prompts +
-	// restored ranking context push reasoning generations past 150s, and the
-	// hard cap was aborting legitimate mid-stream responses. The 90s idle
-	// watchdog still bounds genuinely hung connections.
+	// Same (SSRF-safe) transport with the per-attempt hard cap. Big strategy
+	// prompts + restored ranking context push reasoning generations past
+	// 150s, and the hard cap was aborting legitimate mid-stream responses.
+	// The 90s idle watchdog still bounds genuinely hung connections.
 	httpClient := &http.Client{
 		Transport: client.HTTPClient.Transport,
-		Timeout:   300 * time.Second,
+		Timeout:   hardCap,
 	}
 
 	const idleTimeout = 90 * time.Second

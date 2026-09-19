@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,15 +47,15 @@ func TestConfig_MaxRetries_IsUsed(t *testing.T) {
 		t.Errorf("expected 5 retry attempts (from WithMaxRetries(5)), got %d", callCount)
 	}
 
-	// Verify logs show correct retry count
+	// Verify logs show correct retry count. The retry warning carries the
+	// underlying error (09-19 diagnosability fix) — match the prefix + the
+	// attempt counter instead of an exact string.
 	logs := mockLogger.GetLogsByLevel("WARN")
 	expectedWarningCount := 4 // Warnings will be printed on 2nd, 3rd, 4th, 5th retry
 	actualWarningCount := 0
 	for _, log := range logs {
-		if log.Message == "⚠️  AI API call failed, retrying (2/5)..." ||
-			log.Message == "⚠️  AI API call failed, retrying (3/5)..." ||
-			log.Message == "⚠️  AI API call failed, retrying (4/5)..." ||
-			log.Message == "⚠️  AI API call failed, retrying (5/5)..." {
+		if strings.HasPrefix(log.Message, "⚠️  AI API call failed (attempt ") &&
+			strings.Contains(log.Message, "connection reset") {
 			actualWarningCount++
 		}
 	}
