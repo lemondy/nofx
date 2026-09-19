@@ -2,7 +2,6 @@ package kernel
 
 import "testing"
 
-
 // ProfitLockTargets: R-multiple = PnL% ÷ initial-stop-distance%; breakeven
 // only while the stop still sits beyond entry; both actions arm at lockR.
 func TestProfitLockTargets(t *testing.T) {

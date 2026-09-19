@@ -16,14 +16,14 @@ const (
 	// MaxPositions is a sanity BOUND on risk_control.max_positions (fat-finger
 	// protection), not the default — the configured value is honored up to
 	// this cap. The default TEMPLATE for new strategies stays 3.
-	MaxPositions = 10
-	MaxTimeframes     = 4
-	MinKlineCount     = 10
+	MaxPositions  = 10
+	MaxTimeframes = 4
+	MinKlineCount = 10
 	// 120: the structured signal derives indicators from the closed-bar
 	// window — 30 bars left EMA50/MACD unstable (data_quality.sufficient
 	// flagged EVERY candidate as insufficient). 120 keeps ≥60 closed bars
 	// even after the forming-bar drop on the longest fetched TF.
-	MaxKlineCount     = 120
+	MaxKlineCount = 120
 )
 
 // ClampLimits enforces product-level limits on strategy config to prevent token overflow.

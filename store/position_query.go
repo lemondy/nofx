@@ -154,15 +154,19 @@ func (s *PositionStore) getStats(traderID string, initialEquity float64, windowD
 
 // RecentTrade recent trade record
 type RecentTrade struct {
-	Symbol       string  `json:"symbol"`
-	Side         string  `json:"side"`
-	EntryPrice   float64 `json:"entry_price"`
-	ExitPrice    float64 `json:"exit_price"`
-	RealizedPnL  float64 `json:"realized_pnl"`
-	PnLPct       float64 `json:"pnl_pct"`
-	EntryTime    int64   `json:"entry_time"`
-	ExitTime     int64   `json:"exit_time"`
-	HoldDuration string  `json:"hold_duration"`
+	Symbol      string  `json:"symbol"`
+	Side        string  `json:"side"`
+	EntryPrice  float64 `json:"entry_price"`
+	ExitPrice   float64 `json:"exit_price"`
+	RealizedPnL float64 `json:"realized_pnl"`
+	PnLPct      float64 `json:"pnl_pct"` // PRICE return (no leverage — 09-19 audit)
+	// Reconciliation fields: the AI's risk/margin math runs on the notional,
+	// fees explain realized-PnL gaps beyond the price return.
+	PositionValue float64 `json:"position_value"`
+	Fee           float64 `json:"fee"`
+	EntryTime     int64   `json:"entry_time"`
+	ExitTime      int64   `json:"exit_time"`
+	HoldDuration  string  `json:"hold_duration"`
 }
 
 // GetRecentTrades gets recent closed trades
@@ -179,12 +183,14 @@ func (s *PositionStore) GetRecentTrades(traderID string, limit int) ([]RecentTra
 	var trades []RecentTrade
 	for _, pos := range positions {
 		t := RecentTrade{
-			Symbol:      pos.Symbol,
-			Side:        strings.ToLower(pos.Side),
-			EntryPrice:  pos.EntryPrice,
-			ExitPrice:   pos.ExitPrice,
-			RealizedPnL: pos.RealizedPnL,
-			EntryTime:   pos.EntryTime / 1000, // Convert ms to seconds for API compatibility
+			Symbol:        pos.Symbol,
+			Side:          strings.ToLower(pos.Side),
+			EntryPrice:    pos.EntryPrice,
+			ExitPrice:     pos.ExitPrice,
+			RealizedPnL:   pos.RealizedPnL,
+			PositionValue: pos.EntryQuantity * pos.EntryPrice,
+			Fee:           pos.Fee,
+			EntryTime:     pos.EntryTime / 1000, // Convert ms to seconds for API compatibility
 		}
 
 		if pos.ExitTime > 0 {
@@ -193,11 +199,14 @@ func (s *PositionStore) GetRecentTrades(traderID string, limit int) ([]RecentTra
 			t.HoldDuration = formatDurationMs(durationMs)
 		}
 
+		// 09-19 audit: PRICE return only — the stored leverage has been
+		// unreliable (recorded 1x vs actual) and the prompt dictionary now
+		// documents PnL% as price return.
 		if pos.EntryPrice > 0 {
 			if t.Side == "long" {
-				t.PnLPct = (pos.ExitPrice - pos.EntryPrice) / pos.EntryPrice * 100 * float64(pos.Leverage)
+				t.PnLPct = (pos.ExitPrice - pos.EntryPrice) / pos.EntryPrice * 100
 			} else {
-				t.PnLPct = (pos.EntryPrice - pos.ExitPrice) / pos.EntryPrice * 100 * float64(pos.Leverage)
+				t.PnLPct = (pos.EntryPrice - pos.ExitPrice) / pos.EntryPrice * 100
 			}
 		}
 

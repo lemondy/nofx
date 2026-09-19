@@ -151,7 +151,6 @@ func TestHasScannerConflict(t *testing.T) {
 	}
 }
 
-
 // New position-management actions: enum acceptance + required-field guards.
 func TestValidateManagementActions(t *testing.T) {
 	d := Decision{Symbol: "T", Action: "adjust_stop_loss", StopLoss: 0}

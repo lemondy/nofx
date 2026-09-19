@@ -10,6 +10,18 @@ import (
 	"nofx/market"
 )
 
+// fp: float-pointer literal helper for optional signal fields.
+func fp(v float64) *float64 { return &v }
+
+// withVendor: stamp a vendor-vs-live measurement on a hand-built market.Data.
+// Production always measures (market/data.go); fixtures bypassing that layer
+// must simulate the measurement or the fail-closed vendor gate (default on,
+// 1%) blocks both directions as VENDOR_DIVERGENCE_UNKNOWN.
+func withVendor(d *market.Data, pct float64) *market.Data {
+	d.VendorStalenessPct = fp(pct)
+	return d
+}
+
 func buildTF(tf string, now time.Time, bars int, base float64, lastBarForming bool) *market.TimeframeSeriesData {
 	dur := marketTFDuration(tf)
 	data := &market.TimeframeSeriesData{Timeframe: tf}
@@ -728,7 +740,7 @@ func TestDirectionHintRendering(t *testing.T) {
 			"1h":  buildTF("1h", now, 80, 1.0, false),
 			"4h":  buildTF("4h", now, 80, 1.0, false),
 		}
-		ctx.MarketDataMap[c.Symbol] = &market.Data{Symbol: c.Symbol, CurrentPrice: 1, TimeframeData: tfs}
+		ctx.MarketDataMap[c.Symbol] = withVendor(&market.Data{Symbol: c.Symbol, CurrentPrice: 1, TimeframeData: tfs}, 0.05)
 	}
 	prompt := engine.BuildUserPrompt(ctx)
 	sys := engine.BuildSystemPrompt(100, "")

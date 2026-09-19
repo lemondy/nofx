@@ -13,10 +13,10 @@ import (
 // programmatically before order placement — violation blocks or warns.
 // Soft rules: text lessons with tags, injected into the AI prompt as guidance.
 type TradingRuleDB struct {
-	ID         int64  `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID   string `gorm:"column:trader_id;not null;index:idx_rules_trader" json:"trader_id"`
-	RuleType   string `gorm:"column:rule_type;not null;default:'hard'" json:"rule_type"` // hard|soft
-	Name       string `gorm:"column:name;not null" json:"name"`
+	ID          int64  `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraderID    string `gorm:"column:trader_id;not null;index:idx_rules_trader" json:"trader_id"`
+	RuleType    string `gorm:"column:rule_type;not null;default:'hard'" json:"rule_type"` // hard|soft
+	Name        string `gorm:"column:name;not null" json:"name"`
 	Description string `gorm:"column:description;default:''" json:"description"`
 
 	// Hard rule condition (JSON): {"field":"leverage","op":"<=","value":10}
@@ -25,11 +25,11 @@ type TradingRuleDB struct {
 	OnViolation string `gorm:"column:on_violation;default:'warn'" json:"on_violation"`
 
 	// Soft rule lesson (plain text, tagged)
-	LessonText  string `gorm:"column:lesson_text;default:''" json:"lesson_text"`
-	Tags        string `gorm:"column:tags;default:''" json:"tags"` // comma-separated, e.g. "high_leverage,chase_pumping"
+	LessonText string `gorm:"column:lesson_text;default:''" json:"lesson_text"`
+	Tags       string `gorm:"column:tags;default:''" json:"tags"` // comma-separated, e.g. "high_leverage,chase_pumping"
 
 	// Provenance
-	Source      string `gorm:"column:source;default:'manual'" json:"source"` // manual|ai_review
+	Source      string `gorm:"column:source;default:'manual'" json:"source"`       // manual|ai_review
 	SourceStats string `gorm:"column:source_stats;default:''" json:"source_stats"` // supporting stats, e.g. "win_rate=15%,sample=20"
 	Enabled     bool   `gorm:"column:enabled;default:true" json:"enabled"`
 	HitCount    int64  `gorm:"column:hit_count;default:0" json:"hit_count"` // times this rule fired
@@ -92,12 +92,12 @@ type RuleInput struct {
 	RuleType    string `json:"rule_type"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Condition   string `json:"condition"`     // JSON string for hard rules
-	OnViolation string `json:"on_violation"`  // block|warn
-	LessonText  string `json:"lesson_text"`   // for soft rules
+	Condition   string `json:"condition"`    // JSON string for hard rules
+	OnViolation string `json:"on_violation"` // block|warn
+	LessonText  string `json:"lesson_text"`  // for soft rules
 	Tags        string `json:"tags"`
-	Source      string `json:"source"`        // manual|ai_review (defaults to manual)
-	SourceStats string `json:"source_stats"`  // supporting stats from AI extraction
+	Source      string `json:"source"`       // manual|ai_review (defaults to manual)
+	SourceStats string `json:"source_stats"` // supporting stats from AI extraction
 	Enabled     *bool  `json:"enabled"`
 }
 
@@ -123,18 +123,18 @@ func (s *RuleStore) GetRule(traderID string, id int64) (*TradingRuleDB, error) {
 func (s *RuleStore) CreateRule(traderID string, input *RuleInput) (*TradingRuleDB, error) {
 	now := time.Now().UTC().UnixMilli()
 	rule := &TradingRuleDB{
-		TraderID:     traderID,
-		RuleType:     input.RuleType,
-		Name:         input.Name,
-		Description:  input.Description,
+		TraderID:      traderID,
+		RuleType:      input.RuleType,
+		Name:          input.Name,
+		Description:   input.Description,
 		ConditionJSON: input.Condition,
-		OnViolation:  input.OnViolation,
-		LessonText:   input.LessonText,
-		Tags:         input.Tags,
-		Source:       "manual",
-		Enabled:      true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		OnViolation:   input.OnViolation,
+		LessonText:    input.LessonText,
+		Tags:          input.Tags,
+		Source:        "manual",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	if input.OnViolation == "" {
 		rule.OnViolation = "warn"
@@ -208,8 +208,8 @@ func (s *RuleStore) GetEnabledRules(traderID string) ([]*TradingRuleDB, error) {
 // IncrementHitCount records that a rule fired (violated)
 func (s *RuleStore) IncrementHitCount(id int64, blocked bool) error {
 	updates := map[string]interface{}{
-		"hit_count":   gorm.Expr("hit_count + 1"),
-		"updated_at":  time.Now().UTC().UnixMilli(),
+		"hit_count":  gorm.Expr("hit_count + 1"),
+		"updated_at": time.Now().UTC().UnixMilli(),
 	}
 	if blocked {
 		updates["block_count"] = gorm.Expr("block_count + 1")

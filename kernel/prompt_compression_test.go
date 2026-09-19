@@ -52,12 +52,12 @@ func TestAllowedCandidateKeepsFullJSON(t *testing.T) {
 	ctx := &Context{MarketDataMap: map[string]*market.Data{}}
 	now := time.Now()
 	ctx.CandidateCoins = append(ctx.CandidateCoins, CandidateCoin{Symbol: "OKUSDT", Sources: []string{"ai500"}})
-	ctx.MarketDataMap["OKUSDT"] = &market.Data{Symbol: "OKUSDT", CurrentPrice: 1.0,
+	ctx.MarketDataMap["OKUSDT"] = withVendor(&market.Data{Symbol: "OKUSDT", CurrentPrice: 1.0,
 		TimeframeData: map[string]*market.TimeframeSeriesData{
 			"15m": buildTF("15m", now, 80, 1.0, false),
 			"1h":  buildTF("1h", now, 80, 1.0, false),
 			"4h":  buildTF("4h", now, 80, 1.0, false),
-		}}
+		}}, 0.05)
 	prompt := engine.BuildUserPrompt(ctx)
 	if !strings.Contains(prompt, `"hard_entry_gate"`) {
 		t.Fatalf("renderable candidate lost its full JSON:\n%s", prompt)

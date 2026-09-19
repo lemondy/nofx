@@ -763,15 +763,17 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				}
 
 				ctx.RecentOrders = append(ctx.RecentOrders, kernel.RecentOrder{
-					Symbol:       trade.Symbol,
-					Side:         trade.Side,
-					EntryPrice:   trade.EntryPrice,
-					ExitPrice:    trade.ExitPrice,
-					RealizedPnL:  trade.RealizedPnL,
-					PnLPct:       trade.PnLPct,
-					EntryTime:    entryTimeStr,
-					ExitTime:     exitTimeStr,
-					HoldDuration: trade.HoldDuration,
+					Symbol:        trade.Symbol,
+					Side:          trade.Side,
+					EntryPrice:    trade.EntryPrice,
+					ExitPrice:     trade.ExitPrice,
+					RealizedPnL:   trade.RealizedPnL,
+					PnLPct:        trade.PnLPct,
+					PositionValue: trade.PositionValue,
+					Fee:           trade.Fee,
+					EntryTime:     entryTimeStr,
+					ExitTime:      exitTimeStr,
+					HoldDuration:  trade.HoldDuration,
 				})
 			}
 		}

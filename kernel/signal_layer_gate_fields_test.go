@@ -28,10 +28,10 @@ func TestMinSizeCheckFeasibleAndDeadZone(t *testing.T) {
 	now := time.Date(2026, 9, 15, 4, 0, 0, 0, time.UTC)
 	price := 0.0632
 	opts := SignalOptions{
-		Now:             now,
-		PrimaryTF:       "1h",
-		EquityUSDT:      52.9,
-		RiskPct:         1.5,
+		Now:                 now,
+		PrimaryTF:           "1h",
+		EquityUSDT:          52.9,
+		RiskPct:             1.5,
 		MinPositionSizeUSDT: 10.0, // strategy min_position_size as configured
 		// No noise floor → the tightest allowed stop is a structure stop, so
 		// the minimum is always reachable (feasible; the max-stop ceiling is

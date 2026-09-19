@@ -305,7 +305,11 @@ type RRScan struct {
 	BestTarget      float64 `json:"best_target,omitempty"`        // farthest scanned level (max RR)
 	BestRR          float64 `json:"best_rr"`                      // RR upper bound AT THE METHODOLOGY STOP — < min_rr ⇒ RR fails for sure
 	FirstRRGeTarget float64 `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
-	Usable          bool    `json:"usable"`                       // a qualifying target exists
+	// FirstTargetBeyondStructure: the adopted TP sits beyond EVERY timeframe's
+	// structure_high/low — no historical resistance/support reference exists
+	// there (the prompt requires the model to note the uncertainty).
+	FirstTargetBeyondStructure bool `json:"first_target_beyond_structure,omitempty"`
+	Usable                     bool `json:"usable"` // a qualifying target exists
 }
 
 // DirectionGate is the program's per-direction open verdict for one symbol —
@@ -1112,10 +1116,16 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		if opt.StockWeekendBlock {
 			add("STOCK_WEEKEND")
 		}
-		if opt.MaxVendorDivergencePct > 0 &&
-			sig.DataFreshness != nil && sig.DataFreshness.VendorDivergencePct != nil &&
-			math.Abs(*sig.DataFreshness.VendorDivergencePct) > opt.MaxVendorDivergencePct {
-			add(fmt.Sprintf("VENDOR_DIVERGENCE_%.2f", *sig.DataFreshness.VendorDivergencePct))
+		if opt.MaxVendorDivergencePct > 0 {
+			// Same convention as funding_rollover: field absent = UNKNOWN =
+			// 按不满足处理 (09-19 audit 六: the ONE tradable coin silently
+			// lacked the divergence measurement). Absent is now rare — the
+			// market layer measures ~0 for a fresh vendor too.
+			if sig.DataFreshness == nil || sig.DataFreshness.VendorDivergencePct == nil {
+				add("VENDOR_DIVERGENCE_UNKNOWN")
+			} else if math.Abs(*sig.DataFreshness.VendorDivergencePct) > opt.MaxVendorDivergencePct {
+				add(fmt.Sprintf("VENDOR_DIVERGENCE_%.2f", *sig.DataFreshness.VendorDivergencePct))
+			}
 		}
 		g.Allowed = len(g.Failed) == 0
 		return g
@@ -1183,6 +1193,20 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		MinRR:           round2(minRR),
 		TargetsScanned:  len(uniq),
 	}
+	// Global structure extremes across all timeframes — a TP beyond them has
+	// no historical reference (09-19 audit 六: TP 1648.08 vs structure_high 1588).
+	maxSH, minSL := 0.0, 0.0
+	for _, tf := range tfs {
+		if tf == nil {
+			continue
+		}
+		if tf.StructureHigh != nil && *tf.StructureHigh > maxSH {
+			maxSH = *tf.StructureHigh
+		}
+		if tf.StructureLow != nil && (minSL == 0 || *tf.StructureLow < minSL) {
+			minSL = *tf.StructureLow
+		}
+	}
 	best, bestT := 0.0, 0.0
 	for _, t := range uniq {
 		dist := (t - entry) / entry * 100
@@ -1196,6 +1220,12 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		if minRR > 0 && !out.Usable && v >= minRR-1e-9 {
 			out.FirstRRGeTarget = t
 			out.Usable = true
+			if isLong && maxSH > 0 && t > maxSH {
+				out.FirstTargetBeyondStructure = true
+			}
+			if !isLong && minSL > 0 && t < minSL {
+				out.FirstTargetBeyondStructure = true
+			}
 		}
 	}
 	if len(uniq) > 0 {

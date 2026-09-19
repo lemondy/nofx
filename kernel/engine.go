@@ -97,15 +97,19 @@ type TradingStats struct {
 
 // RecentOrder recently completed order (for AI input)
 type RecentOrder struct {
-	Symbol       string  `json:"symbol"`        // Trading pair
-	Side         string  `json:"side"`          // long/short
-	EntryPrice   float64 `json:"entry_price"`   // Entry price
-	ExitPrice    float64 `json:"exit_price"`    // Exit price
-	RealizedPnL  float64 `json:"realized_pnl"`  // Realized profit/loss
-	PnLPct       float64 `json:"pnl_pct"`       // Profit/loss percentage
-	EntryTime    string  `json:"entry_time"`    // Entry time
-	ExitTime     string  `json:"exit_time"`     // Exit time
-	HoldDuration string  `json:"hold_duration"` // Hold duration, e.g. "2h30m"
+	Symbol      string  `json:"symbol"`       // Trading pair
+	Side        string  `json:"side"`         // long/short
+	EntryPrice  float64 `json:"entry_price"`  // Entry price
+	ExitPrice   float64 `json:"exit_price"`   // Exit price
+	RealizedPnL float64 `json:"realized_pnl"` // Realized profit/loss
+	PnLPct      float64 `json:"pnl_pct"`      // PRICE return % (no leverage — 09-19 audit)
+	// PositionValue (entry notional) and Fee make the row reconcilable:
+	// risk/margin math runs on the notional, fees explain PnL gaps.
+	PositionValue float64 `json:"position_value"`
+	Fee           float64 `json:"fee"`
+	EntryTime     string  `json:"entry_time"`    // Entry time
+	ExitTime      string  `json:"exit_time"`     // Exit time
+	HoldDuration  string  `json:"hold_duration"` // Hold duration, e.g. "2h30m"
 }
 
 // Context trading context (complete information passed to AI)

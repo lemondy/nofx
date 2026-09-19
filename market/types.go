@@ -4,15 +4,15 @@ import "time"
 
 // Data market data structure
 type Data struct {
-	Symbol            string
-	CurrentPrice      float64
-	PriceChange1h     float64 // 1-hour price change percentage
-	PriceChange4h     float64 // 4-hour price change percentage
-	CurrentEMA20      float64
-	CurrentMACD       float64
-	CurrentRSI7       float64
-	OpenInterest      *OIData
-	FundingRate       float64
+	Symbol        string
+	CurrentPrice  float64
+	PriceChange1h float64 // 1-hour price change percentage
+	PriceChange4h float64 // 4-hour price change percentage
+	CurrentEMA20  float64
+	CurrentMACD   float64
+	CurrentRSI7   float64
+	OpenInterest  *OIData
+	FundingRate   float64
 	// FundingRateOK distinguishes a REAL zero rate (bstock tokens pay no
 	// funding) from a failed fetch — the kernel warns only on the latter.
 	FundingRateOK bool
@@ -25,15 +25,15 @@ type Data struct {
 	// (nil when the history fetch failed). The signal layer derives the
 	// program-verified funding_rollover verdict from it — the settled sequence
 	// vs the live forward estimate in FundingRate.
-	FundingHistory []float64
-	IntradaySeries     *IntradayData
-	LongerTermContext  *LongerTermData
+	FundingHistory    []float64
+	IntradaySeries    *IntradayData
+	LongerTermContext *LongerTermData
 	// Multi-timeframe data (new)
 	TimeframeData map[string]*TimeframeSeriesData `json:"timeframe_data,omitempty"`
-	// VendorStalenessPct: how far the vendor's forming-candle close was from
-	// the live ticker before the live-price patch (0 = unknown/not patched).
-	// Large values flag stale vendor data for the AI's freshness judgment.
-	VendorStalenessPct float64 `json:"-"`
+	// VendorStalenessPct: how far the vendor's last candle close was from
+	// the live ticker (primary timeframe). nil = not measurable this cycle
+	// (no klines) — the AI gate treats absent as UNKNOWN and fails closed.
+	VendorStalenessPct *float64 `json:"-"`
 }
 
 // KlineBar single kline bar with OHLCV data

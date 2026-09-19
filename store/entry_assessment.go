@@ -18,30 +18,30 @@ import (
 // ============================================================================
 
 type EntryAssessment struct {
-	ID        int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID  string    `gorm:"column:trader_id;index:idx_ea_trader_ts" json:"trader_id"`
-	Cycle     int       `gorm:"column:cycle" json:"cycle"`
-	Ts        time.Time `gorm:"column:ts;index:idx_ea_trader_ts" json:"ts"`
-	Symbol    string    `gorm:"column:symbol;index" json:"symbol"`
-	Direction string    `gorm:"column:direction;size:8" json:"direction"` // long | short | none
-	Action    string    `gorm:"column:action;size:24" json:"action"`
-	Stage     string    `gorm:"column:stage;size:16" json:"stage"`     // decision_stage
-	WaitBias  string    `gorm:"column:wait_bias;size:8" json:"wait_bias"`
-	WaitState   string `gorm:"column:wait_state;size:16" json:"wait_state"`       // BLOCKED | WATCH_* | READY_* (empty = not declared)
-	NextTrigger string `gorm:"column:next_trigger;size:192" json:"next_trigger"` // required-event sentence for directional states
+	ID          int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraderID    string    `gorm:"column:trader_id;index:idx_ea_trader_ts" json:"trader_id"`
+	Cycle       int       `gorm:"column:cycle" json:"cycle"`
+	Ts          time.Time `gorm:"column:ts;index:idx_ea_trader_ts" json:"ts"`
+	Symbol      string    `gorm:"column:symbol;index" json:"symbol"`
+	Direction   string    `gorm:"column:direction;size:8" json:"direction"` // long | short | none
+	Action      string    `gorm:"column:action;size:24" json:"action"`
+	Stage       string    `gorm:"column:stage;size:16" json:"stage"` // decision_stage
+	WaitBias    string    `gorm:"column:wait_bias;size:8" json:"wait_bias"`
+	WaitState   string    `gorm:"column:wait_state;size:16" json:"wait_state"`      // BLOCKED | WATCH_* | READY_* (empty = not declared)
+	NextTrigger string    `gorm:"column:next_trigger;size:192" json:"next_trigger"` // required-event sentence for directional states
 	// Gate RR ceiling (review 09-16 point 2): the rr_scan.best_rr the model
 	// was SHOWN this cycle for the row's direction, plus its usable flag.
 	// Comparing a later open's realized RR on the same symbol against the
 	// WATCH_* rows' gate_rr quantifies the RR decay paid for "wait for the
 	// micro-trend turn". 0 / false when no scan was rendered (no noise floor).
-	GateRR     float64 `gorm:"column:gate_rr;default:0" json:"gate_rr"`
-	GateUsable bool    `gorm:"column:gate_usable" json:"gate_usable"`
-	EntryQuality int    `gorm:"column:entry_quality;default:-1" json:"entry_quality"` // -1 = not provided
-	BlockingFactors string `gorm:"column:blocking_factors;type:text" json:"blocking_factors"` // JSON array
-	MgmtQuality  int    `gorm:"column:mgmt_quality;default:-1" json:"mgmt_quality"`   // -1 = not provided (holds)
-	MgmtFlags    string `gorm:"column:mgmt_flags;type:text" json:"mgmt_flags"`        // JSON array
-	EntryPath    string `gorm:"column:entry_path;size:24" json:"entry_path"`          // e.g. "15m:down" / "15m:rally" / "bb_ride"
-	Price     float64   `gorm:"column:price;default:0" json:"price"`
+	GateRR          float64 `gorm:"column:gate_rr;default:0" json:"gate_rr"`
+	GateUsable      bool    `gorm:"column:gate_usable" json:"gate_usable"`
+	EntryQuality    int     `gorm:"column:entry_quality;default:-1" json:"entry_quality"`      // -1 = not provided
+	BlockingFactors string  `gorm:"column:blocking_factors;type:text" json:"blocking_factors"` // JSON array
+	MgmtQuality     int     `gorm:"column:mgmt_quality;default:-1" json:"mgmt_quality"`        // -1 = not provided (holds)
+	MgmtFlags       string  `gorm:"column:mgmt_flags;type:text" json:"mgmt_flags"`             // JSON array
+	EntryPath       string  `gorm:"column:entry_path;size:24" json:"entry_path"`               // e.g. "15m:down" / "15m:rally" / "bb_ride"
+	Price           float64 `gorm:"column:price;default:0" json:"price"`
 }
 
 func (EntryAssessment) TableName() string { return "entry_assessments" }
@@ -68,9 +68,9 @@ type QualityBucketStat struct {
 	Assessments int     `json:"assessments"`
 	Traded      int     `json:"traded"`
 	Wins        int     `json:"wins"`
-	WinRate     float64 `json:"win_rate"`     // % of traded
-	AvgPnLPct   float64 `json:"avg_pnl_pct"`  // mean journal PnL% (margin-based) of traded
-	TotalPnL    float64 `json:"total_pnl"`    // USDT
+	WinRate     float64 `json:"win_rate"`    // % of traded
+	AvgPnLPct   float64 `json:"avg_pnl_pct"` // mean journal PnL% (margin-based) of traded
+	TotalPnL    float64 `json:"total_pnl"`   // USDT
 }
 
 // BucketStats joins assessments with the trade journal: an assessment with an
@@ -98,9 +98,9 @@ func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat
 	}
 
 	buckets := []struct {
-		name       string
-		lo, hi     int
-	}{ {"<60", 0, 59}, {"60-70", 60, 69}, {"70-80", 70, 79}, {"80+", 80, 1000} }
+		name   string
+		lo, hi int
+	}{{"<60", 0, 59}, {"60-70", 60, 69}, {"70-80", 70, 79}, {"80+", 80, 1000}}
 	stats := make([]QualityBucketStat, len(buckets))
 	for i, b := range buckets {
 		stats[i] = QualityBucketStat{Bucket: b.name}

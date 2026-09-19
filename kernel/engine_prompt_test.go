@@ -377,12 +377,12 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 			Open: p * 0.999, High: p * 1.002, Low: p * 0.998, Close: p, Volume: 1000 + float64(i),
 		})
 	}
-	data := &market.Data{
+	data := withVendor(&market.Data{
 		Symbol: "TESTUSDT", CurrentPrice: p,
 		FundingRate: 0.00005, FundingRateOK: true, FundingSettleHours: 4,
 		FundingHistory: []float64{0.0004, 0.0004, 0.0004, 0.0004, 0.00005, 0.00005},
 		TimeframeData:  map[string]*market.TimeframeSeriesData{"1h": tfData},
-	}
+	}, 0.05)
 	out := engine.formatMarketData(data, nil, nil, nil)
 	for _, want := range []string{
 		`"hard_entry_gate"`, `"rr_scan"`, `"bias"`, `"funding_rollover"`,
@@ -448,10 +448,10 @@ func TestFormatMarketDataRecordsRRCeilings(t *testing.T) {
 
 	now := time.Now()
 	tfData := buildTF("1h", now, 80, 5.0, false) // swings via BOLL band supplements give both sides targets
-	data := &market.Data{
+	data := withVendor(&market.Data{
 		Symbol: "TESTUSDT", CurrentPrice: tfData.Klines[len(tfData.Klines)-1].Close,
 		TimeframeData: map[string]*market.TimeframeSeriesData{"1h": tfData},
-	}
+	}, 0.05)
 	ctx := &Context{}
 	out := engine.formatMarketData(data, nil, ctx, nil)
 	c := ctx.RRCeilings["TESTUSDT"]

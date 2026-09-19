@@ -134,22 +134,22 @@ func (s *TradeJournalStore) SyncFromPositions(traderID string) (int, error) {
 		}
 
 		entry := &TradeJournalDB{
-			TraderID:    traderID,
-			PositionID:  pos.ID,
-			Symbol:      pos.Symbol,
-			Side:        pos.Side,
-			EntryPrice:  pos.EntryPrice,
-			ExitPrice:   pos.ExitPrice,
-			Quantity:    pos.Quantity,
-			Leverage:    pos.Leverage,
-			EntryTime:   pos.EntryTime,
-			ExitTime:    pos.ExitTime,
-			RealizedPnL: pos.RealizedPnL,
-			Fee:         pos.Fee,
-			CloseReason: pos.CloseReason,
+			TraderID:     traderID,
+			PositionID:   pos.ID,
+			Symbol:       pos.Symbol,
+			Side:         pos.Side,
+			EntryPrice:   pos.EntryPrice,
+			ExitPrice:    pos.ExitPrice,
+			Quantity:     pos.Quantity,
+			Leverage:     pos.Leverage,
+			EntryTime:    pos.EntryTime,
+			ExitTime:     pos.ExitTime,
+			RealizedPnL:  pos.RealizedPnL,
+			Fee:          pos.Fee,
+			CloseReason:  pos.CloseReason,
 			ReviewStatus: "pending",
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		}
 		entry.PnLPct = calculateJournalPnLPct(pos)
 
@@ -314,29 +314,29 @@ type JournalGroupStats struct {
 
 // JournalStats aggregated review statistics across all journal entries
 type JournalStats struct {
-	TotalEntries   int `json:"total_entries"`
-	ReviewedCount  int `json:"reviewed_count"`
-	PendingCount   int `json:"pending_count"`
-	WinTrades      int `json:"win_trades"`
-	LossTrades     int `json:"loss_trades"`
-	WinRate        float64 `json:"win_rate"`
-	TotalPnL       float64 `json:"total_pnl"`
-	AvgWin         float64 `json:"avg_win"`
-	AvgLoss        float64 `json:"avg_loss"`
-	Expectancy     float64 `json:"expectancy"` // win_rate*avg_win - (1-win_rate)*avg_loss
-	ProfitFactor   float64 `json:"profit_factor"`
+	TotalEntries  int     `json:"total_entries"`
+	ReviewedCount int     `json:"reviewed_count"`
+	PendingCount  int     `json:"pending_count"`
+	WinTrades     int     `json:"win_trades"`
+	LossTrades    int     `json:"loss_trades"`
+	WinRate       float64 `json:"win_rate"`
+	TotalPnL      float64 `json:"total_pnl"`
+	AvgWin        float64 `json:"avg_win"`
+	AvgLoss       float64 `json:"avg_loss"`
+	Expectancy    float64 `json:"expectancy"` // win_rate*avg_win - (1-win_rate)*avg_loss
+	ProfitFactor  float64 `json:"profit_factor"`
 
 	// Execution layer: plan adherence
-	AdherencePlan    []JournalGroupStats `json:"adherence_plan"`    // executed_as_plan
-	EmotionStats     []JournalGroupStats `json:"emotion_stats"`     // emotions
-	MistakeStats     []JournalGroupStats `json:"mistake_stats"`     // mistake_category
-	StrategyStats    []JournalGroupStats `json:"strategy_stats"`    // strategy_tag
+	AdherencePlan []JournalGroupStats `json:"adherence_plan"` // executed_as_plan
+	EmotionStats  []JournalGroupStats `json:"emotion_stats"`  // emotions
+	MistakeStats  []JournalGroupStats `json:"mistake_stats"`  // mistake_category
+	StrategyStats []JournalGroupStats `json:"strategy_stats"` // strategy_tag
 
 	// Deviation from plan: how often planned SL/TP existed vs missing
-	WithPlanCount    int     `json:"with_plan_count"`
-	WithPlanWinRate  float64 `json:"with_plan_win_rate"`
-	NoPlanCount      int     `json:"no_plan_count"`
-	NoPlanWinRate    float64 `json:"no_plan_win_rate"`
+	WithPlanCount   int     `json:"with_plan_count"`
+	WithPlanWinRate float64 `json:"with_plan_win_rate"`
+	NoPlanCount     int     `json:"no_plan_count"`
+	NoPlanWinRate   float64 `json:"no_plan_win_rate"`
 }
 
 // GetStats computes aggregated review statistics from journal entries

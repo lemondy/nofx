@@ -115,10 +115,19 @@ func TestVendorDivergenceGate(t *testing.T) {
 		}
 	}
 
-	// Missing divergence data (nil) must not block.
+	// Missing divergence data (nil) = UNKNOWN = 按不满足处理 (same convention
+	// as funding_rollover) — fail CLOSED, not open (09-19 audit 六).
 	gateNil := compute(nil, 2)
-	if hasBlocker(gateNil.Long) || hasBlocker(gateNil.Short) {
-		t.Error("nil divergence must fail open, not block")
+	for name, g := range map[string]*DirectionGate{"long": gateNil.Long, "short": gateNil.Short} {
+		found := false
+		for _, code := range g.Failed {
+			if code == "VENDOR_DIVERGENCE_UNKNOWN" {
+				found = true
+			}
+		}
+		if g.Allowed || !found {
+			t.Errorf("%s: nil divergence must block with VENDOR_DIVERGENCE_UNKNOWN, allowed=%v failed=%v", name, g.Allowed, g.Failed)
+		}
 	}
 }
 

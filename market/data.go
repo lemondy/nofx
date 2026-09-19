@@ -355,12 +355,30 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	// price — a systematic lag that misleads the model on trending days.
 	// Closed candles are never touched.
 	vendorStaleness := 0.0
+	vendorStalenessKnown := false
 	if livePrice > 0 {
 		for tf, sd := range timeframeData {
 			if div, patched := refreshFormingCandle(tf, sd, livePrice); patched && tf == primaryTimeframe {
 				vendorStaleness = div
+				vendorStalenessKnown = true
 			}
 		}
+		// 09-19 audit 六: nothing-to-patch (last candle already closed or
+		// already fresh) is itself a MEASUREMENT (~0) — report it, instead
+		// of an absent field the AI would read as UNKNOWN.
+		if !vendorStalenessKnown {
+			if sd := timeframeData[primaryTimeframe]; sd != nil && len(sd.Klines) > 0 {
+				if pre := sd.Klines[len(sd.Klines)-1].Close; pre > 0 {
+					vendorStaleness = (livePrice - pre) / pre * 100
+					vendorStalenessKnown = true
+				}
+			}
+		}
+	}
+	var vendorStalenessP *float64
+	if vendorStalenessKnown {
+		v := vendorStaleness
+		vendorStalenessP = &v
 	}
 
 	currentEMA20 := calculateEMA(primaryKlines, 20)
@@ -390,7 +408,7 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		CurrentPrice:       currentPrice,
 		PriceChange1h:      priceChange1h,
 		PriceChange4h:      priceChange4h,
-		VendorStalenessPct: vendorStaleness,
+		VendorStalenessPct: vendorStalenessP,
 		CurrentEMA20:       currentEMA20,
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,

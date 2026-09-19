@@ -140,12 +140,12 @@ func TestRegimeSkipKeepsCallForAllowedDirection(t *testing.T) {
 		CandidateCoin{Symbol: "BADUSDT", Sources: []string{"ai500"}},
 		CandidateCoin{Symbol: "OKUSDT", Sources: []string{"ai500"}})
 	ctx.MarketDataMap["BADUSDT"] = &market.Data{Symbol: "BADUSDT", CurrentPrice: 1.0}
-	ctx.MarketDataMap["OKUSDT"] = &market.Data{Symbol: "OKUSDT", CurrentPrice: 1.0,
+	ctx.MarketDataMap["OKUSDT"] = withVendor(&market.Data{Symbol: "OKUSDT", CurrentPrice: 1.0,
 		TimeframeData: map[string]*market.TimeframeSeriesData{
 			"15m": buildTF("15m", now, 80, 1.0, false),
 			"1h":  buildTF("1h", now, 80, 1.0, false),
 			"4h":  buildTF("4h", now, 80, 1.0, false),
-		}}
+		}}, 0.05)
 
 	if _, err := GetFullDecisionWithStrategy(ctx, mock, engine, "balanced"); err != nil {
 		t.Logf("parse error tolerated (the assertion is the call itself): %v", err)
