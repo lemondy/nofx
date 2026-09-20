@@ -265,6 +265,15 @@ func (at *AutoTrader) runCycle() error {
 		}
 	}
 
+	// Plan-parity: the executor's band/RR checks exempt stops that equal the
+	// gated stop_plan — they need this cycle's gate verdicts. Assigned HERE,
+	// after the prompt build: the map is created lazily inside
+	// computeCoinSignal, and assigning it inside buildTradingContext (before
+	// the prompt existed) captured nil — the exemption then never fired and
+	// plan-equal stops were rejected at the anchor basis all night
+	// (2026-09-20 AVAXUSDT/STRKUSDT/XMRUSDT).
+	at.cycleGateStates = ctx.GateStates
+
 	// Pre-trade rule check: evaluate review-derived rules before execution.
 	// Hard rules with action=block reject the decision outright.
 	sortedDecisions = at.preTradeRuleCheck(sortedDecisions, ctx.Account.TotalEquity)
@@ -709,9 +718,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		SymbolStats:    at.loadSymbolStats(),
 		CandidateCoins: candidateCoins,
 	}
-	// Plan-parity: the executor's band/RR checks exempt stops that equal the
-	// gated stop_plan — they need this cycle's gate verdicts.
-	at.cycleGateStates = ctx.GateStates
+	// NOTE: cycleGateStates is NOT assigned here — ctx.GateStates is created
+	// lazily during the prompt build (computeCoinSignal); it is wired into
+	// the executor after GetFullDecisionWithStrategy returns, before the
+	// decision loop.
 
 	// Loss-streak circuit breaker: program-computed ban map (one store pass),
 	// mirrored into each symbol's snapshot so the model reads the verdict

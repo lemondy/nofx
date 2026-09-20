@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -467,5 +468,56 @@ func TestValidateOpenRiskGatedPlanExemptFromFloor(t *testing.T) {
 	}
 	if err := at.validateOpenRisk(dec2, 0.679254, 2.96, 6.0); err == nil {
 		t.Fatal("non-plan below-floor stop passed — the exemption leaked")
+	}
+}
+
+// The plan-parity exemption (0d7b4584): a stop that EQUALS the gated
+// stop_plan passes the noise floor even at the limit-anchor basis (a deeper
+// limit anchor shrinks the plan's percentage — the plan was validated
+// in-band at the gate's snapshot basis and the anchor only improves the
+// entry). Regression for the 2026-09-20 wiring bug: runCycle assigned
+// at.cycleGateStates BEFORE the prompt build had created the map, so the
+// exemption read nil and every plan-equal stop was rejected all night
+// (AVAXUSDT 9.60461 == stop_plan, still rejected at 2.72% < 3.57%).
+func TestNoiseFloorExemptsPlanEqualStop(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{
+		MinRiskRewardRatio: 1.5,
+		SLMinATRMult:       1.5,
+	})
+	// Gate state as the cycle's prompt build would have captured it
+	// (post-fix wiring: assigned AFTER computeCoinSignal filled the map).
+	at.cycleGateStates = map[string]*kernel.GateState{
+		"AVAXUSDT": {LongStopPlanPrice: 9.60461, LongAllowed: true},
+	}
+
+	// Limit anchor 9.87308 (1.2% under live), stop == plan 9.60461 →
+	// anchor-basis distance 2.72% < 1.5×ATR(1h) 3.57% — exempt, allowed.
+	err := at.validateOpenRisk(&kernel.Decision{
+		Action: "open_long_limit", Symbol: "AVAXUSDT",
+		Price: 9.87308, StopLoss: 9.60461, TakeProfit: 10.823,
+	}, 9.87308, 2.38, 3.87)
+	if err != nil {
+		t.Fatalf("plan-equal stop must be exempt from the noise floor: %v", err)
+	}
+
+	// A stop that does NOT match the gated plan stays rejected below the
+	// floor (the exemption must not become a hole).
+	err = at.validateOpenRisk(&kernel.Decision{
+		Action: "open_long_limit", Symbol: "AVAXUSDT",
+		Price: 9.87308, StopLoss: 9.65, TakeProfit: 10.823,
+	}, 9.87308, 2.38, 3.87)
+	if err == nil || !strings.Contains(err.Error(), "noise floor") {
+		t.Fatalf("non-plan stop below floor must be rejected, got: %v", err)
+	}
+
+	// Missing gate state (the old wiring bug's runtime shape) → exemption
+	// cannot fire; the floor rejects even a plan-equal stop.
+	at.cycleGateStates = nil
+	err = at.validateOpenRisk(&kernel.Decision{
+		Action: "open_long_limit", Symbol: "AVAXUSDT",
+		Price: 9.87308, StopLoss: 9.60461, TakeProfit: 10.823,
+	}, 9.87308, 2.38, 3.87)
+	if err == nil || !strings.Contains(err.Error(), "noise floor") {
+		t.Fatalf("nil gate states must keep the floor active, got: %v", err)
 	}
 }
