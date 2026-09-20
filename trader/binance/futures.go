@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/adshao/go-binance/v2/futures"
+	"math"
+	"strconv"
 )
 
 // getBrOrderID generates unique order ID (for futures contracts)
@@ -227,4 +229,21 @@ func (t *FuturesTrader) notifyLabel() string {
 		return t.displayName
 	}
 	return "Binance"
+}
+
+// formatTriggerPrice renders an algo-order trigger price at the symbol's
+// tick precision (decimals derived from PRICE_FILTER.tickSize). Refuses to
+// emit a price that rounding moved by more than 1%: a mis-rounded stop
+// trigger sits at the wrong level — instant or never — and "never" is how a
+// position runs naked while everyone believes it is protected.
+func formatTriggerPrice(price float64, precision int) (string, error) {
+	if precision < 0 || precision > 8 {
+		precision = 8
+	}
+	out := fmt.Sprintf("%.*f", precision, price)
+	if rp, err := strconv.ParseFloat(out, 64); err == nil && price > 0 &&
+		math.Abs(rp-price)/price > 0.01 {
+		return "", fmt.Errorf("tick rounding moved the trigger %.2f%% (%.8f -> %s) — refusing to place", math.Abs(rp-price)/price*100, price, out)
+	}
+	return out, nil
 }

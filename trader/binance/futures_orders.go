@@ -687,12 +687,23 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 	}
 
 	// Use new Algo Order API
+	//
+	// Trigger price MUST be tick-rounded — a raw %.8f triggers -1111
+	// "Precision is over the maximum defined for this asset" on coarse-tick
+	// symbols (UNIUSDT tick 0.001 vs stop 8.86573 → the position ran
+	// unprotected, 2026-09-20). Limit entries already format via FormatPrice;
+	// the algo orders were the only raw senders.
+	prec, _ := t.GetSymbolPricePrecision(symbol)
+	priceStr, ferr := formatTriggerPrice(stopPrice, prec)
+	if ferr != nil {
+		return fmt.Errorf("failed to set stop-loss: %w", ferr)
+	}
 	_, err := t.client.NewCreateAlgoOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.AlgoOrderTypeStopMarket).
-		TriggerPrice(fmt.Sprintf("%.8f", stopPrice)).
+		TriggerPrice(priceStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
 		ClientAlgoId(getBrOrderID()).
@@ -720,13 +731,19 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// Use new Algo Order API
+	// Use new Algo Order API — tick-rounded trigger, same -1111 rationale
+	// as SetStopLoss above.
+	precTP, _ := t.GetSymbolPricePrecision(symbol)
+	priceStr, ferr := formatTriggerPrice(takeProfitPrice, precTP)
+	if ferr != nil {
+		return fmt.Errorf("failed to set take-profit: %w", ferr)
+	}
 	_, err := t.client.NewCreateAlgoOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.AlgoOrderTypeTakeProfitMarket).
-		TriggerPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
+		TriggerPrice(priceStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
 		ClientAlgoId(getBrOrderID()).
