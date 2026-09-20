@@ -5,6 +5,8 @@
 > 本报告只做发现与定性，不包含代码修改；严重级别标注供排期参考。
 >
 > **更新（2026-09-13，同日）**：第 6 节汇总表中的 4 个核心发现（#1-#4）已修复，详见各条目后的"状态"列与文末的[修复记录](#8-修复记录2026-09-13)。
+>
+> **更新（2026-09-20，第四轮全量复审）**：针对 09-13 之后累积的 52 个 commit 做了全量重审（重点：user prompt 数据获取/指标计算、仓位计算、风控闸门、止盈止损与开仓单计算、网页策略配置项生效链路），发现 5 项 P1 / 10 项 P2，详见[第 10 节](#10-第四轮全量复审2026-09-20)。本轮只审不改。
 
 ---
 
@@ -18,6 +20,8 @@
 6. [问题清单汇总（按严重级别）](#6-问题清单汇总按严重级别)
 7. [值得保留的好设计](#7-值得保留的好设计)
 8. [修复记录（2026-09-13）](#8-修复记录2026-09-13)
+9. [七门深挖补充审查与修复记录（2026-09-13，第三轮）](#9-七门深挖补充审查与修复记录2026-09-13第三轮)
+10. [第四轮全量复审（2026-09-20）](#10-第四轮全量复审2026-09-20)
 
 ---
 
@@ -298,4 +302,122 @@ entryPrice := pos["entryPrice"].(float64)
 
 ---
 
-*本报告基于 2026-09-13 dev 分支（含大量未提交改动）的代码快照，未涉及前端 React 代码、交易所适配层细节（bybit/okx/gate 等）及数据库 schema 层面的审查。第 8 节为第二轮修复（首次审查的 4 项核心发现），第 9 节为第三轮修复（七门专项深挖的 6 项缺口），均于同日完成。*
+## 10. 第四轮全量复审（2026-09-20）
+
+**审查范围**：09-13 复审之后的 52 个 commit（`94a363d1`→`f01cb6f8`）+ 核心链路全量重审。**重点**（用户指定）：user prompt 数据获取、数据指标计算、仓位计算、风险控制、止盈止损/开仓单计算逻辑、风控闸门、网页策略配置项是否正确生效。**方法**：三路并行深查（A prompt 数据链路 / B 闸门与订单执行 / C 网页配置生效链路）+ 主审对全部 P1/P2 结论及两路矛盾处逐条亲读源码裁决。本轮**只审不改**。
+
+### 10.0 裁决记录（两路深查结论矛盾、由主审亲读定案）
+
+1. **`validateDecision` 的 RR 校验**：一路结论"配置 min_rr<3 时模型输出在 parse 阶段整批报错、3 次后误入 SAFE MODE"；另一路结论"恒真死校验"。亲读 `kernel/engine_position.go:260-285`：虚拟 entry 固定取 SL→TP 区间的 20% 分位，risk 恒为区间 20%、reward 恒为 80%，RR 恒等于 4.0 → `< 3.0` **永不触发**。死校验成立，"整批报错"不成立（见 R4-9）。
+2. **4h 数据是否恒可用**：一路称"默认/激进预设缺 4h → 全候选 DATA_INSUFFICIENT"；另一路称"GetWithExchange 恒拉 3m/4h 不受预设影响"。亲读裁决：**kernel 决策路径走 `GetWithTimeframes`（`market/data.go:272-323`），只拉策略 `SelectedTimeframes` 列表内的周期、不强制补 4h**；恒拉 3m/4h/1h 的是执行路径的 `GetWithExchange`（`data.go:100-223`，供挂单/止损带/vol 门用）。预设缺 4h 的封锁结论**成立**，但仅影响 kernel 侧（见 R4-3）。
+
+### 10.1 问题清单汇总（按严重级别）
+
+| # | 级别 | 位置 | 问题 | 一句话影响 |
+|---|---|---|---|---|
+| R4-1 | **P1** | `kernel/engine_analysis.go:209-211` | `correctStopLossToPlan`（2a76d4bf 承诺的 post-parse 止损吸附）**无生产调用**，全仓唯一调用在 `stop_plan_test.go:234` | 模型自算止损≠plan 时豁免失效，噪声地板拒单循环（ZEC/AVAX 同型故障）仍在 |
+| R4-2 | **P1** | `kernel/signal_layer.go:619-622` + `kernel/engine_data_binance.go:643` | `price_change_24h_live_pct` 携带小数而非百分数：`QuantData.PriceChange["24h"]` 约定是小数（0.0723=7.23%），signal 层直接透传未 ×100；隔壁 `price_change_60m_live_pct` 是真百分数（`rolling1hChangePct` 尾部 `×100`，signal_layer.go:2033），同块 JSON 单位差 100 倍 | 模型每周期把所有币的 24h 变动读成 ~0.0x%，24h 上下文整体失真 |
+| R4-3 | **P1** | `kernel/signal_layer.go:876,895-897` + `store/strategy.go:547` + `api/handler_user.go:308` | DataQuality 硬性要求 15m/1h/4h 各 ≥60 bars（缺失→`sufficient=false`→`DATA_INSUFFICIENT` 双向 no-exception 阻断），但默认策略模板 `["5m","15m","1h"]` 与激进预设 `["3m","15m","1h"]` 均无 4h，`fetchMarketDataWithStrategy`（`engine_analysis.go:235-244`）只在列表为空时才补 `LongerTimeframe` | 这两类配置下**每个候选 4h bars=0 → 全部 DATA_INSUFFICIENT → 整轮 regime skip 合成 wait、零 LLM 调用**。当前实盘 Conservative 预设（`handler_user.go:291`，含 4h）不受影响 |
+| R4-4 | **P1** | `trader/auto_trader_risk.go:1078-1105` vs `:307-322` | `executePartialCloseWithRecord`（决策周期 goroutine）无锁读写 `at.partialTrimmed`；回撤监控 goroutine 的 `ClearPeakPnLCache`（`:243`→`:320`）在 `tpTrimMutex` 下 delete 同一 map | 并发 map 读写 = Go runtime fatal（**整个进程崩溃**，非单协程）。触发窗口窄（partial_close 与回撤保护平仓同刻），但后果是级联的 |
+| R4-5 | **P1** | `web/src/pages/StrategyStudioPage.tsx:414-432` + `api/strategy.go:258-272,330-355` + `trader/auto_trader_configcheck.go:57-58` | UI 保存 = 页面打开时的 GET 快照整体覆盖（前端显式携带全字段；后端 merge 语义救不了）；**且保存即 RemoveTrader+reload，`loadedConfigHash` 以回滚后的值重算 → 漂移告警恒通过** | 09-14 `sl_min_atr_mult 1.5→0` 事故的完整路径仍然在，且这次连 config-drift 告警都不响（告警只覆盖"DB 被改但进程没 reload"，恰好不覆盖"保存即回滚+reload"） |
+| R4-6 | P2 | `market/data.go:393-396` + `kernel/engine_analysis.go:287-294` | OI 拉取失败被构造成非 nil 零值 `&OIData{0,0}`，下游 `data.OpenInterest != nil` 把"数据缺失"当"真实 OI=0"，日志打"OI value too low (0.00M)"剔除 | openInterestHist 单点故障 = 当周期全部非持仓候选被静默清空（与 ticker 全失败→VENDOR_DIVERGENCE_UNKNOWN 同族的基础设施单点） |
+| R4-7 | P2 | `trader/auto_trader_vol.go:372-384`（写）+ `:280`、`auto_trader_risk.go:1220`（读） | `tpRunnerDoneMap` 全仓无任何 delete（`ClearPeakPnLCache` 清 tpTrimDone/r1TrimDone/partialTrimmed，独独漏它） | 同 symbol_side 平仓后重开的新仓**永远不会再转 trend-run 出场**（vol.go:280 守卫恒假）；出场管理退化但不丢保护（新开仓的固定 TP 仍在） |
+| R4-8 | P2 | `trader/auto_trader_risk.go:213-221` | TP ladder trim 档：执行（`:208-212`）后无论成败置位 `tpTrimDone`，失败不回滚（full 档无 done 门会每周期重试，自愈；trim 档一次失败永久跳过） | 1/3 减仓利润获取缺失（非风险放大） |
+| R4-9 | P2 | `kernel/engine_position.go:260-285` | RR 校验死代码：虚拟 entry 推导下 RR 恒 4.0，`<3.0` 永不触发；且硬编码 3.0 不读 `min_risk_reward_ratio` 配置。prompt（`engine_prompt.go:87`）宣称"程序双重校验,不可放宽"——kernel 层实际是 no-op，真实强制只有 rr_scan 门 + 执行端 `checkRR`（这两处正确且读配置） | 误导性死代码 + prompt 承诺与 kernel 现实不符（执行侧无资金风险） |
+| R4-10 | P2 | `web/src/components/strategy/RiskControlEditor.tsx:137-162` + `kernel/anchor_offset.go:211-237` | `tp_trim_profit_pct` 表单可配但默认**永不生效**：`profit_lock_at_r` 缺省=0→解析为 1.0（1R 锁开启）→ `TpTierAction` trim 档恒让位（`:215-217`）；要启用 trim 必须把 `profit_lock_at_r` 设为负，而该字段**无表单、无 TS 类型**（`web/src/types/strategy.ts` 缺） | UI 调 trim 是无效配置且无提示（1R 锁压制 trim 是已记录的设计，问题在 UI 暴露了死配置项） |
+| R4-11 | P2 | `web/src/components/strategy/RiskControlEditor.tsx:482` vs `kernel/anchor_offset.go:297-304` | `max_vendor_divergence_pct` 前端提示"默认 2"，后端 0→**1**% | 展示层与执行默认不符 |
+| R4-12 | P2 | `kernel/engine_prompt.go:71,83,84` | Hard Constraints 三行渲染无 ≤0 fallback：`MaxPositions=0` 渲染"0 coins"（执行端回落 3，`auto_trader_risk.go:392`）、`MaxMarginUsage=0` 渲染"≤0%"（执行端 0.9，`:809`）、`MinPositionSize=0` 渲染"≥0 USDT"（执行端 12） | 字段为 0（JSON 导入/直改 DB）时 prompt 向模型宣告与执行矛盾的硬约束；同文件相邻行（:60-67、:93-96）都有 fallback，属遗漏 |
+| R4-13 | P2 | `market/breakout/gainer_history.go:86-100` + `kernel/engine.go:947` | `SetShortScanHistoryConfig` 是包级全局单值，每个 trader 的 engine 每周期覆盖写入——多 trader 不同 `short_scan_history_days/max` 时 last-writer-wins | 单 trader（当前部署）闭环正常；多 trader 时配置串扰无检测 |
+| R4-14 | P2 | `trader/auto_trader_risk.go:1252-1300` | 裸仓看门狗 `placeComputedProtection`（c2f65c7d 的核心新行为：从实时数据算 SL=mark∓1.5×ATR(1h)、TP=mark±2×dist 并补挂）**零测试覆盖**；`processProtectionWatchdog` 整体同样无测试 | 09-19 用户指令的直接实现无回归网 |
+| R4-15 | P2 | `trader/binance/futures.go:239-248`（`calculatePrecision`）+ `auto_trader_risk.go:1273-1281` | tick 取整按 tickSize 的**小数位数**而非 tick 量化——对 10 的幂次 tick 等价（Binance 绝大多数），非 10 幂 tick（如 0.025）不保证是 tick 整数倍；另 `placeComputedProtection` 用 `math.Pow10` 自行取整、不走 `formatTriggerPrice`、无 drift guard、取整后未重验 SL 相对 mark 的边 | -1111 理论可复现的边缘 + 看门狗路径取整口径与挂单路径不一致 |
+| R4-16 | P3 | `market/data.go:337-386` | `GetWithTimeframes` 的 `primaryKlines`（局部变量）未被 live price patch（`refreshFormingCandle` 只 patch `timeframeData` 副本）→ BTC 头行 EMA/MACD/RSI7（`engine_prompt.go:379-381`）用 vendor 冻结 forming close | 仅影响 BTC 概览行与遗留字段，各币 Structured Signal 自算不受影响（legend 已声明优先级） |
+| R4-17 | P3 | `kernel/signal_layer.go:1088` vs `trader/auto_trader_risk.go:608-610` | 1h 数据缺失时两侧 floor 口径不一致：kernel 端 `STOP_PLAN_NO_STRUCTURE` 双向封锁（fail-closed），执行端本有 1h→2h→4h 降级链 | 方向保守（安全），但 1h best-effort 失败 = 该币当周期无条件禁交易，两侧不同尺 |
+| R4-18 | P3 | `kernel/signal_layer.go:932-938` vs `kernel/anchor_offset.go:117-132` | prompt 端 breathing 阈值经 `primaryTFSignal`（15m 缺失回退最长 TF=4h），执行端 `ExecutionATRPct` 精确 15m（缺失→0→fixed）——`anchor_offset.go:121-123` 注释声称两侧同约定，实际 `ComputeSymbolSignals` 内部不走 `ExecutionATRPct` | GetWithExchange 恒聚合 15m 故窗口窄；触发时 prompt 端过度抑制（≈8× 宽），`LIMIT_ANCHOR_SUPPRESSED` 误报 |
+| R4-19 | P3 | `trader/auto_trader_orders.go:188-189` vs `:362` | 市价开仓先 `SetRecordedStopLoss/SetInitialStopLoss` 落锚、后 `reanchorProtectivePrices` 按滑点平移才发交易所——滑点时内存记录≠交易所触发价（min-hold 硬退出旁路、看门狗补挂价均用内存值）；限价路径无此问题 | 滑点窗口内内存锚轻微失真 |
+| R4-20 | P3 | `trader/auto_trader_pending.go:301-315` | 限价开仓路径缺市价路径的"可用保证金缩放"步骤（orders.go:132-146 有）——可用不足时限价单被交易所以保证金不足拒绝，非风控拦截 | 有 `marginBudgetBlocksOpen` 90% 线兜底，覆盖区间不同 |
+| R4-21 | P3 | `trader/auto_trader_risk.go:1252-1300` + `vol.go:280` | `placeComputedProtection` 不检查 `tpRunnerDone`（理论窗口极小）；裸仓判定从实时 mark 计算（交易所止损刚触发、仓位残留瞬间可能误挂，下单被拒或立即触发）；操作员手工撤单想手动管理会被强制重挂 | c2f65c7d 有意行为（用户指令"保护裸仓"），记录边缘 |
+| R4-22 | P3 | `trader/binance/futures_orders.go:242+` | `moveStopExchange` 的 `CancelStopLossOrders(symbol)` 按 symbol 撤**所有** STOP 单不筛方向——对冲模式（同币双向持仓）下会连带撤掉对侧止损，靠看门狗下轮补挂 | 当前单向持仓模式无影响 |
+| R4-23 | P3 | `trader/auto_trader_vol.go:161,262-263` | trailing 的 arm 阈值用 live recorded stop 而非开仓 R 锚（6d241a25 只改了 1R 锚，trail 的 arm 仍随收紧收缩——breakeven 后 dist≈0 恒 armed） | 提前武装方向（更保护），与 1R 修复口径不一致且未注释声明 |
+| R4-24 | P3 | `kernel/engine_analysis.go:139-178` | regime skip 不覆盖 `adjust_stop_loss`：全部持仓 close-locked + 全候选 blocked 时合成 wait，跳过了本可合法收紧的止损动作 | 错失收紧机会，不放大风险 |
+| R4-25 | P3 | `trader/auto_trader_risk.go:1172`、`:187`、`:196-201` | ①看门狗首见冻结在"DB 行未落库+重启后止损已收紧"场景会把已收紧的止损冻成 R 锚（legacy 折衷，注释自认）；②`:187` 传 `&at.config.StrategyConfig.RiskControl` 无 nil 检查（panic 被 `safeCheckPositionDrawdown` 的 recover 吞掉→监控每分钟空转）；③TP full/1R dust 全平不清 peakPnLCache（靠下周期差集自愈） | 三处边缘，均有自愈或兜底 |
+| R4-26 | P3 | `kernel/signal_layer.go:1571` + `market/data.go:548-550` | `if macdLine := ...; macdLine != 0` 用 0 兼作失败哨兵（MACD 线恰为 0 时字段静默消失，罕见）；`getFundingRate` 内"1-hour cache"注释陈旧（实际 TTL 5min） | 纯边缘/注释漂移 |
+| R4-27 | P3 | `web/src/components/strategy/RiskControlEditor.tsx:117,151,181,53,366,513` + `CoinSourceEditor.tsx:749-757` + `api/strategy.go:300-322,249-250` | 前端杂项：①`pump_guard_4h_pct/tp_trim_profit_pct/tp_full_profit_pct` 是后端 float64 却用 `parseInt`（7.5→7）；②`|| 默认值` 使 UI 无法表达 0（`min_risk_reward_ratio` 后端 0=禁用 RR 门，UI 永远设不出）；③`short_scan_history_max` 输入框 min=1 回不到 0=默认 30；④token 超限检查在写库+reload **之后**才返回 400；⑤`is_public/config_visible` 非 pointer，非 UI 客户端 PUT 会把公开状态重置 false | 单独都小，合起来是"表单语义 ≠ 后端语义"的同一族问题 |
+| R4-28 | 信息 | `web/src/types/strategy.ts:187-245,93-121` | TS 类型落后于后端：缺 `max_spread_pct`、`profit_lock_at_r`、`stock_weekend_no_open`、`limit_entry_offset_mode/_atr_mult/_min_pct/_max_pct`、`use_hyper_all/use_hyper_main/hyper_main_limit` | 运行时靠 JS spread round-trip 不丢值，但类型缺位 = 这些字段永远进不了表单（R4-10 同根） |
+| R4-29 | 信息 | `kernel/engine_prompt.go:379-381` + `kernel/schema.go` | BTC 头行字段（3m 遗留序列指标）与各币 Structured Signal（TFSignal 自算）口径并列但来源不同，且受 R4-16 影响；schema.go 数据字典偏旧但不喂错误口径（legend 已声明 Structured Signal 优先） | 文案已缓解，记录在案 |
+
+### 10.2 各主题详细核查结论
+
+#### A. user prompt 数据获取与指标计算
+
+**验证无误**（关键项，各一行）：
+
+- `GetWithExchange` 恒拉 3m/4h（失败即整体失败，不静默降级）+ 1h best-effort（失败置 nil 记日志，floor 回退链吃 4h）+ 15m 由 3m 本地聚合（`market/data.go:970-1028`，5:1 对齐桶边界）——执行侧止损带/vol 门数据源成立（7c0aebd4/d1981253 修复在位）。
+- live price：Binance ticker，xyz 资产保留 kline close；±80% 崩坏不 patch；vendor divergence 测量 `*float64`，nothing-to-patch 也产出 ~0 测量值，缺失时 `VENDOR_DIVERGENCE_UNKNOWN` fail-closed 拦双方向（09-19 审计六修复在位）。
+- funding：5min 缓存、失败不缓存、成功须回显 symbol 才 Store（防 -1121 错误信封缓存假 0）、`FundingRateOK` 区分真 0（bstock）与失败、结算间隔实测年化（未知回退 8h×3）、rate=0 省略 annualized——全部在位且有测试。
+- 指标：ATR Wilder 仅 closed bars、各周期口径一致；RSI 平盘=50、stochRSI 零头不入随机窗+hi==lo→50、MACD 注释明示是线非柱、classifyTrend 对称四象限（`signal_layer.go:1704-1730`）、finestSubHourTrend 取最细子小时 TF、OI USD delta=base change×latest price（测试钉死）、`funding_rate` 原始小数 vs `funding_annualized_pct` 百分数的 prompt 契约在位。
+- stop_plan：结构位 step-out 不 clamp（过紧跳下一结构、超 cap break）、缓冲取宽端（空 0.5/多 0.4×ATR(1h)）、RR 门口径统一到 plan（gate/采纳/执行端 checkRR 同源）、`StopPlanTolerancePct=0.05` 与执行端豁容差一致。
+- prompt 示例数字：仓位/风险预算示例全部 `fmt.Sprintf` 自实时 equity+配置 `risk_per_trade_pct`（`TestRiskBudgetSingleSource` 钉死 3.5% 流转）；止损带/限价偏移/TP 阶梯/点差/连亏等参数行全部从共享 resolve 函数取值，未见新的手写数字。
+- 限价锚点：offset=ATRMult×ATR(1h) clamp 带宽、方向正确（买单阻力下方/卖单支撑上方）、抑制 fail-closed（`!LimitAllowed && 无市价例外证据`→`LIMIT_ANCHOR_SUPPRESSED`）、被抑制锚点上的限价开仓降级 wait 不落交易所。
+
+**缺陷**：R4-2（24h 单位）、R4-3（预设缺 4h）、R4-6（OI 零值）、R4-9（RR 死校验）、R4-16/17/18/26。
+
+#### B. 止盈止损/开仓单计算与执行
+
+**验证无误**：
+
+- `validateOpenRisk` 六子门：SL/TP 必填、边 sanity、双锚 RR（decision.Price 与 live 价各查一次）、cap=max(2×ATR(4h),8%)、floor=SLMinATRMult×ATR(1h)；plan-parity 豁免（stop==gated plan ±0.05% 免 floor、RR 仍复检）+ `cycleGateStates` 捕获时机修复（86523dfd：prompt build 之后、执行循环之前赋值，测试含 nil-map 回归）——在位。
+- algo 触发价 tick 取整 + drift guard（f01cb6f8）：`formatTriggerPrice` 按 tickSize 精度渲染、roundtrip 偏移>1% 拒单，SetStopLoss/SetTakeProfit 均接入，UNIUSDT 型 -1111 修复成立。
+- 限价寿命 `max(30min, N×scan interval)` 时间口径、锚点穿越市价回退、supply-zone 呼吸阈值用执行 TF 15m ATR（`ExecutionATRPct` 精确查找无跨周期回退，parity 测试钉死）。
+- `adjust_stop_loss` 三闸：无仓跳过、tighten-only（currentSL≤0 时正确侧新止损=裸仓补挂放行）、保本闸（多 newSL≥开仓价/空镜像，entry 缺失时跳保本闸保留 tighten+WARN）。
+- 裸仓看门狗计算保护（c2f65c7d）：ATR(1h) 来源/双侧 sanity/成功后 Set 锚+TP 记录使下游按计划处理——数学正确（测试缺口见 R4-14）。
+
+**缺陷**：R4-1（吸附未接线）、R4-15（tick 量化边缘）、R4-19/20/21/22。
+
+#### C. 仓位计算
+
+**验证无误**（含一次口径澄清）：
+
+- `clampSizeToRisk`：`maxNotional = equity × riskPct% / distPct%`——**不除以杠杆，且这是正确的**：`PositionSizeUSD` 全链按名义价值使用（qty=size/price、保证金=size/lev、止损时损失=notional×dist%），令损失=风险额反解即得该式。"÷杠杆"得出的是保证金口径，两者等价、代码无误。
+- 链路顺序：价值比例上限（BTC/ETH 5x、山寨 1x 权益）→ 风险反推 → 可用保证金缩放（marginFactor=1.01/lev+0.001，超限缩至 98%）→ 最小下单量（读配置 `min_position_size`，与 kernel `EffectiveMinPositionSize` 同源）→ 保证金预算门（Σ已用+挂单预留+新单 ≤ budget×equity，lev 不可读按全额保守计）。
+- `risk_per_trade_pct` 四个消费点（clampSizeToRisk / vol-target / prompt 公式与示例 / signal_layer 预计算）全部 `≤0→1.5` 同语义，单一解析无分叉。
+- vol-target：target=equity×(riskPct/100)/(atrPct/100)，80/120 滞后带、只减不加、target<min size 整体平仓、1h 冷却——单位正确。
+
+**缺陷**：R4-4（partialTrimmed 竞争）、R4-8（trim 失败不回滚）、R4-7（tpRunnerDoneMap 残留）。
+
+#### D. 风控闸门
+
+**验证无误**：
+
+- extended-pump 做多守卫（794ad4e7）：4h ReturnPct ≥ `PumpGuard4h`（0=20/负=关，单一 resolver 三处共用）+ 确认需 15m LastClose>EMA20 且 swing low 抬高，缺 15m 在 extended 状态下 fail-closed；仅拦做多（做空侧对等惩罚在 short 扫描器 extended penalty，单向为设计）。
+- regime-level LLM skip：全候选 HardBlocked（缺失 GateState 视为 blocked）+ 全持仓 close-locked（年龄未知 fail-open 保留调用）→ 合成 wait；渲染候选计数=实际渲染数；锁定持仓覆盖（587066fc）。
+- 连亏熔断（24h 窗、从第 N 笔亏损平仓时刻起算）、账户级回撤熔断（拦 open 不拦 close）、股票周末禁开（nil/true=拦）、max_positions/nextSlotCount（含挂单占位）、点差门 fail-open+必留日志——语义与 09-13 报告一致，无回归。
+- 1R 锚（6d241a25）：三路径落锚（市价/限价成交/离线成交）+ 看门狗首见冻结，write-once 双层（内存 if≤0 + DB `WHERE initial_stop_loss=0`），`ProfitLockTargets` 幂等性文档在位。
+- decision_stage/wait_state 程序派生（456578f0/b4bf7552）：模型声明一律覆写、wait 剥离冗余字段、派生词表齐全。
+- drawdown-protect 5/55 默认、Peak-PnL 单调更新、`trailingDecision` 只紧不松+0.1% 最小改善（纯函数+单测）。
+
+**缺陷**：R4-14/21/22/23/24/25。
+
+#### E. 网页策略配置项生效链路
+
+**链路总评**：
+
+- **保存→生效闭环完整**：PUT `/api/strategies/{id}` → DB 更新 → 立即 `RemoveTrader`+`LoadUserTradersFromStore`+`EnsureTraderStarted`（`api/strategy.go:330-355`）→ **下周期生效，无需重启**；运行中每周期不重读 DB，靠 `checkConfigDrift` 比对哈希告警（30min 去重，不阻断）。
+- **prompt 渲染与执行闸门共享 resolve 函数**：EarlyCloseHours/MaxSpreadPct/TpTrim/TpFull/ProfitLock/PumpGuard4h/EffectiveMaxVendorDivergencePct/EffectiveMinPositionSize/ResolveShortScanHistory* 等确认单一解析（例外=R4-12 三行渲染遗漏）。
+- **两个新字段闭环确认**：`risk_per_trade_pct`（f8daeff5）全链 ✅；`short_scan_history_days/max`（1f543406）单 trader 全链 ✅（prompt 图例走同一 resolve，无手写默认；残留=R4-13 全局串扰、R4-27③ max 回不到默认）。
+- **无表单但被后端读取的字段**（靠 GET/PUT round-trip 存活，一旦页面快照过期再保存就会被回滚——R4-5 的作用面）：`sl_min_atr_mult`、`profit_lock_at_r`、`min_hold_minutes`、`max_spread_pct`、`stock_weekend_no_open`、`block_short_1d_uptrend`、`entry_timing_gate`、`limit_entry_enabled`、`limit_entry_max_cycles`、`limit_entry_offset_mode/_atr_mult/_min_pct/_max_pct`、`vol_target_enabled`、`trailing_stop_enabled`、`close_reject_breakout_pct`、`open_reject_supply_pct`、`loss_streak_ban_enabled/_max_losses`、`account_max_drawdown_pct`。
+- **表单有但无效/误导的配置项**：`tp_trim_profit_pct`（R4-10，默认死配置）；`max_vendor_divergence_pct`（R4-11 提示值错）。
+
+**缺陷**：R4-5（回滚+告警盲区）、R4-10/11/12/13、R4-27/28。
+
+### 10.3 修复建议（按优先级排序，未实施）
+
+1. **R4-1**：`engine_analysis.go:210` 在 `correctLimitAnchors` 旁补一行 `correctStopLossToPlan(decision.Decisions, ctx.GateStates, kernel.StopPlanTolerancePct)`——`ctx.GateStates` 已就绪，一行接线，测试现成。
+2. **R4-2**：`signal_layer.go:621` 改 `v := pc * 100; d.PriceChange24hLivePct = &v`，补数值断言测试。
+3. **R4-4**：`executePartialCloseWithRecord` 三处 map 访问套 `tpTrimMutex`（与 ClearPeakPnLCache 同锁）。
+4. **R4-3**：预设/默认模板补 4h，或 `minBars` 按策略实配 TF 收缩（后者更治本：只对"配置里有的周期"提 60 bars 要求，4h 单独豁免为"有则须 ≥60"）。
+5. **R4-5**：保存前重新 GET 比对（前端）或 `updated_at` 乐观锁（后端 API，`api/strategy.go` req 加版本字段，不匹配返回 409）；至少把 `checkConfigDrift` 的告警从"reload 后恒过"改为记录旧哈希迁移链。
+6. P2 批次：R4-6（OI 失败显式 UNKNOWN 而非零值）、R4-7（ClearPeakPnLCache 补 delete tpRunnerDoneMap）、R4-8（trim 失败回滚 flag）、R4-9（删恒真块或改读配置+真实价）、R4-10（trim 输入旁标注"1R 锁开启时无效"或补 profit_lock_at_r 表单）、R4-12（三行补 fallback）、R4-14（看门狗补测试）。
+
+---
+
+*本报告基于 2026-09-13 dev 分支（含大量未提交改动）的代码快照，未涉及前端 React 代码、交易所适配层细节（bybit/okx/gate 等）及数据库 schema 层面的审查。第 8 节为第二轮修复（首次审查的 4 项核心发现），第 9 节为第三轮修复（七门专项深挖的 6 项缺口），均于同日完成。第 10 节为第四轮全量复审（2026-09-20，dev 分支 HEAD=`f01cb6f8`，工作区干净），覆盖前端策略配置链路与 09-14 之后全部新增风控逻辑，只审不改。*
