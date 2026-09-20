@@ -196,6 +196,8 @@ export const riskControl = {
   maxPositionsDesc: { zh: '同时持有的最大币种数量', en: 'Maximum coins held simultaneously', es: 'Monedas máximas simultáneas' },
   earlyCloseMinHours: { zh: '提前平仓最短持仓时长（小时）', en: 'Early-Close Min Hold (hours)', es: 'Cierre Anticipado: Horas Mínimas' },
   earlyCloseMinHoursDesc: { zh: 'AI 主动平仓需持仓满 N 小时,且 1h 出现≥2 根逆持仓方向收盘K线;0=默认 4h,负数=禁用。止盈/止损触发与回撤保护平仓不受限', en: 'AI closes under N hours of hold time need ≥2 against-direction closed 1h candles; 0 = default 4h, negative = disabled. SL/TP fills and drawdown-protect are unaffected', es: 'Cierres IA bajo N horas requieren ≥2 velas 1h en contra; 0 = 4h por defecto, negativo = desactivado' },
+  pumpGuard4hPct: { zh: '暴涨延伸做多确认门（4h 涨幅%）', en: 'Extended-Pump Long Guard (4h return %)', es: 'Guardia de Bomba Extendida (retorno 4h %)' },
+  pumpGuard4hPctDesc: { zh: '4h 趋势窗口涨幅 ≥ N% 的币,做多需回踩确认(15m 收复 EMA20 + 摆动低点抬高),否则做多被拒(EXTENDED_PUMP_UNCONFIRMED);0 = 默认 20,负数 = 禁用', en: "Coins with 4h trend-window return ≥ N% need a CONFIRMED pullback for longs (15m back above EMA20 + higher swing low), else longs are blocked (EXTENDED_PUMP_UNCONFIRMED); 0 = default 20, negative = disabled", es: 'Monedas con retorno 4h ≥ N% requieren retroceso confirmado para largos; 0 = 20 por defecto, negativo = desactivado' },
   tpTrimProfitPct: { zh: '止盈阶梯:减仓 1/3 触发浮盈(%)', en: 'TP Ladder: Trim-1/3 PnL (%)', es: 'Escalón TP: Reducción 1/3 (%)' },
   tpTrimProfitPctDesc: { zh: '浮盈(杠杆后)达到此值,程序自动市价减仓 1/3(每仓位一次);0=默认 10,负数=关闭', en: 'At this leveraged PnL the program market-trims 1/3 (once per position); 0 = default 10, negative = off', es: 'Con este PnL apalancado, reduce 1/3; 0 = 10, negativo = off' },
   tpFullProfitPct: { zh: '止盈阶梯:全平触发浮盈(%)', en: 'TP Ladder: Full-Close PnL (%)', es: 'Escalón TP: Cierre Total (%)' },

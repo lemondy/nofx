@@ -539,3 +539,39 @@ func TestBuildSystemPromptRendersUniverseLegend(t *testing.T) {
 		t.Fatal("disabled pool must not render the universe legend")
 	}
 }
+
+// The extended-pump long guard (user directive 2026-09-20) must render its
+// params line from the RESOLVED threshold — never a handwritten default —
+// and the hard-gate line must list EXTENDED_PUMP among the no-exception
+// blocker codes.
+func TestBuildSystemPromptRendersPumpGuard(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.CoinSource.SourceType = "static"
+
+	engine := NewStrategyEngine(cfg)
+	prompt := engine.BuildSystemPrompt(100, "")
+	for _, want := range []string{"暴涨延伸做多确认门", "≥ 20%", "EXTENDED_PUMP_UNCONFIRMED"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("default-guard prompt missing %q", want)
+		}
+	}
+	// The blocker line must carry the code in the NO-EXCEPTION list.
+	i := strings.Index(prompt, "任一项时不存在任何例外")
+	seg := prompt[max(0, i-700) : i+10]
+	if !strings.Contains(seg, "EXTENDED_PUMP") {
+		t.Fatal("EXTENDED_PUMP not in the no-exception blocker list")
+	}
+
+	// Configured threshold must flow through verbatim; disabled (negative)
+	// must drop the line entirely.
+	cfg.RiskControl.PumpGuard4hPct = 35
+	engine = NewStrategyEngine(cfg)
+	if !strings.Contains(engine.BuildSystemPrompt(100, ""), "≥ 35%") {
+		t.Fatal("configured 35% threshold missing from prompt")
+	}
+	cfg.RiskControl.PumpGuard4hPct = -1
+	engine = NewStrategyEngine(cfg)
+	if strings.Contains(engine.BuildSystemPrompt(100, ""), "暴涨延伸做多确认门") {
+		t.Fatal("disabled guard must not render its params line")
+	}
+}

@@ -103,6 +103,40 @@ export function RiskControlEditor({
  style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
  >
  <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {ts(riskControl.pumpGuard4hPct, language)}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {ts(riskControl.pumpGuard4hPctDesc, language)}
+ </p>
+ <input
+ type="number"
+ value={config.pump_guard_4h_pct ?? 0}
+ onChange={(e) =>
+ updateField(
+ 'pump_guard_4h_pct',
+ e.target.value === '' ? 0 : parseInt(e.target.value)
+ )
+ }
+ disabled={disabled}
+ min={-1}
+ max={200}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {`当前生效: ${(config.pump_guard_4h_pct ?? 0) === 0 ? 20 : (config.pump_guard_4h_pct ?? 0) < 0 ? '禁用' : config.pump_guard_4h_pct}%`}
+ </p>
+ </div>
+
+ <div
+ className="p-4 rounded-lg"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
  {ts(riskControl.tpTrimProfitPct, language)}
  </label>
  <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>

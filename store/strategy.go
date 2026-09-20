@@ -456,6 +456,15 @@ type RiskControlConfig struct {
 	// the fill would land inside the supply/demand zone with no room.
 	// 0 disables. (CODE ENFORCED)
 	OpenRejectSupplyPct float64 `json:"open_reject_supply_pct"`
+	// Extended-pump long guard (暴涨延伸做多确认门): when a coin's 4h
+	// trend-window return is at/above this percent, the EMA "up" label lags
+	// the round-trip by days — longs then need a CONFIRMED pullback (15m
+	// close back above its EMA20 AND a higher 15m swing low), otherwise the
+	// long direction is blocked (EXTENDED_PUMP_UNCONFIRMED). Vertical pumps
+	// bought as "trend pullbacks" round-trip hard (FILUSDT/SAGAUSDT
+	// 2026-09-19: 4h +29%, −5.2%/−3.6% stop-outs within hours).
+	// 0 = built-in default (20), negative = guard disabled. (CODE ENFORCED)
+	PumpGuard4hPct float64 `json:"pump_guard_4h_pct"`
 	// Loss-streak circuit breaker: when a symbol closes LossStreakMaxLosses
 	// consecutive losing trades within the last 24h, new opens on that symbol
 	// are blocked for 24h from the third loss (recomputed statelessly from

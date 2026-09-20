@@ -282,8 +282,11 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if e.config.RiskControl.EntryTimingGate {
 			params.WriteString("- 入场时点(程序强制): 最细子小时周期(15m/30m)趋势必须与方向一致——做多需 up/pullback,做空需 down/rally(下跌趋势中的反弹=空头入场窗);range 无动能,顺势入场同样会被拦截\n")
 		}
+		if pg := PumpGuard4h(&e.config.RiskControl); pg > 0 {
+			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门(程序强制): 4h 趋势窗口(5根)涨幅 ≥ %.0f%% 的币,EMA 多头标签滞后于行情,禁止把暴跌初段当\"趋势回踩\"买入——该方向开仓要求回踩已确认: 15m 收盘收复 EMA20 且 15m 摆动低点抬高(各币快照 pump_guard.extended/confirmed 已程序判定);extended=true 且 confirmed=false 时做多被拒(EXTENDED_PUMP_UNCONFIRMED),no_trade_reason 直接引用该码,不要凭感觉改判;该门与入场时点门独立,两者都过才能做多\n", pg))
+		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
-		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
+		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门(程序强制): K线数据源与实时行情偏差超过 %.1f%% 时,该币两个方向的开仓都被拦(VENDOR_DIVERGENCE)——entry/SL/TP 全部按实时价定价,数据源偏差过大使整套设置失真(09-18 MYXUSDT −2.57%% 教训);阈值可在策略页配置\n", v))
 		}
@@ -1236,6 +1239,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		LimitEntryOffsetMinPct:  e.config.RiskControl.LimitEntryOffsetMinPct,
 		LimitEntryOffsetMaxPct:  e.config.RiskControl.LimitEntryOffsetMaxPct,
 		SupplyZonePct:           e.config.RiskControl.OpenRejectSupplyPct,
+		PumpGuard4hPct:          PumpGuard4h(&e.config.RiskControl),
 		// Hard-entry gate inputs — the program pre-evaluates the strategy's
 		// own gates per direction (review 2026-09-15).
 		MinRR:             e.config.RiskControl.MinRiskRewardRatio,

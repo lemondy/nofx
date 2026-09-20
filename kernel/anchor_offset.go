@@ -131,6 +131,24 @@ func (sig *SymbolSignal) ExecutionATRPct() float64 {
 	return 0
 }
 
+// DefaultPumpGuard4hPct — the 4h trend-window return at/above which a coin
+// counts as an extended pump and longs need a confirmed pullback.
+const DefaultPumpGuard4hPct = 20.0
+
+// PumpGuard4h resolves the extended-pump long guard threshold from
+// risk_control: 0 = built-in default, negative = guard disabled (returns 0).
+// Single definition — the prompt builder, the signal layer and the trader's
+// execution recompute all read through this.
+func PumpGuard4h(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.PumpGuard4hPct == 0 {
+		return DefaultPumpGuard4hPct
+	}
+	if rc.PumpGuard4hPct < 0 {
+		return 0
+	}
+	return rc.PumpGuard4hPct
+}
+
 // AnchorBreathingPct resolves the breathing-room threshold between an anchor
 // and the opposite-side structure. Same scaling shape and the same ATR(1h)
 // yardstick as the offset so the prompt-time suppression (kernel) and the

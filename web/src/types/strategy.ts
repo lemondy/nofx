@@ -207,6 +207,8 @@ export interface RiskControlConfig {
   min_hold_minutes?: number;
   // AI closes before this many hours need ≥2 against-direction closed 1h candles (0 = default 4h, negative = disabled) (CODE ENFORCED)
   early_close_min_hours?: number;
+  // 暴涨延伸做多确认门：4h 趋势窗口涨幅 ≥ N% 时做多需回踩确认；0 = 默认 20，负数 = 禁用
+  pump_guard_4h_pct?: number;
   // TP ladder on leveraged PnL%: at ≥ this the program trims 1/3 (0 = default 10, negative = off) (CODE ENFORCED)
   tp_trim_profit_pct?: number;
   // At ≥ this PnL% the program closes the rest (0 = default 25, negative = off) (CODE ENFORCED)

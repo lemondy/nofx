@@ -266,6 +266,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 			LimitEntryOffsetATRMult: rc.LimitEntryOffsetATRMult,
 			LimitEntryOffsetMinPct:  rc.LimitEntryOffsetMinPct,
 			LimitEntryOffsetMaxPct:  rc.LimitEntryOffsetMaxPct,
+			PumpGuard4hPct:          kernel.PumpGuard4h(&rc),
 		})
 		if sigErr == nil && sig != nil {
 			// Same execution-TF-scaled breathing threshold the prompt-side

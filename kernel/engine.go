@@ -266,6 +266,7 @@ var ValidBlockingFactors = []string{
 	"RANGE_NO_DIRECTION", "CONFLICT_UNRESOLVED", "CROWDING_HIGH",
 	"LOSS_STREAK_BAN", "VOL_EXTREME", "DATA_INSUFFICIENT", "MIN_SIZE",
 	"STRUCTURE_CONFLICT", "WAIT_PULLBACK", "VENDOR_DIVERGENCE", "POOR_HISTORY",
+	"EXTENDED_PUMP",
 }
 
 // ValidWaitStates is the per-coin trading state machine (user review

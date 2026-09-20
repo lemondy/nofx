@@ -186,6 +186,10 @@ type SymbolSignal struct {
 	// documented market-order exceptions), and adopt rr_scan.first_rr_ge_target
 	// as the take-profit instead of re-scanning structure.
 	HardGate *HardEntryGate `json:"hard_entry_gate,omitempty"`
+	// PumpGuard is the extended-pump long guard's evidence + verdict —
+	// rendered so the model sees WHY a hot coin's long side is locked
+	// (nil when the guard is disabled via a negative pump_guard_4h_pct).
+	PumpGuard *PumpGuardBlock `json:"pump_guard,omitempty"`
 	// Bias names the SOURCE of each directional read (see BiasBlock).
 	Bias *BiasBlock `json:"bias,omitempty"`
 
@@ -352,13 +356,61 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score
 }
 
 // HardEntryGate holds both direction verdicts.
 type HardEntryGate struct {
 	Long  *DirectionGate `json:"long"`
 	Short *DirectionGate `json:"short"`
+}
+
+// PumpGuardBlock is the extended-pump long guard's evidence + verdict
+// (user directive 2026-09-20 收紧). Vertical pumps carry an EMA-lagged "up"
+// label for days while they round-trip — FILUSDT/SAGAUSDT (2026-09-19, 4h
+// +29%/+30%, 1d +38%/+64%) were bought as "trend pullbacks" and stopped out
+// −5.2%/−3.6% within hours. When the 4h trend-window return is extended, a
+// long needs its pullback CONFIRMED: the 15m close back above the 15m EMA20
+// AND a higher 15m swing low — the dip must be demonstrating buyers again,
+// not just be cheaper.
+type PumpGuardBlock struct {
+	Extended      bool    `json:"extended"`       // 4h trend-window return >= threshold
+	ThresholdPct  float64 `json:"threshold_pct"`  // resolved guard threshold
+	Return4hPct   float64 `json:"return_4h_pct"`  // the 4h trend-window return that was measured
+	Confirmed     bool    `json:"confirmed"`      // pullback confirmed; always true when !Extended (guard dormant)
+	FastRecovered bool    `json:"fast_recovered"` // 15m last closed close back above the 15m EMA20
+	HigherLow     bool    `json:"higher_low"`     // most recent 15m swing low above the prior one
+}
+
+// computePumpGuard evaluates the extended-pump long guard. Fail-closed: a
+// missing 4h series can never mark a coin extended, but a missing 15m series
+// on an extended coin blocks the long (no evidence of confirmation).
+func computePumpGuard(sig *SymbolSignal, data *market.Data, thresholdPct float64) *PumpGuardBlock {
+	if thresholdPct <= 0 {
+		return nil
+	}
+	pg := &PumpGuardBlock{ThresholdPct: round2(thresholdPct), Confirmed: true}
+	if t4h := sig.Timeframes["4h"]; t4h != nil {
+		pg.Return4hPct = round2(t4h.ReturnPct)
+		pg.Extended = t4h.ReturnPct >= thresholdPct
+	}
+	if !pg.Extended {
+		return pg // guard dormant — not an extended pump
+	}
+	pg.Confirmed = false
+	if t15 := sig.Timeframes["15m"]; t15 != nil && t15.EMAFast != nil && t15.LastClose > 0 {
+		pg.FastRecovered = t15.LastClose > *t15.EMAFast
+	}
+	if tfd := data.TimeframeData["15m"]; tfd != nil && len(tfd.Klines) > 8 {
+		bars := tfd.Klines
+		bars = bars[:len(bars)-1] // closed bars only (same convention as the anchor suppression)
+		_, lows := swingPivots(bars, 2)
+		if len(lows) >= 2 {
+			pg.HigherLow = lows[len(lows)-1] > lows[len(lows)-2]
+		}
+	}
+	pg.Confirmed = pg.FastRecovered && pg.HigherLow
+	return pg
 }
 
 // BiasBlock separates the three bias SOURCES so "scanner says short" is never
@@ -403,6 +455,14 @@ type SignalOptions struct {
 	// (the trader would reject the order anyway; the model must not see a
 	// tradable anchor that cannot execute).
 	SupplyZonePct float64
+	// PumpGuard4hPct mirrors risk_control.pump_guard_4h_pct (resolved): when
+	// > 0, coins whose 4h trend-window return is at/above this percent are
+	// EXTENDED pumps — longs then need a confirmed pullback (15m back above
+	// its EMA20 AND a higher 15m swing low) or the long direction is blocked
+	// (EXTENDED_PUMP_UNCONFIRMED). Resolved via kernel.PumpGuard4h — the
+	// prompt builder and the trader's execution recompute must pass the SAME
+	// value.
+	PumpGuard4hPct float64
 
 	QuoteVolume24hUsd      float64            // absolute 24h turnover (USDT)
 	ScannerBias            string             // "short" when the symbol carries a short-scanner hint
@@ -946,6 +1006,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// layering (review 2026-09-15 points 1-3/5/7/8/10): the model reads the
 	// verdict and explains it instead of re-scanning structure and
 	// re-assembling blockers every cycle.
+	sig.PumpGuard = computePumpGuard(sig, data, opt.PumpGuard4hPct)
 	sig.HardGate = computeHardEntryGate(sig, opt)
 	sig.Bias = computeBiasBlock(sig, opt)
 
@@ -1162,6 +1223,12 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			if !isLong && !sig.ExecutionFilter.ShortAllowed {
 				add("MICRO_TREND_NOT_SHORT")
 			}
+		}
+		// Extended-pump long guard (2026-09-20): a hot coin's EMA-up label
+		// lags the round-trip — longs into the first pullback of a vertical
+		// pump need the dip CONFIRMED, else the direction is blocked.
+		if isLong && sig.PumpGuard != nil && sig.PumpGuard.Extended && !sig.PumpGuard.Confirmed {
+			add("EXTENDED_PUMP_UNCONFIRMED")
 		}
 		// 09-19 audit 三 (second round): the LimitEntryEnabled precondition
 		// made this fail-closed rule DEAD on market-default strategies whose
