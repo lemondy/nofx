@@ -208,6 +208,12 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		// pre-computed values the prompt showed when the model drifted.
 		if err == nil {
 			correctLimitAnchors(decision.Decisions, ctx.LimitAnchors, LimitAnchorTolerancePct)
+			// Stop-plan compliance (round-4 review R4-1): the same snap for
+			// stop_loss — without this wiring the executor's plan-parity
+			// floor exemption never sees a plan-equal stop, so every echoed
+			// model stop re-hits the noise-floor rejection (the ZEC/AVAX
+			// wasted-cycle loop this was written to end).
+			correctStopLossToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
 		}
 	}
 
@@ -284,13 +290,22 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		// Liquidity filter (skip for xyz dex assets - they don't have OI data from Binance)
 		isExistingPosition := positionSymbols[coin.Symbol]
 		isXyzAsset := market.IsXyzDexAsset(coin.Symbol)
-		if !isExistingPosition && !isXyzAsset && data.OpenInterest != nil && data.CurrentPrice > 0 {
-			oiValue := data.OpenInterest.Latest * data.CurrentPrice
-			oiValueInMillions := oiValue / 1_000_000
-			if oiValueInMillions < minOIThresholdMillions {
-				logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin",
-					coin.Symbol, oiValueInMillions, minOIThresholdMillions)
-				continue
+		if !isExistingPosition && !isXyzAsset && data.CurrentPrice > 0 {
+			if !data.OpenInterestOK {
+				// A failed OI fetch used to masquerade as OI=0 here and the
+				// filter silently dropped EVERY candidate for the cycle
+				// (round-4 review R4-6). Unknown ≠ zero: skip the level check
+				// and say so — the universe-level min-OI gate at scan time
+				// already applied.
+				logger.Infof("⚠️  %s OI unknown (fetch failed) — liquidity filter skipped this cycle", coin.Symbol)
+			} else if data.OpenInterest != nil {
+				oiValue := data.OpenInterest.Latest * data.CurrentPrice
+				oiValueInMillions := oiValue / 1_000_000
+				if oiValueInMillions < minOIThresholdMillions {
+					logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin",
+						coin.Symbol, oiValueInMillions, minOIThresholdMillions)
+					continue
+				}
 			}
 		}
 

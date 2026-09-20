@@ -11,7 +11,14 @@ type Data struct {
 	CurrentEMA20  float64
 	CurrentMACD   float64
 	CurrentRSI7   float64
-	OpenInterest  *OIData
+	OpenInterest *OIData
+	// OpenInterestOK distinguishes a REAL zero OI reading from a failed
+	// fetch — OpenInterest is always non-nil (zero-value on failure) but
+	// only meaningful when this is true. Consumers that gate on OI level
+	// (the liquidity filter) must check this flag: a silent zero read as
+	// "real OI = 0" let one failed endpoint call drop EVERY candidate as
+	// too illiquid (round-4 review R4-6).
+	OpenInterestOK bool
 	FundingRate   float64
 	// FundingRateOK distinguishes a REAL zero rate (bstock tokens pay no
 	// funding) from a failed fetch — the kernel warns only on the latter.

@@ -194,11 +194,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	}
 
 	// Get OI data
-	oiData, err := getOpenInterestData(symbol)
-	if err != nil {
-		// OI failure doesn't affect overall result, use default values
-		oiData = &OIData{Latest: 0, Average: 0}
-	}
+	oiData, oiOK := fetchOIDataOrZero(symbol)
 
 	// Get Funding Rate + measured settlement interval + settled history
 	fundingRate, fundingErr := getFundingRate(symbol)
@@ -231,6 +227,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,
 		OpenInterest:       oiData,
+		OpenInterestOK:     oiOK,
 		FundingRate:        fundingRate,
 		FundingRateOK:      fundingErr == nil,
 		FundingSettleHours: fundingSettleHours,
@@ -390,10 +387,7 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	priceChange4h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 240, currentPrice) // 4 hours
 
 	// Get OI data
-	oiData, err := getOpenInterestData(symbol)
-	if err != nil {
-		oiData = &OIData{Latest: 0, Average: 0}
-	}
+	oiData, oiOK := fetchOIDataOrZero(symbol)
 
 	// Get Funding Rate + measured settlement interval + settled history
 	fundingRate, fundingErr := getFundingRate(symbol)
@@ -413,6 +407,7 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,
 		OpenInterest:       oiData,
+		OpenInterestOK:     oiOK,
 		FundingRate:        fundingRate,
 		FundingRateOK:      fundingErr == nil,
 		FundingSettleHours: fundingSettleHours,
@@ -500,6 +495,21 @@ func refreshFormingCandle(tf string, sd *TimeframeSeriesData, livePrice float64)
 		return divergencePct, true
 	}
 	return 0, false
+}
+
+// fetchOIDataOrZero wraps getOpenInterestData with the failure convention:
+// OpenInterest stays non-nil (zero value) so readers never nil-panic, but the
+// ok flag — surfaced as Data.OpenInterestOK — tells level-gating consumers
+// (the liquidity filter) that the zero is ABSENCE, not a real reading. A
+// silent zero once let one failed endpoint call drop every candidate as "OI
+// too low" (round-4 review R4-6).
+func fetchOIDataOrZero(symbol string) (*OIData, bool) {
+	oiData, err := getOpenInterestData(symbol)
+	if err != nil {
+		logger.Infof("⚠️ %s OI fetch failed (%v) — OI-dependent gates are blind this cycle", symbol, err)
+		return &OIData{Latest: 0, Average: 0}, false
+	}
+	return oiData, true
 }
 
 // getOpenInterestData retrieves OI data

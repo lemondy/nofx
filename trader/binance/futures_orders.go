@@ -691,10 +691,10 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 	// Trigger price MUST be tick-rounded — a raw %.8f triggers -1111
 	// "Precision is over the maximum defined for this asset" on coarse-tick
 	// symbols (UNIUSDT tick 0.001 vs stop 8.86573 → the position ran
-	// unprotected, 2026-09-20). Limit entries already format via FormatPrice;
-	// the algo orders were the only raw senders.
-	prec, _ := t.GetSymbolPricePrecision(symbol)
-	priceStr, ferr := formatTriggerPrice(stopPrice, prec)
+	// unprotected, 2026-09-20). Quantized to a real tick MULTIPLE (not just
+	// decimal places — a 0.025 tick breaks the decimals-only shortcut),
+	// falling back to decimal formatting when the tick size is unavailable.
+	priceStr, ferr := t.formatAlgoTriggerPrice(symbol, stopPrice)
 	if ferr != nil {
 		return fmt.Errorf("failed to set stop-loss: %w", ferr)
 	}
@@ -733,8 +733,7 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 
 	// Use new Algo Order API — tick-rounded trigger, same -1111 rationale
 	// as SetStopLoss above.
-	precTP, _ := t.GetSymbolPricePrecision(symbol)
-	priceStr, ferr := formatTriggerPrice(takeProfitPrice, precTP)
+	priceStr, ferr := t.formatAlgoTriggerPrice(symbol, takeProfitPrice)
 	if ferr != nil {
 		return fmt.Errorf("failed to set take-profit: %w", ferr)
 	}

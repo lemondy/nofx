@@ -246,12 +246,33 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		Name          string          `json:"name"`
 		Description   string          `json:"description"`
 		Config        json.RawMessage `json:"config"` // raw JSON so we can merge
-		IsPublic      bool            `json:"is_public"`
-		ConfigVisible bool            `json:"config_visible"`
+		IsPublic      *bool           `json:"is_public"`
+		ConfigVisible *bool           `json:"config_visible"`
+		// BaseUpdatedAt is the updated_at the editor loaded its config copy
+		// at. A mismatch means something else (another tab, a backend
+		// script) changed the row after the page opened — the 09-14
+		// sl_min_atr_mult rollback rode exactly this window, so the save is
+		// refused with 409 instead of silently overwriting. Empty = legacy
+		// client, no guard (round-4 review R4-5).
+		BaseUpdatedAt string `json:"base_updated_at"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		SafeBadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// Optimistic-concurrency guard (round-4 review R4-5): refuse the save
+	// when the row moved since the editor's snapshot. json.Marshal renders
+	// time.Time as RFC3339Nano — the same format the GET endpoints ship.
+	if req.BaseUpdatedAt != "" && !existing.UpdatedAt.IsZero() &&
+		req.BaseUpdatedAt != existing.UpdatedAt.Format(time.RFC3339Nano) {
+		logger.Warnf("⚠️ Strategy %s save refused (stale editor): base_updated_at %s ≠ current %s — a UI save would have rolled back newer changes",
+			strategyID, req.BaseUpdatedAt, existing.UpdatedAt.Format(time.RFC3339Nano))
+		c.JSON(http.StatusConflict, gin.H{
+			"error":              "配置已被其他修改更新（另一标签页或后台脚本改动过该策略）。本次保存已拒绝，以防旧表单回滚最新配置——请刷新页面核对后重试。",
+			"current_updated_at": existing.UpdatedAt.Format(time.RFC3339Nano),
+		})
 		return
 	}
 
@@ -271,38 +292,10 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		}
 	}
 
-	// Preserve existing name/description when not supplied
-	name := req.Name
-	if name == "" {
-		name = existing.Name
-	}
-	description := req.Description
-	if description == "" {
-		description = existing.Description
-	}
-
-	configJSON, err := json.Marshal(mergedConfig)
-	if err != nil {
-		SafeInternalError(c, "Serialize configuration", err)
-		return
-	}
-
-	strategy := &store.Strategy{
-		ID:            strategyID,
-		UserID:        userID,
-		Name:          name,
-		Description:   description,
-		Config:        string(configJSON),
-		IsPublic:      req.IsPublic,
-		ConfigVisible: req.ConfigVisible,
-	}
-
-	if err := s.store.Strategy().Update(strategy); err != nil {
-		SafeInternalError(c, "Failed to update strategy", err)
-		return
-	}
-
-	// Token overflow check — block save if all models exceed context limits
+	// Token overflow check — block save if all models exceed context limits.
+	// Runs BEFORE the DB write: the old order persisted + reloaded traders
+	// first and only then returned 400, leaving the over-limit config live
+	// (round-4 review R4-27d).
 	if mergedConfig.StrategyType == "" || mergedConfig.StrategyType == "ai_trading" {
 		estimate := mergedConfig.EstimateTokens()
 		allExceed := true
@@ -319,6 +312,49 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 			})
 			return
 		}
+	}
+
+	// Preserve existing name/description when not supplied
+	name := req.Name
+	if name == "" {
+		name = existing.Name
+	}
+	description := req.Description
+	if description == "" {
+		description = existing.Description
+	}
+
+	// Visibility flags are pointers: a client that omits them (non-UI
+	// scripts PUTting only config) must not reset them to false
+	// (round-4 review R4-27e).
+	isPublic := existing.IsPublic
+	if req.IsPublic != nil {
+		isPublic = *req.IsPublic
+	}
+	configVisible := existing.ConfigVisible
+	if req.ConfigVisible != nil {
+		configVisible = *req.ConfigVisible
+	}
+
+	configJSON, err := json.Marshal(mergedConfig)
+	if err != nil {
+		SafeInternalError(c, "Serialize configuration", err)
+		return
+	}
+
+	strategy := &store.Strategy{
+		ID:            strategyID,
+		UserID:        userID,
+		Name:          name,
+		Description:   description,
+		Config:        string(configJSON),
+		IsPublic:      isPublic,
+		ConfigVisible: configVisible,
+	}
+
+	if err := s.store.Strategy().Update(strategy); err != nil {
+		SafeInternalError(c, "Failed to update strategy", err)
+		return
 	}
 
 	// Validate merged configuration and collect warnings

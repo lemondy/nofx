@@ -257,32 +257,14 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			}
 		}
 
-		var entryPrice float64
-		if isLongOpen {
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2
-		} else {
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2
-		}
-
-		var riskPercent, rewardPercent, riskRewardRatio float64
-		if isLongOpen {
-			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
-			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		} else {
-			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
-			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		}
-
-		if riskRewardRatio < 3.0 {
-			return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥3.0:1 [risk: %.2f%% reward: %.2f%%] [stop loss: %.2f take profit: %.2f]",
-				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
-		}
+		// Round-4 review R4-9: the old RR check here was a provably-dead
+		// no-op (its synthetic entry sat at the 20% point of the SL→TP span,
+		// forcing RR ≡ 4.0 against a hardcoded 3.0 floor) while REAL min-RR
+		// enforcement is the hard_entry_gate's rr_scan verdict plus the
+		// executor's checkRR — both reading the configured
+		// min_risk_reward_ratio. Nothing re-added here: a kernel-side RR
+		// gate must price the actual decision values against the CONFIGURED
+		// floor, or it just becomes another drift bomb.
 	}
 
 	return nil

@@ -154,7 +154,7 @@ type AutoTrader struct {
 	peakPnLCacheMutex       sync.RWMutex       // Cache read-write lock
 	tpTrimDone              map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
 	r1TrimDone              map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
-	partialTrimmed          map[string]float64 // AI partial_close: symbol_side -> cumulative fraction
+	partialTrimmed          map[string]float64 // AI partial_close: cumulative fraction (GUARDED BY tpTrimMutex — cycle goroutine writes, drawdown monitor deletes)
 	tpTrimMutex             sync.Mutex
 	lastBalanceSyncTime     time.Time                   // Last balance sync time
 	userID                  string                      // User ID
@@ -170,7 +170,7 @@ type AutoTrader struct {
 	pendingEntriesMu        sync.RWMutex
 	volResizeLast           map[string]time.Time // per-position vol-resize cooldown
 	volResizeMu             sync.Mutex
-	tpRunnerDoneMap         map[string]bool    // TP-runner conversion done per position
+	tpRunnerDoneMap         map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
 	openTP                  map[string]float64 // recorded decision TP per open position (symbol_side)
 	openTPMu                sync.RWMutex
 }

@@ -742,14 +742,16 @@ export function CoinSourceEditor({
  <div className="flex items-center gap-2">
  <input
  type="number"
- min={1}
+ min={0}
  max={100}
  value={config.short_scan_history_max ?? 0}
  onChange={(e) =>
  onChange({
  ...config,
+ // 0 = built-in default (30) — the backend resolves ≤0 that way,
+ // so the UI must be able to express it (round-4 review R4-27).
  short_scan_history_max: Math.max(
- 1,
+ 0,
  Math.min(100, Number(e.target.value) || 0)
  ),
  })

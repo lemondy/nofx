@@ -189,13 +189,17 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			logger.Infof("🎯 TP ladder FULL close: %s %s | PnL %.2f%% ≥ %.0f%%", symbol, side, currentPnLPct, kernel.TpFullProfitPct(&at.config.StrategyConfig.RiskControl))
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 止盈全平 %s (%s)</b>\n浮盈 <code>%.2f%%</code> ≥ %.0f%%,程序全部平仓锁定利润。",
 				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], currentPnLPct, kernel.TpFullProfitPct(&at.config.StrategyConfig.RiskControl)))
-			at.tpTrimMutex.Lock()
-			at.r1TrimDone[posKey] = true
-			at.tpTrimDone[posKey] = true
-			at.tpTrimMutex.Unlock()
 			if err := at.emergencyClosePosition(symbol, side); err != nil {
-				logger.Infof("❌ TP full close failed (%s %s): %v", symbol, side, err)
+				logger.Infof("❌ TP full close failed (%s %s): %v — retries next cycle", symbol, side, err)
 			} else {
+				// Consume the one-shot flags on SUCCESS only: the full tier
+				// retries regardless, but a pre-consumed trimDone would mute
+				// the ROE trim tier forever if PnL dips back below the full
+				// threshold with the close still unfilled (round-4 R4-8).
+				at.tpTrimMutex.Lock()
+				at.r1TrimDone[posKey] = true
+				at.tpTrimDone[posKey] = true
+				at.tpTrimMutex.Unlock()
 				logger.Infof("✅ TP full close succeeded: %s %s", symbol, side)
 			}
 			continue
@@ -210,13 +214,16 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			} else {
 				_, err = at.trader.CloseShort(symbol, trimQty)
 			}
-			at.tpTrimMutex.Lock()
-			at.r1TrimDone[posKey] = true
-			at.tpTrimDone[posKey] = true
-			at.tpTrimMutex.Unlock()
 			if err != nil {
-				logger.Infof("❌ TP trim failed (%s %s): %v", symbol, side, err)
+				// Flag NOT consumed on failure: trimDone=true here would skip
+				// this 1/3 take-profit forever (one-shot gate in
+				// TpTierAction) — retry next cycle instead (round-4 R4-8).
+				logger.Infof("❌ TP trim failed (%s %s): %v — retries next cycle", symbol, side, err)
 			} else {
+				at.tpTrimMutex.Lock()
+				at.r1TrimDone[posKey] = true
+				at.tpTrimDone[posKey] = true
+				at.tpTrimMutex.Unlock()
 				logger.Infof("✅ TP trim succeeded: %s %s qty=%.6g (protective orders kept)", symbol, side, trimQty)
 			}
 			continue
@@ -319,6 +326,13 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 	delete(at.r1TrimDone, posKey)
 	delete(at.partialTrimmed, posKey)
 	at.tpTrimMutex.Unlock()
+	// The TP-runner flag shares the same lifecycle: without this delete a
+	// re-opened symbol_side inherits "runner done" — the fixed TP would
+	// never convert to the trend-run again and the watchdog would refuse to
+	// re-place a cancelled TP (round-4 review R4-7).
+	at.volResizeMu.Lock()
+	delete(at.tpRunnerDoneMap, posKey)
+	at.volResizeMu.Unlock()
 }
 
 // ============================================================================
@@ -1075,9 +1089,6 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 // position (the rest must run or exit via close_*); close gates (min-hold /
 // early-close / breakout-hold) apply in applyHardRiskGates before this runs.
 func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction, side string) error {
-	if at.partialTrimmed == nil {
-		at.partialTrimmed = make(map[string]float64)
-	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return err
@@ -1093,7 +1104,16 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 		return fmt.Errorf("❌ %s has no open %s position", decision.Symbol, side)
 	}
 	posKey := decision.Symbol + "_" + side
+	// partialTrimmed is shared with the drawdown monitor goroutine (its
+	// ClearPeakPnLCache deletes under tpTrimMutex) — this cycle-goroutine
+	// writer MUST take the same lock or the concurrent map read/write is a
+	// runtime-fatal crash (round-4 review R4-4).
+	at.tpTrimMutex.Lock()
+	if at.partialTrimmed == nil {
+		at.partialTrimmed = make(map[string]float64)
+	}
 	already := at.partialTrimmed[posKey]
+	at.tpTrimMutex.Unlock()
 	if already+decision.CloseFraction > 0.75 {
 		return fmt.Errorf("❌ [RISK CONTROL] partial_close %s rejected: cumulative partial %.0f%% + %.0f%% would exceed 75%% — use close_* for a full exit",
 			decision.Symbol, already*100, decision.CloseFraction*100)
@@ -1102,7 +1122,9 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 	if _, err := at.reducePosition(decision.Symbol, side, trimQty); err != nil {
 		return err
 	}
+	at.tpTrimMutex.Lock()
 	at.partialTrimmed[posKey] = already + decision.CloseFraction
+	at.tpTrimMutex.Unlock()
 	actionRecord.Quantity = trimQty
 	logger.Infof("🎯 [%s] AI partial close: %s %s %.0f%% (%.6g) — cumulative %.0f%%", at.name, decision.Symbol, side, decision.CloseFraction*100, trimQty, (already+decision.CloseFraction)*100)
 	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 部分平仓 %s</b>\n<i>%s 平 %.0f%%(累计 %.0f%%),剩余仓位继续持有</i>", notify.Escape(decision.Symbol), side, decision.CloseFraction*100, (already+decision.CloseFraction)*100))
@@ -1255,19 +1277,12 @@ func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string,
 		return false
 	}
 	tf := data.TimeframeData["1h"]
-	if tf == nil || tf.ATR14 <= 0 || markPrice <= 0 {
+	if tf == nil || tf.ATR14 <= 0 {
 		return false
 	}
 	atrPct := tf.ATR14 / markPrice * 100
-	dist := 1.5 * atrPct / 100 * markPrice
-	var sl, tp float64
-	if side == "long" {
-		sl, tp = markPrice-dist, markPrice+2*dist
-	} else {
-		sl, tp = markPrice+dist, markPrice-2*dist
-	}
-	if sl <= 0 || tp <= 0 || (side == "long" && (sl <= markPrice || tp <= markPrice)) ||
-		(side == "short" && (sl <= markPrice || tp >= markPrice)) {
+	sl, tp, ok := computedProtectionLevels(side, markPrice, tf.ATR14)
+	if !ok {
 		return false
 	}
 	if pp, ok := at.trader.(interface {
@@ -1297,6 +1312,37 @@ func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string,
 		"<b>🛡️ 裸仓自动保护 %s (%s)</b>\n<i>无挂单且无记录止损,已按最新价程序重算并挂出: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h)=%.2f%%)</i>",
 		notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], sl, tp, atrPct))
 	return true
+}
+
+// computedProtectionLevels derives the naked-position fallback pair:
+// SL = mark ∓ 1.5×ATR(1h), TP = mark ∓ 2× that distance (1:2 RR). ok=false
+// when the inputs are unusable (bad side, non-positive mark/ATR) or the
+// resulting prices sit on the wrong side of mark — extracted as a pure
+// function so the watchdog's core math is unit-testable (round-4 review
+// R4-14).
+func computedProtectionLevels(side string, markPrice, atrAbs float64) (sl, tp float64, ok bool) {
+	if markPrice <= 0 || atrAbs <= 0 {
+		return 0, 0, false
+	}
+	dist := 1.5 * atrAbs
+	switch side {
+	case "long":
+		sl, tp = markPrice-dist, markPrice+2*dist
+	case "short":
+		sl, tp = markPrice+dist, markPrice-2*dist
+	default:
+		return 0, 0, false
+	}
+	if sl <= 0 || tp <= 0 {
+		return 0, 0, false
+	}
+	if side == "long" && (sl >= markPrice || tp <= markPrice) {
+		return 0, 0, false
+	}
+	if side == "short" && (sl <= markPrice || tp >= markPrice) {
+		return 0, 0, false
+	}
+	return sl, tp, true
 }
 
 // alertUnprotectedPosition pushes a Telegram alert when the watchdog finds a

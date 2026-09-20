@@ -6,7 +6,7 @@
 >
 > **更新（2026-09-13，同日）**：第 6 节汇总表中的 4 个核心发现（#1-#4）已修复，详见各条目后的"状态"列与文末的[修复记录](#8-修复记录2026-09-13)。
 >
-> **更新（2026-09-20，第四轮全量复审）**：针对 09-13 之后累积的 52 个 commit 做了全量重审（重点：user prompt 数据获取/指标计算、仓位计算、风控闸门、止盈止损与开仓单计算、网页策略配置项生效链路），发现 5 项 P1 / 10 项 P2，详见[第 10 节](#10-第四轮全量复审2026-09-20)。本轮只审不改。
+> **更新（2026-09-20，第四轮全量复审）**：针对 09-13 之后累积的 52 个 commit 做了全量重审（重点：user prompt 数据获取/指标计算、仓位计算、风控闸门、止盈止损与开仓单计算、网页策略配置项生效链路），发现 5 项 P1 / 10 项 P2，详见[第 10 节](#10-第四轮全量复审2026-09-20)。**其中全部 P1（R4-1~R4-5）与全部 P2（R4-6~R4-15）已于同日修复**，见 [10.4 修复记录](#104-修复记录2026-09-20同日)；R4-16~R4-29（P3/信息）保持记录状态。
 
 ---
 
@@ -418,6 +418,42 @@ entryPrice := pos["entryPrice"].(float64)
 5. **R4-5**：保存前重新 GET 比对（前端）或 `updated_at` 乐观锁（后端 API，`api/strategy.go` req 加版本字段，不匹配返回 409）；至少把 `checkConfigDrift` 的告警从"reload 后恒过"改为记录旧哈希迁移链。
 6. P2 批次：R4-6（OI 失败显式 UNKNOWN 而非零值）、R4-7（ClearPeakPnLCache 补 delete tpRunnerDoneMap）、R4-8（trim 失败回滚 flag）、R4-9（删恒真块或改读配置+真实价）、R4-10（trim 输入旁标注"1R 锁开启时无效"或补 profit_lock_at_r 表单）、R4-12（三行补 fallback）、R4-14（看门狗补测试）。
 
+### 10.4 修复记录（2026-09-20，同日）
+
+10.1 表中 **R4-1 ~ R4-15（全部 P1 + 全部 P2）已全部修复**，`go build ./...`、`go vet ./...`、`go test ./...` 全绿（含 kernel/trader/market/api/binance 及全部交易所适配层），前端 `tsc --noEmit` 通过。R4-16 ~ R4-29（P3/信息级）保持记录状态未改动。
+
+**P1 修复**：
+
+| # | 修复内容 | 文件 |
+|---|---|---|
+| R4-1 | `correctStopLossToPlan` 接入 parse 成功路径（`correctLimitAnchors` 之后），模型回显止损偏离 plan >0.05% 时吸附到 gated plan——plan-parity 豁免的前提真正成立 | `kernel/engine_analysis.go` |
+| R4-2 | `price_change_24h_live_pct` 在 signal 层 ingest 时 ×100（Quant 层小数 → _pct 百分数），字段注释同步；`TestPerCoinPromptIsJSONOnly` 增加数值断言（0.09 → 渲染 `9`）钉死单位 | `kernel/signal_layer.go`、`kernel/engine_prompt_test.go` |
+| R4-3 | `SignalOptions` 新增 `ConfiguredTimeframes`，`computeCoinSignal` 从策略配置填充（含 fetch 路径的空列表 legacy 展开）；DataQuality 的 `minBars` 改为 {15m,1h} 恒需 + 实配周期各 ≥60，仅当调用方未携带配置（执行侧重算路径）才保留历史 4h 硬要求；n==0 时 shortfall 现在写明缺失周期名。新测试 `TestDataQualityRespectsConfiguredTimeframes` 钉死三态（无 4h 配置可交易 / 配置了但没拉到仍 fail-closed / legacy 行为不变） | `kernel/signal_layer.go`、`kernel/engine_prompt.go`、`kernel/signal_layer_test.go` |
+| R4-4 | `executePartialCloseWithRecord` 的 `partialTrimmed` 三处访问全部套 `tpTrimMutex`（nil 初始化移入锁内）；字段声明注明锁约定 | `trader/auto_trader_risk.go`、`trader/auto_trader.go` |
+| R4-5 | 后端 `handleUpdateStrategy` 请求体新增 `base_updated_at`（RFC3339Nano），与 DB 行 `UpdatedAt` 不一致返回 **409** + 中文提示 + 当前值（前端随后刷新）；前端保存携带 `base_updated_at`，409 时提示并自动重新 GET 刷新编辑器。空值 = legacy 客户端不设防。同批顺带修 R4-27d/e（见下） | `api/strategy.go`、`web/src/pages/StrategyStudioPage.tsx` |
+
+**P2 修复**：
+
+| # | 修复内容 | 文件 |
+|---|---|---|
+| R4-6 | `market.Data` 新增 `OpenInterestOK`；两个构造路径走 `fetchOIDataOrZero`（失败保留零值结构体防 nil-panic，但打 WARN 且 ok=false）；kernel 流动性过滤器对 OI-unknown 改为跳过检查 + 日志（候选宇宙在扫描层已有 min-OI 门槛，不再因一次接口故障静默清空全宇宙）；legacy prompt 的 OI 行加同守卫 | `market/types.go`、`market/data.go`、`kernel/engine_analysis.go`、`kernel/engine_prompt.go` |
+| R4-7 | `ClearPeakPnLCache` 补 `delete(tpRunnerDoneMap, posKey)`（volResizeMu 下）——重开仓不再继承 "runner done"；字段声明注明锁与生命周期约定。新测试 `TestClearPeakPnLCacheClearsTPRunner` | `trader/auto_trader_risk.go`、`trader/auto_trader.go`、`trader/protection_test.go` |
+| R4-8 | TP 阶梯 trim 档与 full 档的 `tpTrimDone/r1TrimDone` 均改为**成功后才置位**——失败下周期重试（full 档原本就无 done 门、行为对齐；trim 档不再永久跳过） | `trader/auto_trader_risk.go` |
+| R4-9 | 删除 `validateDecision` 中恒真的 RR 校验块（虚拟 entry 使 RR≡4.0），留注释指明真实双门 = rr_scan + 执行端 checkRR（均读配置）；消除硬编码 3.0 漂移炸弹 | `kernel/engine_position.go` |
+| R4-10 | 策略页新增 `profit_lock_at_r` 表单（step 0.1，含"当前生效"行）；`tp_trim_profit_pct` 旁在 1R 锁开启时显示 ⚠️ 提示（"ROE 减仓档不生效"）；两字段 desc 同步补充说明；TS 类型补 `profit_lock_at_r` | `web/src/components/strategy/RiskControlEditor.tsx`、`web/src/types/strategy.ts`、`web/src/i18n/strategy-translations.ts` |
+| R4-11 | vendor divergence 前端"当前生效"提示与 TS 注释：默认 2 → **1**（与 `EffectiveMaxVendorDivergencePct` 一致） | `web/src/components/strategy/RiskControlEditor.tsx`、`web/src/types/strategy.ts` |
+| R4-12 | Hard Constraints 三行补 ≤0 fallback（MaxPositions→3、MaxMarginUsage→90%、MinPositionSize→12），与执行端 `enforceMaxPositions`/预算门/`EffectiveMinPositionSize` 同值 | `kernel/engine_prompt.go` |
+| R4-13 | `SetShortScanHistoryConfig` 值变化时打 WARN（10 分钟去重）——UI 合法改值提示一次，多 trader 异配置 ping-pong 每 10 分钟暴露一次；注释声明进程级全局语义 | `market/breakout/gainer_history.go` |
+| R4-14 | 裸仓看门狗计算核心提纯为 `computedProtectionLevels(side, mark, atrAbs)` 纯函数（方向/正数/双侧 sanity 全覆盖）；新测试 `TestComputedProtectionLevels` 钉死多空数学与 1:2 RR 比例及全部拒绝分支 | `trader/auto_trader_risk.go`、`trader/protection_test.go` |
+| R4-15 | binance 新增 `symbolTickSize`（原始 tickSize 字符串）与 `formatAlgoTriggerPrice`：先按 **tick 网格量化**（`quantizeToTick`，非 10 幂 tick 如 0.025 也能得到 tick 整数倍），tickSize 不可用时回退原 `formatTriggerPrice` 小数位格式；>1% drift guard 两路均保留。新测试 `TestQuantizeToTick` 四用例 | `trader/binance/futures.go`、`futures_positions.go`、`futures_orders.go`、`futures_trigger_test.go` |
+| R4-27d/e | token 超限检查移到 DB 写入**之前**（超限返回 400 时配置不再已生效）；`is_public/config_visible` 改 `*bool`——省略即保留现值，非 UI 客户端 PUT 不再把公开状态重置 false | `api/strategy.go` |
+| R4-27②③ | `min_risk_reward_ratio` 输入允许 0（0=禁用 RR 门，`|| 3` 改显式 NaN 判断 + 0 值提示行）；`short_scan_history_max` 输入 min 1→0（可回到 0=默认 30） | `web/src/components/strategy/RiskControlEditor.tsx`、`CoinSourceEditor.tsx` |
+| R4-27① | `pump_guard_4h_pct/tp_trim_profit_pct/tp_full_profit_pct/profit_lock_at_r` 全部 `parseInt` → `parseFloat`（后端 float64，7.5 不再截成 7） | `web/src/components/strategy/RiskControlEditor.tsx` |
+
+**有意不修**（记录在案）：R4-17/18（kernel/执行端 ATR 口径差异，两侧均 fail-closed/保守方向，统一属行为变更需拍板）；R4-19~R4-26、R4-28/29（P3 边缘与信息级，均有自愈或文案缓解）。
+
+**部署提示**：本批修复涉及 prompt 渲染（R4-2/12）、决策解析（R4-1/9）、执行闸门（R4-4/7/8）、UI 保存（R4-5），**需重启进程生效**；R4-2 修复后模型看到的 24h 涨跌幅恢复真实量级（此前 100× 偏小）。
+
 ---
 
-*本报告基于 2026-09-13 dev 分支（含大量未提交改动）的代码快照，未涉及前端 React 代码、交易所适配层细节（bybit/okx/gate 等）及数据库 schema 层面的审查。第 8 节为第二轮修复（首次审查的 4 项核心发现），第 9 节为第三轮修复（七门专项深挖的 6 项缺口），均于同日完成。第 10 节为第四轮全量复审（2026-09-20，dev 分支 HEAD=`f01cb6f8`，工作区干净），覆盖前端策略配置链路与 09-14 之后全部新增风控逻辑，只审不改。*
+*本报告基于 2026-09-13 dev 分支（含大量未提交改动）的代码快照，未涉及前端 React 代码、交易所适配层细节（bybit/okx/gate 等）及数据库 schema 层面的审查。第 8 节为第二轮修复（首次审查的 4 项核心发现），第 9 节为第三轮修复（七门专项深挖的 6 项缺口），均于同日完成。第 10 节为第四轮全量复审（2026-09-20，dev 分支 HEAD=`f01cb6f8`，工作区干净），覆盖前端策略配置链路与 09-14 之后全部新增风控逻辑；其全部 P1/P2 已于同日修复（10.4 节），P3 及以下保持记录。*

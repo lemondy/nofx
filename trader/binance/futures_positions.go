@@ -276,6 +276,42 @@ func (t *FuturesTrader) GetSymbolPricePrecision(symbol string) (int, error) {
 	return 2, nil
 }
 
+// symbolTickSize returns the raw PRICE_FILTER.tickSize string for a symbol
+// ("" when absent). The RAW string matters: quantizeToTick needs the tick's
+// own decimal count, and the tick VALUE may be a non-power-of-ten (0.025)
+// that decimal-place rounding alone cannot quantize to (round-4 review
+// R4-15).
+func (t *FuturesTrader) symbolTickSize(symbol string) (string, error) {
+	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("failed to get trading rules: %w", err)
+	}
+	for _, s := range exchangeInfo.Symbols {
+		if s.Symbol == symbol {
+			for _, filter := range s.Filters {
+				if filter["filterType"] == "PRICE_FILTER" {
+					return filter["tickSize"].(string), nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+// formatAlgoTriggerPrice renders an algo-order trigger on the symbol's real
+// tick grid when the tick size is available, falling back to decimal-place
+// formatting when it is not. All algo-order trigger prices (SL/TP) go
+// through here.
+func (t *FuturesTrader) formatAlgoTriggerPrice(symbol string, price float64) (string, error) {
+	if tickStr, err := t.symbolTickSize(symbol); err == nil && tickStr != "" {
+		if tick, perr := strconv.ParseFloat(tickStr, 64); perr == nil && tick > 0 {
+			return quantizeToTick(price, tick, calculatePrecision(tickStr))
+		}
+	}
+	prec, _ := t.GetSymbolPricePrecision(symbol)
+	return formatTriggerPrice(price, prec)
+}
+
 // FormatPrice formats price to correct precision
 func (t *FuturesTrader) FormatPrice(symbol string, price float64) (string, error) {
 	precision, err := t.GetSymbolPricePrecision(symbol)

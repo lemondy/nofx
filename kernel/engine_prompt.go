@@ -68,7 +68,15 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 
 	sb.WriteString("# Hard Constraints (Risk Control)\n\n")
 	sb.WriteString("## CODE ENFORCED (Backend validation, cannot be bypassed):\n")
-	sb.WriteString(fmt.Sprintf("- Max Positions: %d coins simultaneously\n", riskControl.MaxPositions))
+	// ≤0 fallbacks mirror the executor's own defaults (enforceMaxPositions=3,
+	// max_margin_usage→0.9, EffectiveMinPositionSize→12) — rendering the raw
+	// zero ("0 coins", "≤0%", "≥0 USDT") declared constraints the executor
+	// does not have (round-4 review R4-12).
+	maxPositions := riskControl.MaxPositions
+	if maxPositions <= 0 {
+		maxPositions = 3
+	}
+	sb.WriteString(fmt.Sprintf("- Max Positions: %d coins simultaneously\n", maxPositions))
 	if altcoinPosValueRatio == btcEthPosValueRatio {
 		// Identical multipliers: one line — two identical rows read as if
 		// there were differentiated handling when there is none (09-16 audit).
@@ -80,8 +88,16 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString(fmt.Sprintf("- Position Value Limit (BTC/ETH): max %.0f USDT (= equity %.2f × %.1fx)\n",
 			accountEquity*btcEthPosValueRatio, accountEquity, btcEthPosValueRatio))
 	}
-	sb.WriteString(fmt.Sprintf("- Max Margin Usage: ≤%.0f%%\n", riskControl.MaxMarginUsage*100))
-	sb.WriteString(fmt.Sprintf("- Min Position Size: ≥%.0f USDT\n", riskControl.MinPositionSize))
+	maxMarginPct := riskControl.MaxMarginUsage * 100
+	if riskControl.MaxMarginUsage <= 0 {
+		maxMarginPct = 90
+	}
+	sb.WriteString(fmt.Sprintf("- Max Margin Usage: ≤%.0f%%\n", maxMarginPct))
+	minPosSize := riskControl.MinPositionSize
+	if minPosSize <= 0 {
+		minPosSize = 12
+	}
+	sb.WriteString(fmt.Sprintf("- Min Position Size: ≥%.0f USDT\n", minPosSize))
 	// 09-19 audit: min RR is double-enforced (rr_scan gate + executor
 	// checkRR) — it was mis-filed under AI GUIDED and read as relaxable.
 	sb.WriteString(fmt.Sprintf("- Min Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss — 程序双重校验,不可放宽)\n", riskControl.MinRiskRewardRatio))
@@ -1249,6 +1265,22 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// vendor gap prices every anchor/SL/TP off the wrong tick.
 		MaxVendorDivergencePct: EffectiveMaxVendorDivergencePct(&e.config.RiskControl),
 	}
+	// DataQuality's bar requirements must match what fetchMarketDataWithStrategy
+	// actually fetches — including its legacy expansion of an empty
+	// SelectedTimeframes (round-4 review R4-3: a ["5m","15m","1h"] strategy
+	// was pinned to DATA_INSUFFICIENT by the static 4h requirement).
+	{
+		tfs := e.config.Indicators.Klines.SelectedTimeframes
+		if len(tfs) == 0 {
+			if p := e.config.Indicators.Klines.PrimaryTimeframe; p != "" {
+				tfs = append(tfs, p)
+			}
+			if l := e.config.Indicators.Klines.LongerTimeframe; l != "" {
+				tfs = append(tfs, l)
+			}
+		}
+		opt.ConfiguredTimeframes = tfs
+	}
 	opt.Quant = quantData
 	{
 		frPct := e.config.CoinSource.ShortScanFundingRatePct
@@ -1452,7 +1484,10 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 	if indicators.EnableOI || indicators.EnableFundingRate {
 		sb.WriteString(fmt.Sprintf("Additional data for %s:\n\n", data.Symbol))
 
-		if indicators.EnableOI && data.OpenInterest != nil {
+		// OpenInterestOK guard (round-4 review R4-6): a failed fetch leaves
+		// the zero-value struct in place — printing "0 / 0" here would read
+		// as a real reading to the model.
+		if indicators.EnableOI && data.OpenInterest != nil && data.OpenInterestOK {
 			sb.WriteString(fmt.Sprintf("Open Interest: Latest: %.2f Average: %.2f\n\n",
 				data.OpenInterest.Latest, data.OpenInterest.Average))
 		}

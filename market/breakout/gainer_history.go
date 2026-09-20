@@ -87,16 +87,32 @@ var (
 	shortHistCfgMu   sync.Mutex
 	shortHistDaysCfg = DefaultShortScanHistoryDays
 	shortHistMaxCfg  = DefaultShortScanHistoryMax
+	// shortHistLastWarn rate-limits the flip warning below: with multiple
+	// traders running different strategies, each engine re-syncs its own
+	// values EVERY cycle and the knob ping-pongs — one warning per window
+	// is enough to surface it (round-4 review R4-13).
+	shortHistLastWarn time.Time
 )
 
 // SetShortScanHistoryConfig syncs the strategy-side knobs into the scanner
 // (raw values; days ≤ 0 resolves via ResolveShortScanHistoryDays, so a
 // negative config disables the pool). Idempotent — safe to call per cycle.
+// NOTE: this is a process-global single value shared with the scheduler's
+// scan cache. A value change now warns (once per 10 minutes): legitimate UI
+// saves warn once, while multi-trader strategies with different values
+// ping-pong this every cycle and need the noise surfaced.
 func SetShortScanHistoryConfig(rawDays, rawMax int) {
 	shortHistCfgMu.Lock()
 	defer shortHistCfgMu.Unlock()
-	shortHistDaysCfg = ResolveShortScanHistoryDays(rawDays)
-	shortHistMaxCfg = ResolveShortScanHistoryMax(rawMax)
+	days := ResolveShortScanHistoryDays(rawDays)
+	max := ResolveShortScanHistoryMax(rawMax)
+	if (days != shortHistDaysCfg || max != shortHistMaxCfg) && time.Since(shortHistLastWarn) > 10*time.Minute {
+		shortHistLastWarn = time.Now()
+		logger.Warnf("short-scan history pool config changed %dd/%dmax → %dd/%dmax — this is a PROCESS-GLOBAL scanner knob: multiple traders running different short_scan_history values will fight over it every cycle (last writer wins)",
+			shortHistDaysCfg, shortHistMaxCfg, days, max)
+	}
+	shortHistDaysCfg = days
+	shortHistMaxCfg = max
 }
 
 func shortScanHistoryDays() int {

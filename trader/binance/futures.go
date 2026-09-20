@@ -247,3 +247,22 @@ func formatTriggerPrice(price float64, precision int) (string, error) {
 	}
 	return out, nil
 }
+
+// quantizeToTick renders a trigger price ON the symbol's tick grid:
+// quantize to the nearest tickSize multiple, then format at the tick's
+// decimal count. Decimal-place formatting alone (formatTriggerPrice) is only
+// equivalent when the tick is a power of ten — on a 0.025 tick, 3dp rounding
+// can emit 1.234, which is NOT a multiple of 0.025 and Binance rejects with
+// -1111 (round-4 review R4-15). The same >1% drift guard applies.
+func quantizeToTick(price, tickSize float64, tickDecimals int) (string, error) {
+	if tickSize <= 0 || tickDecimals < 0 || tickDecimals > 8 {
+		return formatTriggerPrice(price, 8)
+	}
+	q := math.Round(price/tickSize) * tickSize
+	out := fmt.Sprintf("%.*f", tickDecimals, q)
+	if rp, err := strconv.ParseFloat(out, 64); err == nil && price > 0 &&
+		math.Abs(rp-price)/price > 0.01 {
+		return "", fmt.Errorf("tick rounding moved the trigger %.2f%% (%.8f -> %s) — refusing to place", math.Abs(rp-price)/price*100, price, out)
+	}
+	return out, nil
+}

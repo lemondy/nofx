@@ -226,6 +226,76 @@ func TestSignalLayerSufficientWithFullBars(t *testing.T) {
 	}
 }
 
+// Round-4 review R4-3 regression: a strategy whose fetch list has no 4h
+// (default template ["5m","15m","1h"], aggressive preset ["3m","15m","1h"])
+// must NOT be pinned to DATA_INSUFFICIENT by the static 4h requirement —
+// GetWithTimeframes fetches only the configured list. A configured-but-
+// missing timeframe still fails closed.
+func TestDataQualityRespectsConfiguredTimeframes(t *testing.T) {
+	now := time.Now()
+	// No 4h configured → no 4h requirement; the strategy trades.
+	no4h := &market.Data{
+		Symbol: "XUSDT", CurrentPrice: 1.0,
+		TimeframeData: map[string]*market.TimeframeSeriesData{
+			"5m":  buildTF("5m", now, 100, 1.0, false),
+			"15m": buildTF("15m", now, 100, 1.0, false),
+			"1h":  buildTF("1h", now, 100, 1.0, false),
+		},
+	}
+	sig, err := ComputeSymbolSignals("XUSDT", no4h, SignalOptions{
+		Now: now, PrimaryTF: "5m",
+		ConfiguredTimeframes: []string{"5m", "15m", "1h"},
+	})
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if !sig.DataQuality.Sufficient {
+		t.Fatalf("configured {5m,15m,1h} with 100 bars each must be sufficient: %+v", sig.DataQuality)
+	}
+	if _, has := sig.DataQuality.MinimumBars["4h"]; has {
+		t.Errorf("unconfigured 4h must not appear in minimum_bars: %+v", sig.DataQuality.MinimumBars)
+	}
+
+	// Configured but unfetched → still fail closed (fetch failed mid-cycle).
+	broken := &market.Data{
+		Symbol: "XUSDT", CurrentPrice: 1.0,
+		TimeframeData: map[string]*market.TimeframeSeriesData{
+			"15m": buildTF("15m", now, 100, 1.0, false),
+			"1h":  buildTF("1h", now, 100, 1.0, false),
+			// 4h configured by the strategy but the fetch failed
+		},
+	}
+	sigBroken, err := ComputeSymbolSignals("XUSDT", broken, SignalOptions{
+		Now: now, PrimaryTF: "15m",
+		ConfiguredTimeframes: []string{"15m", "1h", "4h"},
+	})
+	if err != nil {
+		t.Fatalf("compute broken: %v", err)
+	}
+	if sigBroken.DataQuality.Sufficient {
+		t.Error("configured-but-missing 4h must stay insufficient")
+	}
+	found4hShortfall := false
+	for _, s := range sigBroken.DataQuality.Shortfall {
+		if strings.Contains(s, "4h") {
+			found4hShortfall = true
+		}
+	}
+	if !found4hShortfall {
+		t.Errorf("shortfall must name the missing 4h: %+v", sigBroken.DataQuality.Shortfall)
+	}
+
+	// Legacy callers (execution-side recompute, no config plumbed) keep the
+	// historical {15m,1h,4h} requirement.
+	legacy, err := ComputeSymbolSignals("XUSDT", broken, SignalOptions{Now: now, PrimaryTF: "15m"})
+	if err != nil {
+		t.Fatalf("compute legacy: %v", err)
+	}
+	if legacy.DataQuality.Sufficient {
+		t.Error("legacy path without 4h data must stay insufficient")
+	}
+}
+
 // A steady uptrend should pin StochRSI in the overbought band (K > 80), and
 // the values must exist on timeframes with enough closed bars.
 func TestStochRSIUptrendOverbought(t *testing.T) {

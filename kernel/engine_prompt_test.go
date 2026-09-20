@@ -95,6 +95,12 @@ func TestPerCoinPromptIsJSONOnly(t *testing.T) {
 	if !strings.Contains(out, `"price_change_24h_live_pct":`) {
 		t.Fatal("24h fold into derivatives missing")
 	}
+	// Round-4 review R4-2 regression: QuantData.PriceChange is a DECIMAL
+	// (0.09 = 9%) and this field is a _pct JSON key — the raw pass-through
+	// shipped 100×-too-small values the model read as ~0.0x%.
+	if !strings.Contains(out, `"price_change_24h_live_pct":9`) {
+		t.Fatal(`24h live change must render as a PERCENT (0.09 → 9), not the raw decimal`)
+	}
 	if !strings.Contains(out, `"oi_current_base":1234.5`) {
 		t.Fatal("OI current fold missing")
 	}

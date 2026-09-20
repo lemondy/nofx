@@ -74,7 +74,7 @@ type DerivSignal struct {
 	OIChange1hPct         *float64 `json:"oi_change_1h_pct,omitempty"`          // true 1h change (quant layer)
 	OIVsAvgPct            *float64 `json:"oi_vs_avg_pct,omitempty"`             // current OI vs its period average
 	PriceChange1hLivePct  *float64 `json:"price_change_60m_live_pct,omitempty"` // LIVE price vs ~60 minutes ago (self-computed from the finest ≤1h klines). NOT a candle-close figure.
-	PriceChange24hLivePct *float64 `json:"price_change_24h_live_pct,omitempty"` // LIVE price vs 24 hours ago (rolling, exchange ticker basis)
+	PriceChange24hLivePct *float64 `json:"price_change_24h_live_pct,omitempty"` // LIVE price vs 24 hours ago (rolling, exchange ticker basis), PERCENT — converted from the quant layer's decimal at ingest
 	OICurrentBase         *float64 `json:"oi_current_base,omitempty"`           // current open interest, base-asset units
 	// Crowd-positioning metrics from Binance futures data endpoints:
 	LongShortAccountRatio  *float64 `json:"long_short_account_ratio,omitempty"`  // global accounts long/short
@@ -515,6 +515,16 @@ type SignalOptions struct {
 	// (MYXUSDT 09-18) — entry, stop and target are all priced off the wrong
 	// tick. <=0 (disabled) skips the check.
 	MaxVendorDivergencePct float64
+	// ConfiguredTimeframes is the strategy's fetched timeframe list
+	// (Indicators.Klines.SelectedTimeframes as expanded by the fetch path).
+	// DataQuality requires 60+ bars only for timeframes the strategy ACTUALLY
+	// fetches — the static 4h requirement pinned every candidate of a
+	// ["5m","15m","1h"] strategy to DATA_INSUFFICIENT (GetWithTimeframes
+	// fetches only the configured list; there is no 4h fallback on the kernel
+	// path — round-4 review R4-3). Empty = legacy execution-side recompute on
+	// GetWithExchange data, which always carries 3m/4h/1h + aggregated 15m:
+	// the historical {15m,1h,4h} requirement is kept there.
+	ConfiguredTimeframes []string
 }
 
 // ComputeSymbolSignals builds the normalized signal block for one symbol from
@@ -618,7 +628,14 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	}
 	if opt.Quant != nil {
 		if pc, ok := opt.Quant.PriceChange["24h"]; ok {
-			d.PriceChange24hLivePct = &pc
+			// QuantData.PriceChange is a DECIMAL fraction (0.0723 = 7.23% —
+			// the quant renderer multiplies by 100). This field's JSON key is
+			// a _pct name rounded at 2dp, so the conversion happens HERE.
+			// Round-4 review R4-2: the raw pass-through shipped 100×-too-small
+			// values (7.23% read as 0.07) while sibling
+			// price_change_60m_live_pct is a true percent.
+			v := pc * 100
+			d.PriceChange24hLivePct = &v
 		}
 		if qoi := opt.Quant.OI["binance"]; qoi != nil && qoi.CurrentOI > 0 {
 			v := qoi.CurrentOI
@@ -873,11 +890,28 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// Only timeframes the analysis stack actually reads are required. The
 	// old static "1d" entry was never fetched, so its 0 bars pinned
 	// sufficient=false forever (review 2026-09-07: dead flag).
-	minBars := map[string]int{"15m": 60, "1h": 60, "4h": 60}
+	// Round-4 review R4-3: 4h (and any other TF beyond 15m/1h) is required
+	// only when the strategy's fetch list carries it — see
+	// SignalOptions.ConfiguredTimeframes.
+	minBars := map[string]int{"15m": 60, "1h": 60}
 	if opt.PrimaryTF != "" {
 		if _, ok := minBars[opt.PrimaryTF]; !ok {
 			minBars[opt.PrimaryTF] = 60
 		}
+	}
+	if len(opt.ConfiguredTimeframes) > 0 {
+		for _, tf := range opt.ConfiguredTimeframes {
+			if tf == "" {
+				continue
+			}
+			if _, ok := minBars[tf]; !ok {
+				minBars[tf] = 60
+			}
+		}
+	} else if _, ok := minBars["4h"]; !ok {
+		// Legacy caller (execution-side recompute): GetWithExchange always
+		// provides 4h, keep the historical requirement.
+		minBars["4h"] = 60
 	}
 	avail := map[string]int{}
 	sufficient := true
@@ -894,6 +928,10 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		}
 		if n == 0 {
 			sufficient = false
+			// Name the missing timeframe: a bare sufficient=false with no
+			// shortfall entry read as a mystery block (configured-but-unfetched
+			// is the usual suspect after R4-3).
+			shortfall = append(shortfall, fmt.Sprintf("%s: 0 bars — required timeframe has no data (configured but fetch failed?)", tfName))
 		}
 	}
 	sig.DataQuality = &DataQuality{

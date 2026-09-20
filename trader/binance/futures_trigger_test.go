@@ -30,3 +30,28 @@ func TestFormatTriggerPrice(t *testing.T) {
 		t.Fatalf("fallback precision = %q", got)
 	}
 }
+
+// Round-4 review R4-15: decimal-place rounding is only tick-correct for
+// power-of-ten ticks. On a 0.025 tick, 3dp rounding emits 1.234 — NOT a
+// multiple of 0.025 — and Binance rejects with -1111, leaving the position
+// unprotected. quantizeToTick snaps to the tick grid instead.
+func TestQuantizeToTick(t *testing.T) {
+	// Non-power-of-ten tick: 1.234 → 49×0.025 = 1.225 (plain 3dp rounding
+	// would have kept 1.234 and drawn -1111).
+	if got, err := quantizeToTick(1.234, 0.025, 3); err != nil || got != "1.225" {
+		t.Fatalf("0.025-tick quantize = %q err %v, want 1.225", got, err)
+	}
+	// Power-of-ten parity with the legacy formatter (UNIUSDT live case).
+	if got, err := quantizeToTick(8.86573, 0.001, 3); err != nil || got != "8.866" {
+		t.Fatalf("0.001-tick quantize = %q err %v, want 8.866", got, err)
+	}
+	// Coarse tick still respects the >1% drift guard: rounding 4.4 onto a
+	// 10-tick grid would emit 0 — a wrong level, refuse.
+	if _, err := quantizeToTick(4.4, 10, 0); err == nil {
+		t.Fatal("drift guard must refuse a coarse-tick rounding that moves the trigger >1%")
+	}
+	// Degenerate tick falls back to plain 8dp formatting rather than panic.
+	if got, _ := quantizeToTick(8.86573, 0, 3); got != "8.86573000" {
+		t.Fatalf("degenerate tick fallback = %q", got)
+	}
+}

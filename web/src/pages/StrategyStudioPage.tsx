@@ -423,30 +423,45 @@ export function StrategyStudioPage() {
  'Content-Type': 'application/json',
  Authorization: `Bearer ${token}`,
  },
- body: JSON.stringify({
- name: selectedStrategy.name,
- description: selectedStrategy.description,
- config: configWithLanguage,
- is_public: selectedStrategy.is_public,
- config_visible: selectedStrategy.config_visible,
- }),
- signal: controller.signal,
- }
- )
- if (!response.ok) {
- const body = await response.text().catch(() => '')
- throw new Error(
- `保存失败 (HTTP ${response.status})${
- response.status === 401
- ? ' — 登录已过期，请重新登录'
- : response.status === 403
- ? ' — 系统默认策略不可修改'
- : body
- ? `: ${body.slice(0, 120)}`
- : ''
- }`
- )
- }
+	 body: JSON.stringify({
+	 name: selectedStrategy.name,
+	 description: selectedStrategy.description,
+	 config: configWithLanguage,
+	 is_public: selectedStrategy.is_public,
+	 config_visible: selectedStrategy.config_visible,
+	 // Optimistic lock (round-4 review R4-5): the backend refuses the save
+	 // (409) when the strategy row changed after THIS page loaded its copy —
+	 // a stale snapshot silently overwriting newer risk_control values was
+	 // the 09-14 sl_min_atr_mult rollback path.
+	 base_updated_at: selectedStrategy.updated_at,
+	 }),
+	 signal: controller.signal,
+	 }
+	 )
+	 if (!response.ok) {
+	 if (response.status === 409) {
+	 const msg =
+	 '保存被拒绝：该策略在你打开页面后已被其他修改更新（另一标签页或后台脚本）。已刷新为最新配置——请核对数值后重新保存。'
+	 setError(msg)
+	 notify.error(msg)
+	 // Reload from the DB so the editor shows the NEWER config the
+	 // stale snapshot was about to overwrite.
+	 await fetchStrategies()
+	 return
+	 }
+	 const body = await response.text().catch(() => '')
+	 throw new Error(
+	 `保存失败 (HTTP ${response.status})${
+	 response.status === 401
+	 ? ' — 登录已过期，请重新登录'
+	 : response.status === 403
+	 ? ' — 系统默认策略不可修改'
+	 : body
+	 ? `: ${body.slice(0, 120)}`
+	 : ''
+	 }`
+	 )
+	 }
  setHasChanges(false)
  notify.success(tr('strategySaved'))
  } catch (err) {

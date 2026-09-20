@@ -114,7 +114,7 @@ export function RiskControlEditor({
  onChange={(e) =>
  updateField(
  'pump_guard_4h_pct',
- e.target.value === '' ? 0 : parseInt(e.target.value)
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
  )
  }
  disabled={disabled}
@@ -148,7 +148,7 @@ export function RiskControlEditor({
  onChange={(e) =>
  updateField(
  'tp_trim_profit_pct',
- e.target.value === '' ? 0 : parseInt(e.target.value)
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
  )
  }
  disabled={disabled}
@@ -159,6 +159,17 @@ export function RiskControlEditor({
  color: '#1E1E1A',
  }}
  />
+ {(() => {
+ const lockR = config.profit_lock_at_r ?? 0
+ if (lockR >= 0) {
+ return (
+ <p className="text-xs mt-2 font-medium" style={{ color: '#B8912A' }}>
+ {ts(riskControl.profitLockTrimHint, language)}
+ </p>
+ )
+ }
+ return null
+ })()}
  </div>
 
  <div
@@ -177,7 +188,7 @@ export function RiskControlEditor({
  onChange={(e) =>
  updateField(
  'tp_full_profit_pct',
- e.target.value === '' ? 0 : parseInt(e.target.value)
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
  )
  }
  disabled={disabled}
@@ -188,6 +199,39 @@ export function RiskControlEditor({
  color: '#1E1E1A',
  }}
  />
+ </div>
+
+ <div
+ className="p-4 rounded-lg"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {ts(riskControl.profitLockAtR, language)}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {ts(riskControl.profitLockAtRDesc, language)}
+ </p>
+ <input
+ type="number"
+ step={0.1}
+ value={config.profit_lock_at_r ?? 0}
+ onChange={(e) =>
+ updateField(
+ 'profit_lock_at_r',
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
+ )
+ }
+ disabled={disabled}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {`当前生效: ${(config.profit_lock_at_r ?? 0) < 0 ? '禁用(ROE 减仓档接管)' : `${(config.profit_lock_at_r ?? 0) === 0 ? 1 : config.profit_lock_at_r}R 时保本+减半 50%`}`}
+ </p>
  </div>
  </div>
 
@@ -362,11 +406,14 @@ export function RiskControlEditor({
  <input
  type="number"
  value={config.min_risk_reward_ratio ?? 3}
- onChange={(e) =>
- updateField('min_risk_reward_ratio', parseFloat(e.target.value) || 3)
- }
+ onChange={(e) => {
+ // 0 is a legal value (disables the RR gate) — a bare
+ // `|| 3` made it unreachable from the UI.
+ const v = parseFloat(e.target.value)
+ updateField('min_risk_reward_ratio', Number.isFinite(v) ? v : 3)
+ }}
  disabled={disabled}
- min={1}
+ min={0}
  max={10}
  step={0.5}
  className="w-20 px-3 py-2 rounded ml-2"
@@ -377,6 +424,11 @@ export function RiskControlEditor({
  }}
  />
  </div>
+ {(config.min_risk_reward_ratio ?? 3) === 0 && (
+ <p className="text-xs mt-2 font-medium" style={{ color: '#B8912A' }}>
+ {ts(riskControl.minRRZeroHint, language)}
+ </p>
+ )}
  </div>
 
  <div
@@ -479,7 +531,7 @@ export function RiskControlEditor({
  </span>
  </div>
  <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
- {`当前生效: ${(config.max_vendor_divergence_pct ?? 0) < 0 ? '禁用' : (config.max_vendor_divergence_pct ?? 0) === 0 ? '默认 2' : config.max_vendor_divergence_pct}%`}
+ {`当前生效: ${(config.max_vendor_divergence_pct ?? 0) < 0 ? '禁用' : (config.max_vendor_divergence_pct ?? 0) === 0 ? '默认 1' : config.max_vendor_divergence_pct}%`}
  </p>
  </div>
  </div>
