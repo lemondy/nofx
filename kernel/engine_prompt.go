@@ -1456,9 +1456,19 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			if sig.HardGate != nil {
 				if sig.HardGate.Long != nil {
 					gs.LongStopPlanPrice = sig.HardGate.Long.StopPlanPrice
+					gs.LongEntryPrice = sig.HardGate.Long.EntryPrice
+					gs.LongFailed = sig.HardGate.Long.Failed
+					if sig.HardGate.Long.RR != nil {
+						gs.LongTakeProfit = sig.HardGate.Long.RR.FirstRRGeTarget
+					}
 				}
 				if sig.HardGate.Short != nil {
 					gs.ShortStopPlanPrice = sig.HardGate.Short.StopPlanPrice
+					gs.ShortEntryPrice = sig.HardGate.Short.EntryPrice
+					gs.ShortFailed = sig.HardGate.Short.Failed
+					if sig.HardGate.Short.RR != nil {
+						gs.ShortTakeProfit = sig.HardGate.Short.RR.FirstRRGeTarget
+					}
 				}
 			}
 			ctx.GateStates[market.Normalize(data.Symbol)] = gs

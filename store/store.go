@@ -29,6 +29,7 @@ type Store struct {
 	order          *OrderStore
 	grid           *GridStore
 	pendingEntry   *PendingEntryStore
+	gateShadow     *GateShadowStore
 	entryAssess    *EntryAssessmentStore
 	aiCharge       *AIChargeStore
 	journal        *TradeJournalStore
@@ -162,6 +163,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.PendingEntry().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize pending entry tables: %w", err)
+	}
+	if err := s.GateShadow().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize gate shadow tables: %w", err)
 	}
 	if err := s.EntryAssessment().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize entry assessment tables: %w", err)
@@ -298,6 +302,15 @@ func (s *Store) EntryAssessment() *EntryAssessmentStore {
 }
 
 // PendingEntry gets the pending limit-entry shadow storage
+func (s *Store) GateShadow() *GateShadowStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gateShadow == nil {
+		s.gateShadow = NewGateShadowStore(s.gdb)
+	}
+	return s.gateShadow
+}
+
 func (s *Store) PendingEntry() *PendingEntryStore {
 	s.mu.Lock()
 	defer s.mu.Unlock()

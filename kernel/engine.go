@@ -195,6 +195,17 @@ type GateState struct {
 	// regime-level skip (09-19 audit: all-candidates-blocked + no positions
 	// ⇒ the LLM call can only return a hold; synthesize it for free).
 	HardBlocked bool
+	// Shadow-block bookkeeping (09-21 user directive): per-direction would-be
+	// trade for the gate-calibration dataset — blocked directions with a
+	// complete entry/stop/TP triple are recorded and evaluated against the
+	// later price path. Entry is the basis the gate priced the direction at
+	// (live price or limit anchor); TP is rr_scan.first_rr_ge_target.
+	LongEntryPrice  float64
+	ShortEntryPrice float64
+	LongTakeProfit  float64
+	ShortTakeProfit float64
+	LongFailed      []string
+	ShortFailed     []string
 }
 
 // DeriveWaitStateFromGate resolves the wait_state enum mechanically from the

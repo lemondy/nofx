@@ -1172,6 +1172,11 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	}
 
 	// Cap: max(2×ATR(4h), 8%) — same wide-of-the-two as the executor.
+	// NOTE the deliberate ATR-timescale asymmetry of the band: the FLOOR
+	// (stopFloorPct, 1.5×ATR(1h)) uses the 1h scale because identifying
+	// noise-tight stops needs the fine-grained yardstick; the CAP uses the
+	// 4h scale because a ceiling must be STABLE — a 1h ATR spike must not
+	// blow the maximum stop width open mid-cycle. Not a typo (09-21 audit).
 	capPct := 8.0
 	if t4h := sig.Timeframes["4h"]; t4h != nil && t4h.ATRPct > 0 {
 		if c := 2 * t4h.ATRPct; c > capPct {

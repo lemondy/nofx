@@ -279,6 +279,12 @@ func (at *AutoTrader) runCycle() error {
 	// (2026-09-20 AVAXUSDT/STRKUSDT/XMRUSDT).
 	at.cycleGateStates = ctx.GateStates
 
+	// Shadow-record blocked directions with a complete would-be trade, and
+	// resolve matured ones against the price path (09-21 user directive:
+	// gate-threshold calibration data). Observational only.
+	at.recordGateShadowBlocks(ctx.GateStates, at.callCount)
+	at.evaluateGateShadowBlocks()
+
 	// Pre-trade rule check: evaluate review-derived rules before execution.
 	// Hard rules with action=block reject the decision outright.
 	sortedDecisions = at.preTradeRuleCheck(sortedDecisions, ctx.Account.TotalEquity)
