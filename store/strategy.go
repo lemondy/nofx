@@ -376,6 +376,21 @@ type RiskControlConfig struct {
 	// disabled. Supersedes the ROE trim tier of the TP ladder while active;
 	// the 25% full-close backstop and drawdown-protect stay. (CODE ENFORCED)
 	ProfitLockAtR float64 `json:"profit_lock_at_r"`
+	// ProfitLockBEOffsetR: how far PAST entry (long; mirror for short) the
+	// 1R lock parks the stop, in units of the opening risk R. 0.2 = entry
+	// +0.2R — locks a sliver of profit so a post-lock pullback can't scratch
+	// the runner back to flat. 0 = default 0.2 (09-21 user experiment);
+	// negative = pure breakeven at entry (legacy).
+	ProfitLockBEOffsetR float64 `json:"profit_lock_be_offset_r"`
+	// TPCloseFraction: the fraction of the position the take-profit algo
+	// closes at the planned structure level. The remainder stays on as a
+	// trend-runner under the trailing stop (2×ATR ratchet) — a resting
+	// full-size TP structurally sold every spike top (BTCUSDT 2026-09-21:
+	// TP filled 83000, price printed 84275 in the same minute). 0 = default
+	// 0.5 (09-21 user experiment); negative = 1.0 (legacy full close).
+	// Collapses to 1.0 when trailing_stop_enabled is off — a runner without
+	// a ratchet just gives the move back. (CODE ENFORCED)
+	TPCloseFraction float64 `json:"tp_close_fraction"`
 	// TP ladder on leveraged PnL% (CODE ENFORCED): at >= TpTrimProfitPct the
 	// program market-trims 1/3 of the position (once per position); at >=
 	// TpFullProfitPct it closes the rest. 0 = defaults 10/25; negative = that

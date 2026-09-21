@@ -236,27 +236,31 @@ func ProfitLockRMult(rc *store.RiskControlConfig) float64 {
 	return rc.ProfitLockAtR
 }
 
-// ProfitLockTargets returns (breakeven, trim) for a position given its R
-// multiple — the two 1R actions of the profit lock. initialSL is the
-// OPENING-risk stop the position was planned with (the fixed R anchor; the
-// trader persists it per position and never rewrites it); currentSL is the
-// LIVE recorded stop and is what gates the breakeven check: once breakeven
-// has armed, the live stop sits at entry, so the breakeven condition goes
-// false and arms exactly once — idempotent with no separate bookkeeping.
-// initialSL and currentSL are intentionally different numbers — do not
-// collapse the anchor onto the live stop: every tighten above entry would
-// then lower the 1R bar (ONDOUSDT 2026-09-17: +0.49% read as 1.89R after two
-// tightens, trimming at 0.352 instead of true 1R 0.3578).
-func ProfitLockTargets(side string, entry, initialSL, currentSL, markPrice, lockR float64) (bool, bool) {
+// ProfitLockTargets returns (bePrice, trim) for a position given its R
+// multiple — the two 1R actions of the profit lock. bePrice > 0 means "move
+// the stop to this price"; 0 means the stop already sits at-or-beyond it.
+// initialSL is the OPENING-risk stop the position was planned with (the fixed
+// R anchor; the trader persists it per position and never rewrites it);
+// currentSL is the LIVE recorded stop and is what gates the breakeven check:
+// once the lock has armed, the live stop sits at-or-above bePrice, so the
+// condition goes false and arms exactly once — idempotent with no separate
+// bookkeeping. initialSL and currentSL are intentionally different numbers —
+// do not collapse the anchor onto the live stop: every tighten above entry
+// would then lower the 1R bar (ONDOUSDT 2026-09-17: +0.49% read as 1.89R
+// after two tightens, trimming at 0.352 instead of true 1R 0.3578).
+// beOffsetR parks the stop PAST entry (entry ± beOffsetR × opening-risk
+// distance) so a post-lock pullback can't scratch the runner back to flat
+// (09-21 user experiment; resolve via ProfitLockBreakevenOffsetR).
+func ProfitLockTargets(side string, entry, initialSL, currentSL, markPrice, lockR, beOffsetR float64) (float64, bool) {
 	if lockR <= 0 || entry <= 0 || initialSL <= 0 || markPrice <= 0 {
-		return false, false
+		return 0, false
 	}
-	initialDist := (entry - initialSL) / entry * 100
-	if initialDist < 0 {
-		initialDist = -initialDist
+	initialDistPct := (entry - initialSL) / entry * 100
+	if initialDistPct < 0 {
+		initialDistPct = -initialDistPct
 	}
-	if initialDist <= 0 {
-		return false, false
+	if initialDistPct <= 0 {
+		return 0, false
 	}
 	var pnlDist float64
 	if side == "long" {
@@ -264,13 +268,68 @@ func ProfitLockTargets(side string, entry, initialSL, currentSL, markPrice, lock
 	} else {
 		pnlDist = (entry - markPrice) / entry * 100
 	}
-	rm := pnlDist / initialDist
+	rm := pnlDist / initialDistPct
 	if rm < lockR {
-		return false, false
+		return 0, false
 	}
-	// Breakeven: the recorded stop still leaves room on the entry side.
-	breakeven := (side == "long" && currentSL < entry) || (side == "short" && currentSL > entry)
-	return breakeven, true
+	// Breakeven (+ optional R-offset): the recorded stop still leaves room
+	// on the entry side of the target level.
+	be := entry
+	if beOffsetR > 0 {
+		rDist := entry - initialSL
+		if rDist < 0 {
+			rDist = -rDist
+		}
+		if side == "long" {
+			be = entry + rDist*beOffsetR
+		} else {
+			be = entry - rDist*beOffsetR
+		}
+	}
+	if (side == "long" && currentSL < be) || (side == "short" && currentSL > be) {
+		return be, true
+	}
+	return 0, true
+}
+
+// ProfitLockBreakevenOffsetR resolves how far past entry the 1R lock parks
+// the stop, in R units: 0/unset = 0.2 default (09-21 user experiment: pure
+// breakeven runners got scratched back to flat by post-lock noise); negative
+// = 0 (classic breakeven at entry). Shared by the trader's lock and the
+// prompt builder.
+func ProfitLockBreakevenOffsetR(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.ProfitLockBEOffsetR == 0 {
+		return 0.2
+	}
+	if rc.ProfitLockBEOffsetR < 0 {
+		return 0
+	}
+	return rc.ProfitLockBEOffsetR
+}
+
+// TPCloseFraction resolves the fraction of the position the take-profit algo
+// closes at the planned structure level: 0/unset = 0.5 default (09-21 user
+// experiment — a resting full-size TP structurally sold every spike top:
+// BTCUSDT 2026-09-21, TP filled 83000 and price printed 84275 in the same
+// minute); negative = 1.0 (legacy full close); anything else clamps to
+// [0.05, 1]. The TRADER collapses this to 1.0 when the trailing stop is
+// disabled — a runner without a ratchet just gives the move back.
+func TPCloseFraction(rc *store.RiskControlConfig) float64 {
+	f := 0.5
+	if rc != nil {
+		if rc.TPCloseFraction < 0 {
+			f = 1.0
+		} else if rc.TPCloseFraction > 0 {
+			f = rc.TPCloseFraction
+		}
+	}
+	if f < 0.05 {
+		f = 0.05
+	}
+	if f > 1.0 {
+		f = 1.0
+	}
+	return f
 }
 
 // MaxSpreadPct resolves the order-book spread gate threshold (percent of

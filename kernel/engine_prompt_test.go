@@ -302,9 +302,11 @@ func TestTpTierAction(t *testing.T) {
 		t.Fatalf("disabled tiers must no-op, got %q", got)
 	}
 	// Prompt renders the ladder and drops the frequency-cap wording.
+	// Default config → breakeven offset 0.2R active (09-21 experiment):
+	// the stop parks at 开仓价+0.20R, not plain entry.
 	engine := NewStrategyEngine(&store.StrategyConfig{})
 	prompt := engine.BuildSystemPrompt(100, "")
-	for _, want := range []string{"程序自动市价减仓 50%", "止损移至开仓价保本", "程序自动全部平仓"} {
+	for _, want := range []string{"程序自动市价减仓 50%", "止损移至开仓价+0.20R", "程序自动全部平仓"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("TP ladder missing %q", want)
 		}

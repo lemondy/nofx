@@ -243,6 +243,13 @@ export interface RiskControlConfig {
   // is trimmed (0 = default 1R, negative = disabled). While ON it
   // supersedes the ROE trim tier (tp_trim_profit_pct).
   profit_lock_at_r?: number;
+  // 1R lock breakeven offset in R: the stop parks at entry ± N× the
+  // opening-risk distance (0 = default 0.2R, negative = pure breakeven).
+  profit_lock_be_offset_r?: number;
+  // Fraction the TP algo closes at the structure level; the remainder runs
+  // as a trend-runner under the trailing stop (0 = default 0.5, negative =
+  // full close; collapses to full close when trailing_stop_enabled is off).
+  tp_close_fraction?: number;
   // Hard-block opens when the vendor-vs-live price diverges beyond this %
   // (0 = default 1, negative = disabled) (CODE ENFORCED)
   max_vendor_divergence_pct?: number;

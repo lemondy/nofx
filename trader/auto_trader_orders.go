@@ -369,12 +369,40 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 		logger.Infof("  ⚠ AI decision for %s has no stop_loss, exchange stop not placed", decision.Symbol)
 	}
 	if decision.TakeProfit > 0 {
-		if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.TakeProfit); err != nil {
+		// Split TP (09-21 user experiment): the algo closes only
+		// tp_close_fraction of the position at the structure level; the
+		// remainder stays on as a trend-runner under the trailing stop.
+		// Collapsed to a full close when trailing is disabled — a runner
+		// without a ratchet just gives the move back.
+		//
+		// tpQty keeps the legacy contract (full quantity — adapters size
+		// their TP order by it) whenever the split is off.
+		tpQty := quantity
+		if frac := at.effectiveTPCloseFraction(); frac < 1.0 {
+			tpQty = quantity * frac
+			// The remainder is now a runner: the protection watchdog must
+			// NOT re-place a full TP over it (the same flag also marks the
+			// legacy TP-runner conversion). ClearPeakPnLCache already ran
+			// upstream, so this mark survives the open-path reset.
+			at.markTPRunner(decision.Symbol + "_" + strings.ToLower(positionSide))
+			logger.Infof("  🏃 %s split TP: algo closes %.0f%% (%.6g) at %.6g — remainder trails", decision.Symbol, frac*100, tpQty, decision.TakeProfit)
+		}
+		if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, tpQty, decision.TakeProfit); err != nil {
 			logger.Infof("  ⚠ Failed to set take profit for %s: %v", decision.Symbol, err)
 		}
 		side := strings.ToLower(positionSide)
 		at.recordOpenTakeProfit(decision.Symbol, side, decision.TakeProfit)
 	}
+}
+
+// effectiveTPCloseFraction resolves the split-TP fraction for this trader:
+// trailing disabled → 1.0 (full close, no runner), otherwise the configured
+// kernel.TPCloseFraction (0 = default 0.5, negative = legacy 1.0).
+func (at *AutoTrader) effectiveTPCloseFraction() float64 {
+	if at.config.StrategyConfig == nil || !at.config.StrategyConfig.RiskControl.TrailingStopEnabled {
+		return 1.0
+	}
+	return kernel.TPCloseFraction(&at.config.StrategyConfig.RiskControl)
 }
 
 // executeCloseLongWithRecord executes close long position and records detailed information

@@ -733,19 +733,40 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 
 	// Use new Algo Order API — tick-rounded trigger, same -1111 rationale
 	// as SetStopLoss above.
+	//
+	// quantity > 0 = PARTIAL TP (tp_close_fraction < 1): only that slice
+	// closes at the trigger, the remainder stays on as a trend-runner under
+	// the trailing stop (09-21 user experiment — a resting full-size TP
+	// structurally sold every spike top: BTCUSDT TP filled 83000, price
+	// printed 84275 in the same minute). quantity <= 0 keeps the legacy
+	// closePosition mode. If the fraction underflows the symbol's lot step
+	// the order falls back to full-close rather than placing a rejected
+	// dust order.
 	priceStr, ferr := t.formatAlgoTriggerPrice(symbol, takeProfitPrice)
 	if ferr != nil {
 		return fmt.Errorf("failed to set take-profit: %w", ferr)
 	}
-	_, err := t.client.NewCreateAlgoOrderService().
+	algo := t.client.NewCreateAlgoOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.AlgoOrderTypeTakeProfitMarket).
 		TriggerPrice(priceStr).
-		WorkingType(futures.WorkingTypeContractPrice).
-		ClosePosition(true).
-		ClientAlgoId(getBrOrderID()).
+		WorkingType(futures.WorkingTypeContractPrice)
+	if quantity > 0 {
+		qtyStr, qerr := t.FormatQuantity(symbol, quantity)
+		qty, _ := strconv.ParseFloat(qtyStr, 64)
+		if qerr == nil && qty > 0 {
+			algo = algo.Quantity(qtyStr).ReduceOnly(true)
+		} else {
+			// Fraction underflowed the lot step — full close instead of a
+			// rejected order (which would leave the TP leg missing).
+			algo = algo.ClosePosition(true)
+		}
+	} else {
+		algo = algo.ClosePosition(true)
+	}
+	_, err := algo.ClientAlgoId(getBrOrderID()).
 		Do(context.Background())
 
 	if err != nil {

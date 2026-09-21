@@ -208,18 +208,25 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			// with no persisted anchor.
 			//
 			// The live stop (passed as currentSL) still gates breakeven: once
-			// armed, SetRecordedStopLoss overwrites it to `entry`, so the
-			// breakeven condition goes false and arms exactly once — no extra
-			// "already armed" bookkeeping. Trim idempotency is r1TrimDone.
+			// armed, SetRecordedStopLoss overwrites it to bePrice (entry plus
+			// the configured R-offset), so the breakeven condition goes false
+			// and arms exactly once — no extra "already armed" bookkeeping.
+			// Trim idempotency is r1TrimDone.
 			anchorSL := at.initialStopAnchor(symbol, side, initialSL)
-			breakeven, trim := kernel.ProfitLockTargets(side, entry, anchorSL, initialSL, markPrice, lockR)
-			if breakeven {
-				if err := at.moveStopExchange(symbol, side, entry); err != nil {
+			beOffset := kernel.ProfitLockBreakevenOffsetR(&at.config.StrategyConfig.RiskControl)
+			bePrice, trim := kernel.ProfitLockTargets(side, entry, anchorSL, initialSL, markPrice, lockR, beOffset)
+			if bePrice > 0 {
+				if err := at.moveStopExchange(symbol, side, bePrice); err != nil {
 					logger.Infof("⚠️ [%s] Breakeven SL place failed for %s: %v", at.name, symbol, err)
 				} else {
-					at.SetRecordedStopLoss(symbol, side, entry)
-					logger.Infof("🔒 [%s] Breakeven armed: %s %dR reached — SL moved to entry %.6g", at.name, symbol, int(lockR), entry)
-					notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🔒 保本止损 %s</b>\n浮盈达 %.0fR,止损已移至开仓价 <code>%.6g</code>——最差结果保本出局", notify.Escape(symbol), lockR, entry))
+					at.SetRecordedStopLoss(symbol, side, bePrice)
+					if beOffset > 0 {
+						logger.Infof("🔒 [%s] Breakeven+%.1fR armed: %s %dR reached — SL moved to %.6g (entry %.6g + %.1fR, locks a sliver past flat)", at.name, beOffset, symbol, int(lockR), bePrice, entry, beOffset)
+						notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🔒 保本+%.1fR 止损 %s</b>\n浮盈达 %.0fR,止损已移至开仓价+%.1fR <code>%.6g</code>——锁住一档微利,防噪声扫回平手", beOffset, notify.Escape(symbol), lockR, beOffset, bePrice))
+					} else {
+						logger.Infof("🔒 [%s] Breakeven armed: %s %dR reached — SL moved to entry %.6g", at.name, symbol, int(lockR), entry)
+						notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🔒 保本止损 %s</b>\n浮盈达 %.0fR,止损已移至开仓价 <code>%.6g</code>——最差结果保本出局", notify.Escape(symbol), lockR, entry))
+					}
 				}
 			}
 			if trim {

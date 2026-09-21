@@ -233,6 +233,82 @@ export function RiskControlEditor({
  {`当前生效: ${(config.profit_lock_at_r ?? 0) < 0 ? '禁用(ROE 减仓档接管)' : `${(config.profit_lock_at_r ?? 0) === 0 ? 1 : config.profit_lock_at_r}R 时保本+减半 50%`}`}
  </p>
  </div>
+
+ <div
+ className="p-4 rounded-lg"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {ts(riskControl.profitLockBEOffsetR, language)}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {ts(riskControl.profitLockBEOffsetRDesc, language)}
+ </p>
+ <input
+ type="number"
+ step={0.05}
+ value={config.profit_lock_be_offset_r ?? 0}
+ onChange={(e) =>
+ updateField(
+ 'profit_lock_be_offset_r',
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
+ )
+ }
+ disabled={disabled}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {`当前生效: ${(config.profit_lock_be_offset_r ?? 0) < 0 ? '纯保本(开仓价)' : `开仓价+${(config.profit_lock_be_offset_r ?? 0) === 0 ? 0.2 : config.profit_lock_be_offset_r}R`}
+ `}
+ </p>
+ </div>
+
+ <div
+ className="p-4 rounded-lg"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {ts(riskControl.tpCloseFraction, language)}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {ts(riskControl.tpCloseFractionDesc, language)}
+ </p>
+ <input
+ type="number"
+ step={0.05}
+ min={-1}
+ max={1}
+ value={config.tp_close_fraction ?? 0}
+ onChange={(e) =>
+ updateField(
+ 'tp_close_fraction',
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
+ )
+ }
+ disabled={disabled}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {(() => {
+ const raw = config.tp_close_fraction ?? 0
+ // Backend bool: absent/false = trailing OFF → full close (no runner).
+ const trailingOn = config.trailing_stop_enabled === true
+ if (!trailingOn) return '当前生效: 全平(移动止损关闭,趋势跑单不可用)'
+ const eff = raw < 0 ? 1 : raw === 0 ? 0.5 : raw
+ return `当前生效: 止盈触发平 ${(eff * 100).toFixed(0)}%,剩余 ${100 - eff * 100}% 由移动止损接管`
+ })()}
+ </p>
+ </div>
  </div>
 
  {/* Trading Leverage (Exchange) */}

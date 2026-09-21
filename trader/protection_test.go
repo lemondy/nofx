@@ -3,6 +3,8 @@ package trader
 import (
 	"math"
 	"testing"
+
+	"nofx/store"
 )
 
 // Round-4 review R4-14: the naked-position watchdog's core math, extracted
@@ -63,5 +65,29 @@ func TestClearPeakPnLCacheClearsTPRunner(t *testing.T) {
 	}
 	if at.peakPnLCache["BTCUSDT_long"] != 0 || at.tpTrimDone["BTCUSDT_long"] || at.r1TrimDone["BTCUSDT_long"] || at.partialTrimmed["BTCUSDT_long"] != 0 {
 		t.Fatal("sibling lifecycle maps must also be cleared")
+	}
+}
+
+// 09-21 split-TP experiment: the fraction only applies when the trailing
+// stop can ratchet the runner out — without it the split collapses to a
+// full close (a runner without a ratchet gives the move back).
+func TestEffectiveTPCloseFraction(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	at := &AutoTrader{config: AutoTraderConfig{StrategyConfig: cfg}}
+
+	cfg.RiskControl.TrailingStopEnabled = false
+	cfg.RiskControl.TPCloseFraction = 0.5
+	if got := at.effectiveTPCloseFraction(); got != 1.0 {
+		t.Fatalf("trailing off must collapse to full close, got %v", got)
+	}
+
+	cfg.RiskControl.TrailingStopEnabled = true
+	if got := at.effectiveTPCloseFraction(); got != 0.5 {
+		t.Fatalf("trailing on + default fraction must be 0.5, got %v", got)
+	}
+
+	cfg.RiskControl.TPCloseFraction = -1
+	if got := at.effectiveTPCloseFraction(); got != 1.0 {
+		t.Fatalf("negative fraction = legacy full close, got %v", got)
 	}
 }

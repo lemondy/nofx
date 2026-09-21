@@ -58,12 +58,12 @@ func TestInitialStopAnchorOpeningRisk(t *testing.T) {
 	}
 
 	// Mark 0.352 (+0.49%) vs opening risk 2.14% → 0.23R: no trim.
-	_, trim := kernel.ProfitLockTargets("long", 0.3503, anchor, 0.3512, 0.352, 1.0)
+	_, trim := kernel.ProfitLockTargets("long", 0.3503, anchor, 0.3512, 0.352, 1.0, 0)
 	if trim {
 		t.Fatal("tightened live stop pulled the 1R bar down — trim fired at +0.49%")
 	}
 	// True 1R ≈ 0.3578 → trim fires.
-	_, trim = kernel.ProfitLockTargets("long", 0.3503, anchor, 0.3512, 0.3579, 1.0)
+	_, trim = kernel.ProfitLockTargets("long", 0.3503, anchor, 0.3512, 0.3579, 1.0, 0)
 	if !trim {
 		t.Fatal("true 1R must fire the trim")
 	}

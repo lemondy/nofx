@@ -328,7 +328,19 @@ func (e *StrategyEngine) strategyParamsText() string {
 		params.WriteString(fmt.Sprintf("- 止盈(结构选位已由程序完成): 各币快照 `hard_entry_gate[direction].rr_scan` 就是\"从近到远遍历全部时间块(含 execution_tf/15m)全部 resistance/support 元素\"的程序结果——开仓时 `take_profit` 直接采用 `rr_scan.first_rr_ge_target`(该方向从近到远第一个 RR≥%.1f 的结构位,按 rr_scan.entry_price 口径计算);`rr_scan.usable=false` 表示连最窄允许止损下 RR 上限 best_rr 都 <%.1f,该方向 RR 门结构性失败,输出 wait 并在 blocking_factors 标 RR_LOW、no_trade_reason 引用 `MAX_STRUCTURAL_RR=best_rr`——禁止只看最近一个结构位就下\"无可用结构位\"结论,也不许跳到更远目标。个别币没有 rr_scan 字段(如未启用噪声下限)时退回手工规则: 逐项遍历全部数组取第一个 RR≥%.1f。该比例仍是程序硬门槛(开仓时按决策价与成交价双重校验 RR)。stop_plan_price + first_rr_ge_target 这一对就是「真实 RR≥min」的组合——SL 用前者、TP 用后者,不要只换其中一半\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
 		var tpParts []string
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
-			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序自动市价减仓 50%%,同时止损移至开仓价保本;剩余 50%% 奔向结构位止盈", lockR))
+			// 保本位措辞从配置求值(09-21 实验: +0.2R 锁微利 vs 纯保本)
+			beTxt := "开仓价保本"
+			if beOff := ProfitLockBreakevenOffsetR(&e.config.RiskControl); beOff > 0 {
+				beTxt = fmt.Sprintf("开仓价+%.2fR(锁定一档微利,防噪声扫回平手)", beOff)
+			}
+			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序自动市价减仓 50%%,同时止损移至%s;剩余 50%% 奔向结构位止盈", lockR, beTxt))
+		}
+		// 分批止盈+趋势跑单(09-21 实验): 止盈触发只平一部分,剩余由移动止损
+		// 接管——只在移动止损开启时生效(trader 端 effectiveTPCloseFraction
+		// 同条件收拢为全平)。
+		tpFrac := TPCloseFraction(&e.config.RiskControl)
+		if e.config.RiskControl.TrailingStopEnabled && tpFrac < 1.0 {
+			tpParts = append(tpParts, fmt.Sprintf("结构位止盈触发时程序只平 %.0f%% 仓位,剩余继续由 2×ATR 移动止损接管(趋势跑单,利润奔跑;强趋势冲破止盈位后的延续行情由它捕捉)", tpFrac*100))
 		}
 		if tpFull := TpFullProfitPct(&e.config.RiskControl); tpFull > 0 {
 			tpParts = append(tpParts, fmt.Sprintf("≥%.0f%%(杠杆后)程序自动全部平仓", tpFull))
@@ -344,12 +356,16 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString("- 波动率调仓(程序自动): 每周期按 权益×单笔风险%÷ATR(1h)% 重算目标仓位,80/120 滞后带外才调——>120% 程序自动减仓,<80% 时你可在信号仍有效的前提下评估加仓。不要因波动率变化去动 SL/TP\n")
 		}
 		if e.config.RiskControl.TrailingStopEnabled {
-			params.WriteString("- 移动止损/止盈延展(程序自动): 浮盈达 1.5×初始止损距离启动 2×ATR(1h) 跟踪止损(只紧不松);到达止盈距离后固定止盈单撤除、由跟踪止损接管让利润奔跑。初始 SL/TP 开仓后即固定,你不可也不需要修改它们;提前离场的唯一合法理由是结构破坏\n")
+			if tpFrac < 1.0 {
+				params.WriteString(fmt.Sprintf("- 移动止损/趋势跑单(程序自动): 浮盈达 1.5×初始止损距离启动 2×ATR(1h) 跟踪止损(只紧不松);结构位止盈只平 %.0f%% 仓位,剩余由该跟踪止损接管让利润奔跑。初始 SL/TP 开仓后即固定,你不可也不需要修改它们;提前离场的唯一合法理由是结构破坏\n", tpFrac*100))
+			} else {
+				params.WriteString("- 移动止损/止盈延展(程序自动): 浮盈达 1.5×初始止损距离启动 2×ATR(1h) 跟踪止损(只紧不松);到达止盈距离后固定止盈单撤除、由跟踪止损接管让利润奔跑。初始 SL/TP 开仓后即固定,你不可也不需要修改它们;提前离场的唯一合法理由是结构破坏\n")
+			}
 		}
 		if e.config.RiskControl.CloseRejectBreakoutPct > 0 {
 			params.WriteString(fmt.Sprintf("- 浮亏平仓限制(程序强制): 持仓浮亏时,若最近的反向结构位(做多看上方 resistance/structure_high、做空看下方 support)距离现价 < %.1f%% 且 15m 结构未破坏(未破支撑/未破阻力),\"被阻力拒绝/被支撑拒绝\"不构成平仓理由,该 close 会被程序拦截——给突破留空间;你的合法离场路径是 15m 结构实际破位、止损触发,或浮盈状态下的正常止盈\n", e.config.RiskControl.CloseRejectBreakoutPct))
 		}
-		params.WriteString("- 保护单看门狗(程序强制): 每周期核对全部持仓的止损/止盈挂单,缺失时按开仓计划价自动补挂(止盈距离走完转跟踪止损的除外)——保护单由程序保障,你只负责按结构规划输出 SL/TP 数值\n")
+		params.WriteString("- 保护单看门狗(程序强制): 每周期核对全部持仓的止损/止盈挂单,缺失时按开仓计划价自动补挂(止盈只平部分的剩余趋势跑单、以及止盈距离走完转跟踪止损的仓位除外——它们的出场由移动止损接管)——保护单由程序保障,你只负责按结构规划输出 SL/TP 数值\n")
 		if EarlyCloseHours(&e.config.RiskControl) > 0 {
 			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 需要该币 1h 出现至少 2 根逆持仓方向的已收盘 K 线(1h 节奏出现趋势转变的证据)才会放行,浮盈浮亏一视同仁;止盈/止损触发单与回撤保护平仓由程序自动执行,不受此限。持仓满 %dh 后正常平仓\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
 		}
