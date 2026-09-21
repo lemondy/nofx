@@ -43,6 +43,11 @@ func (at *AutoTrader) runCycle() error {
 	// recorded plan prices (manual cancels, exchange hiccups, missed legs).
 	at.processProtectionWatchdog()
 
+	// Close DB OPEN rows the exchange no longer holds (one-way netting or
+	// manual closes orphan them — BTWUSDT 09-21). Reporting-only rows:
+	// decisions read the exchange live, this just keeps the books honest.
+	at.reconcileOrphanedPositionRows()
+
 	// Create decision record
 	record := &store.DecisionRecord{
 		ExecutionLog: []string{},
