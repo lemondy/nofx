@@ -82,6 +82,7 @@ func (t *StocksTrader) GetBalance() (map[string]interface{}, error) {
 	}
 
 	result := map[string]interface{}{
+		"totalEquity":           total,
 		"totalWalletBalance":    total,
 		"availableBalance":      available,
 		"totalUnrealizedProfit": 0.0, // unrealized equity PnL lives in the position value

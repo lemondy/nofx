@@ -64,6 +64,11 @@ func (t *OKXTrader) GetBalance() (map[string]interface{}, error) {
 	totalEq, _ := strconv.ParseFloat(balance.TotalEq, 64)
 
 	result := map[string]interface{}{
+		// totalEq is OKX's total equity (wallet + upl). It must ALSO land in
+		// "totalEquity": the executor's equity chain prefers that key, and
+		// without it sizing/margin-budget silently fell back to whatever
+		// "totalWalletBalance" held (QUANT_REVIEW_2026-09-22 D1).
+		"totalEquity":           totalEq,
 		"totalWalletBalance":    totalEq,
 		"availableBalance":      usdtAvail,
 		"totalUnrealizedProfit": usdtUPL,

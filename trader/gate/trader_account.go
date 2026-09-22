@@ -32,6 +32,10 @@ func (t *GateTrader) GetBalance() (map[string]interface{}, error) {
 	unrealizedPnl, _ := strconv.ParseFloat(accounts.UnrealisedPnl, 64)
 
 	result := map[string]interface{}{
+		// "totalEquity" = wallet + unrealized — executor equity chain prefers
+		// this key; without it sizing fell back to wallet balance
+		// (QUANT_REVIEW_2026-09-22 D1).
+		"totalEquity":           total + unrealizedPnl,
 		"totalWalletBalance":    total,
 		"availableBalance":      available,
 		"totalUnrealizedProfit": unrealizedPnl,

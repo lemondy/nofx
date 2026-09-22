@@ -59,6 +59,7 @@ func (t *AsterTrader) GetBalance() (map[string]interface{}, error) {
 		logger.Infof("⚠️  Failed to get position information: %v", err)
 		// fallback: use simple calculation when unable to get positions
 		return map[string]interface{}{
+			"totalEquity":           crossWalletBalance + crossUnPnl,
 			"totalWalletBalance":    crossWalletBalance,
 			"availableBalance":      availableBalance,
 			"totalUnrealizedProfit": crossUnPnl,
@@ -94,6 +95,9 @@ func (t *AsterTrader) GetBalance() (map[string]interface{}, error) {
 	totalWalletBalance := totalEquity - realUnrealizedPnl
 
 	return map[string]interface{}{
+		// "totalEquity" is the key the executor's equity chain prefers; it must
+		// be wallet + unrealized by definition (QUANT_REVIEW_2026-09-22 D1).
+		"totalEquity":           totalEquity,        // = available + margin used = wallet + unrealized
 		"totalWalletBalance":    totalWalletBalance, // Wallet balance (excluding unrealized PnL)
 		"availableBalance":      availableBalance,   // Available balance
 		"totalUnrealizedProfit": realUnrealizedPnl,  // Unrealized PnL (accumulated from positions)

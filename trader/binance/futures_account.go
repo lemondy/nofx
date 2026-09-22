@@ -30,9 +30,18 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	}
 
 	result := make(map[string]interface{})
-	result["totalWalletBalance"], _ = strconv.ParseFloat(account.TotalWalletBalance, 64)
+	wallet, _ := strconv.ParseFloat(account.TotalWalletBalance, 64)
+	unrealized, _ := strconv.ParseFloat(account.TotalUnrealizedProfit, 64)
+	result["totalWalletBalance"] = wallet
 	result["availableBalance"], _ = strconv.ParseFloat(account.AvailableBalance, 64)
-	result["totalUnrealizedProfit"], _ = strconv.ParseFloat(account.TotalUnrealizedProfit, 64)
+	result["totalUnrealizedProfit"] = unrealized
+	// totalEquity = wallet + unrealized PnL — this key MUST exist. The executor's
+	// equity fallback chain (totalEquity → totalWalletBalance → availableBalance,
+	// auto_trader_orders.go) silently landed on wallet balance when it didn't,
+	// so sizing and the margin-budget gate priced risk off a denominator that
+	// ignored floating PnL while the account-drawdown breaker and the prompt
+	// used wallet+unrealized (QUANT_REVIEW_2026-09-22 D1, P0).
+	result["totalEquity"] = wallet + unrealized
 
 	logger.Infof("✓ Binance API returned: total balance=%s, available=%s, unrealized PnL=%s",
 		account.TotalWalletBalance,

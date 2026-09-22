@@ -52,10 +52,13 @@ func (t *BitgetTrader) GetBalance() (map[string]interface{}, error) {
 	}
 
 	result := map[string]interface{}{
+		// "totalEquity" is the key the executor's equity chain prefers — the
+		// old snake_case "total_equity" was never read by any consumer
+		// (QUANT_REVIEW_2026-09-22 D1).
+		"totalEquity":           totalEquity,
 		"totalWalletBalance":    totalEquity - unrealizedPnL,
 		"availableBalance":      availableBalance,
 		"totalUnrealizedProfit": unrealizedPnL,
-		"total_equity":          totalEquity,
 	}
 
 	// Update cache
