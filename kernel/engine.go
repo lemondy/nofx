@@ -569,6 +569,19 @@ func (e *StrategyEngine) GetConfig() *store.StrategyConfig {
 // ============================================================================
 
 // GetCandidateCoins gets candidate coins based on strategy configuration
+// appendUniqueSource tags a candidate with a universe source, skipping exact
+// duplicates — one coin passing two sources keeps both tags, but the same
+// source fetched twice must not double-render in Sources (A5,
+// QUANT_REVIEW_2026-09-22).
+func appendUniqueSource(sources []string, tag string) []string {
+	for _, s := range sources {
+		if s == tag {
+			return sources
+		}
+	}
+	return append(sources, tag)
+}
+
 func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	var candidates []CandidateCoin
 	symbolSources := make(map[string][]string)
@@ -712,7 +725,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				logger.Infof("⚠️  Failed to get AI500 coins: %v", err)
 			} else {
 				for _, coin := range poolCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "ai500")
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "ai500")
 				}
 			}
 		}
@@ -723,7 +736,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				logger.Infof("⚠️  Failed to get OI Top: %v", err)
 			} else {
 				for _, coin := range oiCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "oi_top")
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "oi_top")
 				}
 			}
 		}
@@ -734,7 +747,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				logger.Infof("⚠️  Failed to get OI Low: %v", err)
 			} else {
 				for _, coin := range oiLowCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "oi_low")
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "oi_low")
 				}
 			}
 		}
@@ -743,14 +756,20 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// overheating + topping confirmation" engine the short_scan source
 		// type uses. Without this the mixed pool is long-only (AI500/OI-top/
 		// piggy-dash are all up-side selectors) and the model drifts long.
+		// Fetched ONCE — a previous shape called getShortScanCoins three
+		// times (universe assembly twice + shortMeta below), double-tagging
+		// merged symbols' Sources with duplicate "short_scan" entries
+		// (QUANT_REVIEW_2026-09-22 A5).
+		var shortCoins []CandidateCoin
 		if coinSource.UseShortScan {
-			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+			sc, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
 				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 			if err != nil {
 				logger.Infof("⚠️  Failed to get short-scan coins: %v", err)
 			} else {
-				for _, coin := range shortCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "short_scan")
+				shortCoins = sc
+				for _, coin := range sc {
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "short_scan")
 				}
 			}
 		}
@@ -761,7 +780,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				logger.Infof("⚠️  Failed to get Hyperliquid All coins: %v", err)
 			} else {
 				for _, coin := range hyperCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "hyper_all")
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "hyper_all")
 				}
 			}
 		}
@@ -772,7 +791,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				logger.Infof("⚠️  Failed to get Hyperliquid Main coins: %v", err)
 			} else {
 				for _, coin := range hyperMainCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "hyper_main")
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "hyper_main")
 				}
 			}
 		}
@@ -783,19 +802,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				logger.Infof("⚠️  Failed to get Piggy Dash coins: %v", err)
 			} else {
 				for _, coin := range piggyCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "piggy_dash")
-				}
-			}
-		}
-
-		if coinSource.UseShortScan {
-			shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
-				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
-			if err != nil {
-				logger.Infof("⚠️  Failed to get Short Scan coins: %v", err)
-			} else {
-				for _, coin := range shortCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "short_scan")
+					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "piggy_dash")
 				}
 			}
 		}
@@ -809,21 +816,17 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				if _, exists := symbolSources[symbol]; !exists {
 					symbolSources[symbol] = []string{"static"}
 				} else {
-					symbolSources[symbol] = append(symbolSources[symbol], "static")
+					symbolSources[symbol] = appendUniqueSource(symbolSources[symbol], "static")
 				}
 			}
 		}
 
 		// Short-scan metadata (score/grade/reasons) must survive the
 		// symbolSources collapse — it labels the direction hints in the prompt.
+		// Reuses the fetch from the universe assembly above (A5 dedupe).
 		shortMeta := make(map[string]CandidateCoin)
-		if coinSource.UseShortScan {
-			if shortCoins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
-				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax); err == nil {
-				for _, c := range shortCoins {
-					shortMeta[c.Symbol] = c
-				}
-			}
+		for _, c := range shortCoins {
+			shortMeta[c.Symbol] = c
 		}
 		// Piggy-dash direction metadata survives the collapse too — the
 		// cross-scanner conflict check needs it (audit 2026-09-12 #11).
@@ -1012,6 +1015,12 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 			continue
 		}
 		c := shortSignalToCandidate(sig, scanAt)
+		// A6 (QUANT_REVIEW 09-22): OI-unknown coins ride in the pool by the
+		// fail-open rule, but they must SAY so — an unverified candidate must
+		// not carry the implied "passed the liquidity floor" status.
+		if sig.OIValueMillions <= 0 && !sig.NearHighAlso {
+			c.ShortReasons = append(c.ShortReasons, "OI数据缺失:流动性门槛未能核验")
+		}
 		candidates = append(candidates, c)
 	}
 	// Reserve one slot for the strongest grinding-top setup when the gainer
