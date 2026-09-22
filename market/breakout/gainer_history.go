@@ -78,54 +78,13 @@ func ResolveShortScanHistoryMax(raw int) int {
 	return raw
 }
 
-// Scanner-side knobs. The scheduler and the kernel share one scan cache, so
-// both callers must resolve the SAME values or the cache ping-pongs between
-// two universe definitions and re-scans on every call — hence package-level
-// config instead of per-call parameters. The kernel syncs the strategy's
-// values each cycle; the scheduler picks them up for free.
-var (
-	shortHistCfgMu   sync.Mutex
-	shortHistDaysCfg = DefaultShortScanHistoryDays
-	shortHistMaxCfg  = DefaultShortScanHistoryMax
-	// shortHistLastWarn rate-limits the flip warning below: with multiple
-	// traders running different strategies, each engine re-syncs its own
-	// values EVERY cycle and the knob ping-pongs — one warning per window
-	// is enough to surface it (round-4 review R4-13).
-	shortHistLastWarn time.Time
-)
-
-// SetShortScanHistoryConfig syncs the strategy-side knobs into the scanner
-// (raw values; days ≤ 0 resolves via ResolveShortScanHistoryDays, so a
-// negative config disables the pool). Idempotent — safe to call per cycle.
-// NOTE: this is a process-global single value shared with the scheduler's
-// scan cache. A value change now warns (once per 10 minutes): legitimate UI
-// saves warn once, while multi-trader strategies with different values
-// ping-pong this every cycle and need the noise surfaced.
-func SetShortScanHistoryConfig(rawDays, rawMax int) {
-	shortHistCfgMu.Lock()
-	defer shortHistCfgMu.Unlock()
-	days := ResolveShortScanHistoryDays(rawDays)
-	max := ResolveShortScanHistoryMax(rawMax)
-	if (days != shortHistDaysCfg || max != shortHistMaxCfg) && time.Since(shortHistLastWarn) > 10*time.Minute {
-		shortHistLastWarn = time.Now()
-		logger.Warnf("short-scan history pool config changed %dd/%dmax → %dd/%dmax — this is a PROCESS-GLOBAL scanner knob: multiple traders running different short_scan_history values will fight over it every cycle (last writer wins)",
-			shortHistDaysCfg, shortHistMaxCfg, days, max)
-	}
-	shortHistDaysCfg = days
-	shortHistMaxCfg = max
-}
-
-func shortScanHistoryDays() int {
-	shortHistCfgMu.Lock()
-	defer shortHistCfgMu.Unlock()
-	return shortHistDaysCfg
-}
-
-func shortScanHistoryMax() int {
-	shortHistCfgMu.Lock()
-	defer shortHistCfgMu.Unlock()
-	return shortHistMaxCfg
-}
+// (A4, QUANT_REVIEW 09-22) The old process-global knob set here by whichever
+// trader called last is GONE: the history-pool window/max now travel as
+// ScanShorts parameters, and the shared scan cache is keyed by the resolved
+// (universe, days, max) triple — two strategies with different values get
+// two cache slots instead of fighting over one universe definition. The
+// Resolve* helpers stay the single default source for callers without
+// strategy context (scheduler, API handler pass 0/0).
 
 // GainerQuote is one row of the live 24h gainer board.
 type GainerQuote struct {
@@ -184,12 +143,10 @@ func recordGainerHistory(board []GainerQuote, now time.Time) {
 		entries = entries[:gainerHistPerDayCap]
 	}
 	hist.Days[day] = entries
-	// Prune past the window (+buffer). Floor the keep at the default window
-	// so a temporarily-disabled pool doesn't starve.
-	keep := shortScanHistoryDays()
-	if keep < DefaultShortScanHistoryDays {
-		keep = DefaultShortScanHistoryDays
-	}
+	// Prune past the window (+buffer). Fixed at the default window — the
+	// file's retention is data hygiene shared by all strategies; which days
+	// are USED is per-call (A4).
+	keep := DefaultShortScanHistoryDays
 	cutoff := now.UTC().AddDate(0, 0, -(keep + gainerHistKeepBuffer - 1)).Format("2006-01-02")
 	for d := range hist.Days {
 		if d < cutoff {

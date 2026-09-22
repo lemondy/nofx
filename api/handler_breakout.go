@@ -167,7 +167,7 @@ func (s *Server) handleBreakoutShortScan(c *gin.Context) {
 	if len(results) < limit {
 		// Cold snapshot (or fewer candidates than requested) — compute live;
 		// ScanShorts shares the scheduler's 2-minute cache so this is cheap.
-		if live, at, err := breakout.ScanShorts(50); err == nil {
+		if live, at, err := breakout.ScanShorts(50, 0, 0); err == nil {
 			results, updatedAt = live, at
 		}
 	}

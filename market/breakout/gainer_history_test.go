@@ -16,12 +16,6 @@ func withTempGainerHistory(t *testing.T) {
 	t.Cleanup(func() { gainerHistPath = old })
 }
 
-func withTempHistoryConfig(t *testing.T, days, max int) {
-	t.Helper()
-	SetShortScanHistoryConfig(days, max)
-	t.Cleanup(func() { SetShortScanHistoryConfig(DefaultShortScanHistoryDays, DefaultShortScanHistoryMax) })
-}
-
 func readGainerHistoryFile(t *testing.T) *gainerHistoryFile {
 	t.Helper()
 	b, err := os.ReadFile(gainerHistPath)
@@ -40,7 +34,6 @@ func readGainerHistoryFile(t *testing.T) *gainerHistoryFile {
 // reload (persistence is the whole point of the pool).
 func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 	withTempGainerHistory(t)
-	withTempHistoryConfig(t, DefaultShortScanHistoryDays, DefaultShortScanHistoryMax)
 	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 
 	// 25 quotes: only the top 20 (board keep) may enter the pool. FADESUSDT
@@ -96,7 +89,6 @@ func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 // shrink-then-re-enable window changes from destroying data.
 func TestRecordGainerHistoryPrune(t *testing.T) {
 	withTempGainerHistory(t)
-	withTempHistoryConfig(t, DefaultShortScanHistoryDays, DefaultShortScanHistoryMax)
 	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 	hist := &gainerHistoryFile{Days: map[string][]gainerHistEntry{
 		now.UTC().AddDate(0, 0, -8).Format("2006-01-02"): {{Symbol: "KEEPLUSDT", Chg: 80}}, // buffer edge (keep 7 + buffer 2 − 1) — kept
@@ -187,17 +179,15 @@ func TestResolveShortScanHistoryConfig(t *testing.T) {
 	}
 }
 
-// The setter stores RESOLVED values so the scheduler (no strategy context)
-// reads the same universe as the kernel — a mismatch would ping-pong the
-// shared scan cache between two universe definitions.
-func TestSetShortScanHistoryConfigSync(t *testing.T) {
-	SetShortScanHistoryConfig(0, 0)
-	defer SetShortScanHistoryConfig(DefaultShortScanHistoryDays, DefaultShortScanHistoryMax)
-	if d, m := shortScanHistoryDays(), shortScanHistoryMax(); d != 7 || m != 30 {
+// A4 (QUANT_REVIEW 09-22): the process-global setter is gone — the resolve
+// helpers are now the single semantic source that ScanShorts applies to the
+// raw per-call config. Pin their mapping so defaults/disabled/cap behavior
+// cannot drift between the kernel (strategy values) and the scheduler (0/0).
+func TestResolveShortScanHistorySemantics(t *testing.T) {
+	if d, m := ResolveShortScanHistoryDays(0), ResolveShortScanHistoryMax(0); d != 7 || m != 30 {
 		t.Fatalf("defaults: days=%d max=%d, want 7/30", d, m)
 	}
-	SetShortScanHistoryConfig(-1, 200)
-	if d, m := shortScanHistoryDays(), shortScanHistoryMax(); d != 0 || m != 100 {
+	if d, m := ResolveShortScanHistoryDays(-1), ResolveShortScanHistoryMax(200); d != 0 || m != 100 {
 		t.Fatalf("raw(-1,200): days=%d max=%d, want 0(disabled)/100(cap)", d, m)
 	}
 }

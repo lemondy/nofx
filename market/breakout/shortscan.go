@@ -79,10 +79,14 @@ type shortScanCacheEntry struct {
 	updatedAt time.Time
 }
 
+// A4 (QUANT_REVIEW 09-22): one cache slot per resolved config
+// (universe|histDays|histMax) instead of one process-global slot — two
+// strategies with different short_scan_history values each keep their own
+// 2-minute scan instead of re-scanning every cycle and stomping each other.
 var (
-	shortScanCache    *shortScanCacheEntry
+	shortScanCache    = map[string]*shortScanCacheEntry{}
 	shortScanCacheMu  sync.Mutex
-	shortScanInflight = false
+	shortScanInflight = map[string]bool{}
 )
 
 // gainerTickerSnapshot fetches the 24h ticker once and returns the gainer
@@ -550,32 +554,38 @@ func btcRegimePenalty(btc4h []Kline) (float64, string) {
 	}
 }
 
-// ScanShorts ranks the top `limit` 24h gainers by short suitability. Results
-// are cached for shortScanCacheTTL; concurrent calls share one scan.
+// ScanShorts ranks the top `limit` 24h gainers by short suitability, plus
+// the history pool (histDaysRaw/histMaxRaw: 0 = defaults, negative disables
+// the pool — resolved via ResolveShortScanHistory*, single default source)
+// and the slow-top universe. Results are cached per resolved config for
+// shortScanCacheTTL; concurrent calls with the SAME config share one scan.
 // Newly listed symbols (< 7 days of 4h history) are skipped — thin history
 // and tiny float make squeeze risk unacceptable.
-func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
+func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, error) {
+	histDays := ResolveShortScanHistoryDays(histDaysRaw)
+	histMax := ResolveShortScanHistoryMax(histMaxRaw)
 	fullList := limit <= 0 || limit >= ShortScanUniverse
 	if !fullList && limit < 1 {
 		limit = 10
 	}
+	cacheKey := fmt.Sprintf("%d|%d|%d", ShortScanUniverse, histDays, histMax)
 	shortScanCacheMu.Lock()
-	if shortScanCache != nil && time.Now().Before(shortScanCache.expires) {
-		r, up := shortScanCache.results, shortScanCache.updatedAt
+	if ent := shortScanCache[cacheKey]; ent != nil && time.Now().Before(ent.expires) {
+		r, up := ent.results, ent.updatedAt
 		shortScanCacheMu.Unlock()
 		if !fullList && len(r) > limit {
 			r = r[:limit]
 		}
 		return r, up, nil
 	}
-	if shortScanInflight {
+	if shortScanInflight[cacheKey] {
 		shortScanCacheMu.Unlock()
 		// Wait for the in-flight scan to populate the cache.
 		for i := 0; i < 100; i++ {
 			time.Sleep(300 * time.Millisecond)
 			shortScanCacheMu.Lock()
-			if shortScanCache != nil && time.Now().Before(shortScanCache.expires) {
-				r, up := shortScanCache.results, shortScanCache.updatedAt
+			if ent := shortScanCache[cacheKey]; ent != nil && time.Now().Before(ent.expires) {
+				r, up := ent.results, ent.updatedAt
 				shortScanCacheMu.Unlock()
 				if !fullList && len(r) > limit {
 					r = r[:limit]
@@ -586,11 +596,11 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 		}
 		return nil, time.Time{}, fmt.Errorf("short scan in progress, please retry")
 	}
-	shortScanInflight = true
+	shortScanInflight[cacheKey] = true
 	shortScanCacheMu.Unlock()
 	defer func() {
 		shortScanCacheMu.Lock()
-		shortScanInflight = false
+		shortScanInflight[cacheKey] = false
 		shortScanCacheMu.Unlock()
 	}()
 
@@ -612,19 +622,19 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 		chg      float64
 		universe string
 	}
-	items := make([]shortScanItem, 0, len(board)+shortScanHistoryMax())
+	items := make([]shortScanItem, 0, len(board)+histMax)
 	covered := make(map[string]bool, len(board))
 	for _, g := range board {
 		items = append(items, shortScanItem{g.Symbol, g.ChgPct, "gainer"})
 		covered[g.Symbol] = true
 	}
-	if days := shortScanHistoryDays(); days > 0 {
-		extra := historyUniverseCandidates(loadGainerHistory(), time.Now(), days, index, covered, shortScanHistoryMax())
+	if histDays > 0 {
+		extra := historyUniverseCandidates(loadGainerHistory(), time.Now(), histDays, index, covered, histMax)
 		for _, q := range extra {
 			items = append(items, shortScanItem{q.Symbol, q.ChgPct, "hist_gainer"})
 		}
 		if len(extra) > 0 {
-			logger.Infof("🩸 Gainer history pool: +%d symbols over %dd window (universe=hist_gainer)", len(extra), days)
+			logger.Infof("🩸 Gainer history pool: +%d symbols over %dd window (universe=hist_gainer)", len(extra), histDays)
 		}
 	}
 
@@ -703,7 +713,7 @@ func ScanShorts(limit int) ([]ShortSignal, time.Time, error) {
 	}
 	now := time.Now()
 	shortScanCacheMu.Lock()
-	shortScanCache = &shortScanCacheEntry{
+	shortScanCache[cacheKey] = &shortScanCacheEntry{
 		results:   out,
 		expires:   now.Add(shortScanCacheTTL),
 		updatedAt: now,

@@ -337,7 +337,9 @@ func (s *Scheduler) runOnce(onDone func()) {
 	// Short scan rides the same cadence: rank the top 24h gainers by
 	// short-suitability. Best-effort — a short-scan failure never touches
 	// the main breakout snapshot.
-	if shorts, shortAt, err := ScanShorts(ShortScanUniverse); err != nil {
+	// 0/0 = default history-pool knobs — the scheduler has no strategy
+	// context; per-strategy values ride the kernel's own ScanShorts call (A4).
+	if shorts, shortAt, err := ScanShorts(ShortScanUniverse, 0, 0); err != nil {
 		logger.Warnf("⚠️ Short scan failed: %v", err)
 	} else {
 		s.mu.Lock()

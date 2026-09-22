@@ -989,10 +989,11 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 		// this keeps the built-in floor for any direct call.
 		minOIMillions = store.DefaultMinOIValueMillions
 	}
-	breakout.SetShortScanHistoryConfig(histDays, histMax)
-	// Full ranked universe (cached), so the OI filter happens before the
-	// top-N cut instead of wasting slots on coins that would be skipped later.
-	signals, scanAt, err := breakout.ScanShorts(breakout.ShortScanUniverse)
+	// Full ranked universe (cached per resolved config — A4), so the OI
+	// filter happens before the top-N cut instead of wasting slots on coins
+	// that would be skipped later. The strategy's history knobs travel as
+	// parameters; no process-global state.
+	signals, scanAt, err := breakout.ScanShorts(breakout.ShortScanUniverse, histDays, histMax)
 	if err != nil {
 		return nil, fmt.Errorf("short scan failed: %w", err)
 	}
