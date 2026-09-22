@@ -379,6 +379,12 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if e.config.RiskControl.AccountMaxDrawdownPct > 0 {
 			params.WriteString(fmt.Sprintf("- 账户级熔断(程序强制): 账户净值自初始值回撤 ≥ %.1f%% 时进入只减仓模式,一切新开仓被程序拦截;此时优先保护本金,减少交易频率\n", e.config.RiskControl.AccountMaxDrawdownPct))
 		}
+		if v := e.config.RiskControl.EffectiveMaxAccountRiskPct(); v > 0 {
+			params.WriteString(fmt.Sprintf("- 账户风险敞口上限(程序强制): 全部持仓的止损风险(数量×|开仓价−止损|,无保护单的仓位按止损带上限 %.0f%% 最坏估计)加上本单风险,合计不得超过权益的 %.1f%%——仓位数量上限看不见相关性,五个同向山寨止损等于一个大仓;超限时 open 被拒,优先平掉浮亏单腾出敞口额度\n", UnprotectedStopWorstCasePct, v))
+		}
+		if v := e.config.RiskControl.EffectiveDailyMaxLossPct(); v > 0 {
+			params.WriteString(fmt.Sprintf("- 日内亏损熔断(程序强制): 净值较今日开盘基线回撤 ≥ %.1f%% 时,当日所有新开仓被拦截至下一个 UTC 日,平仓/止损不受影响——连亏日强制降频,不是可选建议\n", v))
+		}
 		if noOpen := e.config.RiskControl.StockWeekendNoOpen; noOpen == nil || *noOpen {
 			params.WriteString("- 股票类代币周末禁开新仓(程序强制): DELL/SKHY 等 bstock 标的周末(美东周六/周日)波动率与胜率都低——候选里出现股票类代币时,本周末只允许 hold/close,不输出任何 open_*\n")
 		}

@@ -1483,6 +1483,77 @@ func finestSubHourTrend(data *market.Data) (string, string) {
 // Hard Risk Gates (CODE ENFORCED, strategy risk_control driven)
 // ============================================================================
 
+// accountRiskExposureBlocks reports whether opening d would push total open
+// stop-risk past max_account_risk_pct × equity. Existing risk is
+// Σ|qty|×|entry − exchange SL| from the cycle's position snapshot;
+// unprotected positions are worst-cased at the stop-band cap
+// (kernel.UnprotectedStopWorstCasePct). The new trade's risk uses the
+// gate-priced entry (limit anchor when live) and the decision's stop.
+func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx float64, ctx *kernel.Context) (bool, string) {
+	rc := at.config.StrategyConfig.RiskControl
+	capPct := rc.EffectiveMaxAccountRiskPct()
+	equity := ctx.Account.TotalEquity
+	if equity <= 0 || entryPx <= 0 || d.StopLoss <= 0 {
+		return false, "" // unpriceable → other gates (mandatory SL) handle it
+	}
+	totalRisk := 0.0
+	unprotected := 0
+	for _, p := range ctx.Positions {
+		if p.Quantity <= 0 || p.EntryPrice <= 0 {
+			continue
+		}
+		stopDistPct := kernel.UnprotectedStopWorstCasePct
+		if p.StopLossPrice > 0 {
+			stopDistPct = math.Abs(p.EntryPrice-p.StopLossPrice) / p.EntryPrice * 100
+		} else {
+			unprotected++
+		}
+		totalRisk += p.Quantity * p.EntryPrice * stopDistPct / 100
+	}
+	newRisk := d.PositionSizeUSD * math.Abs(entryPx-d.StopLoss) / entryPx
+	usedPct := totalRisk / equity * 100
+	newPct := newRisk / equity * 100
+	if usedPct+newPct > capPct {
+		return true, fmt.Sprintf("open stop-risk %.2f%% (existing %.2f%% + new %.2f%%) would exceed max_account_risk_pct %.1f%% of equity %.2f%s",
+			usedPct+newPct, usedPct, newPct, capPct, equity, unprotectedSuffix(unprotected))
+	}
+	return false, ""
+}
+
+func unprotectedSuffix(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d unprotected position(s) worst-cased at %.0f%% stop)", n, kernel.UnprotectedStopWorstCasePct)
+}
+
+// dailyLossHaltBlocks reports the halt reason when equity has retraced ≥
+// daily_max_loss_pct from the first equity seen this UTC day. Empty string =
+// no halt. The anchor is captured lazily on the first gated cycle of the
+// day (the loop's daily reset runs before any equity is available).
+func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity float64) string {
+	capPct := rc.EffectiveDailyMaxLossPct()
+	if capPct <= 0 || equity <= 0 {
+		return ""
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if at.dayStartDay != today {
+		at.dayStartDay = today
+		at.dayStartEquity = equity
+		return ""
+	}
+	if at.dayStartEquity <= 0 {
+		at.dayStartEquity = equity
+		return ""
+	}
+	lossPct := (at.dayStartEquity - equity) / at.dayStartEquity * 100
+	if lossPct >= capPct {
+		return fmt.Sprintf("equity %.2f is %.2f%% below day-start %.2f (≥ %.1f%%) — opens halted until next UTC day",
+			equity, lossPct, at.dayStartEquity, capPct)
+	}
+	return ""
+}
+
 // applyHardRiskGates enforces program-level gates the AI cannot override:
 //  1. 1d-uptrend short block (risk_control.block_short_1d_uptrend)
 //  2. Minimum holding period lock on AI-initiated closes (min_hold_minutes)
@@ -1496,7 +1567,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		return decisions
 	}
 	rc := at.config.StrategyConfig.RiskControl
-	if rc.MinHoldMinutes <= 0 && rc.EarlyCloseMinHours >= 0 && !rc.BlockShort1dUptrend && !rc.EntryTimingGate && rc.CloseRejectBreakoutPct <= 0 && !rc.LossStreakBanEnabled && rc.AccountMaxDrawdownPct <= 0 {
+	if rc.MinHoldMinutes <= 0 && rc.EarlyCloseMinHours >= 0 && !rc.BlockShort1dUptrend && !rc.EntryTimingGate && rc.CloseRejectBreakoutPct <= 0 && !rc.LossStreakBanEnabled && rc.AccountMaxDrawdownPct <= 0 && rc.EffectiveMaxAccountRiskPct() <= 0 && rc.EffectiveDailyMaxLossPct() <= 0 {
 		return decisions
 	}
 	filtered := make([]kernel.Decision, 0, len(decisions))
@@ -1535,6 +1606,50 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: bstock weekend — US market closed, no new stock positions", at.name, d.Action, d.Symbol)
 					continue
 				}
+			}
+		}
+		// Daily-loss halt (QUANT_REVIEW_2026-09-22 D2): once equity is down
+		// ≥ daily_max_loss_pct from the day's first-seen equity, new opens
+		// are blocked until the next UTC day. The old dailyPnL variable was
+		// reset every day but never consumed — this is the missing consumer.
+		// Closes/SL/TP unaffected — the account must de-risk, not stop.
+		if strings.HasPrefix(d.Action, "open_") {
+			if halt := at.dailyLossHaltBlocks(rc, ctx.Account.TotalEquity); halt != "" {
+				_, push := at.gateNotifyRecord("dailyhalt:"+time.Now().Format("2006-01-02"), time.Now())
+				logger.Warnf("🛑 [%s] GATE BLOCKED %s %s: %s", at.name, d.Action, d.Symbol, halt)
+				if push {
+					notify.Notify("ALERT", at.name, fmt.Sprintf(
+						"<b>🛑 日内亏损熔断 — 今日停开新仓</b>\n%s\n一切新开仓被程序拦截至次日,平仓/止损不受限", halt))
+				}
+				continue
+			}
+		}
+		// Account risk-exposure cap (QUANT_REVIEW_2026-09-22 D2): Σ open
+		// stop-risk + this trade's stop-risk ≤ max_account_risk_pct × equity.
+		// Position-count caps can't see correlation — five same-direction
+		// altcoin stops are one big position; this bounds the full-load
+		// stop-out (3.5% × 5 correlated positions ≈ 17.5% was one bad cycle
+		// from the account breaker).
+		if strings.HasPrefix(d.Action, "open_") && rc.EffectiveMaxAccountRiskPct() > 0 {
+			entryPx := d.Price
+			if gs, ok := at.cycleGateStates[market.Normalize(d.Symbol)]; ok && gs != nil {
+				basis := gs.LongEntryPrice
+				if strings.Contains(d.Action, "short") {
+					basis = gs.ShortEntryPrice
+				}
+				if basis > 0 {
+					entryPx = basis
+				}
+			}
+			if blocked, reason := at.accountRiskExposureBlocks(&d, entryPx, ctx); blocked {
+				streak, push := at.gateNotifyRecord("exposure:"+d.Symbol, time.Now())
+				logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: %s (streak %d)", at.name, d.Action, d.Symbol, reason, streak)
+				if push {
+					notify.Notify("ALERT", at.name, fmt.Sprintf(
+						"<b>🛡️ 账户风险敞口上限 %s</b>\n%s\n\n<i>%s</i>",
+						notify.Escape(d.Symbol), reason, notify.Escape(d.Reasoning)))
+				}
+				continue
 			}
 		}
 		// Loss-streak circuit breaker (opens only).

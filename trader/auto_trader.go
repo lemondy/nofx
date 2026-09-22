@@ -136,6 +136,8 @@ type AutoTrader struct {
 	cycleNumber             int                    // Current cycle number
 	initialBalance          float64
 	dailyPnL                float64
+	dayStartDay             string  // UTC day anchor for the daily-loss halt (D2, QUANT_REVIEW 09-22)
+	dayStartEquity          float64 // first equity seen on dayStartDay — the halt's baseline
 	customPrompt            string // Custom trading strategy prompt
 	overrideBasePrompt      bool   // Whether to override base prompt
 	lastResetTime           time.Time

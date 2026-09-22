@@ -498,6 +498,44 @@ type RiskControlConfig struct {
 	// breaker cannot catch a negative-edge strategy bleeding across many
 	// symbols. 0 disables. (CODE ENFORCED)
 	AccountMaxDrawdownPct float64 `json:"account_max_drawdown_pct"`
+	// MaxAccountRiskPct caps TOTAL open stop-risk: Σ over positions of
+	// qty×|entry−SL| (unprotected positions worst-cased at the 8% stop-band
+	// cap) plus the new trade's risk ≤ pct×equity. Position COUNT caps say
+	// nothing about correlation — five same-direction altcoin stops are one
+	// big position; this is the cap that bounds a full-load stop-out.
+	// 0 = default 10, negative = disabled. (CODE ENFORCED, QUANT_REVIEW
+	// 2026-09-22 D2)
+	MaxAccountRiskPct float64 `json:"max_account_risk_pct"`
+	// DailyMaxLossPct halts new opens for the rest of the UTC day once equity
+	// is down pct% from that day's first-seen equity. Closes/SL/TP unaffected.
+	// 0 = default 10, negative = disabled. (CODE ENFORCED, QUANT_REVIEW
+	// 2026-09-22 D2 — restores the lost daily-halt design; dailyPnL existed
+	// but nothing consumed it)
+	DailyMaxLossPct float64 `json:"daily_max_loss_pct"`
+}
+
+// EffectiveMaxAccountRiskPct resolves the account risk-exposure cap:
+// 0/unset → DefaultMaxAccountRiskPct, negative → disabled (0).
+func (r RiskControlConfig) EffectiveMaxAccountRiskPct() float64 {
+	if r.MaxAccountRiskPct < 0 {
+		return 0
+	}
+	if r.MaxAccountRiskPct == 0 {
+		return DefaultMaxAccountRiskPct
+	}
+	return r.MaxAccountRiskPct
+}
+
+// EffectiveDailyMaxLossPct resolves the daily-loss halt threshold:
+// 0/unset → DefaultDailyMaxLossPct, negative → disabled (0).
+func (r RiskControlConfig) EffectiveDailyMaxLossPct() float64 {
+	if r.DailyMaxLossPct < 0 {
+		return 0
+	}
+	if r.DailyMaxLossPct == 0 {
+		return DefaultDailyMaxLossPct
+	}
+	return r.DailyMaxLossPct
 }
 
 // NewStrategyStore creates a new StrategyStore
@@ -508,6 +546,14 @@ func NewStrategyStore(db *gorm.DB) *StrategyStore {
 // DefaultStatsWindowDays is the rolling stats window when the strategy
 // config leaves stats_window_days unset.
 const DefaultStatsWindowDays = 30
+
+// DefaultMaxAccountRiskPct / DefaultDailyMaxLossPct back the effective
+// helpers above — rendered into the prompt from these constants so the text
+// can never drift from the enforced value.
+const (
+	DefaultMaxAccountRiskPct = 10.0
+	DefaultDailyMaxLossPct   = 10.0
+)
 
 // EffectiveStatsWindowDays resolves the stats window in days: 0 means
 // "full history" (explicitly negative config), otherwise the window length
@@ -603,6 +649,9 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			MinPositionSize:              12,  // Min 12 USDT per position (CODE ENFORCED)
 			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (CODE ENFORCED at open — struct field comment is the source of truth)
 			MinConfidence:                75,  // Min 75% confidence (AI guided)
+
+			MaxAccountRiskPct: 10.0, // Σ open stop-risk + new risk ≤ 10% equity (CODE ENFORCED)
+			DailyMaxLossPct:   10.0, // Daily-loss halt: opens blocked at −10% from day-start equity (CODE ENFORCED)
 		},
 	}
 

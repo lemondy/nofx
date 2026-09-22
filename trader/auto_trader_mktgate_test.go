@@ -77,3 +77,89 @@ func TestMarketExceptionGate(t *testing.T) {
 		t.Fatalf("missing gate state must fail closed, got err=%v", err)
 	}
 }
+
+// Pins for the D2 account risk-exposure gate: existing stop-risk + new
+// stop-risk vs max_account_risk_pct of equity; unprotected positions
+// worst-cased at the stop-band cap.
+func TestAccountRiskExposureBlocks(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{MaxAccountRiskPct: 10})
+	ctx := &kernel.Context{
+		Account: kernel.AccountInfo{TotalEquity: 1000},
+		Positions: []kernel.PositionInfo{
+			{Symbol: "AUSDT", Side: "long", EntryPrice: 100, Quantity: 1, StopLossPrice: 95},  // risk 5
+			{Symbol: "BUSDT", Side: "short", EntryPrice: 50, Quantity: 2, StopLossPrice: 51.5}, // risk 3
+		},
+	}
+
+	// Existing 0.8% + new 1% = 1.8% ≤ 10% → allowed.
+	d := &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 196, PositionSizeUSD: 500}
+	if blocked, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
+		t.Fatal("1.8% total risk must pass a 10% cap")
+	}
+
+	// New risk 10.4% (2000 notional × 5.2% stop) → blocked.
+	d = &kernel.Decision{Symbol: "CUSDT", Price: 100, StopLoss: 94.8, PositionSizeUSD: 2000}
+	blocked, reason := at.accountRiskExposureBlocks(d, 100, ctx)
+	if !blocked {
+		t.Fatal("risk pushing total past the cap must block")
+	}
+	if !strings.Contains(reason, "10.0%") {
+		t.Fatalf("reason should quote the cap, got: %s", reason)
+	}
+
+	// Unprotected position worst-cased at 8%: 300 notional → 24 risk (2.4%).
+	ctx.Positions = append(ctx.Positions, kernel.PositionInfo{Symbol: "DUSDT", Side: "long", EntryPrice: 300, Quantity: 1})
+	d = &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 190, PositionSizeUSD: 1500} // 7.5%
+	blocked, reason = at.accountRiskExposureBlocks(d, 200, ctx)
+	if !blocked {
+		t.Fatal("unprotected worst-casing should push this over the cap")
+	}
+	if !strings.Contains(reason, "unprotected") {
+		t.Fatalf("reason should disclose the unprotected worst-case, got: %s", reason)
+	}
+
+	// Disabled (negative config) → never blocks.
+	atOff := riskTestTrader(store.RiskControlConfig{MaxAccountRiskPct: -1})
+	if atOff.config.StrategyConfig.RiskControl.EffectiveMaxAccountRiskPct() != 0 {
+		t.Fatal("negative max_account_risk_pct must disable the cap")
+	}
+
+	// Missing stop on the DECISION → not this gate's problem (mandatory-SL gate).
+	d = &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 0, PositionSizeUSD: 9000}
+	if blocked, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
+		t.Fatal("unpriceable decision must be left to the mandatory-SL gate")
+	}
+}
+
+// Pins for the D2 daily-loss halt: anchored at the first equity of each UTC
+// day, halting opens past the threshold, never blocking without config.
+func TestDailyLossHaltBlocks(t *testing.T) {
+	at := &AutoTrader{}
+	rc := store.RiskControlConfig{DailyMaxLossPct: 10}
+
+	// First sighting anchors the baseline and never halts same-call.
+	if halt := at.dailyLossHaltBlocks(rc, 1000); halt != "" {
+		t.Fatalf("baseline anchor must not halt: %s", halt)
+	}
+	if halt := at.dailyLossHaltBlocks(rc, 950); halt != "" {
+		t.Fatalf("−5%% must not halt a 10%% cap: %s", halt)
+	}
+	if halt := at.dailyLossHaltBlocks(rc, 895); halt == "" {
+		t.Fatalf("−10.5%% must halt, got %q", halt)
+	}
+
+	// Next UTC day re-anchors (simulated by rewinding the anchor day).
+	at.dayStartDay = "2000-01-01"
+	if halt := at.dailyLossHaltBlocks(rc, 900); halt != "" {
+		t.Fatalf("new day must re-anchor, got %s", halt)
+	}
+
+	// Disabled (negative) → always empty.
+	rcOff := store.RiskControlConfig{DailyMaxLossPct: -1}
+	if halt := (&AutoTrader{}).dailyLossHaltBlocks(rcOff, 1); halt != "" {
+		t.Fatalf("disabled halt must stay empty, got %s", halt)
+	}
+	if store.DefaultMaxAccountRiskPct != 10 || store.DefaultDailyMaxLossPct != 10 {
+		t.Fatal("defaults moved — the prompt renders these constants, keep them in sync with the review")
+	}
+}

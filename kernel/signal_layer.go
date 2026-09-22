@@ -1221,6 +1221,14 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 // so the gate, the executor and the prompt text render ONE number.
 const MarketExceptionMinScore = 80
 
+// UnprotectedStopWorstCasePct is the worst-case stop distance assumed when
+// accounting a position with no SL on the exchange against the account
+// risk-exposure cap — the stop band's own floor cap (max(2×ATR(4h), 8%))
+// bottoms out here, bounding what an unprotected position can lose before
+// the watchdog re-arms protection. Single source for kernel prompt text and
+// the trader's exposure gate (QUANT_REVIEW_2026-09-22 D2).
+const UnprotectedStopWorstCasePct = 8.0
+
 // marketExceptionEvidence reports whether the direction-matched market-order
 // exception carries program-side evidence: breakout confirmed with volume AND
 // OI confirmation AND |directional_score| ≥ MarketExceptionMinScore in the
