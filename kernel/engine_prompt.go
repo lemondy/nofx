@@ -224,7 +224,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		anchorCfg := AnchorOffsetFromRiskControl(&riskControl).normalized()
 		sb.WriteString(fmt.Sprintf("- **开仓默认用限价单,不要用市价**:做多输出 `open_long_limit`、做空输出 `open_short_limit`,`price` 字段直接复制该币快照里预计算好的 `limit_buy_price`/`limit_sell_price`,禁止自己另算或改动这个值。锚点偏移随该币波动率缩放(偏移 = %.2f×ATR(1h),夹在 %.2f%%~%.2f%%;实际值见各币 JSON 的 `limit_entry_offset_pct`):低波动币锚点更紧,高波动币呼吸空间更宽。限价单让你在回踩/反弹到更优价位时才成交,避免追高滑点和假突破;系统挂 GTC 限价单,最长保留 max(30 分钟, %d 个调度周期),到期未成交自动撤销并在下轮重评,你不需要重复挂单;成交后系统自动按你给的 stop_loss/take_profit 挂保护单(以成交价=触发价精确锚定)。SL/TP/杠杆/仓位等其余字段与市价开仓完全一致。\n", anchorCfg.ATRMult, anchorCfg.MinPct, anchorCfg.MaxPct, maxCycles))
 		sb.WriteString("- **锚点被抑制 = 禁止开仓(硬规则,优先级高于 entry_rule_triggered)**: 若某币快照里 `limit_buy_price` 或 `limit_sell_price` 为 0(被程序抑制,warnings 会有 \"anchor ... suppressed\" 说明),该币该方向本周期不可开仓——即便 entry_rule_triggered=true、directional_score 很高也一样:action 只能输出 wait(无持仓)或 hold(有持仓),no_trade_reason 写明\"挂单锚点被抑制\"。严禁把 0 当作 price 输出,也严禁自己另算价格顶替——系统会直接把此类决策降级为 wait 并记录\n")
-		sb.WriteString("- `open_long` / `open_short`(市价,三类例外,其余情况必须用限价): **例外一(突破追入)**: 当且仅当以下条件**全部**满足——① `breakout.status`=\"confirmed\"(仅此值;approach/broken_unconfirmed/retest_hold 均不算)② `breakout.volume_confirmation`=true ③ `breakout.oi_confirmation`=true ④ `directional_score`≥80 ⑤ `signal_conflict.directional_conflict`=false ⑥ 该币未处于连亏禁开仓期。**例外二(布林上轨骑行,只做多)**: 程序预计算标志 `bb_ride.ride`=true(短期量能暴增 + 15m 连续 ≥3 根阳线收盘且高点贴上轨,见快照 `bb_ride.windows`/`volume_surge`/`upper_band`)且你的 confidence≥80。**例外三(布林下轨骑行,只做空)**: 程序预计算标志 `short_ride.ride`=true(量能暴增 + 15m 连续 ≥3 根阴线收盘且低点贴下轨,见快照 `short_ride.windows`/`volume_surge`/`lower_band`)且你的 confidence≥80——急跌行情里做空限价锚点常因贴近 swing-low 被程序抑制(hard_entry_gate.short.failed 仅含 LIMIT_ANCHOR_SUPPRESSED 即此情形),此时不得干等反弹,可按本例外 `open_short` 市价追入。**任一例外成立才允许 `open_long`/`open_short` 市价追入(例外二仅多头、例外三仅空头)**,reasoning 逐条列出成立条件;例外不满足仍必须用限价单等回踩,市价承担滑点与假突破成本。突破触发单(stop-entry)系统当前不支持,不要输出其他动作类型。\n")
+		sb.WriteString("- `open_long` / `open_short`(市价,三类例外,其余情况必须用限价): **例外一(突破追入)**: 当且仅当以下条件**全部**满足——① `breakout.status`=\"confirmed\"(仅此值;approach/broken_unconfirmed/retest_hold 均不算)② `breakout.volume_confirmation`=true ③ `breakout.oi_confirmation`=true ④ `directional_score`≥80 ⑤ `signal_conflict.directional_conflict`=false ⑥ 该币未处于连亏禁开仓期。**例外二(布林上轨骑行,只做多)**: 程序预计算标志 `bb_ride.ride`=true(短期量能暴增 + 15m 连续 ≥3 根阳线收盘且高点贴上轨,见快照 `bb_ride.windows`/`volume_surge`/`upper_band`)且你的 confidence≥80。**例外三(布林下轨骑行,只做空)**: 程序预计算标志 `short_ride.ride`=true(量能暴增 + 15m 连续 ≥3 根阴线收盘且低点贴下轨,见快照 `short_ride.windows`/`volume_surge`/`lower_band`)且你的 confidence≥80——急跌行情里做空限价锚点常因贴近 swing-low 被程序抑制(hard_entry_gate.short.failed 仅含 LIMIT_ANCHOR_SUPPRESSED 即此情形),此时不得干等反弹,可按本例外 `open_short` 市价追入。**任一例外成立才允许 `open_long`/`open_short` 市价追入(例外二仅多头、例外三仅空头)**,reasoning 逐条列出成立条件;**市价例外由程序逐条复核(CODE ENFORCED)**:hard_entry_gate 相应方向的 `market_exception`=true(突破例外还要求 directional_score≥80,已程序判定)且你的 confidence≥80 才放行,否则市价开仓会被程序按锚点改挂限价(锚点也没有时直接拒单)——例外不满足仍必须用限价单等回踩,市价承担滑点与假突破成本。突破触发单(stop-entry)系统当前不支持,不要输出其他动作类型。\n")
 	}
 	sb.WriteString("- **wait 必须区分三类,禁止混淆**: ① NO TRADE(无方向优势): directional_score 弱/多空证据均衡,wait_bias 留空;② WAIT_LONG / WAIT_SHORT(方向明确但无合规入场点): 方向证据成立(directional_score 同号、结构共振),但锚点被抑制/时机闸门未过/当前价位 RR 不足/破位未确认等,wait_bias 填 \"long\"/\"short\";③ 方向被禁: 连亏熔断或方向硬门拦截,wait_bias 填被禁方向。**no_trade_reason 只描述拦路的客观条件,禁止输出反向方向判断**——\"不看多\"/\"bearish\" 在方向证据为多时是错误表述。例(方向多但限价锚点被抑制): wait_bias=\"long\",理由只写\"挂单锚点被抑制\"——这是 WAIT_LONG,绝不是\"不看多\"\n")
 	sb.WriteString("- `no_trade_reason`: hold/wait 决策必填数组(2-4 条,中文短语,每条≤25字),只写客观拦截条件——如 挂单锚点被抑制/微趋势range/RR不足/贴近阻力/拥挤度过高/连亏熔断/数据不足。这是无交易统计的数据源,缺失会被视为分析不完整。**长度纪律**: 输出预算有限,推理段不要逐币罗列完整理由数组再在 JSON 里重复一遍——推理只写关键判断(每币一行以内),完整理由只在 JSON 的 no_trade_reason 里出现一次。输出被截断的响应会作废,宁可少写推理也不要丢掉结尾的 JSON\n")
@@ -302,7 +302,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门(程序强制): 4h 趋势窗口(5根)涨幅 ≥ %.0f%% 的币,EMA 多头标签滞后于行情,禁止把暴跌初段当\"趋势回踩\"买入——该方向开仓要求回踩已确认: 15m 收盘收复 EMA20 且 15m 摆动低点抬高(各币快照 pump_guard.extended/confirmed 已程序判定);extended=true 且 confirmed=false 时做多被拒(EXTENDED_PUMP_UNCONFIRMED),no_trade_reason 直接引用该码,不要凭感觉改判;该门与入场时点门独立,两者都过才能做多\n", pg))
 		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
-		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)条件成立仍可主张;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
+		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)仍可主张——**例外成立与否以程序判定 `market_exception` 为准,且市价开仓在执行端逐条复核(无证据按锚点降级限价,confidence<80 拦截)**;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门(程序强制): K线数据源与实时行情偏差超过 %.1f%% 时,该币两个方向的开仓都被拦(VENDOR_DIVERGENCE)——entry/SL/TP 全部按实时价定价,数据源偏差过大使整套设置失真(09-18 MYXUSDT −2.57%% 教训);阈值可在策略页配置\n", v))
 		}
@@ -1461,6 +1461,8 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					gs.LongStopPlanPrice = sig.HardGate.Long.StopPlanPrice
 					gs.LongEntryPrice = sig.HardGate.Long.EntryPrice
 					gs.LongFailed = sig.HardGate.Long.Failed
+					gs.LongMarketException = sig.HardGate.Long.MarketException
+					gs.LongLimitAllowed = sig.HardGate.Long.LimitAllowed
 					if sig.HardGate.Long.RR != nil {
 						gs.LongTakeProfit = sig.HardGate.Long.RR.FirstRRGeTarget
 					}
@@ -1469,6 +1471,8 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					gs.ShortStopPlanPrice = sig.HardGate.Short.StopPlanPrice
 					gs.ShortEntryPrice = sig.HardGate.Short.EntryPrice
 					gs.ShortFailed = sig.HardGate.Short.Failed
+					gs.ShortMarketException = sig.HardGate.Short.MarketException
+					gs.ShortLimitAllowed = sig.HardGate.Short.LimitAllowed
 					if sig.HardGate.Short.RR != nil {
 						gs.ShortTakeProfit = sig.HardGate.Short.RR.FirstRRGeTarget
 					}

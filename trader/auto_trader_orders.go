@@ -16,9 +16,25 @@ import (
 func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	switch decision.Action {
 	case "open_long":
+		decision, err := at.marketExceptionGate(decision, actionRecord, true)
+		if err != nil {
+			return err
+		}
+		if decision.Action == "open_long_limit" {
+			// Degraded: no program evidence for a market open but a live
+			// anchor exists — take the default limit path instead.
+			return at.executeOpenLimitLongWithRecord(decision, actionRecord)
+		}
 		at.dropPendingEntry(decision.Symbol) // market entry supersedes any pending limit
 		return at.executeOpenLongWithRecord(decision, actionRecord)
 	case "open_short":
+		decision, err := at.marketExceptionGate(decision, actionRecord, false)
+		if err != nil {
+			return err
+		}
+		if decision.Action == "open_short_limit" {
+			return at.executeOpenLimitShortWithRecord(decision, actionRecord)
+		}
 		at.dropPendingEntry(decision.Symbol)
 		return at.executeOpenShortWithRecord(decision, actionRecord)
 	case "open_long_limit":
@@ -52,6 +68,72 @@ func (at *AutoTrader) stampEntryPath(record *store.DecisionAction, data *market.
 		return
 	}
 	record.EntryPath = tf + ":" + trend
+}
+
+// marketExceptionGate enforces the market-order exception with program teeth
+// (B1, QUANT_REVIEW 2026-09-22). In limit-entry mode a market open is the
+// EXCEPTION path, and until now the exception existed only as prompt prose —
+// executeOpenLong/Short had no evidence check, so any market decision that
+// survived the timing gates went straight to the exchange.
+//
+// The kernel prices the exception per cycle (DirectionGate.MarketException —
+// bb_ride for longs / short_ride for shorts, or a confirmed breakout with
+// volume+OI and |directional_score| ≥ MarketExceptionMinScore) and ships it
+// in GateState. Enforcement here:
+//   - evidence present AND decision confidence ≥ MarketExceptionMinScore
+//     (the prompt's bb_ride clause, now code) → market open as decided;
+//   - no evidence, live anchor → decision is REWRITTEN to the anchor limit
+//     order — the default path the strategy contract always promised;
+//   - no evidence, anchor suppressed → rejected fail-closed (mirrors
+//     LIMIT_ANCHOR_SUPPRESSED: the direction is unexecutable).
+//
+// Deliberately NOT gated here: the crossed-anchor market fallback
+// (auto_trader_pending.go) — it converts an ALREADY-PLACED limit entry whose
+// anchor the price ran through, a documented market path that never passes
+// through this dispatch. Market-default strategies (limit_entry_enabled=
+// false) are exempt: market IS their default path.
+func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.DecisionAction, isLong bool) (*kernel.Decision, error) {
+	if at.config.StrategyConfig == nil {
+		return d, nil
+	}
+	rc := at.config.StrategyConfig.RiskControl
+	if !rc.LimitEntryEnabled {
+		return d, nil
+	}
+	gs := at.cycleGateStates[market.Normalize(d.Symbol)]
+	if gs == nil {
+		return d, fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: no hard-gate state this cycle — market open unverifiable (fail-closed)", d.Action, d.Symbol)
+	}
+	exception := gs.LongMarketException
+	anchorLive := gs.LongLimitAllowed
+	anchor := gs.LongEntryPrice
+	if !isLong {
+		exception = gs.ShortMarketException
+		anchorLive = gs.ShortLimitAllowed
+		anchor = gs.ShortEntryPrice
+	}
+	if exception && d.Confidence >= kernel.MarketExceptionMinScore {
+		return d, nil
+	}
+	if anchorLive && anchor > 0 {
+		limitAction := "open_long_limit"
+		if !isLong {
+			limitAction = "open_short_limit"
+		}
+		streak, push := at.gateNotifyRecord("mktgate:"+d.Symbol, time.Now())
+		logger.Warnf("🛡️ [%s] MARKET→LIMIT %s %s: no market-exception evidence (or confidence %d < %d) — degraded to anchor limit %.6g (streak %d)",
+			at.name, d.Action, d.Symbol, d.Confidence, kernel.MarketExceptionMinScore, anchor, streak)
+		if push {
+			notify.Notify("ALERT", at.name, fmt.Sprintf(
+				"<b>🛡️ 市价降级限价 %s</b>\n%s 无市价例外证据(或 confidence %d < %d),已按锚点 <code>%.6g</code> 改挂限价\n\n<i>%s</i>",
+				notify.Escape(d.Symbol), d.Action, d.Confidence, kernel.MarketExceptionMinScore, anchor, notify.Escape(d.Reasoning)))
+		}
+		d.Action = limitAction
+		d.Price = anchor
+		d.MarketDegraded = true
+		return d, nil
+	}
+	return d, fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: no market-exception evidence and no live anchor — direction unexecutable this cycle", d.Action, d.Symbol)
 }
 
 // executeOpenLongWithRecord executes open long position and records detailed information

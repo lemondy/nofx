@@ -228,6 +228,16 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 				return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: anchor %.6g already crossed (live %.6g) and price is at/beyond SL %.6g — setup invalidated",
 					decision.Action, decision.Symbol, decision.Price, livePrice, decision.StopLoss)
 			}
+			// A degraded decision (market open rewritten to the anchor limit
+			// for lacking exception evidence) must not ride this conversion
+			// back into a market order — that would silently restore the
+			// market chase the gate just refused (B1, QUANT_REVIEW 09-22).
+			// The anchor is already at/beyond the live price, so resting it
+			// would fill immediately = a market order by another name.
+			if decision.MarketDegraded {
+				return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: degraded market open's anchor %.6g already crossed (live %.6g) and no exception evidence — not converting back to market",
+					decision.Action, decision.Symbol, decision.Price, livePrice)
+			}
 			if at.limitEntryMarketFallbackEnabled() {
 				logger.Infof("  🔄 %s anchor %.6g crossed by market %.6g — converting to market entry", decision.Symbol, decision.Price, livePrice)
 				// The market paths don't manage pending state (only the

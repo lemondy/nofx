@@ -183,6 +183,16 @@ type RRCeiling struct {
 type GateState struct {
 	LongAllowed  bool
 	ShortAllowed bool
+	// MarketException per direction (B1, QUANT_REVIEW 2026-09-22): the
+	// direction-matched market-order exception holds with program evidence.
+	// The trader's open dispatch degrades a market open to the anchor limit
+	// (or drops it) unless this is true for its direction.
+	LongMarketException bool
+	ShortMarketException bool
+	// LimitAllowed per direction: a live limit anchor exists (limit path
+	// executable). Drives the degrade-vs-drop choice in the same gate.
+	LongLimitAllowed  bool
+	ShortLimitAllowed bool
 	// Precomputed methodology stops per direction (0 = no plan — the gate
 	// blocked the direction with STOP_PLAN_* or no floor is configured).
 	// Drives the post-parse stop-loss snap: the executed trade must equal
@@ -456,6 +466,13 @@ type Decision struct {
 	// edge (true NO TRADE). Directional verdicts live here and in
 	// directional_score — never re-phrased inside no_trade_reason.
 	WaitBias string `json:"wait_bias,omitempty"`
+	// MarketDegraded (internal, never serialized): the decision arrived as a
+	// market open and the trader's marketExceptionGate rewrote it to the
+	// anchor limit for lacking exception evidence. The limit path's
+	// crossed-anchor→market conversion must NOT fire for it — that would
+	// silently turn the degraded order back into the market chase the gate
+	// just refused (B1, QUANT_REVIEW 2026-09-22).
+	MarketDegraded bool `json:"-"`
 	// WaitState + NextTrigger complete the trade state machine (review
 	// 2026-09-15 points 11/12): wait_state ∈ ValidWaitStates, and next_trigger
 	// is ONE sentence naming the required event and ending with the mandate

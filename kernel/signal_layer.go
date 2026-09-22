@@ -348,6 +348,13 @@ type DirectionGate struct {
 	EntryPrice   float64 `json:"entry_price"`
 	EntryBasis   string  `json:"entry_basis"`   // limit_anchor | live_price
 	LimitAllowed bool    `json:"limit_allowed"` // false = anchor suppressed (limit path dead; the two documented market-order exceptions may still apply)
+	// MarketException: the direction-matched market-order exception holds with
+	// program evidence (bb_ride/short_ride ride, or confirmed breakout with
+	// volume+OI and |directional_score| ≥ MarketExceptionMinScore). Enforced
+	// at the open dispatch: without it a market open in limit mode is
+	// degraded to the anchor limit or dropped (QUANT_REVIEW_2026-09-22 B1).
+	// omitempty keeps the common (false) prompt JSON unchanged.
+	MarketException bool `json:"market_exception,omitempty"`
 	StopFloorPct float64 `json:"stop_floor_pct,omitempty"`
 	// StopPlan is the precomputed METHODOLOGY stop (nearest opposite-side
 	// structure + direction-aware buffer, clamped into the band). 09-19 RR
@@ -1209,9 +1216,16 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	return 0, 0, "STOP_PLAN_OUT_OF_BAND"
 }
 
-// marketExceptionEvidence reports whether any of the three market-order
-// exceptions carries program-side evidence: breakout confirmed with volume
-// AND OI confirmation (exception one), the 15m upper-band ride (exception
+// MarketExceptionMinScore is the directional_score bar the prompt has always
+// quoted for the breakout-chase market exception (condition ④). It lives here
+// so the gate, the executor and the prompt text render ONE number.
+const MarketExceptionMinScore = 80
+
+// marketExceptionEvidence reports whether the direction-matched market-order
+// exception carries program-side evidence: breakout confirmed with volume AND
+// OI confirmation AND |directional_score| ≥ MarketExceptionMinScore in the
+// trade's favor (exception one, six conditions ①②③④ — ⑤ conflict and ⑥
+// loss-streak are separate gate codes), the 15m upper-band ride (exception
 // two, longs), the lower-band ride (exception three, shorts).
 //
 // 09-19 audit: with the limit anchor suppressed these are the ONLY entry
@@ -1219,18 +1233,49 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 // CLOSED (ZEC long shipped allowed=true with limit_buy_price=0,
 // bb_ride=false, breakout=below: the model had to choose between breaking
 // the exception rules and fighting the gate).
-func marketExceptionEvidence(sig *SymbolSignal) bool {
-	if sig.BBRide != nil && sig.BBRide.Ride {
-		return true
-	}
-	if sig.ShortRide != nil && sig.ShortRide.Ride {
-		return true
+//
+// 2026-09-22 (QUANT_REVIEW B1): direction-matched and score-gated. Previously
+// a long bb_ride could evidence a SHORT market open and the breakout leg
+// ignored the score the prompt demanded — the exception was prompt-advisory.
+// The kernel verdict lands on DirectionGate.MarketException, which the
+// trader enforces at the open dispatch.
+func marketExceptionEvidence(sig *SymbolSignal, isLong bool) bool {
+	if isLong {
+		if sig.BBRide != nil && sig.BBRide.Ride {
+			return true
+		}
+	} else {
+		if sig.ShortRide != nil && sig.ShortRide.Ride {
+			return true
+		}
 	}
 	if sig.Breakout != nil && sig.Breakout.Status == "confirmed" &&
-		sig.Breakout.VolumeConfirm && sig.Breakout.OIConfirm {
+		sig.Breakout.VolumeConfirm && sig.Breakout.OIConfirm &&
+		breakoutDirectionMatches(sig, isLong) &&
+		directionScoreAtLeast(sig, isLong, MarketExceptionMinScore) {
 		return true
 	}
 	return false
+}
+
+// breakoutDirectionMatches: a confirmed BREAKOUT is a long exception, a
+// confirmed BREAKDOWN a short one — the other side may not borrow it.
+func breakoutDirectionMatches(sig *SymbolSignal, isLong bool) bool {
+	if isLong {
+		return sig.Breakout.Direction != "breakdown"
+	}
+	return sig.Breakout.Direction == "breakdown"
+}
+
+func directionScoreAtLeast(sig *SymbolSignal, isLong bool, min int) bool {
+	score := 0
+	if sig.SignalConflict != nil {
+		score = sig.SignalConflict.DirectionalScore
+	}
+	if isLong {
+		return score >= min
+	}
+	return score <= -min
 }
 
 // computeHardEntryGate evaluates, per direction, every program-decidable
@@ -1285,9 +1330,14 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		// allowed=true / failed=[] with every path dead). The anchor is
 		// suppressed by the breathing rule regardless of the mode flag, and
 		// the executor's supply-zone gate rejects those fills too — block it.
-		if !g.LimitAllowed && !marketExceptionEvidence(sig) {
+		if !g.LimitAllowed && !marketExceptionEvidence(sig, isLong) {
 			add("LIMIT_ANCHOR_SUPPRESSED")
 		}
+		// B1 (QUANT_REVIEW 2026-09-22): the market-order exception verdict is
+		// program-decided here and enforced at the trader's open dispatch —
+		// previously it existed only as prompt prose, so a market open without
+		// any exception evidence went straight to the exchange.
+		g.MarketException = marketExceptionEvidence(sig, isLong)
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
 			add(fmt.Sprintf("RR_MAX_%.2f", g.RR.BestRR))
 		}
