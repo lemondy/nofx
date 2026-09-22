@@ -339,3 +339,45 @@ func TestHardEntryGateNoFloorSkipsRRScan(t *testing.T) {
 		t.Errorf("RR blocker without a floor definition: %v", g.Long.Failed)
 	}
 }
+
+// QUANT_REVIEW_2026-09-22 C1: a Bollinger-sourced level must NEVER become
+// first_rr_ge_target (the rule-mandated TP) — the band decays with its
+// window, so the adopted exit would drift after placement. It may still
+// contribute to best_rr.
+func TestScanRRExcludesBOLLSourcedFromFirstTarget(t *testing.T) {
+	// Long: entry 100, stop 4% away. Levels: 105.2 (pivot, RR 1.3), 106.5
+	// (BOLL upper, RR 1.63), 107 (pivot, RR 1.75). Without the exclusion the
+	// first ≥1.5 target would be the BOLL value; with it, the 107 pivot wins.
+	tfs := map[string]*TFSignal{
+		"1h": {
+			Resistance:  []float64{105.2, 106.5, 107},
+			BOLLSourced: map[float64]bool{106.5: true},
+		},
+	}
+	scan := scanRR(100, "limit_anchor", 4, 96, tfs, true, 1.5)
+	if !scan.Usable {
+		t.Fatalf("expected usable scan, got none (best=%.2f)", scan.BestRR)
+	}
+	if scan.FirstRRGeTarget != 107 {
+		t.Errorf("first_rr_ge_target = %.2f, want 107 (BOLL 106.5 must be skipped)", scan.FirstRRGeTarget)
+	}
+	if scan.BestTarget != 107 {
+		t.Errorf("best_target = %.2f, want 107", scan.BestTarget)
+	}
+
+	// If a BOLL level is the ONLY qualifying target, the scan is unusable —
+	// not silently converted to a band anchor.
+	tfsOnlyBOLL := map[string]*TFSignal{
+		"1h": {
+			Resistance:  []float64{105.2, 106.5},
+			BOLLSourced: map[float64]bool{106.5: true},
+		},
+	}
+	scan2 := scanRR(100, "limit_anchor", 4, 96, tfsOnlyBOLL, true, 1.5)
+	if scan2.Usable || scan2.FirstRRGeTarget != 0 {
+		t.Errorf("BOLL-only qualifying target must yield unusable, got usable=%v first=%g", scan2.Usable, scan2.FirstRRGeTarget)
+	}
+	if scan2.BestRR <= 0 {
+		t.Errorf("BOLL level should still feed best_rr, got %.2f", scan2.BestRR)
+	}
+}

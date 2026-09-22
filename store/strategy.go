@@ -601,7 +601,7 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			AltcoinMaxPositionValueRatio: 1.0, // Altcoin: max position = 1x equity (CODE ENFORCED)
 			MaxMarginUsage:               0.9, // Max 90% margin usage (CODE ENFORCED)
 			MinPositionSize:              12,  // Min 12 USDT per position (CODE ENFORCED)
-			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (AI guided)
+			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (CODE ENFORCED at open — struct field comment is the source of truth)
 			MinConfidence:                75,  // Min 75% confidence (AI guided)
 		},
 	}

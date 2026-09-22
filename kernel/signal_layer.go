@@ -41,8 +41,13 @@ type TFSignal struct {
 	// resistance key at all while price was above every 4h structure high).
 	Support           []float64 `json:"support"`               // nearest swing lows, ascending; [] = none below live price
 	Resistance        []float64 `json:"resistance"`            // nearest swing highs, descending; [] = none above live price
-	SupportDistPct    []float64 `json:"support_dist_pct"`      // pre-computed (level-anchor)/anchor×100, index-aligned with Support
-	ResistanceDistPct []float64 `json:"resistance_dist_pct"`   // pre-computed, index-aligned with Resistance
+	// BOLLSourced tags which Support/Resistance values came from the Bollinger
+	// band rather than a swing pivot. NOT serialized (prompt JSON unchanged):
+	// scanRR uses it to keep decaying band values out of first_rr_ge_target
+	// (QUANT_REVIEW_2026-09-22 C1).
+	BOLLSourced    map[float64]bool `json:"-"`
+	SupportDistPct []float64        `json:"support_dist_pct"`    // pre-computed (level-anchor)/anchor×100, index-aligned with Support
+	ResistanceDistPct []float64     `json:"resistance_dist_pct"` // pre-computed, index-aligned with Resistance
 	MACDHist          *float64  `json:"macd_hist,omitempty"`   // normalized by price
 	MACDTrend         string    `json:"macd_trend,omitempty"`  // rising / falling / flat
 	RSI14             *float64  `json:"rsi,omitempty"`         // 0-100
@@ -1079,7 +1084,8 @@ func annualizeFunding(rate, settleHours float64) float64 {
 }
 
 // stopFloorPct mirrors the executor's noise floor (SLMinATRMult × ATR(1h),
-// closed bars) — 0 when no floor is configured. Single source for the
+// closed bars) — 0 when no floor is configured. The multiplier comes from
+// strategy config (sl_min_atr_mult), NOT a fixed 1.5. Single source for the
 // min_size block and the hard-entry gate.
 func stopFloorPct(sig *SymbolSignal, mult float64) float64 {
 	if mult <= 0 {
@@ -1350,6 +1356,10 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		pairs = append(pairs, tfLevels{name, tf})
 	}
 	var targets []float64
+	// BOLL-sourced targets: visible for best_rr, but NEVER first_rr_ge_target —
+	// a band value decays with its window, so anchoring the rule-mandated TP
+	// to it lets the exit drift after placement (QUANT_REVIEW_2026-09-22 C1).
+	bollT := map[float64]bool{}
 	for _, p := range pairs {
 		src := p.tf.Resistance
 		if !isLong {
@@ -1361,9 +1371,15 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 			}
 			if isLong && l > entry {
 				targets = append(targets, l)
+				if p.tf.BOLLSourced[l] {
+					bollT[l] = true
+				}
 			}
 			if !isLong && l < entry {
 				targets = append(targets, l)
+				if p.tf.BOLLSourced[l] {
+					bollT[l] = true
+				}
 			}
 		}
 	}
@@ -1423,7 +1439,7 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		if v > best {
 			best, bestT = v, t
 		}
-		if minRR > 0 && !out.Usable && v >= minRR-1e-9 {
+		if minRR > 0 && !out.Usable && v >= minRR-1e-9 && !bollT[t] {
 			out.FirstRRGeTarget = t
 			out.Usable = true
 			if isLong && maxSH > 0 && t > maxSH {
@@ -1679,6 +1695,10 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	// Resistance: swing highs above price, nearest first. Starts non-nil so
 	// an empty side still marshals as [] — "no level on this side of the
 	// live price" is evidence, not an absence of data.
+	// Cap 3 (was 2): with only two slots per side per TF the nearest two
+	// pivots crowded out the level that actually offered min-RR, and the
+	// "exhaustive TP check" instruction walked a list of ~6 values
+	// (QUANT_REVIEW_2026-09-22 C1).
 	resist := []float64{}
 	for _, p := range pivHighs {
 		if p > anchor {
@@ -1686,20 +1706,29 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 		}
 	}
 	sort.Float64s(resist)
-	if len(resist) > 2 {
-		resist = resist[:2]
+	if len(resist) > 3 {
+		resist = resist[:3]
 	}
-	// Supplement with Bollinger upper when thin.
-	if true {
-		if len(tfData.BOLLUpper) > 0 {
-			bu := lastNonZero(tfData.BOLLUpper)
-			if bu > anchor && !inList(resist, bu, anchor) {
+	// Supplement with Bollinger upper when thin. BOLL-sourced levels are
+	// tagged in BOLLSourced so scanRR excludes them from first_rr_ge_target:
+	// a band value decays with its window and must not anchor the TP decision
+	// — it may still serve as best_rr context (QUANT_REVIEW_2026-09-22 C1).
+	bollSourced := map[float64]bool{}
+	if len(tfData.BOLLUpper) > 0 {
+		if bu := lastNonZero(tfData.BOLLUpper); bu > anchor {
+			bollSourced[bu] = true
+			if !inList(resist, bu, anchor) {
 				resist = append(resist, bu)
 				sort.Float64s(resist)
-				if len(resist) > 2 {
-					resist = resist[:2]
+				if len(resist) > 3 {
+					resist = resist[:3]
 				}
 			}
+		}
+	}
+	if len(tfData.BOLLLower) > 0 {
+		if bl := lastNonZero(tfData.BOLLLower); bl < anchor {
+			bollSourced[bl] = true
 		}
 	}
 	sig.Resistance = resist
@@ -1712,20 +1741,21 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 		}
 	}
 	sort.Sort(sort.Reverse(sort.Float64Slice(supp)))
-	if len(supp) > 2 {
-		supp = supp[:2]
+	if len(supp) > 3 {
+		supp = supp[:3]
 	}
 	if len(tfData.BOLLLower) > 0 {
 		bl := lastNonZero(tfData.BOLLLower)
 		if bl < anchor && !inList(supp, bl, anchor) {
 			supp = append(supp, bl)
 			sort.Sort(sort.Reverse(sort.Float64Slice(supp)))
-			if len(supp) > 2 {
-				supp = supp[:2]
+			if len(supp) > 3 {
+				supp = supp[:3]
 			}
 		}
 	}
 	sig.Support = supp
+	sig.BOLLSourced = bollSourced
 
 	// Pre-computed percentage distances from the live anchor — the model
 	// should not do its own arithmetic on levels.

@@ -534,7 +534,10 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			if ctx.TradingStats.WindowDays > 0 {
 				enWindow = fmt.Sprintf("last %d days", ctx.TradingStats.WindowDays)
 			}
-			sb.WriteString("## Historical Trading Statistics (30d rolling window; the account PnL is a since-start cumulative — different bases)\n")
+			// enWindow in the heading too — it used to hardcode "30d" while the
+			// data line below honored stats_window_days, so an English-model
+			// reading a non-30d window saw a mislabeled caliber (E3, QUANT_REVIEW 09-22).
+			sb.WriteString(fmt.Sprintf("## Historical Trading Statistics (%s rolling window; the account PnL is a since-start cumulative — different bases)\n", enWindow))
 			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
 				enWindow,
 				ctx.TradingStats.TotalTrades,
