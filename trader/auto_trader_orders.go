@@ -7,6 +7,7 @@ import (
 	"nofx/market"
 	"nofx/store"
 	notify "nofx/telegram/notify"
+	"nofx/trader/types"
 	"strings"
 	"time"
 )
@@ -393,6 +394,58 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 		side := strings.ToLower(positionSide)
 		at.recordOpenTakeProfit(decision.Symbol, side, decision.TakeProfit)
 	}
+
+	// MANDATORY post-open verification (09-22 lesson): placement APIs can
+	// succeed while the leg never rests (the -1106 reduceOnly rejection left
+	// every split-TP position SL-only behind a single log line). Re-query the
+	// exchange and confirm each intended leg is actually there — escalate to
+	// ALERT when it is not, so a missing leg can never again be silent.
+	at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, decision.TakeProfit > 0)
+}
+
+// missingLegsReport returns "" when every INTENDED leg (wantSL/wantTP) is
+// resting on the exchange; otherwise names what is missing. Pure — the
+// retry/notify wrapper around it is verifyProtectiveLegs.
+func missingLegsReport(orders []types.OpenOrder, wantSL, wantTP bool) string {
+	needSL, needTP := missingProtection(orders)
+	var missing []string
+	if wantSL && needSL {
+		missing = append(missing, "SL")
+	}
+	if wantTP && needTP {
+		missing = append(missing, "TP")
+	}
+	return strings.Join(missing, "+")
+}
+
+// verifyProtectiveLegs re-queries the exchange open orders right after the
+// placement pass. One retry after a short delay rides out read-after-write
+// lag without masking a real rejection; a still-missing leg is an ALERT —
+// the position is running unprotected or without its profit leg.
+func (at *AutoTrader) verifyProtectiveLegs(decision *kernel.Decision, positionSide string, wantSL, wantTP bool) {
+	if !wantSL && !wantTP {
+		return // no leg was intended — nothing to verify
+	}
+	report := ""
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(2 * time.Second)
+		}
+		orders, err := at.trader.GetOpenOrders(decision.Symbol)
+		if err != nil {
+			report = fmt.Sprintf("open-orders query failed: %v", err)
+			continue
+		}
+		report = missingLegsReport(orders, wantSL, wantTP)
+		if report == "" {
+			logger.Infof("  ✅ [%s] protective legs verified on exchange: %s %s", at.name, decision.Symbol, positionSide)
+			return
+		}
+	}
+	logger.Infof("  🚨 [%s] protective leg verification FAILED: %s %s missing %s", at.name, decision.Symbol, positionSide, report)
+	notify.Notify("ALERT", at.name, fmt.Sprintf(
+		"<b>🚨 %s %s 保护单核验失败</b>\n<i>开仓后交易所挂单核验(已重试): <b>%s</b> 腿缺失——仓位可能在无止损/无止盈状态运行,请立即人工核查!</i>",
+		notify.Escape(decision.Symbol), positionSide, report))
 }
 
 // effectiveTPCloseFraction resolves the split-TP fraction for this trader:

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"nofx/store"
+	"nofx/trader/types"
 )
 
 // Round-4 review R4-14: the naked-position watchdog's core math, extracted
@@ -89,5 +90,28 @@ func TestEffectiveTPCloseFraction(t *testing.T) {
 	cfg.RiskControl.TPCloseFraction = -1
 	if got := at.effectiveTPCloseFraction(); got != 1.0 {
 		t.Fatalf("negative fraction = legacy full close, got %v", got)
+	}
+}
+
+// 09-22 mandatory post-open leg verification: the report must name exactly
+// the INTENDED legs that are missing — a resting limit entry is noise (the
+// watchdog's matching rule), and unwanted legs are never demanded.
+func TestMissingLegsReport(t *testing.T) {
+	sl := types.OpenOrder{Symbol: "X", Type: "STOP_MARKET", StopPrice: 0.0471}
+	tp := types.OpenOrder{Symbol: "X", Type: "TAKE_PROFIT_MARKET", StopPrice: 0.0885}
+	limit := types.OpenOrder{Symbol: "X", Type: "LIMIT", Price: 0.05}
+
+	if got := missingLegsReport([]types.OpenOrder{sl, tp}, true, true); got != "" {
+		t.Fatalf("both legs resting: got %q, want empty", got)
+	}
+	if got := missingLegsReport([]types.OpenOrder{sl, limit}, true, true); got != "TP" {
+		t.Fatalf("TP missing: got %q, want TP (limit entry must not count)", got)
+	}
+	if got := missingLegsReport([]types.OpenOrder{limit}, true, true); got != "SL+TP" {
+		t.Fatalf("both missing: got %q, want SL+TP", got)
+	}
+	// SL-only position (TP not intended): a missing TP must NOT be reported.
+	if got := missingLegsReport([]types.OpenOrder{sl}, true, false); got != "" {
+		t.Fatalf("TP not wanted: got %q, want empty", got)
 	}
 }
