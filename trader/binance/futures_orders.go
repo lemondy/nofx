@@ -757,7 +757,13 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		qtyStr, qerr := t.FormatQuantity(symbol, quantity)
 		qty, _ := strconv.ParseFloat(qtyStr, 64)
 		if qerr == nil && qty > 0 {
-			algo = algo.Quantity(qtyStr).ReduceOnly(true)
+			// NO ReduceOnly here: with positionSide LONG/SHORT Binance
+			// rejects the redundant param (-1106 "Parameter 'reduceonly'
+			// sent when not required") and the whole TP leg fails to place
+			// (AKEUSDT/PHAUSDT 09-22 — positions ran with SL only). The
+			// quantity alone bounds the close; positionSide implies the
+			// reduce direction.
+			algo = algo.Quantity(qtyStr)
 		} else {
 			// Fraction underflowed the lot step — full close instead of a
 			// rejected order (which would leave the TP leg missing).
