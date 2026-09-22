@@ -303,6 +303,23 @@ func (s *PositionStore) UpdatePositionExchangeInfo(id int64, exchangeID, exchang
 	}).Error
 }
 
+// UpdatePositionLeverage backfills the real exchange leverage onto an OPEN
+// row. The sync path (PositionBuilder) has always hardcoded 1 — binance
+// orders ride OrderSync, whose fills carry no leverage — so every row landed
+// as 1x while the real position ran 3-5x, silently inflating the journal's
+// margin/ROI calibers and poisoning every statistic derived from it
+// (QUANT_REVIEW_2026-09-22 D3: 185/185 live rows were leverage=1).
+func (s *PositionStore) UpdatePositionLeverage(id int64, leverage int) error {
+	if leverage <= 0 {
+		return fmt.Errorf("refusing to backfill leverage %d on position #%d", leverage, id)
+	}
+	nowMs := time.Now().UTC().UnixMilli()
+	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"leverage":   leverage,
+		"updated_at": nowMs,
+	}).Error
+}
+
 // ClosePositionFully marks position as fully closed
 // exitTimeMs is Unix milliseconds UTC
 func (s *PositionStore) ClosePositionFully(id int64, exitPrice float64, exitOrderID string, exitTimeMs int64, totalRealizedPnL float64, totalFee float64, closeReason string) error {

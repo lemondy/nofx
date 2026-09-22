@@ -521,3 +521,29 @@ func TestNoiseFloorExemptsPlanEqualStop(t *testing.T) {
 		t.Fatalf("nil gate states must keep the floor active, got: %v", err)
 	}
 }
+
+// D3 (QUANT_REVIEW 2026-09-22): the stop must sit comfortably inside the
+// liquidation distance — ~1/leverage of notional, haircut 10%. At 10x the
+// liq distance ≈ 9%, so a 8% stop (84% of the way to liquidation) is
+// rejected; the same stop at 3x (liq ≈ 27%) passes easily.
+func TestValidateOpenRiskLiquidationDistance(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{MinRiskRewardRatio: 1.5})
+
+	// 10x, stop 8% away → stop sits at 88% of the liquidation move → reject.
+	err := at.validateOpenRisk(&kernel.Decision{
+		Action: "open_long", Symbol: "HIUSDT", Leverage: 10,
+		Price: 100, StopLoss: 92, TakeProfit: 120, PositionSizeUSD: 50,
+	}, 100, 2, 2)
+	if err == nil || !strings.Contains(err.Error(), "liquidation") {
+		t.Fatalf("8%% stop at 10x must be rejected vs liquidation, got err=%v", err)
+	}
+
+	// 3x, stop 8% away → liq distance ≈ 27%, stop at 30% of it → pass.
+	err = at.validateOpenRisk(&kernel.Decision{
+		Action: "open_long", Symbol: "HIUSDT", Leverage: 3,
+		Price: 100, StopLoss: 92, TakeProfit: 120, PositionSizeUSD: 50,
+	}, 100, 2, 2)
+	if err != nil {
+		t.Fatalf("8%% stop at 3x must pass, got err=%v", err)
+	}
+}

@@ -77,13 +77,34 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 		return // can't see the exchange — close nothing this cycle
 	}
 	live := make(map[string]bool, len(exchangePositions))
+	leverageOf := make(map[string]int, len(exchangePositions))
 	for _, p := range exchangePositions {
 		symbol, _ := p["symbol"].(string)
 		side, _ := p["side"].(string)
 		if symbol == "" || side == "" {
 			continue
 		}
-		live[market.Normalize(symbol)+"_"+side] = true
+		key := market.Normalize(symbol) + "_" + side
+		live[key] = true
+		if lev, ok := p["leverage"].(float64); ok && lev > 0 {
+			leverageOf[key] = int(lev)
+		}
+	}
+	// D3 (QUANT_REVIEW 2026-09-22): backfill the real exchange leverage onto
+	// OPEN rows. The sync path hardcodes 1 (fills carry no leverage), so the
+	// journal's margin/ROI calibers — and every statistic derived from them
+	// — ran on a false 1x. Runs before the orphan pass; fail-open per row.
+	for _, row := range rows {
+		key := market.Normalize(row.Symbol) + "_" + strings.ToLower(row.Side)
+		lev := leverageOf[key]
+		if lev <= 0 || row.Leverage == lev {
+			continue
+		}
+		if err := at.store.Position().UpdatePositionLeverage(row.ID, lev); err != nil {
+			logger.Infof("⚠️ [%s] leverage backfill: %s %s row #%d → %dx failed: %v", at.name, row.Symbol, row.Side, row.ID, lev, err)
+			continue
+		}
+		logger.Infof("🔧 [%s] leverage backfill: %s %s row #%d corrected 1x→%dx (journal margin/ROI calibers now honest)", at.name, row.Symbol, row.Side, row.ID, lev)
 	}
 	now := time.Now()
 	for _, row := range orphanedRows(rows, live, now, orphanPositionMinAge) {

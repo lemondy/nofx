@@ -480,6 +480,22 @@ func (at *AutoTrader) validateOpenRisk(decision *kernel.Decision, entryPrice, fl
 		}
 	}
 
+	// 2b. Stop-vs-liquidation sanity (D3, QUANT_REVIEW 2026-09-22): nothing
+	// compared the stop distance with the liquidation distance, so a wide
+	// stop on high leverage could place the liquidation price BEFORE the
+	// stop. Approximation: isolated liq distance ≈ 1/leverage of notional
+	// minus a 10% maintenance-margin/safety haircut; reject when the stop
+	// sits beyond 80% of that move — inside that band a wick can liquidate
+	// (or cascade-slippage the SL) before the stop triggers.
+	if decision.Leverage > 0 {
+		liqDistPct := 100.0/float64(decision.Leverage) * 0.9
+		stopDistPct := math.Abs(entryPrice-decision.StopLoss) / entryPrice * 100
+		if stopDistPct >= liqDistPct*0.8 {
+			return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: stop distance %.2f%% ≥ 80%% of the ~%.2f%% liquidation distance at %dx — price can reach liquidation before the stop; widen the stop's budget by cutting leverage or size",
+				decision.Action, decision.Symbol, stopDistPct, liqDistPct, decision.Leverage)
+		}
+	}
+
 	// 3. Minimum risk-reward ratio, anchored at BOTH the AI's decision price
 	// and the live execution price. Validating only the live ticker let a
 	// market-order fill away from the checked price smuggle in a below-floor
