@@ -128,3 +128,4 @@ dmypy.json
 PR_DESCRIPTION.md
 config.db-shm
 config.db-wal
+cmd/placetp/placetp
