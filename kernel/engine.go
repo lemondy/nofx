@@ -1108,6 +1108,12 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 		// since left the live 24h board — neutral evidence, not a verdict.
 		c.ShortReasons = append(c.ShortReasons, "历史涨幅池:近几日曾大涨,已淡出24h涨幅榜")
 	}
+	if sig.Universe == "breakdown" {
+		// A1 (QUANT_REVIEW 09-22): provenance again — it is here because it
+		// sits on the 24h LOSER board with a 4h downtrend; the continuation
+		// composite ranked it. Still neutral evidence.
+		c.ShortReasons = append(c.ShortReasons, "破位宇宙:24h跌幅榜,4h趋势向下(顺势反弹做空)")
+	}
 	// Keep the topping confirmations compact: the reasons list can be long.
 	if sig.BearishDiv4h {
 		c.ShortReasons = append(c.ShortReasons, "4h顶背离")

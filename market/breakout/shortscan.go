@@ -93,7 +93,7 @@ var (
 // board (top `limit`, chg-desc) PLUS a live-quote index over every filtered
 // symbol — the history pool needs current quotes for coins that left the
 // board without paying a second API call.
-func gainerTickerSnapshot(limit int) ([]GainerQuote, map[string]GainerQuote, error) {
+func gainerTickerSnapshot(limit int) ([]GainerQuote, []GainerQuote, map[string]GainerQuote, error) {
 	if limit <= 0 {
 		limit = ShortScanUniverse
 	}
@@ -105,7 +105,7 @@ func gainerTickerSnapshot(limit int) ([]GainerQuote, map[string]GainerQuote, err
 		QuoteVolume        string `json:"quoteVolume"`
 	}
 	if err := fetchJSON(u, &raw); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	board := make([]GainerQuote, 0, limit)
 	index := make(map[string]GainerQuote, 512)
@@ -130,13 +130,25 @@ func gainerTickerSnapshot(limit int) ([]GainerQuote, map[string]GainerQuote, err
 	if len(board) > limit {
 		board = board[:limit]
 	}
-	return board, index, nil
+	// Loser board (A1, QUANT_REVIEW 09-22): same filtered set, 24h-change
+	// ascending, top BreakdownUniverse — the breakdown-continuation universe
+	// costs nothing extra (same snapshot) and repairs the short pool's
+	// survivorship bias (it used to contain ONLY coins that had pumped).
+	losers := make([]GainerQuote, 0, len(index))
+	for _, q := range index {
+		losers = append(losers, q)
+	}
+	sort.Slice(losers, func(i, j int) bool { return losers[i].ChgPct < losers[j].ChgPct })
+	if len(losers) > BreakdownUniverse {
+		losers = losers[:BreakdownUniverse]
+	}
+	return board, losers, index, nil
 }
 
 // TopGainerSymbols returns up to limit USDT-M perps with the highest 24h
 // price-change percent (liquidity-filtered the same way as TopVolumeSymbols).
 func TopGainerSymbols(limit int) ([]GainerQuote, error) {
-	board, _, err := gainerTickerSnapshot(limit)
+	board, _, _, err := gainerTickerSnapshot(limit)
 	return board, err
 }
 
@@ -604,7 +616,7 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 		shortScanCacheMu.Unlock()
 	}()
 
-	board, index, err := gainerTickerSnapshot(ShortScanUniverse)
+	board, losers, index, err := gainerTickerSnapshot(ShortScanUniverse)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("failed to list gainers: %w", err)
 	}
@@ -637,6 +649,20 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 			logger.Infof("🩸 Gainer history pool: +%d symbols over %dd window (universe=hist_gainer)", len(extra), histDays)
 		}
 	}
+	// Breakdown universe (A1): 24h losers not already covered by the gainer
+	// board — a coin on both boards is whipsaw, the gainer label wins.
+	bdAdded := 0
+	for _, q := range losers {
+		if covered[q.Symbol] {
+			continue
+		}
+		covered[q.Symbol] = true
+		items = append(items, shortScanItem{q.Symbol, q.ChgPct, "breakdown"})
+		bdAdded++
+	}
+	if bdAdded > 0 {
+		logger.Infof("🩸 Breakdown universe: +%d symbols from the 24h loser board (universe=breakdown)", bdAdded)
+	}
 
 	btc4h, _ := NewBinanceDS("BTCUSDT").Klines("4h", 84)
 
@@ -657,8 +683,15 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			sig, err := AnalyzeShort(symbol, chg, btc4h, NewBinanceDS(symbol))
-			if err == nil {
+			var sig *ShortSignal
+			var err error
+			if it.universe == "breakdown" {
+				sig, err = analyzeBreakdownShort(symbol, chg, btc4h, NewBinanceDS(symbol))
+				// nil,nil = downtrend gate said no — not a continuation setup.
+			} else {
+				sig, err = AnalyzeShort(symbol, chg, btc4h, NewBinanceDS(symbol))
+			}
+			if err == nil && sig != nil {
 				mu.Lock()
 				if sig.ListingDays > 0 && sig.ListingDays < 7 {
 					skipped++

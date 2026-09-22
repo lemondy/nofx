@@ -292,7 +292,9 @@ func (e *StrategyEngine) strategyParamsText() string {
 			// scanner uses (ResolveShortScanHistoryDays) — never a
 			// handwritten default.
 			if histDays := breakout.ResolveShortScanHistoryDays(cs.ShortScanHistoryDays); histDays > 0 {
-				params.WriteString(fmt.Sprintf("- 做空候选宇宙(universe)图例: gainer=24h涨幅榜;hist_gainer=历史涨幅池(近 %d 天每日涨幅 Top20 快照合并去重,币种可能已从当日 24h 榜淡出、处于冲高回落期——回落是进入扫描视野的原因,是否可做空仍看各维度确认信号);near_high=磨顶池(距90日高点<5%%,费率豁免见上条)。universe 仅标注候选来源,不改变打分规则\n", histDays))
+				params.WriteString(fmt.Sprintf("- 做空候选宇宙(universe)图例: gainer=24h涨幅榜;hist_gainer=历史涨幅池(近 %d 天每日涨幅 Top20 快照合并去重,币种可能已从当日 24h 榜淡出、处于冲高回落期——回落是进入扫描视野的原因,是否可做空仍看各维度确认信号);near_high=磨顶池(距90日高点<5%%,费率豁免见上条);breakdown=破位池(24h跌幅榜且 4h 趋势向下,顺势反弹做空——它在跌幅榜是进入视野的原因,不是做空结论,是否可做空仍看结构确认与入场时点). universe 仅标注候选来源,不改变打分规则\n", histDays))
+			} else {
+				params.WriteString("- 做空候选宇宙(universe)图例: gainer=24h涨幅榜;near_high=磨顶池(距90日高点<5%%,费率豁免见上条);breakdown=破位池(24h跌幅榜且 4h 趋势向下,顺势反弹做空——在跌幅榜是进入视野的原因,不是做空结论). universe 仅标注候选来源,不改变打分规则\n")
 			}
 		}
 		if e.config.RiskControl.EntryTimingGate {
