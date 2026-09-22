@@ -208,11 +208,17 @@ func TpFullProfitPct(rc *store.RiskControlConfig) float64 {
 // While the R-based profit lock is active (ProfitLockRMult > 0, the default)
 // the ROE trim tier yields to it — the lock already trims 50% at 1R and the
 // remaining half must run to the structural target, not get whittled again.
+// When tp_full_yields_to_lock is set, the FULL tier yields too; default off
+// (the 09-21 exit experiment is measuring the current ladder — flipping the
+// full tier mid-experiment would invalidate its R-distribution retest).
 func TpTierAction(pnlPct float64, trimDone bool, rc *store.RiskControlConfig) string {
+	lockActive := ProfitLockRMult(rc) > 0
 	if full := TpFullProfitPct(rc); full > 0 && pnlPct >= full {
-		return "full"
+		if !(lockActive && rc != nil && rc.TpFullYieldsToLock) {
+			return "full"
+		}
 	}
-	if ProfitLockRMult(rc) > 0 {
+	if lockActive {
 		return "" // 1R/50% lock supersedes the ROE trim tier
 	}
 	if trim := TpTrimProfitPct(rc); trim > 0 && !trimDone && pnlPct >= trim {

@@ -397,6 +397,14 @@ type RiskControlConfig struct {
 	// tier off. Exchange SL/TP and drawdown-protect unaffected.
 	TpTrimProfitPct float64 `json:"tp_trim_profit_pct"`
 	TpFullProfitPct float64 `json:"tp_full_profit_pct"`
+	// TpFullYieldsToLock: when the 1R profit lock is active, the ROE full
+	// tier (default 25% leveraged) ALSO yields to it, not just the trim tier.
+	// Without this, a 5%-price spike at 5x closes the whole position at the
+	// ladder step while the trend-runner design wants the rest riding to the
+	// structural target (QUANT_REVIEW_2026-09-22 C3). Default OFF = current
+	// behavior — flipping it mid-experiment would corrupt the 2-week R
+	// distribution retest, so the user opts in. (CODE ENFORCED when true)
+	TpFullYieldsToLock bool `json:"tp_full_yields_to_lock"`
 	// EarlyCloseMinHours: AI-initiated closes before this many hours of hold
 	// time are blocked unless the 1h timeframe shows ≥2 closed candles against
 	// the position direction (trend-change evidence). Exchange SL/TP triggers
