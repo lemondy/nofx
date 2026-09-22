@@ -617,13 +617,20 @@ func reanchorProtectivePrices(decision *kernel.Decision, refPrice, fillPrice flo
 
 // atrPctFromTimeframes returns ATR(14) as a percent of price from the first
 // timeframe in the priority list with enough bars — deterministic; 0 when
-// none qualify.
-func atrPctFromTimeframes(data *market.Data, names ...string) float64 {
+// none qualify. warnSymbol ("" = silent, for prompt-side mirrors) logs when
+// the chosen scale is NOT the nominal one: the floor's yardstick silently
+// jumping from 1h to 4h changes what the same multiplier means, and the
+// divergence was previously invisible (B2, QUANT_REVIEW 09-22 — open paths
+// only, so the volume is one line per attempted open).
+func atrPctFromTimeframes(data *market.Data, nominal string, warnSymbol string, names ...string) float64 {
 	if data == nil {
 		return 0
 	}
 	for _, name := range names {
 		if tf, ok := data.TimeframeData[name]; ok && len(tf.Klines) >= 15 {
+			if warnSymbol != "" && name != nominal {
+				logger.Infof("📏 [%s] ATR yardstick degraded: %s scale unavailable, using %s ATR — the floor/cap multiplier now means something different on this symbol", warnSymbol, nominal, name)
+			}
 			return atrPercentFromSeries(tf)
 		}
 	}
@@ -636,7 +643,7 @@ func atrPctFromTimeframes(data *market.Data, names ...string) float64 {
 // rescale / trailing stop yardstick. Falls back toward other TFs
 // deterministically; 0 when unavailable.
 func oneHourATRPct(data *market.Data) float64 {
-	return atrPctFromTimeframes(data, "1h", "2h", "4h", "6h", "8h", "12h", "1d", "30m", "15m", "5m", "3m")
+	return atrPctFromTimeframes(data, "1h", "", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "30m", "15m", "5m", "3m")
 }
 
 // fourHourATRPct returns ATR(14) as a percent of price on the 4h timeframe —
@@ -644,7 +651,7 @@ func oneHourATRPct(data *market.Data) float64 {
 // cap bound at the 8% floor and pushed structural stops out of the band on
 // exactly the violent movers the candidate pool surfaces).
 func fourHourATRPct(data *market.Data) float64 {
-	return atrPctFromTimeframes(data, "4h", "6h", "8h", "12h", "1d", "2h", "1h", "30m", "15m", "5m", "3m")
+	return atrPctFromTimeframes(data, "4h", "", "4h", "6h", "8h", "12h", "1d", "2h", "1h", "30m", "15m", "5m", "3m")
 }
 
 // atrPercentFromSeries computes Wilder ATR(14) as a percent of the last

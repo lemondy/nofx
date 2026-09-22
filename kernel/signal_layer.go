@@ -959,12 +959,18 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// fixed percent when ATR is unavailable (review 2026-09-07: a fixed 0.3%
 	// demanded most of a quiet book's ATR and rode the live price for violent
 	// movers; user directive 2026-09-10: the yardstick is ATR(1h), not the
-	// execution TF, whose ATR tracked 15m micro-noise).
+	// B2 (QUANT_REVIEW 09-22): both yardsticks now use the SAME exact-TF
+	// lookup as the trader's gate (AnchorATRPct / ExecutionATRPct). The old
+	// inline fallback went through primaryTFSignal, which hands back the
+	// LONGEST available TF when the wanted one is missing — the prompt-side
+	// offset/breathing then silently ran on a 4h scale while the executor
+	// priced the same anchor off the exact execution TF (or the fixed
+	// fallback). One setting, two thresholds, divergence by data arrival.
 	var anchorATRPct float64
 	if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
 		anchorATRPct = t1h.ATRPct
-	} else if primary := primaryTFSignal(sig, opt.PrimaryTF); primary != nil {
-		anchorATRPct = primary.ATRPct
+	} else if tExec, ok := sig.Timeframes[opt.PrimaryTF]; ok && tExec != nil {
+		anchorATRPct = tExec.ATRPct
 	}
 	sig.LimitEntryOffsetPct = AnchorOffsetPct(anchorATRPct, offsetCfg)
 	sig.LimitBuyPrice = data.CurrentPrice * (1 - sig.LimitEntryOffsetPct/100)
@@ -978,10 +984,11 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// step 4: 0.5×ATR(执行周期)) — the check means "the fill must not land
 	// right under a ceiling", so the yardstick is fill-site noise, not the
 	// deep 1h corridor; the trader's gate applies the same formula to fresh
-	// data.
+	// data. EXACT-TF lookup (B2): missing execution TF → 0 → AnchorBreathingPct's
+	// fixed fallback, matching the trader side — never a silently different scale.
 	execATRPct := 0.0
-	if primary := primaryTFSignal(sig, opt.PrimaryTF); primary != nil {
-		execATRPct = primary.ATRPct
+	if tExec, ok := sig.Timeframes[opt.PrimaryTF]; ok && tExec != nil {
+		execATRPct = tExec.ATRPct
 	}
 	if opt.SupplyZonePct > 0 {
 		breathing := AnchorBreathingPct(execATRPct, offsetCfg, opt.SupplyZonePct)
