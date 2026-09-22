@@ -21,10 +21,15 @@ import (
 //     price) into a JSONL journal;
 //   - samples older than 24h are marked evaluated with
 //     outcome = (scanPrice - priceNow) / scanPrice × 100 (unlevered short PnL);
-//   - once ≥30 evaluated samples exist (evaluated since the last tune), each
-//     component's weight is multiplied by exp(η × Pearson(component, outcome))
-//     — components that correlated with profitable shorts gain share, the
-//     rest lose — then clamped to [0.03, 0.30] and renormalized to sum 1.
+//   - when ENABLED, each component's weight is multiplied by
+//     exp(η × Pearson(component, outcome)) over the evaluated cohort, then
+//     clamped to [0.03, 0.30] and renormalized to sum 1.
+//
+// The weight update is DISABLED by default (short_tuner_enabled, 2026-09-22):
+// it re-multiplied over the same cumulative cohort on every 30-min run, so
+// stable-sign correlations compounded geometrically into the clamp bounds.
+// Sampling/evaluation continue; re-enable only after the update rule is fixed
+// (incremental window + significance test).
 //
 // Historical backtesting is NOT possible for these components (Binance only
 // serves ~24h of OI history and the LS ratio is spot-only-recent), so the
@@ -40,6 +45,16 @@ const (
 )
 
 var shortTunerMu sync.Mutex
+
+// shortTunerUpdateEnabled gates the online weight write. Default OFF — the
+// update rule (repeated exp(η·corr) over the same cumulative cohort) railed
+// weights to the clamp bounds (structure 0.15 → 0.0298 by 2026-09-22); see
+// TunableParams.ShortTunerEnabled. Sampling and outcome evaluation are NOT
+// gated — the journal keeps accumulating for the eventual fixed rule.
+func shortTunerUpdateEnabled() bool {
+	p := GetParams()
+	return p.ShortTunerEnabled != nil && *p.ShortTunerEnabled
+}
 
 // Tunable short-weight keys, in AnalyzeShort's component order.
 var shortWeightKeys = []string{
@@ -215,22 +230,34 @@ func RunShortTuner(now time.Time) {
 	}
 
 	// 2. Weight update from the evaluated cohort (bounded, clamped).
-	var eval []shortSample
-	for _, s := range samples {
-		if s.Evaluated && len(s.Components) > 0 {
-			eval = append(eval, s)
+	// DISABLED by default (params.short_tuner_enabled, 2026-09-22): this was a
+	// repeated multiplicative update on the same cumulative cohort — every run
+	// re-multiplied exp(η·corr) over ALL retained samples, so any stable-sign
+	// correlation railed to the [0.03, 0.30] clamp bounds (structure went
+	// 0.15 → 0.0298; overbought/parabolic → 0.2984). Evaluation in step 1 and
+	// the prune/write in step 3 still run, so the outcome journal keeps
+	// accumulating for the eventual fixed update rule; only the weight write
+	// is gated.
+	if shortTunerUpdateEnabled() {
+		var eval []shortSample
+		for _, s := range samples {
+			if s.Evaluated && len(s.Components) > 0 {
+				eval = append(eval, s)
+			}
 		}
-	}
-	if len(eval) >= shortTunerMinSamples {
-		w := shortWeights()
-		newW := updateShortWeights(eval, w, shortTunerEta)
-		if !weightsClose(newW, w) {
-			p := GetParams()
-			p.ShortWeights = newW
-			ApplyParams(p)
-			logger.Infof("🩸 Short tuner: weights updated from %d evaluated samples: %v", len(eval), formatWeights(newW))
-			changed = true
+		if len(eval) >= shortTunerMinSamples {
+			w := shortWeights()
+			newW := updateShortWeights(eval, w, shortTunerEta)
+			if !weightsClose(newW, w) {
+				p := GetParams()
+				p.ShortWeights = newW
+				ApplyParams(p)
+				logger.Infof("🩸 Short tuner: weights updated from %d evaluated samples: %v", len(eval), formatWeights(newW))
+				changed = true
+			}
 		}
+	} else {
+		logger.Infof("🩸 Short tuner: weight update disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched")
 	}
 
 	// 3. Prune old journal entries and rewrite when anything changed.

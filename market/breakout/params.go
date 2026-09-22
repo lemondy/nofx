@@ -36,6 +36,17 @@ type TunableParams struct {
 
 	// Short-scan composite weights (online-tuned; keys in shortWeightKeys).
 	ShortWeights map[string]float64 `json:"short_weights,omitempty"`
+
+	// ShortTunerEnabled gates the ONLINE weight update (shorttuner.go step 2).
+	// nil/false = disabled (default since 2026-09-22): the update multiplied
+	// exp(η·corr) over the SAME cumulative cohort every 30 minutes, so any
+	// stable-correlation component railed to the clamp bounds — live evidence:
+	// overbought/parabolic pinned at 0.2984, divergence/rejection/structure/
+	// volume_fade at 0.0298 (structure designed at 0.15). Signal SAMPLING and
+	// outcome evaluation stay on; only the weight write is gated. Set true to
+	// re-enable after the update rule is fixed (incremental window +
+	// significance test).
+	ShortTunerEnabled *bool `json:"short_tuner_enabled,omitempty"`
 }
 
 func defaultParams() TunableParams {
