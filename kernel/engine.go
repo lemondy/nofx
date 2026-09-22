@@ -93,7 +93,21 @@ type TradingStats struct {
 	AvgLoss        float64 `json:"avg_loss"`              // Average loss
 	MaxDrawdownPct float64 `json:"max_drawdown_pct"`      // Maximum drawdown (%)
 	WindowDays     int     `json:"window_days,omitempty"` // Rolling stats window in days; 0 = full history
+
+	// MEASURED R distribution (journal rows with a planned stop; E1,
+	// QUANT_REVIEW 09-22). Samples >= MinMeasuredRSamples → the prompt's
+	// expectancy_r uses these real numbers instead of the "every loser = −1R"
+	// assumption. Zero values = not enough data, fallback applies.
+	MeasuredAvgWinR     float64 `json:"measured_avg_win_r,omitempty"`
+	MeasuredAvgLossR    float64 `json:"measured_avg_loss_r,omitempty"` // positive magnitude
+	MeasuredExpectancyR float64 `json:"measured_expectancy_r,omitempty"`
+	MeasuredRSamples    int     `json:"measured_r_samples,omitempty"`
 }
+
+// MinMeasuredRSamples gates the measured-R fallback: below this the
+// measured expectancy is noise and the −1R-assumption estimate renders
+// instead (labeled as such in the prompt).
+const MinMeasuredRSamples = 5
 
 // RecentOrder recently completed order (for AI input)
 type RecentOrder struct {

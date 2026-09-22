@@ -511,3 +511,64 @@ func splitCommaList(s string) []string {
 	}
 	return out
 }
+
+// RMeasure is the MEASURED R-distribution over closed journal trades whose
+// planned stop is known — the fix for the expectancy_r prompt line, which
+// assumed every loser = −1R while the real 86-trade baseline measured
+// avg loss −0.70R (systematic pessimism fed to the model every cycle,
+// QUANT_REVIEW_2026-09-22 E1).
+type RMeasure struct {
+	AvgWinR     float64 // mean R over winners (R > 0)
+	AvgLossR    float64 // mean |R| over losers (R < 0)
+	ExpectancyR float64 // winrate×avgWinR − (1−winrate)×avgLossR
+	Samples     int     // trades with a computable R
+}
+
+// MeasureRExpectancy computes the measured R distribution for one trader.
+// R per trade = (RealizedPnL − Fee) / risk, risk = |entry − planned_stop| ×
+// qty — the same net-PnL caliber as GetRollingStats. Trades without a
+// planned stop (manual closes, legacy rows) are excluded, so small sample
+// counts are honest, not padded. sinceMs = 0 → full history.
+func (s *TradeJournalStore) MeasureRExpectancy(traderID string, sinceMs int64) (RMeasure, error) {
+	var out RMeasure
+	q := s.db.Where("trader_id = ? AND planned_stop_loss > 0 AND entry_price > 0 AND quantity > 0", traderID)
+	if sinceMs > 0 {
+		q = q.Where("exit_time >= ?", sinceMs)
+	}
+	var rows []TradeJournalDB
+	if err := q.Find(&rows).Error; err != nil {
+		return out, err
+	}
+	var winRSum, lossRSum float64
+	wins, losses := 0, 0
+	for _, r := range rows {
+		risk := (r.EntryPrice - r.PlannedStopLoss) * r.Quantity
+		if risk < 0 {
+			risk = -risk
+		}
+		if risk <= 0 {
+			continue
+		}
+		rMult := (r.RealizedPnL - r.Fee) / risk
+		if rMult > 0 {
+			winRSum += rMult
+			wins++
+		} else if rMult < 0 {
+			lossRSum += -rMult
+			losses++
+		}
+	}
+	out.Samples = wins + losses
+	if out.Samples == 0 {
+		return out, nil
+	}
+	if wins > 0 {
+		out.AvgWinR = winRSum / float64(wins)
+	}
+	if losses > 0 {
+		out.AvgLossR = lossRSum / float64(losses)
+	}
+	wr := float64(wins) / float64(out.Samples)
+	out.ExpectancyR = wr*out.AvgWinR - (1-wr)*out.AvgLossR
+	return out, nil
+}

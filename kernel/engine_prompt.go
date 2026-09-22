@@ -522,7 +522,19 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			} else if ctx.TradingStats.ProfitFactor < 1.1 {
 				edge = "NO_EDGE"
 			}
-			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f, 窗口 %s)\n", edge, ctx.TradingStats.ProfitFactor, expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss), windowLabel))
+			// expectancy_r: MEASURED from journal R multiples when enough
+			// planned-stop trades exist; the old estimate assumed every loser
+			// = −1R while the real baseline measured −0.70R — a systematic
+			// pessimism the model read every cycle (E1, QUANT_REVIEW 09-22).
+			// The label states which caliber rendered.
+			expR := expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)
+			expSource := "估算,亏损按-1R假设"
+			if ctx.TradingStats.MeasuredRSamples >= MinMeasuredRSamples {
+				expR = ctx.TradingStats.MeasuredExpectancyR
+				expSource = fmt.Sprintf("实测,%d笔R", ctx.TradingStats.MeasuredRSamples)
+			}
+			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
+				edge, ctx.TradingStats.ProfitFactor, expR, expSource, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
 			if edge == "NEGATIVE_EDGE" {
 				sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置,其余一律 hold 并在 no_trade_reason 写明\n", windowLabel))
 			}

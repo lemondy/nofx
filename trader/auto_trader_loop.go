@@ -872,6 +872,23 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				MaxDrawdownPct: maxDD,
 				WindowDays:     stats.WindowDays,
 			}
+			// Measured R distribution (E1, QUANT_REVIEW 09-22): expectancy in
+			// R from journal rows with a planned stop, same window — replaces
+			// the −1R-loser assumption when there is enough data.
+			var sinceMs int64
+			if stats.WindowDays > 0 {
+				sinceMs = time.Now().UTC().AddDate(0, 0, -stats.WindowDays).UnixMilli()
+			}
+			if rm, err := at.store.TradeJournal().MeasureRExpectancy(at.id, sinceMs); err != nil {
+				logger.Infof("⚠️ [%s] measured R expectancy unavailable: %v", at.name, err)
+			} else if rm.Samples >= kernel.MinMeasuredRSamples {
+				ctx.TradingStats.MeasuredAvgWinR = rm.AvgWinR
+				ctx.TradingStats.MeasuredAvgLossR = rm.AvgLossR
+				ctx.TradingStats.MeasuredExpectancyR = rm.ExpectancyR
+				ctx.TradingStats.MeasuredRSamples = rm.Samples
+				logger.Infof("📈 [%s] Measured R (%s): %d trades, avgWin %+.2fR, avgLoss %.2fR, expectancy %+.2fR",
+					at.name, windowLabel, rm.Samples, rm.AvgWinR, rm.AvgLossR, rm.ExpectancyR)
+			}
 			logger.Infof("📈 [%s] Trading stats (%s): %d trades, %.1f%% win rate, PF=%.2f, Sharpe=%.2f, DD=%.1f%%",
 				at.name, windowLabel, stats.TotalTrades, stats.WinRate, stats.ProfitFactor, stats.SharpeRatio, stats.MaxDrawdownPct)
 		}

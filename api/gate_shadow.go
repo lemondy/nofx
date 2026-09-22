@@ -38,6 +38,8 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 	}
 	overall := &tally{}
 	byCode := map[string]*tally{}
+	overall48 := &tally{}
+	byCode48 := map[string]*tally{}
 
 	traders, _ := s.store.Trader().List(userID)
 	fetched := 0
@@ -59,11 +61,21 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 				}
 				pnlR = pnl / risk
 			}
-			add := func(t *tally) {
+			outcome48 := r.Outcome48
+			pnlR48 := pnlR
+			if outcome48 != "" && risk > 0 {
+				// 48h R marks to market at the 48h exit, not the 8h one.
+				pnl := r.ExitPrice48 - r.EntryPrice
+				if r.Direction == "short" {
+					pnl = r.EntryPrice - r.ExitPrice48
+				}
+				pnlR48 = pnl / risk
+			}
+			add := func(t *tally, outcome string, sumR float64) {
 				t.Total++
-				t.SumR += pnlR
+				t.SumR += sumR
 				t.PlannedRR += r.PlanRR
-				switch r.Outcome {
+				switch outcome {
 				case "tp_first":
 					t.TpFirst++
 				case "sl_first":
@@ -74,7 +86,10 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 					t.NoData++
 				}
 			}
-			add(overall)
+			add(overall, r.Outcome, pnlR)
+			if outcome48 != "" {
+				add(overall48, outcome48, pnlR48)
+			}
 			for _, code := range strings.Split(r.BlockedCodes, ",") {
 				code = strings.TrimSpace(code)
 				// Strip the numeric suffix (RR_MAX_0.07 → RR_MAX): the code
@@ -91,7 +106,13 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 				if byCode[code] == nil {
 					byCode[code] = &tally{}
 				}
-				add(byCode[code])
+				add(byCode[code], r.Outcome, pnlR)
+				if outcome48 != "" {
+					if byCode48[code] == nil {
+						byCode48[code] = &tally{}
+					}
+					add(byCode48[code], outcome48, pnlR48)
+				}
 			}
 			fetched++
 		}
@@ -110,11 +131,17 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 	for _, t := range byCode {
 		finalize(t)
 	}
+	finalize(overall48)
+	for _, t := range byCode48 {
+		finalize(t)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"note":          "shadow counterfactuals of BLOCKED gate directions; 8h horizon; same-bar TP+SL counts as sl_first (conservative)",
+		"note":           "shadow counterfactuals of BLOCKED gate directions; dual horizon 8h+48h (48h fills only after rows mature); same-bar TP+SL counts as sl_first (conservative)",
 		"rows_evaluated": fetched,
-		"overall":       overall,
-		"by_code":       byCode,
+		"overall":        overall,
+		"by_code":        byCode,
+		"overall_48h":    overall48,
+		"by_code_48h":    byCode48,
 	})
 }

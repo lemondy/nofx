@@ -32,6 +32,13 @@ type GateShadowBlock struct {
 	Outcome      string    `gorm:"column:outcome;size:16;index" json:"outcome"` // "" | tp_first | sl_first | timeout | no_data
 	ExitPrice    float64   `gorm:"column:exit_price" json:"exit_price"`
 	EvaluatedAt  time.Time `gorm:"column:evaluated_at" json:"evaluated_at"`
+	// Second horizon (E1, QUANT_REVIEW 09-22): 8h resolves mostly `timeout`
+	// for structural TPs (live data: 39/56 timeout, 2 tp_first) — the 48h
+	// pass lets the same counterfactual play out far enough for the
+	// tp_first/sl_first split to mean something. Same verdict vocabulary.
+	Outcome48     string    `gorm:"column:outcome_48h;size:16" json:"outcome_48h"` // "" | tp_first | sl_first | timeout | no_data
+	ExitPrice48   float64   `gorm:"column:exit_price_48h" json:"exit_price_48h"`
+	EvaluatedAt48 time.Time `gorm:"column:evaluated_at_48h" json:"evaluated_at_48h"`
 }
 
 func (GateShadowBlock) TableName() string { return "gate_shadow_blocks" }
@@ -75,6 +82,21 @@ func (s *GateShadowStore) ListMatured(traderID string, now time.Time) ([]*GateSh
 func (s *GateShadowStore) MarkEvaluated(id uint, outcome string, exitPrice float64, at time.Time) error {
 	return s.db.Model(&GateShadowBlock{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"outcome": outcome, "exit_price": exitPrice, "evaluated_at": at,
+	}).Error
+}
+
+// ListMatured48 returns rows whose 8h verdict exists but whose 48h pass is
+// still pending and due.
+func (s *GateShadowStore) ListMatured48(traderID string, now time.Time) ([]*GateShadowBlock, error) {
+	var rows []*GateShadowBlock
+	err := s.db.Where("trader_id = ? AND outcome != '' AND outcome_48h = '' AND created_at < ?",
+		traderID, now).Order("created_at ASC").Limit(50).Find(&rows).Error
+	return rows, err
+}
+
+func (s *GateShadowStore) MarkEvaluated48(id uint, outcome string, exitPrice float64, at time.Time) error {
+	return s.db.Model(&GateShadowBlock{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"outcome_48h": outcome, "exit_price_48h": exitPrice, "evaluated_at_48h": at,
 	}).Error
 }
 
