@@ -202,3 +202,31 @@ LLM prompt 工程(仅审了与执行一致性相关部分)、grid 引擎、OKX/�
 
 ---
 *评审人:ZCode(量化视角全量代码走读)。本文档为评审意见,未修改任何代码;任何一条的落地均以用户批准为前提。*
+
+---
+
+## 附:落地状态(2026-09-23 更新)
+
+经用户批准逐项改进后落地。每批独立 commit + 回归测试,全仓 `go build ./... && go test ./...` 通过。
+
+| 评审项 | 状态 | Commit | 摘要 |
+|---|---|---|---|
+| D1(P0) equity 口径 | ✅ 已修 | `6e57e9b6` | 所有交易所 GetBalance 补 `totalEquity = wallet + uPnL`(binance/okx/gate/aster/bitget/stocks);bitget 的 snake_case `total_equity` 无人消费,已替换 |
+| A3 空头调参器 | ✅ 已停 | `ebf9f812` | 权重更新默认关闭(`short_tuner_enabled`,nil/false=停),采样与评估保留;`data/breakout_params.json` 权重复位为设计默认;修复待做(增量窗口+显著性检验) |
+| C1 TP 结构位 | ✅ 已修 | `38cb4540` | 每 TF 每侧截断 2→3;BOLL 值打 `BOLLSourced` 标记,`scanRR` 的 `first_rr_ge_target` 不再取 BOLL(仍进 best_rr);BOLL-only 达标→unusable |
+| E3/C7 杂项 | ✅ 已修 | `38cb4540` | 英文 prompt 统计标题动态化;`stopFloorPct` 注释去硬编码;min_rr 注释矛盾修正;`if true {}` 移除 |
+| B1(+B5) 市价例外 | ✅ 已修 | `f7917fab` | kernel `marketExceptionEvidence` 方向匹配 + 突破腿要求 directional_score≥80(常量 `MarketExceptionMinScore`);执行端 `marketExceptionGate`:有证据+confidence≥80 放行;无证据+有锚→降级锚点限价(`MarketDegraded` 阻断穿越回退复活市价);无锚→fail-closed 拒单;市价模式策略豁免;prompt 已宣告 CODE ENFORCED |
+| A5/A6 候选池 | ✅ 已修 | `824cf5a9` | `getShortScanCoins` 三次调用合一,`appendUniqueSource` 全源去重;OI 未知候选显式标注「OI数据缺失:流动性门槛未能核验」 |
+| D2 账户风控 | ✅ 已加 | `84279f0d` | ①`max_account_risk_pct`(默认10,负=关):Σ持仓止损风险(无保护仓位按 8% 上限最坏估计,`UnprotectedStopWorstCasePct` 单一来源)+新单风险 ≤ 权益%;②`daily_max_loss_pct`(默认10,负=关):日内回撤熔断,拦开仓不拦平仓;两者均入 applyHardRiskGates + prompt |
+| D3 杠杆真相 | ✅ 已修 | `23f907ba` | 每周期从交易所实况回填 OPEN 行真实杠杆(185 行全 1x 的病灶);`validateOpenRisk` 新增强平距离预检(止损距离 ≥ ~1/杠杆×0.9×80% 拒单) |
+| B3/B2附 成交复核 | ✅ 已加 | `fe62d855` | 限价成交报告 realized RR(<min_rr/2 告警);市价成交对比校验价 vs avgPrice 的 RR 劣化告警(含 bps 滑点)。纯可观测性,不改行为 |
+| C3 tp_full 让位 | ✅ 开关就绪 | `2d823b8e` | `tp_full_yields_to_lock`(默认关=现状,避免污染 2 周 R 分布重测;用户可开) |
+| E1 校准闭环 | ✅ 部分落地 | `b463a56e` | ①expectancy_r 改实测(journal R 分布,≥5 笔;标签注明口径);②影子拦截双视界(8h `outcome` + 48h `outcome_48h` 自动迁移,`/api/gate-shadow-stats` 出 `overall_48h`/`by_code_48h`) |
+| A1 空头幸存者偏差 | ⏳ 待专项 | — | 需新增破位/弱势宇宙源,涉及扫描引擎扩展 |
+| A2 回测口径分裂 | ⏳ 待专项 | — | 依赖 E2 回放器(回测须重放完整 Analyze 路径) |
+| A4 全局旋钮互踩 | ⏳ 待专项 | — | per-strategy 参数隔离,涉及 params 存储结构 |
+| B2/B4 ATR 尺度统一 | ⏳ 待专项 | — | VolYardstick 结构统一三处数据源,牵涉面广 |
+| E2 回测基建 | ⏳ 待专项 | — | 成本模型+walk-forward+完整打分路径重放,最大的独立基建项 |
+| C6 出场摩擦不对称 | ⏳ 待拍板 | — | 与 C3 出场重设计一并权衡 |
+
+**注**:全部改动尚未重启进程生效(当前 live 进程仍是旧二进制)。重启前确认:.env 代理变量(HTTPS_PROXY/HTTP_PROXY=127.0.0.1:7890)需显式携带;重启后新闸门(max_account_risk_pct=10、daily_max_loss_pct=10)默认生效,Conservative 3.5%×5仓配置会首次受到敞口约束——若满载 5 仓 3.5% 风险(17.5%)时,第 5 单之后的开仓将被拒,这是设计行为。
