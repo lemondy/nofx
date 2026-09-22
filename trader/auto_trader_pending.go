@@ -2,6 +2,7 @@ package trader
 
 import (
 	"fmt"
+	"math"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
@@ -434,6 +435,12 @@ func (at *AutoTrader) processPendingEntries() {
 			if pe.Side == "short" {
 				positionSide = "SHORT"
 			}
+			// B3 (QUANT_REVIEW 09-22, observability): the entry gates were
+			// evaluated at PLACEMENT time; a fill up to 30min later can sit
+			// in a dead setup. The SL/TP still anchor at the fill price, so
+			// realized RR is computable — report it against min_rr (alert
+			// only, no auto-close: that behavior change waits for user sign-off).
+			at.reportFilledRR(pe)
 			at.placeProtectiveOrders(&kernel.Decision{
 				Symbol: pe.Symbol, Action: "open_" + pe.Side,
 				StopLoss: pe.StopLoss, TakeProfit: pe.TakeProfit,
@@ -463,6 +470,36 @@ func (at *AutoTrader) processPendingEntries() {
 				logger.Infof("📌 [%s] Limit entry %s pending (%d/%d cycles, age %s of %s)", at.name, pe.Symbol, pe.Cycles, maxCycles, age.Round(time.Second), lifetime)
 			}
 		}
+	}
+}
+
+// reportFilledRR logs (and on a badly-degraded setup alerts) the realized
+// reward:risk of a just-filled limit entry, priced at the fill (== limit
+// price) against the pending SL/TP. Alert threshold: realized RR below half
+// the configured min_rr — the setup aged badly between placement and fill;
+// anything above that is normal aging noise.
+func (at *AutoTrader) reportFilledRR(pe *pendingEntry) {
+	if pe.StopLoss <= 0 || pe.TakeProfit <= 0 || pe.Price <= 0 {
+		return
+	}
+	minRR := 1.5
+	if at.config.StrategyConfig != nil {
+		if v := at.config.StrategyConfig.RiskControl.MinRiskRewardRatio; v > 0 {
+			minRR = v
+		}
+	}
+	risk := math.Abs(pe.Price - pe.StopLoss)
+	reward := math.Abs(pe.TakeProfit - pe.Price)
+	if risk <= 0 {
+		return
+	}
+	rr := reward / risk
+	if rr < minRR*0.5 {
+		logger.Warnf("⚠️ [%s] %s %s filled @ %.6g with realized RR %.2f vs min_rr %.2f — setup aged badly since placement; protective orders still anchor at the fill (manual review suggested)",
+			at.name, pe.Symbol, pe.Side, pe.Price, rr, minRR)
+		notify.Notify("ALERT", at.name, fmt.Sprintf(
+			"<b>⚠️ 限价成交 RR 劣化 %s</b>\n%s @ %.6g,成交 RR <code>%.2f</code>(min_rr %.2f 的一半)——挂单期间 setup 已老化,保护单仍按成交价锚定,请人工复核",
+			notify.Escape(pe.Symbol), pe.Side, pe.Price, rr, minRR))
 	}
 }
 
