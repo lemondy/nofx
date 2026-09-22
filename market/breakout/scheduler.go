@@ -203,9 +203,10 @@ func (s *Scheduler) runTuning() (ok bool) {
 			ok = false
 		}
 	}()
-	// 15 symbols: the old top-10 (majors only) under-covered the high-ATR
-	// alts the candidate pool actually trades.
-	symbols, err := TopVolumeSymbols(15)
+	// 30 symbols: the old top-15 under-covered the high-ATR alts the
+	// candidate pool actually trades (E2, QUANT_REVIEW 09-22 — the replay
+	// must see the universe the strategy trades, not only majors).
+	symbols, err := TopVolumeSymbols(30)
 	if err != nil {
 		logger.Warnf("⚠️ Breakout tuning: failed to list symbols: %v", err)
 		return false
