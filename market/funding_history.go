@@ -109,6 +109,7 @@ func IsUSMarketWeekend(now time.Time) bool {
 var (
 	bstockSymbols    map[string]bool
 	usEquitySymbols  map[string]bool // EQUITY/PREMARKET underlyingType only — US-session weighting set
+	binanceListed    map[string]bool // EVERY symbol Binance futures lists — the xyz-routing check
 	bstockMu         sync.RWMutex
 	bstockLoaded     time.Time
 	bstockLoadError  time.Time
@@ -143,6 +144,7 @@ func loadBStockSymbols() map[string]bool {
 	}
 	next := map[string]bool{}
 	usNext := map[string]bool{}
+	allNext := map[string]bool{}
 	for _, s := range info.Symbols {
 		if isStockClassification(s.UnderlyingType, s.UnderlyingSubType) {
 			next[s.Symbol] = true
@@ -150,14 +152,28 @@ func loadBStockSymbols() map[string]bool {
 		if s.UnderlyingType == "EQUITY" || s.UnderlyingType == "PREMARKET" {
 			usNext[s.Symbol] = true
 		}
+		allNext[s.Symbol] = true
 	}
 	bstockMu.Lock()
 	bstockSymbols = next
 	usEquitySymbols = usNext
+	binanceListed = allNext
 	bstockLoaded = time.Now()
 	bstockLoadError = time.Time{}
 	bstockMu.Unlock()
 	return next
+}
+
+// binanceListsNative reports whether BASE (no USDT suffix) trades as a
+// native Binance futures perp. Nil cache (classification never loaded /
+// fetch failed) → false: callers fall back to their legacy routing.
+func binanceListsNative(base string) bool {
+	bstockMu.RLock()
+	defer bstockMu.RUnlock()
+	if binanceListed == nil {
+		return false
+	}
+	return binanceListed[base+"USDT"]
 }
 
 // isStockClassification is the single classification predicate (2026-09-23

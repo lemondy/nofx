@@ -810,7 +810,15 @@ var xyzDexAssets = map[string]bool{
 	"XYZ100": true,
 }
 
-// IsXyzDexAsset checks if a symbol is an xyz dex asset
+// IsXyzDexAsset checks if a symbol is an xyz dex asset — i.e. it needs the
+// Hyperliquid data path because Binance does NOT list it natively. The
+// hand-maintained list went stale after Binance launched native equity
+// perps (PLTRUSDT/SNDKUSDT/TSLAUSDT… are real Binance symbols now):
+// routing them to xyz: failed their OI fetch every cycle and the
+// colon-choke-point filter then excluded them entirely (2026-09-24). A
+// natively-listed base is NOT an xyz asset — it takes the full Binance
+// data path (OI/funding/klines) like any other perp. Unloaded cache →
+// legacy behavior (fail-open).
 func IsXyzDexAsset(symbol string) bool {
 	base := strings.ToUpper(symbol)
 	// Remove any prefix/suffix
@@ -821,7 +829,10 @@ func IsXyzDexAsset(symbol string) bool {
 			break
 		}
 	}
-	return xyzDexAssets[base]
+	if !xyzDexAssets[base] {
+		return false
+	}
+	return !binanceListsNative(base)
 }
 
 // Normalize normalizes symbol

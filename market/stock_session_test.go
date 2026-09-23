@@ -98,3 +98,44 @@ func TestIsUSEquitySymbol(t *testing.T) {
 		t.Error("crypto must not classify as US equity")
 	}
 }
+
+// The xyz-routing fix (2026-09-24): a hand-listed base that Binance now
+// lists NATIVELY must leave the xyz path (full Binance data, no more
+// per-cycle OI-fetch failure + colon exclusion), while genuinely unlisted
+// bases (GOLD/JPY) stay on it. Cache unloaded → legacy behavior.
+func TestIsXyzDexAssetNativeListing(t *testing.T) {
+	bstockMu.Lock()
+	oldListed := binanceListed
+	binanceListed = map[string]bool{"PLTRUSDT": true, "TSLAUSDT": true} // GOLDUSDT absent
+	bstockMu.Unlock()
+	t.Cleanup(func() {
+		bstockMu.Lock()
+		binanceListed = oldListed
+		bstockMu.Unlock()
+	})
+
+	if IsXyzDexAsset("PLTRUSDT") {
+		t.Fatal("natively-listed PLTRUSDT must NOT route to the xyz path")
+	}
+	if IsXyzDexAsset("xyz:PLTR") {
+		t.Fatal("prefixed form must resolve the same way")
+	}
+	if !IsXyzDexAsset("GOLDUSDT") {
+		t.Fatal("unlisted GOLDUSDT must keep the xyz (Hyperliquid) route")
+	}
+	// Normalize follows the same decision — no more fake xyz: symbols.
+	if got := Normalize("PLTRUSDT"); got != "PLTRUSDT" {
+		t.Fatalf("Normalize(PLTRUSDT) = %q, want the native symbol", got)
+	}
+	if got := Normalize("GOLDUSDT"); got != "xyz:GOLD" {
+		t.Fatalf("Normalize(GOLDUSDT) = %q, want xyz:GOLD", got)
+	}
+
+	// Unloaded cache → legacy xyz behavior (fail-open).
+	bstockMu.Lock()
+	binanceListed = nil
+	bstockMu.Unlock()
+	if !IsXyzDexAsset("PLTRUSDT") {
+		t.Fatal("nil cache must fall back to legacy xyz routing")
+	}
+}
