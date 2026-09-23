@@ -107,10 +107,11 @@ func IsUSMarketWeekend(now time.Time) bool {
 // ============================================================================
 
 var (
-	bstockSymbols   map[string]bool
-	bstockMu        sync.RWMutex
-	bstockLoaded    time.Time
-	bstockLoadError time.Time
+	bstockSymbols    map[string]bool
+	usEquitySymbols  map[string]bool // EQUITY/PREMARKET underlyingType only — US-session weighting set
+	bstockMu         sync.RWMutex
+	bstockLoaded     time.Time
+	bstockLoadError  time.Time
 )
 
 const (
@@ -130,6 +131,7 @@ func loadBStockSymbols() map[string]bool {
 	var info struct {
 		Symbols []struct {
 			Symbol            string   `json:"symbol"`
+			UnderlyingType    string   `json:"underlyingType"`
 			UnderlyingSubType []string `json:"underlyingSubType"`
 		} `json:"symbols"`
 	}
@@ -140,20 +142,71 @@ func loadBStockSymbols() map[string]bool {
 		return set // possibly nil — caller fails open
 	}
 	next := map[string]bool{}
+	usNext := map[string]bool{}
 	for _, s := range info.Symbols {
-		for _, st := range s.UnderlyingSubType {
-			if strings.EqualFold(st, "Stocks") || strings.Contains(strings.ToLower(st), "stocks") {
-				next[s.Symbol] = true
-				break
-			}
+		if isStockClassification(s.UnderlyingType, s.UnderlyingSubType) {
+			next[s.Symbol] = true
+		}
+		if s.UnderlyingType == "EQUITY" || s.UnderlyingType == "PREMARKET" {
+			usNext[s.Symbol] = true
 		}
 	}
 	bstockMu.Lock()
 	bstockSymbols = next
+	usEquitySymbols = usNext
 	bstockLoaded = time.Now()
 	bstockLoadError = time.Time{}
 	bstockMu.Unlock()
 	return next
+}
+
+// isStockClassification is the single classification predicate (2026-09-23
+// fix): Binance RENAMED the classification — underlyingSubType "Stocks" is
+// gone, equity tokens now carry underlyingType EQUITY/PREMARKET/KR_EQUITY/
+// HK_EQUITY/CN_EQUITY (verified live 2026-09-23: 703 COIN / 163 EQUITY /
+// 8 COMMODITY / 0 "Stocks"). The old subType-only matcher matched NOTHING,
+// silently disabling every stock gate that keys on it (weekend no-open,
+// STOCK_WEEKEND). Accept the new types plus the legacy subType for safety.
+func isStockClassification(underlyingType string, subTypes []string) bool {
+	switch underlyingType {
+	case "EQUITY", "PREMARKET", "KR_EQUITY", "HK_EQUITY", "CN_EQUITY":
+		return true
+	}
+	for _, st := range subTypes {
+		if strings.EqualFold(st, "Stocks") || strings.Contains(strings.ToLower(st), "stock") {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUSEquitySymbol reports whether the symbol is a token of a US-listed
+// equity (or its pre-market token) — the set the US-session weighting
+// applies to. KR/HK/CN equity tokens follow their home calendars, not the
+// US session, and are deliberately excluded here.
+func IsUSEquitySymbol(symbol string) bool {
+	set := loadBStockSymbols()
+	if set == nil {
+		return false
+	}
+	return set[strings.ToUpper(symbol)] && usEquitySymbols[strings.ToUpper(symbol)]
+}
+
+// IsUSMarketOpen reports whether `now` falls inside US regular trading
+// hours (Eastern, Mon–Fri 09:30–16:00) — the session the equity tokens
+// track their underlying most tightly and where the session weighting
+// applies.
+func IsUSMarketOpen(now time.Time) bool {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.FixedZone("EST", -5*3600)
+	}
+	et := now.In(loc)
+	if et.Weekday() == time.Saturday || et.Weekday() == time.Sunday {
+		return false
+	}
+	mins := et.Hour()*60 + et.Minute()
+	return mins >= 9*60+30 && mins < 16*60
 }
 
 // IsBStockSymbol reports whether the futures symbol is a Binance tokenized

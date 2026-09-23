@@ -1,72 +1,28 @@
 package binance
 
 import (
-	"context"
-	"nofx/market"
-	"strings"
-	"sync"
 	"time"
+
+	"nofx/market"
 )
 
 // ============================================================================
-// Binance tokenized-stock ("bstock") symbol detection (user directive
-// 2026-09-11: stocks on Binance trade on weekends but follow the US market —
-// weekend volatility and profit probability are poor, so stock-class symbols
-// must not take new positions on weekends until 24h stock trading exists).
-//
-// The authoritative classification is exchangeInfo underlyingSubType
-// containing "Stocks" (DELLUSDT/SKHYUSDT/SKHYNIXUSDT/SPCXUSDT/…), fetched
-// once and cached for a day — no hand-maintained ticker list.
+// Binance tokenized-stock ("bstock") symbol detection — DELEGATED to the
+// market package (2026-09-23). The classification is exchangeInfo
+// underlyingType EQUITY/PREMARKET/KR_EQUITY/HK_EQUITY/CN_EQUITY (the legacy
+// underlyingSubType "Stocks" matcher went dead when Binance renamed the
+// field — verified live 2026-09-23: 163 EQUITY, 0 "Stocks" — silently
+// disabling the weekend gate that keys on it). market.loadBStockSymbols
+// owns the classification and its 24h cache; the executor reads the same
+// source so the prompt-side STOCK_WEEKEND block and this gate can never
+// disagree.
 // ============================================================================
 
-var (
-	stockSymbolsMu     sync.RWMutex
-	stockSymbols       map[string]bool
-	stockSymbolsLoaded time.Time
-)
-
-const stockSymbolsTTL = 24 * time.Hour
-
-// loadStockSymbols refreshes the cached stock-symbol set from exchangeInfo.
-// Errors are returned to the caller (the gate fails open — never block on a
-// classification outage).
-func loadStockSymbols(t *FuturesTrader) (map[string]bool, error) {
-	stockSymbolsMu.RLock()
-	if stockSymbols != nil && time.Since(stockSymbolsLoaded) < stockSymbolsTTL {
-		cached := stockSymbols
-		stockSymbolsMu.RUnlock()
-		return cached, nil
-	}
-	stockSymbolsMu.RUnlock()
-
-	info, err := t.client.NewExchangeInfoService().Do(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	set := map[string]bool{}
-	for _, s := range info.Symbols {
-		for _, st := range s.UnderlyingSubType {
-			if strings.EqualFold(st, "Stocks") {
-				set[s.Symbol] = true
-				break
-			}
-		}
-	}
-	stockSymbolsMu.Lock()
-	stockSymbols = set
-	stockSymbolsLoaded = time.Now()
-	stockSymbolsMu.Unlock()
-	return set, nil
-}
-
-// IsStockSymbol reports whether the symbol is a Binance tokenized stock
-// (underlyingSubType "Stocks"). Unknown/unfetchable → false (fail-open).
+// IsStockSymbol reports whether the symbol is a Binance tokenized stock.
+// Unknown/unfetchable → false (fail-open — never block on a classification
+// outage).
 func (t *FuturesTrader) IsStockSymbol(symbol string) bool {
-	set, err := loadStockSymbols(t)
-	if err != nil {
-		return false
-	}
-	return set[strings.ToUpper(symbol)]
+	return market.IsBStockSymbol(symbol)
 }
 
 // IsUSMarketWeekend reports whether `now` falls on a Saturday or Sunday in

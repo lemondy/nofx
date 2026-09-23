@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
@@ -14,6 +15,8 @@ import (
 	"nofx/provider/vergex"
 	"nofx/security"
 	"nofx/store"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1038,6 +1041,17 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 		}
 		candidates = append(candidates, c)
 	}
+	// US-session equity weighting (user directive 2026-09-23): during US
+	// regular hours, US equity tokens in the pool rank ahead of the crypto
+	// pool — lower realized volatility and (journal baseline, small n)
+	// better win rate. Applied BEFORE the top-N cut so the weighting actually
+	// changes selection, not just prompt order.
+	e.applyUSStockSessionBoost(candidates, time.Now())
+	// Re-rank after the boost: the top-N cut below takes the slice head in
+	// scan order, so a boosted equity token must actually rise in the order
+	// to change selection (scan order alone is the pre-boost ranking).
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].ShortScore > candidates[j].ShortScore })
+
 	// Reserve one slot for the strongest grinding-top setup when the gainer
 	// fill left no room for it — without this the near_high universe stays
 	// invisible to the AI in every cycle and its exemption is dead text.
@@ -1128,6 +1142,35 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 		c.ShortReasons = append(c.ShortReasons, "资金费率回落")
 	}
 	return c
+}
+
+// applyUSStockSessionBoost multiplies US equity tokens' short scores by
+// (1 + pct/100) while the US market is in regular hours, adding a visible
+// provenance reason. Disabled (pct ≤ 0) or classification unavailable →
+// no-op. Score caps at 100 like every other dimension.
+func (e *StrategyEngine) applyUSStockSessionBoost(candidates []CandidateCoin, now time.Time) {
+	if e.config == nil {
+		return
+	}
+	pct := e.config.EffectiveUSStockSessionBoostPct()
+	if pct <= 0 || !market.IsUSMarketOpen(now) {
+		return
+	}
+	factor := 1 + pct/100
+	for i := range candidates {
+		if !market.IsUSEquitySymbol(candidates[i].Symbol) {
+			continue
+		}
+		if candidates[i].ShortScore > 0 {
+			candidates[i].ShortScore = round2(math.Min(100, candidates[i].ShortScore*factor))
+		}
+		candidates[i].ShortReasons = append(candidates[i].ShortReasons,
+			fmt.Sprintf("美股盘中时段加权+%s%%(波动相对加密更低,流动性更薄注意点差)", fmtFloatPct(pct)))
+	}
+}
+
+func fmtFloatPct(v float64) string {
+	return strconv.FormatFloat(v, 'f', 0, 64)
 }
 
 // getAI500Coins returns AI500 picks from vergex trending — the same source as

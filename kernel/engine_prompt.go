@@ -389,6 +389,9 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		if noOpen := e.config.RiskControl.StockWeekendNoOpen; noOpen == nil || *noOpen {
 			params.WriteString("- 股票类代币周末禁开新仓(程序强制): DELL/SKHY 等 bstock 标的周末(美东周六/周日)波动率与胜率都低——候选里出现股票类代币时,本周末只允许 hold/close,不输出任何 open_*\n")
+		if v := e.config.EffectiveUSStockSessionBoostPct(); v > 0 {
+			params.WriteString(fmt.Sprintf("- 美股盘中时段股票标的加权(程序施加,美东周一至五 09:30–16:00 生效): 美股股票类代币(AAPL/TSLA/SPY 等 EQUITY 代币)在 short_scan 候选中的得分已按 +%.0f%% 加权后再截断——它们跟随标的正股交易时段,波动相对加密货币更低、历史胜率更高;候选 reasons 里的「美股盘中时段加权」即此标记。注意:加权改变排序不改变闸门,RR/止损带/时点门照常执行;且此类标的流动性薄于主流加密,点差门(max_spread_pct)会自动拦截过宽盘口,滑点预期要按更宽计\n", v))
+		}
 		}
 		params.WriteString("- 共识反向门(程序强制): directional_score 绝对值 ≥ 50 时,禁止开与其符号相反方向的仓(CONSENSUS_OPPOSED_±score)——逆着 ≥50 的方向共识做单是 30 天亏损账本里逆势单的那部分;score 是多空证据的程序计分,不是你的自由判断\n")
 		params.WriteString("- 差历史硬门(程序强制): 某币近 5 笔以上平仓胜率 < 35% 时,其快照 trader_history 会带着这份记录,开仓被 POOR_HISTORY 拦截——「连亏的币把机会让给趋势健康的标的」不再是文字建议;快照无 trader_history 字段 = 该币无本地历史,不受此门约束\n")

@@ -116,6 +116,16 @@ type StrategyConfig struct {
 	// window changes what is REPORTED to the AI only — no trades are ever
 	// deleted or moved.
 	StatsWindowDays int `json:"stats_window_days,omitempty"`
+
+	// USStockSessionBoostPct: during US regular trading hours (Eastern
+	// Mon–Fri 09:30–16:00), short-scan candidates that are US equity tokens
+	// get their score multiplied by (1 + pct/100) BEFORE the top-N cut —
+	// equity tokens tracked the underlying session show lower volatility and
+	// (so far) a better realized win rate than the crypto pool (user
+	// directive 2026-09-23; journal baseline: stocks 11 trades 54.5% win vs
+	// crypto 184 trades 40.8%). 0 = default 20, negative = disabled.
+	// Weekends stay blocked by stock_weekend_no_open regardless.
+	USStockSessionBoostPct float64 `json:"us_stock_session_boost_pct,omitempty"`
 	// risk control configuration
 	RiskControl RiskControlConfig `json:"risk_control"`
 	// editable sections of System Prompt
@@ -554,6 +564,21 @@ func NewStrategyStore(db *gorm.DB) *StrategyStore {
 // DefaultStatsWindowDays is the rolling stats window when the strategy
 // config leaves stats_window_days unset.
 const DefaultStatsWindowDays = 30
+
+// DefaultUSStockSessionBoostPct backs EffectiveUSStockSessionBoostPct.
+const DefaultUSStockSessionBoostPct = 20.0
+
+// EffectiveUSStockSessionBoostPct resolves the US-session equity weighting:
+// 0/unset → DefaultUSStockSessionBoostPct, negative → disabled (0).
+func (c *StrategyConfig) EffectiveUSStockSessionBoostPct() float64 {
+	if c.USStockSessionBoostPct < 0 {
+		return 0
+	}
+	if c.USStockSessionBoostPct == 0 {
+		return DefaultUSStockSessionBoostPct
+	}
+	return c.USStockSessionBoostPct
+}
 
 // DefaultMaxAccountRiskPct / DefaultDailyMaxLossPct back the effective
 // helpers above — rendered into the prompt from these constants so the text
