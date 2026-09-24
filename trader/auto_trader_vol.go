@@ -195,6 +195,29 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			}
 		}
 
+		// ── intermediate breakeven arm (breakeven_arm_r, user 2026-09-24) ──
+		// At armR × initial risk the stop moves to entry(+beOffset) EARLY —
+		// no trim, the reduction ladder stays with TpTierAction/1R lock.
+		// One-shot by the same currentSL gating as the 1R lock: once armed
+		// the recorded stop sits at bePrice and the arm condition goes false.
+		// Arm-only-when-tightening is built into ProfitLockTargets' final
+		// gate (an AI tighten past BE simply never arms this).
+		if armR := kernel.BreakevenArmR(&at.config.StrategyConfig.RiskControl); armR > 0 {
+			entry := posEntryPrice(pos)
+			anchorSL := at.initialStopAnchor(symbol, side, initialSL)
+			beOffset := kernel.ProfitLockBreakevenOffsetR(&at.config.StrategyConfig.RiskControl)
+			bePrice, _ := kernel.ProfitLockTargets(side, entry, anchorSL, initialSL, markPrice, armR, beOffset)
+			if bePrice > 0 {
+				if err := at.moveStopExchange(symbol, side, bePrice); err != nil {
+					logger.Infof("⚠️ [%s] early-breakeven SL place failed for %s: %v", at.name, symbol, err)
+				} else {
+					at.SetRecordedStopLoss(symbol, side, bePrice)
+					logger.Infof("🔒 [%s] Early breakeven armed: %s %.2fR reached — SL moved to %.6g (entry %.6g, +%.2fR floor; give-back zone closed)", at.name, symbol, armR, bePrice, entry, beOffset)
+					notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🔒 提前保本 %s</b>\n浮盈达 %.1fR,止损已先期移至开仓价+%.1fR <code>%.6g</code>——最差结果保本+微利出局", notify.Escape(symbol), armR, beOffset, bePrice))
+				}
+			}
+		}
+
 		// ── 1R profit lock (user 2026-09-12): breakeven stop + 50% trim ──
 		if lockR := kernel.ProfitLockRMult(&at.config.StrategyConfig.RiskControl); lockR > 0 {
 			entry := posEntryPrice(pos)

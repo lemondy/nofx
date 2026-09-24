@@ -415,6 +415,17 @@ type RiskControlConfig struct {
 	// behavior — flipping it mid-experiment would corrupt the 2-week R
 	// distribution retest, so the user opts in. (CODE ENFORCED when true)
 	TpFullYieldsToLock bool `json:"tp_full_yields_to_lock"`
+	// BreakevenArmR: intermediate breakeven tier — when a position's
+	// favorable excursion reaches this many × initial stop distance, the
+	// stop moves to entry(+profit_lock_be_offset_r) EARLY, without any
+	// trim. Fills the (0, 1R) give-back zone: SOLUSDT 2026-09-23 peaked
+	// 1.03R for 8 minutes but the 5-min cycle check saw 0.99R and the
+	// trade died at −1.07R; the R-normalized give-back table shows 9/21
+	// losers had peaked ≥0.3R. 0 = disabled (default), negative = disabled.
+	// Simulated on the 09-17→09-24 cohort: arming at 0.5R ≈ +6.4R vs
+	// actual with zero winners scratched. (CODE ENFORCED when >0)
+	BreakevenArmR float64 `json:"breakeven_arm_r"`
+
 	// TpTrimYieldsToLock: whether the ROE trim tier (tp_trim_profit_pct)
 	// yields to an active 1R lock. nil/true = 09-21 default — the lock
 	// supersedes the trim tier entirely, so tp_trim_profit_pct is DEAD TEXT

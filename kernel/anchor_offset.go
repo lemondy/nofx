@@ -316,6 +316,16 @@ func ProfitLockBreakevenOffsetR(rc *store.RiskControlConfig) float64 {
 	return rc.ProfitLockBEOffsetR
 }
 
+// BreakevenArmR resolves the intermediate breakeven tier's trigger: 0 =
+// disabled (default — the (0,1R) zone is unprotected unless configured),
+// negative = disabled. Shared by the trader's early-arm tier and the prompt.
+func BreakevenArmR(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.BreakevenArmR <= 0 {
+		return 0
+	}
+	return rc.BreakevenArmR
+}
+
 // TPCloseFraction resolves the fraction of the position the take-profit algo
 // closes at the planned structure level: 0/unset = 0.5 default (09-21 user
 // experiment — a resting full-size TP structurally sold every spike top:

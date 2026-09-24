@@ -329,6 +329,10 @@ func (e *StrategyEngine) strategyParamsText() string {
 		params.WriteString(fmt.Sprintf("- 仓位(程序强制缩仓): 风险金额 = 权益 × %.1f%%;仓位名义价值 = 风险金额 ÷ 止损距离%%;保证金 = 名义价值 ÷ 杠杆。例: 权益100U、止损距离3%% → 风险金额%.1fU → 名义价值%.0fU → 3x杠杆保证金≈%.1fU——本策略当前风险预算就是正文这个 %.1f%%,示例与执行端缩仓同源。position_size_usd 填名义价值,不是风险金额。注意: 实盘下单量按交易所步长取整,小账户+宽止损时实际风险可能偏离理论值——名义价值低于最小下单量时放弃该设置。各币快照已按当前权益与策略配置 min_position_size(策略页可改)预计算 `min_size` 块: `max_stop_pct_for_min_size` 是能凑够最小仓位的最大止损距离(d%% 超过它名义价值必然不足),`feasible=false` 表示连噪声下限都超出该上限——该币结构性无法开仓;两种情况都直接 wait+MIN_SIZE,不要再花预算算仓位\n", riskPct, exRisk, exNotional, exMargin, riskPct))
 		params.WriteString(fmt.Sprintf("- 止盈(结构选位已由程序完成): 各币快照 `hard_entry_gate[direction].rr_scan` 就是\"从近到远遍历全部时间块(含 execution_tf/15m)全部 resistance/support 元素\"的程序结果——开仓时 `take_profit` 直接采用 `rr_scan.first_rr_ge_target`(该方向从近到远第一个 RR≥%.1f 的结构位,按 rr_scan.entry_price 口径计算);`rr_scan.usable=false` 表示连最窄允许止损下 RR 上限 best_rr 都 <%.1f,该方向 RR 门结构性失败,输出 wait 并在 blocking_factors 标 RR_LOW、no_trade_reason 引用 `MAX_STRUCTURAL_RR=best_rr`——禁止只看最近一个结构位就下\"无可用结构位\"结论,也不许跳到更远目标。个别币没有 rr_scan 字段(如未启用噪声下限)时退回手工规则: 逐项遍历全部数组取第一个 RR≥%.1f。该比例仍是程序硬门槛(开仓时按决策价与成交价双重校验 RR)。stop_plan_price + first_rr_ge_target 这一对就是「真实 RR≥min」的组合——SL 用前者、TP 用后者,不要只换其中一半\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
 		var tpParts []string
+		if armR := BreakevenArmR(&e.config.RiskControl); armR > 0 {
+			beOff := ProfitLockBreakevenOffsetR(&e.config.RiskControl)
+			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.1fR(初始止损距离的 %.0f%%)程序先把止损移至开仓价+%.2fR 提前保本(不涉及减仓,先于 1R 档)", armR, armR*100, beOff))
+		}
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
 			// 保本位措辞从配置求值(09-21 实验: +0.2R 锁微利 vs 纯保本)
 			beTxt := "开仓价保本"
