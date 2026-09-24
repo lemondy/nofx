@@ -415,6 +415,16 @@ type RiskControlConfig struct {
 	// behavior — flipping it mid-experiment would corrupt the 2-week R
 	// distribution retest, so the user opts in. (CODE ENFORCED when true)
 	TpFullYieldsToLock bool `json:"tp_full_yields_to_lock"`
+	// TpTrimYieldsToLock: whether the ROE trim tier (tp_trim_profit_pct)
+	// yields to an active 1R lock. nil/true = 09-21 default — the lock
+	// supersedes the trim tier entirely, so tp_trim_profit_pct is DEAD TEXT
+	// while the lock is on (the CAPUSDT 2026-09-24 surprise: user set trim=15
+	// but the peak at 17% ROE sat in the lock's dead zone below 1R=21.6% and
+	// nothing ever fired). false = division of labor: the trim tier fires at
+	// its threshold (trim 1/3, once), the 1R lock moves the stop to
+	// breakeven(+offset) but does NOT reduce — no double harvest.
+	// (CODE ENFORCED either way)
+	TpTrimYieldsToLock *bool `json:"tp_trim_yields_to_lock,omitempty"`
 	// EarlyCloseMinHours: AI-initiated closes before this many hours of hold
 	// time are blocked unless the 1h timeframe shows ≥2 closed candles against
 	// the position direction (trend-change evidence). Exchange SL/TP triggers
@@ -567,6 +577,13 @@ const DefaultStatsWindowDays = 30
 
 // DefaultUSStockSessionBoostPct backs EffectiveUSStockSessionBoostPct.
 const DefaultUSStockSessionBoostPct = 20.0
+
+// TrimYieldsToLock resolves the trim-tier-vs-lock relationship: nil/true =
+// the 09-21 default (trim tier superseded by the lock), false = trim tier
+// active alongside a breakeven-only lock.
+func (r RiskControlConfig) TrimYieldsToLock() bool {
+	return r.TpTrimYieldsToLock == nil || *r.TpTrimYieldsToLock
+}
 
 // EffectiveUSStockSessionBoostPct resolves the US-session equity weighting:
 // 0/unset → DefaultUSStockSessionBoostPct, negative → disabled (0).

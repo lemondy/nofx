@@ -335,7 +335,18 @@ func (e *StrategyEngine) strategyParamsText() string {
 			if beOff := ProfitLockBreakevenOffsetR(&e.config.RiskControl); beOff > 0 {
 				beTxt = fmt.Sprintf("开仓价+%.2fR(锁定一档微利,防噪声扫回平手)", beOff)
 			}
-			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序自动市价减仓 50%%,同时止损移至%s;剩余 50%% 奔向结构位止盈", lockR, beTxt))
+			if e.config.RiskControl.TrimYieldsToLock() {
+				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序自动市价减仓 50%%,同时止损移至%s;剩余 50%% 奔向结构位止盈", lockR, beTxt))
+			} else {
+				// 分工模式: ROE 减仓档独立生效,锁只管保本(CAPUSDT 09-24)
+				trim := TpTrimProfitPct(&e.config.RiskControl)
+				if trim > 0 {
+					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次)", trim))
+				}
+				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序把止损移至%s——此档只保本不再减仓,剩余仓位奔向结构位止盈", lockR, beTxt))
+			}
+		} else if trim := TpTrimProfitPct(&e.config.RiskControl); trim > 0 {
+			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次)", trim))
 		}
 		// 分批止盈+趋势跑单(09-21 实验): 止盈触发只平一部分,剩余由移动止损
 		// 接管——只在移动止损开启时生效(trader 端 effectiveTPCloseFraction

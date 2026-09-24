@@ -229,7 +229,12 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 					}
 				}
 			}
-			if trim {
+			// tp_trim_yields_to_lock=false (division of labor): the ROE trim
+			// tier owns reductions (tp_trim_profit_pct, once) and the lock
+			// contributes ONLY the breakeven stop above — no 50% reduce, no
+			// consuming the trim marker. Default (true) keeps the 09-21
+			// lock-supersedes-trim behavior below.
+			if trim && at.config.StrategyConfig.RiskControl.TrimYieldsToLock() {
 				at.tpTrimMutex.Lock()
 				done := at.r1TrimDone[posKey]
 				at.tpTrimMutex.Unlock()

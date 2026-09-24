@@ -218,9 +218,12 @@ func TpTierAction(pnlPct float64, trimDone bool, rc *store.RiskControlConfig) st
 			return "full"
 		}
 	}
-	if lockActive {
-		return "" // 1R/50% lock supersedes the ROE trim tier
+	if lockActive && rc != nil && rc.TrimYieldsToLock() {
+		return "" // 09-21 default: the 1R/50% lock supersedes the ROE trim tier
 	}
+	// tp_trim_yields_to_lock=false: the trim tier stays live alongside the
+	// lock — division of labor (trim trims once at its threshold, the lock
+	// only moves the stop to breakeven).
 	if trim := TpTrimProfitPct(rc); trim > 0 && !trimDone && pnlPct >= trim {
 		return "trim"
 	}
