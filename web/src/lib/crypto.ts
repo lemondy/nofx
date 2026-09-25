@@ -179,24 +179,9 @@ export class CryptoService {
     return data.public_key || ''
   }
 
-  static async decryptSensitiveData(
-    payload: EncryptedPayload
-  ): Promise<string> {
-    const response = await fetch('/api/crypto/decrypt', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    })
-
-    if (!response.ok) {
-      throw new Error(`Decryption failed: ${response.statusText}`)
-    }
-
-    const result = await response.json()
-    return result.plaintext
-  }
+  // decryptSensitiveData removed 2026-09-25: the server route was deleted
+  // (a public decrypt oracle is a security regression). Encrypted payloads
+  // are only ever sent TO specific authenticated endpoints.
 }
 
 // 生成混淆字符串（用于剪贴板混淆）

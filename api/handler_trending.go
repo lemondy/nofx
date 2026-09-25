@@ -255,7 +255,9 @@ func (s *Server) handleTrendingRelay(c *gin.Context) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 4<<20))
+	// 2MB cap: vergex payloads are tens of KB; anything larger is abuse or a
+	// memory DoS vector (auth'd caller or not).
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 2<<20))
 	if err != nil || len(body) == 0 || !json.Valid(body) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "body must be a non-empty JSON payload"})
 		return

@@ -96,7 +96,10 @@ func (s *Server) setupRoutes() {
 		// Crypto related endpoints (no authentication required, not exposed to bot)
 		api.GET("/crypto/config", s.cryptoHandler.HandleGetCryptoConfig)
 		api.GET("/crypto/public-key", s.cryptoHandler.HandleGetPublicKey)
-		api.POST("/crypto/decrypt", s.cryptoHandler.HandleDecryptSensitiveData)
+		// NOTE: the old POST /crypto/decrypt (generic decrypt oracle) was
+		// removed — it let ANY unauthenticated caller decrypt arbitrary
+		// payloads with the server key (regression of 1aea7abc). Decryption
+		// happens only inside the specific, authenticated config handlers.
 
 		// Public competition data (no authentication required)
 		s.route(api, "GET", "/traders", "Public trader list", s.handlePublicTraderList)
@@ -113,7 +116,10 @@ func (s *Server) setupRoutes() {
 		s.route(api, "GET", "/trending/hl", "Vergex trending Hyperliquid universe (?category=crypto|stocks|indices|commodities|fx|other&sub=preipo)", s.handleTrendingHL)
 		s.route(api, "GET", "/trending/category", "Vergex trending featured categories (?key=ai500|prediction&lang=en|zh)", s.handleTrendingCategory)
 		s.route(api, "GET", "/trending/flow", "Vergex net flow markets (?window=5m|15m|1h|4h|8h|12h|24h&limit=)", s.handleTrendingFlow)
-		s.route(api, "POST", "/trending/relay", "Cache a vergex payload fetched by the browser (?path=<upstream path>)", s.handleTrendingRelay)
+		// NOTE: POST /trending/relay lives under the PROTECTED group — an
+		// unauthenticated relay let any client overwrite the vergex cache
+		// that feeds dashboard panels AND the strategy coin sources /
+		// AI trading context (cache poisoning, 2026-09-25 P2).
 		s.route(api, "GET", "/breakout", "Breakout/breakdown signal score (?symbol=BTCUSDT)", s.handleBreakout)
 		s.route(api, "GET", "/breakout/scan", "Scan top-volume perps for breakout signals (?limit=10&concurrency=4)", s.handleBreakoutScan)
 		s.route(api, "GET", "/breakout/snapshot", "Background breakout snapshot (refreshed every 5 min)", s.handleBreakoutSnapshot)
@@ -188,7 +194,8 @@ Body: {"show_in_competition":<bool>}`,
 				s.handleGetGridRiskInfo)
 
 			// AI cost tracking
-			s.route(protected, "GET", "/ai-costs", "Get AI call costs for a trader (?trader_id=xxx&period=today)", s.handleGetAICosts)
+					s.route(protected, "POST", "/trending/relay", "Cache a vergex payload fetched by the browser (?path=<upstream path>) — auth required", s.handleTrendingRelay)
+s.route(protected, "GET", "/ai-costs", "Get AI call costs for a trader (?trader_id=xxx&period=today)", s.handleGetAICosts)
 			s.route(protected, "GET", "/ai-costs/summary", "Get AI cost summary (?period=today)", s.handleGetAICostsSummary)
 
 			// AI model configuration

@@ -164,6 +164,25 @@ func loadBStockSymbols() map[string]bool {
 	return next
 }
 
+// SetEquityClassificationForTesting pins the classification state used by
+// IsUSEquitySymbol / binanceListsNative — tests must not depend on live
+// exchangeInfo (a sandbox without network turned the boost test into a
+// flake: the fetch failed and every symbol classified non-equity). nil
+// restores the live path.
+func SetEquityClassificationForTesting(all, us map[string]bool) {
+	bstockMu.Lock()
+	defer bstockMu.Unlock()
+	if all == nil && us == nil {
+		binanceListed = nil // force a live reload on next use
+		return
+	}
+	binanceListed = all
+	usEquitySymbols = us
+	if bstockSymbols == nil {
+		bstockSymbols = map[string]bool{}
+	}
+}
+
 // binanceListsNative reports whether BASE (no USDT suffix) trades as a
 // native Binance futures perp. Nil cache (classification never loaded /
 // fetch failed) → false: callers fall back to their legacy routing.

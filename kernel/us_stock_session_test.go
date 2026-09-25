@@ -20,6 +20,15 @@ func TestApplyUSStockSessionBoost(t *testing.T) {
 	marketOpen := time.Date(2026, 9, 23, 15, 0, 0, 0, time.UTC) // 11:00 ET Wed
 	marketClosed := time.Date(2026, 9, 23, 20, 0, 0, 0, time.UTC) // 16:00+ ET Wed
 
+	// Pin the classification explicitly — the test must not depend on live
+	// exchangeInfo (offline sandboxes made AAPLUSDT classify non-equity and
+	// the boost silently became a no-op).
+	market.SetEquityClassificationForTesting(
+		map[string]bool{"AAPLUSDT": true},
+		map[string]bool{"AAPLUSDT": true},
+	)
+	defer market.SetEquityClassificationForTesting(nil, nil)
+
 	if !market.IsUSMarketOpen(marketOpen) || market.IsUSMarketOpen(marketClosed) {
 		t.Fatalf("session fixture broken: open=%v closed=%v", market.IsUSMarketOpen(marketOpen), market.IsUSMarketOpen(marketClosed))
 	}

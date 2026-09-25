@@ -1,7 +1,6 @@
 package api
 
 import (
-	"log"
 	"net/http"
 	"nofx/config"
 	"nofx/crypto"
@@ -53,28 +52,9 @@ func (h *CryptoHandler) HandleGetPublicKey(c *gin.Context) {
 	})
 }
 
-// ==================== Encrypted Data Decryption Endpoint ====================
-
-// HandleDecryptSensitiveData Decrypt encrypted data sent from client
-func (h *CryptoHandler) HandleDecryptSensitiveData(c *gin.Context) {
-	var payload crypto.EncryptedPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-		return
-	}
-
-	// Decrypt
-	decrypted, err := h.cryptoService.DecryptSensitiveData(&payload)
-	if err != nil {
-		log.Printf("❌ Decryption failed: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Decryption failed"})
-		return
-	}
-
-	c.JSON(http.StatusOK, map[string]string{
-		"plaintext": decrypted,
-	})
-}
+// (HandleDecryptSensitiveData removed 2026-09-25: a public generic decrypt
+// oracle is a security regression of 1aea7abc — decryption belongs ONLY in
+// the specific authenticated handlers that consume an encrypted payload.)
 
 // ==================== Audit Log Query Endpoint ====================
 

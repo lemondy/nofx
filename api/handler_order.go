@@ -368,8 +368,10 @@ func (s *Server) handleOrderFills(c *gin.Context) {
 		return
 	}
 
-	// Get fills for this order
-	fills, err := store.Order().GetOrderFills(orderID)
+	// Get fills for this order — scoped to the caller's trader: order IDs
+	// are sequential, an unscoped query let any authed user enumerate other
+	// users' fills by ID guessing (2026-09-25 P2).
+	fills, err := store.Order().GetOrderFillsForTrader(orderID, traderID)
 	if err != nil {
 		SafeInternalError(c, "Get order fills", err)
 		return

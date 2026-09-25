@@ -229,8 +229,12 @@ function vergexUpstreamPath(backendPath: string): string | null {
 // Relay a browser-fetched vergex payload to the backend so the trending proxy
 // endpoints and the strategy coin sources can serve it. Fire-and-forget.
 function relayVergexPayload(upstreamPath: string, body: string): void {
+ // The relay endpoint is auth-protected (cache poisoning fix 09-25): the
+ // dashboard is logged in, so attach the same bearer the http client uses.
+ const token = localStorage.getItem('auth_token')
  fetch(`/api/trending/relay?path=${encodeURIComponent(upstreamPath)}`, {
  method: 'POST',
+ headers: token ? { Authorization: `Bearer ${token}` } : undefined,
  body,
  }).catch(() => {})
 }

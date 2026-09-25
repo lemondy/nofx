@@ -258,7 +258,23 @@ func (s *OrderStore) GetTraderOrdersFiltered(traderID string, symbol string, sta
 	return orders, nil
 }
 
-// GetOrderFills gets order's fill records
+// GetOrderFillsForTrader gets an order's fills scoped to one trader — the
+// ownership primitive for the fills endpoint (2026-09-25 P2: order IDs are
+// sequential, so an unscoped order_id query let any authed user enumerate
+// other users' fills once the trader-IDOR was closed).
+func (s *OrderStore) GetOrderFillsForTrader(orderID int64, traderID string) ([]*TraderFill, error) {
+	var fills []*TraderFill
+	err := s.db.Where("order_id = ? AND trader_id = ?", orderID, traderID).
+		Order("created_at ASC").
+		Find(&fills).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to query fills: %w", err)
+	}
+	return fills, nil
+}
+
+// GetOrderFills gets order's fill records (UNSCOPED — internal use only;
+// API handlers must use GetOrderFillsForTrader)
 func (s *OrderStore) GetOrderFills(orderID int64) ([]*TraderFill, error) {
 	var fills []*TraderFill
 	err := s.db.Where("order_id = ?", orderID).
