@@ -517,6 +517,7 @@ type QuantData struct {
 	Netflow     *NetflowData       `json:"netflow,omitempty"`
 	OI          map[string]*OIData `json:"oi,omitempty"`
 	PriceChange map[string]float64 `json:"price_change,omitempty"`
+	Liquidation *market.LiquidationWindow `json:"liquidation,omitempty"`
 }
 
 type NetflowData struct {

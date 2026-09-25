@@ -85,6 +85,10 @@ type DerivSignal struct {
 	LongShortAccountRatio  *float64 `json:"long_short_account_ratio,omitempty"`  // global accounts long/short
 	TopTraderPositionRatio *float64 `json:"top_trader_position_ratio,omitempty"` // top-20%-by-position traders long/short
 	TakerBuySellRatio      *float64 `json:"taker_buy_sell_ratio,omitempty"`      // taker buy/sell volume, 1h
+	// Liquidation feed (user directive 2026-09-25): real Binance force-order
+	// stream (!forceOrder@arr), 24h rolling per symbol. Absent during cold
+	// start = the window has no events yet, never "zero liquidations".
+	Liquidation *market.LiquidationWindow `json:"liquidation,omitempty"`
 	// FundingRollover is the PROGRAM-verified short-side crowding condition ②
 	// ("费率刚从高位回落"), computed from the settled funding history vs the
 	// live forward rate (user review 2026-09-15 point 6: the rule demanded
@@ -199,6 +203,11 @@ type SymbolSignal struct {
 	Bias *BiasBlock `json:"bias,omitempty"`
 
 	SignalConflict *SignalConflict `json:"signal_conflict,omitempty"`
+	// OHLCV raw candles per configured timeframe (user directive 2026-09-25):
+	// the strategy UI's 市场数据 panel (enable_raw_klines) promises raw bars
+	// alongside the derived metrics. CLOSED bars only, oldest→newest, last
+	// PrimaryCount per timeframe. [open, high, low, close, volume]
+	OHLCV map[string][][5]float64 `json:"ohlcv,omitempty"`
 }
 
 // RoleTimeframes names the job of each timeframe (⑨): execution TF times the
@@ -676,6 +685,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	}
 	if opt.TakerBuySellRatio != nil {
 		d.TakerBuySellRatio = opt.TakerBuySellRatio
+	}
+	if opt.Quant != nil && opt.Quant.Liquidation != nil {
+		d.Liquidation = opt.Quant.Liquidation
 	}
 	sig.Derivatives = d
 	// ⑤ Precomputed funding annualization on the symbol's REAL settlement

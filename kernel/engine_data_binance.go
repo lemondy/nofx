@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"nofx/logger"
+	"nofx/market"
 	"nofx/provider/nofxos"
 	"nofx/security"
 	"sort"
@@ -657,6 +658,13 @@ func binanceQuantSnapshot(symbol string) (*QuantData, error) {
 				},
 			},
 		}
+	}
+
+	// Liquidations: public all-market force-order stream (keyless), 24h
+	// rolling window maintained by market.LiquidationStats. Cold start
+	// reports nothing rather than zeros.
+	if lw, ok := market.LiquidationStats(symbol); ok {
+		data.Liquidation = &lw
 	}
 
 	quantMu.Lock()

@@ -1518,6 +1518,44 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			}
 			ctx.GateStates[market.Normalize(data.Symbol)] = gs
 		}
+		// Raw OHLCV (user directive 2026-09-25): the strategy config's 市场数据
+		// panel promises raw candles alongside the derived metrics. CLOSED bars
+		// only (the forming candle is dropped — every derived field above is
+		// closed-basis and mixing bases invites lookahead reads), oldest→newest,
+		// last PrimaryCount per configured timeframe.
+		if e.config.Indicators.EnableRawKlines && len(data.TimeframeData) > 0 {
+			count := e.config.Indicators.Klines.PrimaryCount
+			if count < store.MinKlineCount {
+				count = store.MinKlineCount
+			}
+			if count > store.MaxKlineCount {
+				count = store.MaxKlineCount
+			}
+			ov := map[string][][5]float64{}
+			for _, tf := range opt.ConfiguredTimeframes {
+				ts := data.TimeframeData[tf]
+				if ts == nil || len(ts.Klines) == 0 {
+					continue
+				}
+				dur := tfDuration(tf).Milliseconds()
+				bars := make([][5]float64, 0, count)
+				for _, k := range ts.Klines {
+					if k.Time+dur > opt.Now.UnixMilli() {
+						continue // forming candle
+					}
+					bars = append(bars, [5]float64{k.Open, k.High, k.Low, k.Close, k.Volume})
+				}
+				if len(bars) > count {
+					bars = bars[len(bars)-count:]
+				}
+				if len(bars) > 0 {
+					ov[tf] = bars
+				}
+			}
+			if len(ov) > 0 {
+				sig.OHLCV = ov
+			}
+		}
 		// Data-incomplete symbols are barred from trading — nothing beyond
 		// the DO-NOT block is rendered for them.
 		return sig
