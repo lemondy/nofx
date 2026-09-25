@@ -93,13 +93,13 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 
 	// Existing 0.8% + new 1% = 1.8% ≤ 10% → allowed.
 	d := &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 196, PositionSizeUSD: 500}
-	if blocked, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
+	if blocked, _, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
 		t.Fatal("1.8% total risk must pass a 10% cap")
 	}
 
 	// New risk 10.4% (2000 notional × 5.2% stop) → blocked.
 	d = &kernel.Decision{Symbol: "CUSDT", Price: 100, StopLoss: 94.8, PositionSizeUSD: 2000}
-	blocked, reason := at.accountRiskExposureBlocks(d, 100, ctx)
+	blocked, reason, _ := at.accountRiskExposureBlocks(d, 100, ctx)
 	if !blocked {
 		t.Fatal("risk pushing total past the cap must block")
 	}
@@ -110,7 +110,7 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 	// Unprotected position worst-cased at 8%: 300 notional → 24 risk (2.4%).
 	ctx.Positions = append(ctx.Positions, kernel.PositionInfo{Symbol: "DUSDT", Side: "long", EntryPrice: 300, Quantity: 1})
 	d = &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 190, PositionSizeUSD: 1500} // 7.5%
-	blocked, reason = at.accountRiskExposureBlocks(d, 200, ctx)
+	blocked, reason, _ = at.accountRiskExposureBlocks(d, 200, ctx)
 	if !blocked {
 		t.Fatal("unprotected worst-casing should push this over the cap")
 	}
@@ -126,7 +126,7 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 
 	// Missing stop on the DECISION → not this gate's problem (mandatory-SL gate).
 	d = &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 0, PositionSizeUSD: 9000}
-	if blocked, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
+	if blocked, _, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
 		t.Fatal("unpriceable decision must be left to the mandatory-SL gate")
 	}
 }

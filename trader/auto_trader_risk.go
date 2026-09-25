@@ -1182,9 +1182,16 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 // missingProtection inspects a position's open orders and reports which
 // protective legs are absent. STOP* matches stop-loss algos, TAKE_PROFIT*
 // matches TP algos; a resting LIMIT entry on the same symbol is noise here.
-func missingProtection(orders []types.OpenOrder) (needSL, needTP bool) {
+func missingProtection(orders []types.OpenOrder, positionSide string) (needSL, needTP bool) {
 	needSL, needTP = true, true
 	for _, o := range orders {
+		// Hedge-mode-safe (2026-09-25 P0): match the POSITION side — the
+		// opposite side's stop says nothing about this one's. One-way mode
+		// books every order as BOTH: accept it as this side's protection.
+		ps := strings.ToUpper(o.PositionSide)
+		if positionSide != "" && ps != "" && ps != positionSide && ps != "BOTH" {
+			continue
+		}
 		t := strings.ToUpper(o.Type)
 		if strings.Contains(t, "STOP") {
 			needSL = false
@@ -1225,7 +1232,7 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		if err != nil {
 			continue // fail-open
 		}
-		needSL, needTP := missingProtection(orders)
+		needSL, needTP := missingProtection(orders, strings.ToUpper(side))
 		// State healing: the orders exist but the in-memory records were
 		// wiped by a restart — seed them from the exchange so trailing /
 		// breakeven / min-hold bypass keep working for pre-restart positions.
@@ -1268,7 +1275,10 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			if sl := at.GetRecordedStopLoss(symbol, side); sl > 0 {
 				valid := (side == "long" && sl < markPrice) || (side == "short" && sl > markPrice)
 				if valid {
-					if err := at.trader.SetStopLoss(symbol, positionSide, 0, sl); err == nil {
+					// Real quantity (2026-09-25 P1): qty:"0" is REJECTED by
+					// Bybit/OKX with the old stop already cancelled — the repair
+					// must not be able to strand the position naked.
+					if err := at.trader.SetStopLoss(symbol, positionSide, at.positionQty(symbol, side), sl); err == nil {
 						repaired = append(repaired, fmt.Sprintf("SL %.6g", sl))
 					} else {
 						logger.Infof("⚠️ [%s] Protection watchdog: SL re-place failed for %s: %v", at.name, symbol, err)
@@ -1533,12 +1543,12 @@ func finestSubHourTrend(data *market.Data) (string, string) {
 // unprotected positions are worst-cased at the stop-band cap
 // (kernel.UnprotectedStopWorstCasePct). The new trade's risk uses the
 // gate-priced entry (limit anchor when live) and the decision's stop.
-func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx float64, ctx *kernel.Context) (bool, string) {
+func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx float64, ctx *kernel.Context) (bool, string, float64) {
 	rc := at.config.StrategyConfig.RiskControl
 	capPct := rc.EffectiveMaxAccountRiskPct()
 	equity := ctx.Account.TotalEquity
 	if equity <= 0 || entryPx <= 0 || d.StopLoss <= 0 {
-		return false, "" // unpriceable → other gates (mandatory SL) handle it
+		return false, "", 0 // unpriceable → other gates (mandatory SL) handle it
 	}
 	totalRisk := 0.0
 	unprotected := 0
@@ -1554,14 +1564,17 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		}
 		totalRisk += p.Quantity * p.EntryPrice * stopDistPct / 100
 	}
-	newRisk := d.PositionSizeUSD * math.Abs(entryPx-d.StopLoss) / entryPx
+	// Reserved risk (2026-09-25 P1): opens that ALREADY passed this gate
+	// earlier in the same batch share the static ctx.Positions snapshot —
+	// without the reservation two 7% opens both pass a 10% cap.
+	newRisk := d.PositionSizeUSD*math.Abs(entryPx-d.StopLoss)/entryPx + at.cycleRiskReservedUSD
 	usedPct := totalRisk / equity * 100
 	newPct := newRisk / equity * 100
 	if usedPct+newPct > capPct {
-		return true, fmt.Sprintf("open stop-risk %.2f%% (existing %.2f%% + new %.2f%%) would exceed max_account_risk_pct %.1f%% of equity %.2f%s",
-			usedPct+newPct, usedPct, newPct, capPct, equity, unprotectedSuffix(unprotected))
+		return true, fmt.Sprintf("open stop-risk %.2f%% (existing %.2f%% + new %.2f%% incl. %.2f%% reserved this cycle) would exceed max_account_risk_pct %.1f%% of equity %.2f%s",
+			usedPct+newPct, usedPct, newPct, at.cycleRiskReservedUSD/equity*100, capPct, equity, unprotectedSuffix(unprotected)), newRisk
 	}
-	return false, ""
+	return false, "", newRisk
 }
 
 func unprotectedSuffix(n int) string {
@@ -1685,7 +1698,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					entryPx = basis
 				}
 			}
-			if blocked, reason := at.accountRiskExposureBlocks(&d, entryPx, ctx); blocked {
+			if blocked, reason, newRiskUSD := at.accountRiskExposureBlocks(&d, entryPx, ctx); blocked {
 				streak, push := at.gateNotifyRecord("exposure:"+d.Symbol, time.Now())
 				logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: %s (streak %d)", at.name, d.Action, d.Symbol, reason, streak)
 				if push {
@@ -1694,6 +1707,10 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 						notify.Escape(d.Symbol), reason, notify.Escape(d.Reasoning)))
 				}
 				continue
+			} else if newRiskUSD > 0 {
+				// Passed the exposure gate — book the risk so the NEXT open
+				// in this same batch sees it (the ctx snapshot is static).
+				at.cycleRiskReservedUSD += newRiskUSD
 			}
 		}
 		// Loss-streak circuit breaker (opens only).

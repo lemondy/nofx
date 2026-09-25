@@ -239,6 +239,54 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 
 // CancelStopLossOrders cancels only stop-loss orders (doesn't affect take-profit orders)
 // Now uses both legacy API and new Algo Order API
+// CancelStopLossOrdersForSide cancels the symbol's stop-loss orders for ONE
+// position side only — the hedge-mode-safe primitive (2026-09-25 P0: the
+// symbol-wide cancel killed the OPPOSITE side's stop too, and the side-blind
+// watchdog then judged the naked position protected). Empty positionSide
+// cancels all sides (legacy behavior).
+func (t *FuturesTrader) CancelStopLossOrdersForSide(symbol, positionSide string) error {
+	canceledCount := 0
+	var cancelErrors []error
+	match := func(ps string) bool {
+		return positionSide == "" || ps == "" || ps == positionSide ||
+			ps == string(futures.PositionSideTypeBoth)
+	}
+
+	// 1. Legacy stop-loss orders
+	orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
+	if err == nil {
+		for _, order := range orders {
+			orderType := string(order.Type)
+			if (orderType == "STOP_MARKET" || orderType == "STOP") && match(string(order.PositionSide)) {
+				if _, err := t.client.NewCancelOrderService().Symbol(symbol).OrderID(order.OrderID).Do(context.Background()); err != nil {
+					cancelErrors = append(cancelErrors, fmt.Errorf("order %d: %v", order.OrderID, err))
+					continue
+				}
+				canceledCount++
+			}
+		}
+	}
+
+	// 2. Algo stop-loss orders
+	algoOrders, err := t.client.NewListOpenAlgoOrdersService().Symbol(symbol).Do(context.Background())
+	if err == nil {
+		for _, algoOrder := range algoOrders {
+			if (algoOrder.OrderType == futures.AlgoOrderTypeStopMarket || algoOrder.OrderType == futures.AlgoOrderTypeStop) && match(string(algoOrder.PositionSide)) {
+				if _, err := t.client.NewCancelAlgoOrderService().AlgoID(algoOrder.AlgoId).Do(context.Background()); err != nil {
+					cancelErrors = append(cancelErrors, fmt.Errorf("algo %d: %v", algoOrder.AlgoId, err))
+					continue
+				}
+				canceledCount++
+			}
+		}
+	}
+
+	if len(cancelErrors) > 0 && canceledCount == 0 {
+		return fmt.Errorf("failed to cancel stop-loss orders (%s): %v", positionSide, cancelErrors)
+	}
+	return nil
+}
+
 func (t *FuturesTrader) CancelStopLossOrders(symbol string) error {
 	canceledCount := 0
 	var cancelErrors []error

@@ -101,17 +101,17 @@ func TestMissingLegsReport(t *testing.T) {
 	tp := types.OpenOrder{Symbol: "X", Type: "TAKE_PROFIT_MARKET", StopPrice: 0.0885}
 	limit := types.OpenOrder{Symbol: "X", Type: "LIMIT", Price: 0.05}
 
-	if got := missingLegsReport([]types.OpenOrder{sl, tp}, true, true); got != "" {
+	if got := missingLegsReport([]types.OpenOrder{sl, tp}, "", true, true); got != "" {
 		t.Fatalf("both legs resting: got %q, want empty", got)
 	}
-	if got := missingLegsReport([]types.OpenOrder{sl, limit}, true, true); got != "TP" {
+	if got := missingLegsReport([]types.OpenOrder{sl, limit}, "", true, true); got != "TP" {
 		t.Fatalf("TP missing: got %q, want TP (limit entry must not count)", got)
 	}
-	if got := missingLegsReport([]types.OpenOrder{limit}, true, true); got != "SL+TP" {
+	if got := missingLegsReport([]types.OpenOrder{limit}, "", true, true); got != "SL+TP" {
 		t.Fatalf("both missing: got %q, want SL+TP", got)
 	}
 	// SL-only position (TP not intended): a missing TP must NOT be reported.
-	if got := missingLegsReport([]types.OpenOrder{sl}, true, false); got != "" {
+	if got := missingLegsReport([]types.OpenOrder{sl}, "", true, false); got != "" {
 		t.Fatalf("TP not wanted: got %q, want empty", got)
 	}
 }

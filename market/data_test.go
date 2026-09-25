@@ -636,8 +636,10 @@ func TestRefreshFormingCandle(t *testing.T) {
 	}
 
 	// Unknown timeframe label → no patch (duration table returns 0).
-	sd3 := &TimeframeSeriesData{Timeframe: "3d", Klines: []KlineBar{{Time: formingStart.UnixMilli(), Open: 100, High: 102, Low: 99, Close: 100}}}
-	refreshFormingCandle("3d", sd3, 107)
+	// ("3d" used to be the unknown sample — it is a SUPPORTED label now,
+	// 2026-09-25 P1 duration-table fix; use a genuinely unknown one.)
+	sd3 := &TimeframeSeriesData{Timeframe: "9h", Klines: []KlineBar{{Time: formingStart.UnixMilli(), Open: 100, High: 102, Low: 99, Close: 100}}}
+	refreshFormingCandle("9h", sd3, 107)
 	if sd3.Klines[0].Close != 100 {
 		t.Fatalf("unknown timeframe must not patch, got close=%.2f", sd3.Klines[0].Close)
 	}

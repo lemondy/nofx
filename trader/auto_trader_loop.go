@@ -291,6 +291,7 @@ func (at *AutoTrader) runCycle() error {
 
 	// Hard risk gates the AI cannot override: 1d-uptrend short block and the
 	// minimum holding period lock on closes (both strategy risk_control driven).
+	at.cycleRiskReservedUSD = 0 // fresh batch — the reservation accumulates as opens pass the gate
 	sortedDecisions = at.applyHardRiskGates(sortedDecisions, ctx)
 	if len(sortedDecisions) == 0 {
 		logger.Infof("🛡️ [%s] All decisions filtered by hard risk gates", at.name)

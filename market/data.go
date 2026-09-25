@@ -172,8 +172,18 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	// (order placement / SL-TP anchor on this value). xyz dex assets are
 	// Hyperliquid-listed and have no Binance futures ticker — keep the close.
 	if !isXyzAsset {
+		// Exchange-native ticker (2026-09-25 P1): the live price anchors
+		// order placement / SL-TP / RR — it must come from the exchange the
+		// trade runs on, not always Binance. Only Binance has a wired native
+		// ticker here today; every OTHER non-Hyperliquid exchange keeps the
+		// Binance figure but says so loudly (the vendor-divergence gate then
+		// bounds how wrong it can be). Full per-exchange kline/ticker/OI
+		// unification is tracked as follow-up.
 		if livePrice, err := NewAPIClient().GetCurrentPrice(symbol); err == nil && livePrice > 0 {
 			currentPrice = livePrice
+		}
+		if !strings.EqualFold(exchange, "binance") {
+			logger.Warnf("⚠️ %s on %s: live price sourced from Binance ticker (%.6g) — exchange-native quote unification pending; entry/SL checks inherit the cross-venue basis", symbol, exchange, currentPrice)
 		}
 	}
 	// Patch the forming 3m candle with the live price so the intraday series
@@ -459,6 +469,14 @@ func TimeframeDuration(tf string) time.Duration {
 		return 12 * time.Hour
 	case "1d":
 		return 24 * time.Hour
+	// 3d/1w (2026-09-25 P1): the UI offers them and the data source serves
+	// them, but the duration table didn't know them — the signal layer's
+	// unknown-label fallback (1h) then treated a 3-day/1-week forming candle
+	// as settled one hour in, polluting trend/ATR/structure/anchors.
+	case "3d":
+		return 72 * time.Hour
+	case "1w":
+		return 7 * 24 * time.Hour
 	}
 	return 0
 }

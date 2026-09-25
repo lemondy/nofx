@@ -1826,7 +1826,7 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	// — it may still serve as best_rr context (QUANT_REVIEW_2026-09-22 C1).
 	bollSourced := map[float64]bool{}
 	if len(tfData.BOLLUpper) > 0 {
-		if bu := lastNonZero(tfData.BOLLUpper); bu > anchor {
+		if bu := closedBOLLValue(tfData.BOLLUpper, dropped); bu > anchor {
 			bollSourced[bu] = true
 			if !inList(resist, bu, anchor) {
 				resist = append(resist, bu)
@@ -1838,7 +1838,7 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 		}
 	}
 	if len(tfData.BOLLLower) > 0 {
-		if bl := lastNonZero(tfData.BOLLLower); bl < anchor {
+		if bl := closedBOLLValue(tfData.BOLLLower, dropped); bl < anchor {
 			bollSourced[bl] = true
 		}
 	}
@@ -1856,7 +1856,7 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 		supp = supp[:3]
 	}
 	if len(tfData.BOLLLower) > 0 {
-		bl := lastNonZero(tfData.BOLLLower)
+		bl := closedBOLLValue(tfData.BOLLLower, dropped)
 		if bl < anchor && !inList(supp, bl, anchor) {
 			supp = append(supp, bl)
 			sort.Sort(sort.Reverse(sort.Float64Slice(supp)))
@@ -1965,6 +1965,28 @@ func lastNonZero(xs []float64) float64 {
 		}
 	}
 	return 0
+}
+
+// closedBOLLValue returns the Bollinger band value aligned with the last
+// CLOSED candle: the series arrays are index-aligned with the FULL klines
+// (forming bar included), and taking lastNonZero let S/R, the RR scan and
+// the limit-suppression breathe with the forming price (2026-09-25 P2).
+// dropped = forming candles the settlement logic cut from this window.
+func closedBOLLValue(arr []float64, dropped int) float64 {
+	if len(arr) == 0 {
+		return 0
+	}
+	idx := len(arr) - 1 - dropped
+	if idx < 0 {
+		idx = 0
+	}
+	for idx >= 0 && arr[idx] == 0 {
+		idx--
+	}
+	if idx < 0 {
+		return 0
+	}
+	return arr[idx]
 }
 
 // barsToKlines converts KlineBar slices to the full Kline shape the market

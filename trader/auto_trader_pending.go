@@ -9,6 +9,7 @@ import (
 	"nofx/store"
 	notify "nofx/telegram/notify"
 	"nofx/trader/types"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,16 +19,17 @@ import (
 // unfilled → cancelled) | invalidated (price crossed the SL before entry) |
 // replaced (a newer decision for the same symbol).
 type pendingEntry struct {
-	Symbol     string
-	Side       string // "long" / "short"
-	Price      float64
-	Quantity   float64
-	StopLoss   float64
-	TakeProfit float64
-	Leverage   int
-	OrderID    string
-	PlacedAt   time.Time
-	Cycles     int
+	Symbol       string
+	Side         string // "long" / "short"
+	Price        float64
+	Quantity     float64
+	StopLoss     float64
+	TakeProfit   float64
+	Leverage     int
+	OrderID      string
+	PlacedAt     time.Time
+	Cycles       int
+	ProtectedQty float64 // executed size already carrying SL/TP (partial-fill watermark)
 }
 
 func (at *AutoTrader) setPendingEntry(pe *pendingEntry) {
@@ -426,12 +428,12 @@ func (at *AutoTrader) processPendingEntries() {
 		st, _ := status["status"].(string)
 		switch strings.ToUpper(st) {
 		case "FILLED":
-			posKey := pe.Symbol + "_" + pe.Side
-			at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
-			at.SetRecordedStopLoss(pe.Symbol, pe.Side, pe.StopLoss)
-			at.SetInitialStopLoss(pe.Symbol, pe.Side, pe.StopLoss) // 1R anchor — write-once
-			// Fresh position — never inherit a previous trade's peak PnL.
-			at.ClearPeakPnLCache(pe.Symbol, pe.Side)
+			// Reanchor to the ACTUAL fill (P1 2026-09-25): avgPrice can sit
+			// away from the limit on fast books; the protection and the 1R
+			// anchor must price the real position. Partial fills that were
+			// already protected leave ProtectedQty>0 and a recorded stop —
+			// the write-once anchor and the watermark both hold.
+			at.protectExecutedSlice(pe, status)
 			positionSide := "LONG"
 			if pe.Side == "short" {
 				positionSide = "SHORT"
@@ -450,9 +452,35 @@ func (at *AutoTrader) processPendingEntries() {
 			logger.Infof("✅ [%s] Limit entry FILLED: %s %s @ %.6g — protective orders anchored", at.name, pe.Symbol, pe.Side, pe.Price)
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场成交 %s</b>\n<i>%s @ %.6g,保护单已挂</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
 		case "CANCELED", "EXPIRED", "REJECTED":
+			// Residual protection (P1 2026-09-25): a cancel/expiry after a
+			// partial fill must not strand the executed slice on ATR-fallback.
+			at.protectExecutedSlice(pe, status)
 			at.dropPendingEntry(pe.Symbol)
-			logger.Infof("📌 [%s] Limit entry %s %s externally (%s) — state dropped", at.name, pe.Symbol, st, st)
-		default: // NEW / PARTIALLY_FILLED
+			logger.Infof("📌 [%s] Limit entry %s %s externally (%s) — state dropped (executed slice protected if any)", at.name, pe.Symbol, st, st)
+		case "PARTIALLY_FILLED":
+			// P1 (2026-09-25): protect the executed slice NOW at the actual
+			// avg price — a partial used to sit unprotected until the next
+			// cycle boundary, and a later cancel degraded it to ATR-fallback.
+			pe.Cycles++
+			at.protectExecutedSlice(pe, status)
+			// Remaining size keeps the normal pending lifecycle (SL-crossed
+			// invalidation + lifetime expiry), minus the protected watermark.
+			if md, err := market.GetWithExchange(pe.Symbol, at.exchange); err == nil && md.CurrentPrice > 0 {
+				invalid := (pe.Side == "long" && md.CurrentPrice <= pe.StopLoss) ||
+					(pe.Side == "short" && md.CurrentPrice >= pe.StopLoss)
+				if invalid {
+					_ = at.cancelPending(pe)
+					at.dropPendingEntry(pe.Symbol)
+					logger.Infof("📌 [%s] Limit entry %s invalidated after partial fill: remaining slice cancelled, executed slice keeps its protection", at.name, pe.Symbol)
+					continue
+				}
+			}
+			if age := time.Since(pe.PlacedAt); age >= lifetime {
+				_ = at.cancelPending(pe)
+				logger.Infof("📌 [%s] Limit entry %s expired after partial fill: remaining slice cancelled, executed slice keeps its protection", at.name, pe.Symbol)
+				at.dropPendingEntry(pe.Symbol)
+			}
+		default: // NEW
 			pe.Cycles++
 			// Invalidation: price crossed the SL before entry — setup is dead.
 			if md, err := market.GetWithExchange(pe.Symbol, at.exchange); err == nil && md.CurrentPrice > 0 {
@@ -539,4 +567,75 @@ func limitEntryLifetime(maxCycles int, scanInterval time.Duration) time.Duration
 		return min
 	}
 	return lifetime
+}
+
+// reanchorToFill shifts a plan's SL/TP from the reference (limit) price to
+// the ACTUAL fill price, preserving the planned distances — a partial or
+// slipped fill must protect the REAL position, not the intended one.
+func reanchorToFill(side string, refPrice, fillPrice, sl, tp float64) (newSL, newTP float64) {
+	dSL, dTP := sl-refPrice, tp-refPrice
+	if side == "short" {
+		// signed distances already run opposite for shorts (sl above, tp below)
+		return fillPrice + dSL, fillPrice + dTP
+	}
+	return fillPrice + dSL, fillPrice + dTP
+}
+
+// statusFloat reads a float64 out of an exchange order-status map whose
+// numeric fields may arrive as strings.
+func statusFloat(status map[string]interface{}, key string) float64 {
+	switch v := status[key].(type) {
+	case float64:
+		return v
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	}
+	return 0
+}
+
+// protectExecutedSlice places SL/TP for the executed portion of a limit
+// entry at the ACTUAL average fill price (P1, 2026-09-25): partial fills
+// used to sit unprotected until the next full-fill/next-cycle path, and a
+// cancel degraded them to ATR-fallback protection. Idempotent on the
+// protected-qty watermark in the pending entry. Returns the reanchored stop
+// that was recorded (0 = nothing placed).
+func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]interface{}) float64 {
+	executed := statusFloat(status, "executedQty")
+	avg := statusFloat(status, "avgPrice")
+	if executed <= 0 || avg <= 0 {
+		return 0
+	}
+	if executed <= pe.ProtectedQty {
+		return 0 // already protected up to this size
+	}
+	newSL, newTP := reanchorToFill(pe.Side, pe.Price, avg, pe.StopLoss, pe.TakeProfit)
+	if newSL <= 0 || newTP <= 0 {
+		return 0
+	}
+	posKey := pe.Symbol + "_" + pe.Side
+	if at.GetRecordedStopLoss(pe.Symbol, pe.Side) <= 0 {
+		// First slice of this entry: the 1R anchor and the recorded stop are
+		// the REAL opening risk (actual fill), not the plan's limit price.
+		at.SetRecordedStopLoss(pe.Symbol, pe.Side, newSL)
+		at.SetInitialStopLoss(pe.Symbol, pe.Side, newSL)
+		at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+		at.ClearPeakPnLCache(pe.Symbol, pe.Side)
+	}
+	positionSide := "LONG"
+	if pe.Side == "short" {
+		positionSide = "SHORT"
+	}
+	slice := executed - pe.ProtectedQty
+	at.placeProtectiveOrders(&kernel.Decision{
+		Symbol: pe.Symbol, Action: "open_" + pe.Side,
+		StopLoss: newSL, TakeProfit: newTP,
+	}, positionSide, slice, pe.Price, avg)
+	pe.ProtectedQty = executed
+	logger.Infof("📌 [%s] Partial-fill protection: %s %s executed %.6g @ %.6g — SL %.6g / TP %.6g re-anchored to the actual fill",
+		at.name, pe.Symbol, pe.Side, executed, avg, newSL, newTP)
+	notify.Notify("ORDER", at.name, fmt.Sprintf(
+		"<b>📌 部分成交保护 %s</b>\n<i>已成交 %.6g @ %.6g,SL/TP 已按实际成交价重锚(%.6g / %.6g)</i>",
+		notify.Escape(pe.Symbol), executed, avg, newSL, newTP))
+	return newSL
 }

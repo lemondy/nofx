@@ -64,8 +64,23 @@ func resizeAction(actual, target float64) string {
 // seconds-level unprotected window is backstopped by the protection
 // watchdog, which re-places the recorded stop if the new placement fails.
 func (at *AutoTrader) moveStopExchange(symbol, side string, newSL float64) error {
-	_ = at.trader.CancelStopLossOrders(symbol)
-	return at.trader.SetStopLoss(symbol, strings.ToUpper(side), 0, newSL)
+	// Hedge-mode-safe cancel (2026-09-25 P0): the symbol-wide cancel killed
+	// the OPPOSITE side's stop too — updating the long stop left a short
+	// position naked. Side-aware on adapters that support it (Binance);
+	// others keep the wide cancel (their qty semantics differ, see the
+	// qty-0 finding).
+	if c, ok := at.trader.(interface {
+		CancelStopLossOrdersForSide(symbol, positionSide string) error
+	}); ok {
+		_ = c.CancelStopLossOrdersForSide(symbol, strings.ToUpper(side))
+	} else {
+		_ = at.trader.CancelStopLossOrders(symbol)
+	}
+	// Real quantity, not 0 (2026-09-25 P1): Bybit/OKX submit qty:"0" and the
+	// placement is REJECTED with the old stop already cancelled — naked
+	// position. Binance ignores qty (closePosition mode) but the actual size
+	// is harmless to pass.
+	return at.trader.SetStopLoss(symbol, strings.ToUpper(side), at.positionQty(symbol, side), newSL)
 }
 
 // trailingDecision computes the rule-based stop move for one position.
@@ -425,4 +440,25 @@ func (at *AutoTrader) markTPRunner(posKey string) {
 		at.tpRunnerDoneMap = make(map[string]bool)
 	}
 	at.tpRunnerDoneMap[posKey] = true
+}
+
+
+// positionQty reads the LIVE exchange quantity for one symbol+side (the
+// adapter needs a real size for non-Binance stop placement; Binance's
+// closePosition mode ignores it). 0 when unreadable — callers keep their
+// legacy behavior.
+func (at *AutoTrader) positionQty(symbol, side string) float64 {
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return 0
+	}
+	for _, pos := range positions {
+		if pos["symbol"] != symbol || pos["side"] != side {
+			continue
+		}
+		if q, ok := pos["quantity"].(float64); ok && q > 0 {
+			return q
+		}
+	}
+	return 0
 }

@@ -267,6 +267,12 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// Record order to database and poll for confirmation
 	at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0)
 
+	fillPrice := orderFloat(order, "avgPrice")
+	// Reanchor BEFORE recording (2026-09-25 P2): the recorded stop and the
+	// write-once 1R anchor must describe the REAL opening risk at the actual
+	// fill, not the pre-slippage plan.
+	reanchorProtectivePrices(decision, marketData.CurrentPrice, fillPrice)
+
 	// Record position opening time and stop-loss (drives the min-hold gate)
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
@@ -276,7 +282,6 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// the previous trade's peak (stale peaks poison the drawdown monitors).
 	at.ClearPeakPnLCache(decision.Symbol, "long")
 
-	fillPrice := orderFloat(order, "avgPrice")
 	at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
 	return nil
@@ -451,12 +456,14 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// Record position opening time and stop-loss (drives the min-hold gate)
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+	fillPrice := orderFloat(order, "avgPrice")
+	reanchorProtectivePrices(decision, marketData.CurrentPrice, fillPrice)
+
 	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
 	at.SetInitialStopLoss(decision.Symbol, "short", decision.StopLoss) // 1R anchor — write-once, immune to later tighten
 	// Peak PnL is per-position state — see the open_long note above.
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 
-	fillPrice := orderFloat(order, "avgPrice")
 	at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
 	return nil
@@ -483,7 +490,11 @@ func orderFloat(m map[string]interface{}, key string) float64 {
 // otherwise run unprotected. quantity is used by exchange implementations that
 // place qty-sized trigger orders.
 func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) {
-	reanchorProtectivePrices(decision, refPrice, fillPrice)
+	// NOTE: callers pass FINAL (fill-reanchored) SL/TP — the reanchor used to
+	// live here, but it ran AFTER the recorded stop/1R-anchor were written,
+	// leaving memory on the pre-slippage plan while the exchange got the
+	// shifted one (2026-09-25 P2). Market paths reanchor explicitly before
+	// recording; pending/partial paths pre-anchor in protectExecutedSlice.
 	if decision.StopLoss > 0 {
 		if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
 			logger.Infof("  ⚠ Failed to set stop loss for %s: %v", decision.Symbol, err)
@@ -529,8 +540,8 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 // missingLegsReport returns "" when every INTENDED leg (wantSL/wantTP) is
 // resting on the exchange; otherwise names what is missing. Pure — the
 // retry/notify wrapper around it is verifyProtectiveLegs.
-func missingLegsReport(orders []types.OpenOrder, wantSL, wantTP bool) string {
-	needSL, needTP := missingProtection(orders)
+func missingLegsReport(orders []types.OpenOrder, positionSide string, wantSL, wantTP bool) string {
+	needSL, needTP := missingProtection(orders, positionSide)
 	var missing []string
 	if wantSL && needSL {
 		missing = append(missing, "SL")
@@ -559,7 +570,7 @@ func (at *AutoTrader) verifyProtectiveLegs(decision *kernel.Decision, positionSi
 			report = fmt.Sprintf("open-orders query failed: %v", err)
 			continue
 		}
-		report = missingLegsReport(orders, wantSL, wantTP)
+		report = missingLegsReport(orders, positionSide, wantSL, wantTP)
 		if report == "" {
 			logger.Infof("  ✅ [%s] protective legs verified on exchange: %s %s", at.name, decision.Symbol, positionSide)
 			return

@@ -150,29 +150,29 @@ func TestMissingProtection(t *testing.T) {
 		{Type: "STOP_MARKET", Status: "NEW"},
 		{Type: "TAKE_PROFIT_MARKET", Status: "NEW"},
 	}
-	if sl, tp := missingProtection(both); sl || tp {
+	if sl, tp := missingProtection(both, ""); sl || tp {
 		t.Fatalf("both legs present: sl=%v tp=%v", sl, tp)
 	}
 	legacy := []types.OpenOrder{
 		{Type: "STOP", Status: "NEW"},
 		{Type: "TAKE_PROFIT", Status: "NEW"},
 	}
-	if sl, tp := missingProtection(legacy); sl || tp {
+	if sl, tp := missingProtection(legacy, ""); sl || tp {
 		t.Fatalf("legacy legs: sl=%v tp=%v", sl, tp)
 	}
 	slOnly := []types.OpenOrder{{Type: "STOP_MARKET", Status: "NEW"}}
-	if sl, tp := missingProtection(slOnly); sl || !tp {
+	if sl, tp := missingProtection(slOnly, ""); sl || !tp {
 		t.Fatalf("SL-only book: sl=%v tp=%v (want false/true)", sl, tp)
 	}
 	tpOnly := []types.OpenOrder{{Type: "TAKE_PROFIT_MARKET", Status: "NEW"}}
-	if sl, tp := missingProtection(tpOnly); !sl || tp {
+	if sl, tp := missingProtection(tpOnly, ""); !sl || tp {
 		t.Fatalf("TP-only book: sl=%v tp=%v (want true/false)", sl, tp)
 	}
 	noise := []types.OpenOrder{{Type: "LIMIT", Status: "NEW"}}
-	if sl, tp := missingProtection(noise); !sl || !tp {
+	if sl, tp := missingProtection(noise, ""); !sl || !tp {
 		t.Fatalf("limit entry is not protection: sl=%v tp=%v (want true/true)", sl, tp)
 	}
-	if sl, tp := missingProtection(nil); !sl || !tp {
+	if sl, tp := missingProtection(nil, ""); !sl || !tp {
 		t.Fatalf("empty book: sl=%v tp=%v (want true/true)", sl, tp)
 	}
 }
