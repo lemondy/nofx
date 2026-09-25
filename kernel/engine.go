@@ -496,6 +496,11 @@ type Decision struct {
 	// silently turn the degraded order back into the market chase the gate
 	// just refused (B1, QUANT_REVIEW 2026-09-22).
 	MarketDegraded bool `json:"-"`
+	// CycleReservedRiskUSD (internal, never serialized): the stop-risk this
+	// open booked against the account exposure cap once it survived the
+	// whole hard-gate chain (R8, QUANT_REVIEW 09-26). Execution failure
+	// releases it.
+	CycleReservedRiskUSD float64 `json:"-"`
 	// WaitState + NextTrigger complete the trade state machine (review
 	// 2026-09-15 points 11/12): wait_state ∈ ValidWaitStates, and next_trigger
 	// is ONE sentence naming the required event and ending with the mandate

@@ -69,6 +69,15 @@ func (at *AutoTrader) moveStopExchange(symbol, side string, newSL float64) error
 	// position naked. Side-aware on adapters that support it (Binance);
 	// others keep the wide cancel (their qty semantics differ, see the
 	// qty-0 finding).
+	// R1 (2026-09-26 review): resolve the REAL quantity BEFORE cancelling the
+	// old stop. Unknown size ⇒ keep the old stop in place and report — the
+	// old bug cancelled first and then placed qty:"0", which Bybit/OKX
+	// reject, stranding the position with NO protection. Binance ignores
+	// the qty (closePosition mode) but still needs a readable position.
+	qty, qtyOK := at.positionQty(symbol, side)
+	if !qtyOK {
+		return fmt.Errorf("moveStopExchange %s %s: live quantity unreadable — old stop KEPT, new SL %.6g not placed", symbol, side, newSL)
+	}
 	if c, ok := at.trader.(interface {
 		CancelStopLossOrdersForSide(symbol, positionSide string) error
 	}); ok {
@@ -76,11 +85,7 @@ func (at *AutoTrader) moveStopExchange(symbol, side string, newSL float64) error
 	} else {
 		_ = at.trader.CancelStopLossOrders(symbol)
 	}
-	// Real quantity, not 0 (2026-09-25 P1): Bybit/OKX submit qty:"0" and the
-	// placement is REJECTED with the old stop already cancelled — naked
-	// position. Binance ignores qty (closePosition mode) but the actual size
-	// is harmless to pass.
-	return at.trader.SetStopLoss(symbol, strings.ToUpper(side), at.positionQty(symbol, side), newSL)
+	return at.trader.SetStopLoss(symbol, strings.ToUpper(side), qty, newSL)
 }
 
 // trailingDecision computes the rule-based stop move for one position.
@@ -448,22 +453,30 @@ func (at *AutoTrader) markTPRunner(posKey string) {
 }
 
 
-// positionQty reads the LIVE exchange quantity for one symbol+side (the
-// adapter needs a real size for non-Binance stop placement; Binance's
-// closePosition mode ignores it). 0 when unreadable — callers keep their
-// legacy behavior.
-func (at *AutoTrader) positionQty(symbol, side string) float64 {
+// positionQty reads the LIVE exchange quantity for one symbol+side — R1 fix
+// (2026-09-26 review): every adapter emits `positionAmt` (short NEGATIVE on
+// Bybit/OKX; the old `quantity` key exists nowhere, so this always returned
+// 0 and Bybit/OKX rejected the re-placement with the old stop already
+// gone). Returns abs(base-asset size). ok=false when unreadable — the
+// caller must NOT cancel the old stop on that path (unknown size ⇒ no
+// cancel, no placement, watchdog keeps watching).
+func (at *AutoTrader) positionQty(symbol, side string) (float64, bool) {
 	positions, err := at.trader.GetPositions()
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	for _, pos := range positions {
 		if pos["symbol"] != symbol || pos["side"] != side {
 			continue
 		}
-		if q, ok := pos["quantity"].(float64); ok && q > 0 {
-			return q
+		amt, ok := pos["positionAmt"].(float64)
+		if !ok || amt == 0 {
+			return 0, false
 		}
+		if amt < 0 {
+			amt = -amt
+		}
+		return amt, true
 	}
-	return 0
+	return 0, false
 }

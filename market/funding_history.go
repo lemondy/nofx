@@ -107,12 +107,12 @@ func IsUSMarketWeekend(now time.Time) bool {
 // ============================================================================
 
 var (
-	bstockSymbols    map[string]bool
-	usEquitySymbols  map[string]bool // EQUITY/PREMARKET underlyingType only — US-session weighting set
-	binanceListed    map[string]bool // EVERY symbol Binance futures lists — the xyz-routing check
-	bstockMu         sync.RWMutex
-	bstockLoaded     time.Time
-	bstockLoadError  time.Time
+	bstockSymbols   map[string]bool
+	usEquitySymbols map[string]bool // EQUITY/PREMARKET underlyingType only — US-session weighting set
+	binanceListed   map[string]bool // EVERY symbol Binance futures lists — the xyz-routing check
+	bstockMu        sync.RWMutex
+	bstockLoaded    time.Time
+	bstockLoadError time.Time
 )
 
 const (
@@ -164,23 +164,44 @@ func loadBStockSymbols() map[string]bool {
 	return next
 }
 
-// SetEquityClassificationForTesting pins the classification state used by
-// IsUSEquitySymbol / binanceListsNative — tests must not depend on live
-// exchangeInfo (a sandbox without network turned the boost test into a
-// flake: the fetch failed and every symbol classified non-equity). nil
-// restores the live path.
+// SetEquityClassificationForTesting pins the COMPLETE classification state
+// used by IsBStockSymbol / IsUSEquitySymbol / binanceListsNative — tests
+// must not depend on live exchangeInfo. R11 (2026-09-26 review): the first
+// version left bstockSymbols EMPTY while IsBStockSymbol reads it, so
+// IsBStockSymbol/IsUSEquitySymbol returned false for the injected symbol and
+// the stock-band tests silently exercised the crypto path. "all" populates
+// BOTH the bstock set and the native-listing set (a stock IS listed on
+// Binance by definition), "us" the US-equity subset. nil,nil clears
+// everything back to the live-reload path.
 func SetEquityClassificationForTesting(all, us map[string]bool) {
 	bstockMu.Lock()
 	defer bstockMu.Unlock()
 	if all == nil && us == nil {
-		binanceListed = nil // force a live reload on next use
+		bstockSymbols = nil
+		usEquitySymbols = nil
+		binanceListed = nil
+		bstockLoaded = time.Time{}
 		return
 	}
-	binanceListed = all
-	usEquitySymbols = us
-	if bstockSymbols == nil {
-		bstockSymbols = map[string]bool{}
+	next := map[string]bool{}
+	for sym := range all {
+		next[sym] = true
 	}
+	for sym := range us {
+		next[sym] = true
+	}
+	bstockSymbols = next
+	usNext := map[string]bool{}
+	for sym := range us {
+		usNext[sym] = true
+	}
+	usEquitySymbols = usNext
+	allNext := map[string]bool{}
+	for sym := range next {
+		allNext[sym] = true
+	}
+	binanceListed = allNext
+	bstockLoaded = time.Now()
 }
 
 // binanceListsNative reports whether BASE (no USDT suffix) trades as a

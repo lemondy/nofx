@@ -434,10 +434,6 @@ func (at *AutoTrader) processPendingEntries() {
 			// already protected leave ProtectedQty>0 and a recorded stop —
 			// the write-once anchor and the watermark both hold.
 			at.protectExecutedSlice(pe, status)
-			positionSide := "LONG"
-			if pe.Side == "short" {
-				positionSide = "SHORT"
-			}
 			// B3 (QUANT_REVIEW 09-22, observability): the entry gates were
 			// evaluated at PLACEMENT time; a fill up to 30min later can sit
 			// in a dead setup. The SL/TP still anchor at the fill price, so
@@ -445,10 +441,12 @@ func (at *AutoTrader) processPendingEntries() {
 			// only, no auto-close: that behavior change waits for user sign-off).
 			at.reportFilledRR(pe)
 			at.markAIManaged(pe.Symbol, pe.Side)
-			at.placeProtectiveOrders(&kernel.Decision{
-				Symbol: pe.Symbol, Action: "open_" + pe.Side,
-				StopLoss: pe.StopLoss, TakeProfit: pe.TakeProfit,
-			}, positionSide, pe.Quantity, pe.Price, pe.Price) // fill == limit price: exact anchor
+			// R2 (2026-09-26 review): the full-quantity plan placement here
+			// DOUBLE-BOOKED protection on top of protectExecutedSlice —
+			// 0.5-TP fraction placed twice (半仓目标变全仓) and prices mixed
+			// plan/actual fill. protectExecutedSlice above is the SINGLE
+			// protection reconcile: it places the missing slice at the
+			// actual avgPrice and only advances the watermark on success.
 			at.dropPendingEntry(pe.Symbol)
 			logger.Infof("✅ [%s] Limit entry FILLED: %s %s @ %.6g — protective orders anchored", at.name, pe.Symbol, pe.Side, pe.Price)
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场成交 %s</b>\n<i>%s @ %.6g,保护单已挂</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
@@ -470,14 +468,23 @@ func (at *AutoTrader) processPendingEntries() {
 				invalid := (pe.Side == "long" && md.CurrentPrice <= pe.StopLoss) ||
 					(pe.Side == "short" && md.CurrentPrice >= pe.StopLoss)
 				if invalid {
-					_ = at.cancelPending(pe)
+					// R5: only drop the pending state when the exchange order
+					// is ACTUALLY cancelled — otherwise the resting order can
+					// still fill into an untracked position.
+					if cerr := at.cancelPending(pe); cerr != nil {
+						logger.Infof("⚠️ [%s] Limit entry %s invalidation cancel FAILED (%v) — kept pending, retried next cycle", at.name, pe.Symbol, cerr)
+						continue
+					}
 					at.dropPendingEntry(pe.Symbol)
 					logger.Infof("📌 [%s] Limit entry %s invalidated after partial fill: remaining slice cancelled, executed slice keeps its protection", at.name, pe.Symbol)
 					continue
 				}
 			}
 			if age := time.Since(pe.PlacedAt); age >= lifetime {
-				_ = at.cancelPending(pe)
+				if cerr := at.cancelPending(pe); cerr != nil {
+					logger.Infof("⚠️ [%s] Limit entry %s expiry cancel FAILED (%v) — kept pending, retried next cycle", at.name, pe.Symbol, cerr)
+					continue
+				}
 				logger.Infof("📌 [%s] Limit entry %s expired after partial fill: remaining slice cancelled, executed slice keeps its protection", at.name, pe.Symbol)
 				at.dropPendingEntry(pe.Symbol)
 			}
@@ -488,13 +495,19 @@ func (at *AutoTrader) processPendingEntries() {
 				invalid := (pe.Side == "long" && md.CurrentPrice <= pe.StopLoss) ||
 					(pe.Side == "short" && md.CurrentPrice >= pe.StopLoss)
 				if invalid {
-					_ = at.cancelPending(pe)
+					if cerr := at.cancelPending(pe); cerr != nil {
+						logger.Infof("⚠️ [%s] Limit entry %s invalidation cancel FAILED (%v) — kept pending, retried next cycle", at.name, pe.Symbol, cerr)
+						continue
+					}
 					logger.Infof("📌 [%s] Limit entry %s invalidated: price crossed SL before entry", at.name, pe.Symbol)
 					continue
 				}
 			}
 			if age := time.Since(pe.PlacedAt); age >= lifetime {
-				_ = at.cancelPending(pe)
+				if cerr := at.cancelPending(pe); cerr != nil {
+					logger.Infof("⚠️ [%s] Limit entry %s expiry cancel FAILED (%v) — kept pending, retried next cycle", at.name, pe.Symbol, cerr)
+					continue
+				}
 				logger.Infof("📌 [%s] Limit entry %s expired after %s (lifetime max(30min, %d×%v)) — cancelled for re-evaluation", at.name, pe.Symbol, age.Round(time.Second), maxCycles, at.config.ScanInterval)
 			} else {
 				logger.Infof("📌 [%s] Limit entry %s pending (%d/%d cycles, age %s of %s)", at.name, pe.Symbol, pe.Cycles, maxCycles, age.Round(time.Second), lifetime)
@@ -629,10 +642,16 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 		positionSide = "SHORT"
 	}
 	slice := executed - pe.ProtectedQty
-	at.placeProtectiveOrders(&kernel.Decision{
+	// R2: the watermark advances ONLY when both legs actually placed — a
+	// failed placement must not mark the slice protected (the same size
+	// would be skipped forever).
+	if err := at.placeProtectiveOrders(&kernel.Decision{
 		Symbol: pe.Symbol, Action: "open_" + pe.Side,
 		StopLoss: newSL, TakeProfit: newTP,
-	}, positionSide, slice, pe.Price, avg)
+	}, positionSide, slice, pe.Price, avg); err != nil {
+		logger.Infof("⚠️ [%s] partial-fill protection FAILED for %s %s: %v — watermark NOT advanced, retried next cycle", at.name, pe.Symbol, pe.Side, err)
+		return 0
+	}
 	pe.ProtectedQty = executed
 	logger.Infof("📌 [%s] Partial-fill protection: %s %s executed %.6g @ %.6g — SL %.6g / TP %.6g re-anchored to the actual fill",
 		at.name, pe.Symbol, pe.Side, executed, avg, newSL, newTP)

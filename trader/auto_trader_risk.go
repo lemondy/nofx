@@ -1068,15 +1068,14 @@ func (at *AutoTrader) exchangeStopPrice(symbol, side string) float64 {
 // the AI's new price — TIGHTEN-ONLY (guard enforced): structure-based profit
 // protection the mechanical 1R/ATR ladders cannot express.
 func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
-	// Hands-off rule (user directive 2026-09-25): manual positions are never
-	// adjusted by the program.
-	handsOffSide := "long"
-	if strings.Contains(decision.Action, "short") {
-		handsOffSide = "short"
-	}
-	if decision.Symbol != "" && !at.isAIManaged(decision.Symbol, handsOffSide) {
-		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — adjust_stop_loss rejected", decision.Symbol)
-	}
+	// Hands-off rule (user directive 2026-09-25, R7 fix 2026-09-26): the
+	// action string carries NO side ("adjust_stop_loss"), so ownership is
+	// validated against the side ACTUALLY MATCHED below — checking a
+	// hardcoded "long" let a mixed AI-long/manual-short account pass the
+	// long check and then modify the manual SHORT. Positions that fail the
+	// tighten test are not candidates; among the remaining candidates the
+	// trade must be AI-managed on EVERY matched side, else ambiguous →
+	// reject (never guess by stop price).
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return err
@@ -1118,6 +1117,10 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 		// (user 09-14: 没有仓位就停止 stop loss 操作).
 		logger.Infof("ℹ️ [%s] adjust_stop_loss skipped: %s has no open position (closed during the AI-call window — context snapshot was stale)", at.name, decision.Symbol)
 		return nil
+	}
+	// R7 ownership: the matched side is now known — reject manual there.
+	if !at.isAIManaged(decision.Symbol, side) {
+		return fmt.Errorf("❌ [HANDS-OFF] %s %s was not opened by the AI — adjust_stop_loss rejected", decision.Symbol, side)
 	}
 	if !stopMoveTightens(side, currentSL, decision.StopLoss, markPrice) {
 		return fmt.Errorf("❌ [RISK CONTROL] adjust_stop_loss %s rejected: new SL %.6g must TIGHTEN (current %.6g, mark %.6g) — never widen, never cross the mark",
@@ -1303,10 +1306,13 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			if sl := at.GetRecordedStopLoss(symbol, side); sl > 0 {
 				valid := (side == "long" && sl < markPrice) || (side == "short" && sl > markPrice)
 				if valid {
-					// Real quantity (2026-09-25 P1): qty:"0" is REJECTED by
-					// Bybit/OKX with the old stop already cancelled — the repair
-					// must not be able to strand the position naked.
-					if err := at.trader.SetStopLoss(symbol, positionSide, at.positionQty(symbol, side), sl); err == nil {
+					// Real quantity (2026-09-25 P1 + R1 fix): resolve size
+					// FIRST — qty:"0" is rejected by Bybit/OKX, stranding the
+					// position. Unreadable size → alert, no placement.
+					qty, qtyOK := at.positionQty(symbol, side)
+					if !qtyOK {
+						at.alertUnprotectedPosition(symbol, side, "live position quantity unreadable — SL re-place skipped")
+					} else if err := at.trader.SetStopLoss(symbol, positionSide, qty, sl); err == nil {
 						repaired = append(repaired, fmt.Sprintf("SL %.6g", sl))
 					} else {
 						logger.Infof("⚠️ [%s] Protection watchdog: SL re-place failed for %s: %v", at.name, symbol, err)
@@ -1592,17 +1598,21 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		}
 		totalRisk += p.Quantity * p.EntryPrice * stopDistPct / 100
 	}
-	// Reserved risk (2026-09-25 P1): opens that ALREADY passed this gate
-	// earlier in the same batch share the static ctx.Positions snapshot —
-	// without the reservation two 7% opens both pass a 10% cap.
-	newRisk := d.PositionSizeUSD*math.Abs(entryPx-d.StopLoss)/entryPx + at.cycleRiskReservedUSD
-	usedPct := totalRisk / equity * 100
-	newPct := newRisk / equity * 100
-	if usedPct+newPct > capPct {
-		return true, fmt.Sprintf("open stop-risk %.2f%% (existing %.2f%% + new %.2f%% incl. %.2f%% reserved this cycle) would exceed max_account_risk_pct %.1f%% of equity %.2f%s",
-			usedPct+newPct, usedPct, newPct, at.cycleRiskReservedUSD/equity*100, capPct, equity, unprotectedSuffix(unprotected)), newRisk
+	// R8 (2026-09-26 review): the candidate is priced ALONE — the caller
+	// books candidateRisk only when the candidate PASSES, so the reservation
+	// accumulates linearly (20→40→60), never compounding (the old shape fed
+	// the reservation into the candidate AND re-booked it: 20→60→140), never
+	// charges risk for candidates a later gate rejects.
+	candidateRisk := d.PositionSizeUSD * math.Abs(entryPx-d.StopLoss) / entryPx
+	reserved := at.cycleRiskReservedUSD
+	existingPct := totalRisk / equity * 100
+	candidatePct := candidateRisk / equity * 100
+	reservedPct := reserved / equity * 100
+	if existingPct+candidatePct+reservedPct > capPct {
+		return true, fmt.Sprintf("open stop-risk would exceed max_account_risk_pct %.1f%% of equity %.2f: existing %.2f%% + candidate %.2f%% + reserved-this-cycle %.2f%%%s",
+			capPct, equity, existingPct, candidatePct, reservedPct, unprotectedSuffix(unprotected)), candidateRisk
 	}
-	return false, "", newRisk
+	return false, "", candidateRisk
 }
 
 func unprotectedSuffix(n int) string {
@@ -1726,7 +1736,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					entryPx = basis
 				}
 			}
-			if blocked, reason, newRiskUSD := at.accountRiskExposureBlocks(&d, entryPx, ctx); blocked {
+			if blocked, reason, candUSD := at.accountRiskExposureBlocks(&d, entryPx, ctx); blocked {
 				streak, push := at.gateNotifyRecord("exposure:"+d.Symbol, time.Now())
 				logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: %s (streak %d)", at.name, d.Action, d.Symbol, reason, streak)
 				if push {
@@ -1735,10 +1745,11 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 						notify.Escape(d.Symbol), reason, notify.Escape(d.Reasoning)))
 				}
 				continue
-			} else if newRiskUSD > 0 {
-				// Passed the exposure gate — book the risk so the NEXT open
-				// in this same batch sees it (the ctx snapshot is static).
-				at.cycleRiskReservedUSD += newRiskUSD
+			} else {
+				// R8: booking DEFERRED — the candidate must survive the whole
+				// gate chain first; carried on the decision, booked at the
+				// final append.
+				d.CycleReservedRiskUSD = candUSD
 			}
 		}
 		// Loss-streak circuit breaker (opens only).
@@ -1857,6 +1868,9 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				continue
 			}
 		}
+		// R8: the decision survived EVERY gate — now book its stop-risk so
+		// later decisions in this batch see it.
+		at.cycleRiskReservedUSD += d.CycleReservedRiskUSD
 		filtered = append(filtered, d)
 	}
 	return filtered

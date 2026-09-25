@@ -711,7 +711,9 @@ func (at *AutoTrader) isAIManaged(symbol, side string) bool {
 // file, NOT a per-boot re-seed (a per-boot seed would re-adopt manual
 // positions on every restart and defeat the hands-off rule).
 func (at *AutoTrader) seedAIManagedOnce() {
-	flag := "data/ai_marks_seeded"
+	// R6 (2026-09-26 review): per-trader flag — a shared file let the first
+	// trader mark migration done and every OTHER trader skip its own seeding.
+	flag := fmt.Sprintf("data/ai_marks_seeded_%s", at.id)
 	if _, err := os.Stat(flag); err == nil {
 		return
 	}

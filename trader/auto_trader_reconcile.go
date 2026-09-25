@@ -169,6 +169,8 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 // process was down: drop the row and place protective orders anchored at the
 // limit price — the exact price the risk gates validated at.
 func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
+	// (R6: the AI-managed mark below is written BEFORE this row delete in
+	// the flow — ownership persists even if the delete fails.)
 	if err := at.store.PendingEntry().Delete(at.id, row.Symbol); err != nil {
 		logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 	}
@@ -198,6 +200,10 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
 			at.name, row.Symbol, posSide)
 		return
 	}
+	// R6 (2026-09-26 review): the offline fill IS an AI fill (this is the
+	// AI's own pending entry) — mark ownership BEFORE deleting the pending
+	// row, so the hands-off watchdog can never classify it manual later.
+	at.markAIManaged(row.Symbol, row.Side)
 	posKey := row.Symbol + "_" + row.Side
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	at.SetRecordedStopLoss(row.Symbol, row.Side, row.StopLoss)

@@ -324,6 +324,15 @@ func (at *AutoTrader) runCycle() error {
 		}
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
+			// R8 release: an open that FAILED execution must give back the
+			// stop-risk it booked at the exposure gate — otherwise a failed
+			// order keeps eating the account's risk budget for the cycle.
+			if strings.HasPrefix(d.Action, "open_") && d.CycleReservedRiskUSD > 0 {
+				at.cycleRiskReservedUSD -= d.CycleReservedRiskUSD
+				if at.cycleRiskReservedUSD < 0 {
+					at.cycleRiskReservedUSD = 0
+				}
+			}
 			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			// Alert dedup (CAPUSDT 09-15): the AI retrying an illegal
 			// adjust_stop_loss every cycle must not page six times — one alert
@@ -670,6 +679,12 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			at.peakPnLCacheMutex.Lock()
 			delete(at.peakPnLCache, key)
 			at.peakPnLCacheMutex.Unlock()
+			// R6 (2026-09-26 review): THIS is the position-gone branch — the
+			// AI-mark belongs here, not in the first-sighting branch.
+			parts := strings.SplitN(key, "_", 2)
+			if len(parts) == 2 {
+				at.unmarkAIManaged(parts[0], parts[1])
+			}
 		}
 	}
 

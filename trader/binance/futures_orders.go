@@ -1,6 +1,7 @@
 package binance
 
 import (
+	"strings"
 	"context"
 	"fmt"
 	"nofx/logger"
@@ -12,9 +13,11 @@ import (
 
 // OpenLong opens a long position
 func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// First cancel all pending orders for this symbol (clean up old stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel old pending orders (may not have any): %v", err)
+	// R4 (2026-09-26 review): cancel ONLY this side's leftover protection —
+	// CancelAllOrders wiped the opposite side's SL/TP (and any manual
+	// positions' protection the hands-off rule will never restore).
+	if err := t.CancelProtectiveOrdersForSide(symbol, string(futures.PositionSideTypeLong)); err != nil {
+		logger.Infof("  ⚠ Failed to cancel old LONG protection (may not have any): %v", err)
 	}
 
 	// Set leverage
@@ -67,9 +70,9 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 
 // OpenShort opens a short position
 func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// First cancel all pending orders for this symbol (clean up old stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel old pending orders (may not have any): %v", err)
+	// R4: only this side's leftover protection (see OpenLong).
+	if err := t.CancelProtectiveOrdersForSide(symbol, string(futures.PositionSideTypeShort)); err != nil {
+		logger.Infof("  ⚠ Failed to cancel old SHORT protection (may not have any): %v", err)
 	}
 
 	// Set leverage
@@ -167,7 +170,9 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 	// quantity, e.g. the TP-ladder 1/3 trim) must keep them — the remaining
 	// position would otherwise ride unprotected.
 	if quantity == 0 {
-		if err := t.CancelAllOrders(symbol); err != nil {
+		// R4 (2026-09-26 review): full close cancels THIS side's protection
+		// only — CancelAllOrders wiped the opposite side's SL/TP too.
+		if err := t.CancelProtectiveOrdersForSide(symbol, string(futures.PositionSideTypeLong)); err != nil {
 			logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
 		}
 	}
@@ -225,7 +230,9 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 	// Full closes cancel the remaining SL/TP orders; partial closes keep
 	// them (same rule as CloseLong).
 	if quantity == 0 {
-		if err := t.CancelAllOrders(symbol); err != nil {
+		// R4 (2026-09-26 review): full close cancels THIS side's protection
+		// only — CancelAllOrders wiped the opposite side's SL/TP too.
+		if err := t.CancelProtectiveOrdersForSide(symbol, string(futures.PositionSideTypeShort)); err != nil {
 			logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
 		}
 	}
@@ -239,6 +246,49 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 
 // CancelStopLossOrders cancels only stop-loss orders (doesn't affect take-profit orders)
 // Now uses both legacy API and new Algo Order API
+// CancelProtectiveOrdersForSide cancels BOTH protective legs (SL + TP) for
+// ONE position side — R4 (2026-09-26 review): OpenLong/OpenShort and full
+// closes used CancelAllOrders(symbol), which wiped the OPPOSITE side's
+// protection (including manually opened positions' stops, which the
+// hands-off watchdog will never restore). Only this side's STOP*/TAKE_PROFIT*
+// algos and legacy stops are cancelled.
+func (t *FuturesTrader) CancelProtectiveOrdersForSide(symbol, positionSide string) error {
+	cancelErrors := []error{}
+
+	orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
+	if err == nil {
+		for _, order := range orders {
+			orderType := strings.ToUpper(string(order.Type))
+			isProtective := strings.Contains(orderType, "STOP") || strings.Contains(orderType, "TAKE_PROFIT")
+			if !isProtective || string(order.PositionSide) != positionSide {
+				continue
+			}
+			if _, err := t.client.NewCancelOrderService().Symbol(symbol).OrderID(order.OrderID).Do(context.Background()); err != nil {
+				cancelErrors = append(cancelErrors, fmt.Errorf("order %d: %v", order.OrderID, err))
+			}
+		}
+	}
+
+	algoOrders, err := t.client.NewListOpenAlgoOrdersService().Symbol(symbol).Do(context.Background())
+	if err == nil {
+		for _, algo := range algoOrders {
+			algoType := strings.ToUpper(string(algo.OrderType))
+			isProtective := strings.Contains(algoType, "STOP") || strings.Contains(algoType, "TAKE_PROFIT")
+			if !isProtective || string(algo.PositionSide) != positionSide {
+				continue
+			}
+			if _, err := t.client.NewCancelAlgoOrderService().AlgoID(algo.AlgoId).Do(context.Background()); err != nil {
+				cancelErrors = append(cancelErrors, fmt.Errorf("algo %d: %v", algo.AlgoId, err))
+			}
+		}
+	}
+
+	if len(cancelErrors) > 0 {
+		return fmt.Errorf("failed to cancel protective orders (%s %s): %v", symbol, positionSide, cancelErrors)
+	}
+	return nil
+}
+
 // CancelStopLossOrdersForSide cancels the symbol's stop-loss orders for ONE
 // position side only — the hedge-mode-safe primitive (2026-09-25 P0: the
 // symbol-wide cancel killed the OPPOSITE side's stop too, and the side-blind

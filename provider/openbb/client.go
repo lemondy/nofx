@@ -194,7 +194,18 @@ func CryptoKlines(ctx context.Context, base string, interval string, limit int) 
 	q := url.Values{}
 	q.Set("symbol", strings.ToUpper(base)+"-USD")
 	q.Set("provider", "yfinance")
-	q.Set("interval", mapYFInterval(interval))
+	// R9: honest intervals — unsupported → ERROR, never a silent 60m. 4h is
+	// aggregated from complete aligned 1h bars (partial tail dropped).
+	yfInterval := interval
+	aggregate4h := false
+	if interval == "4h" {
+		yfInterval, aggregate4h = "1h", true
+	} else if mapped, merr := mapYFInterval(interval); merr != nil {
+		return nil, merr
+	} else {
+		yfInterval = mapped
+	}
+	q.Set("interval", yfInterval)
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
@@ -223,52 +234,72 @@ func CryptoKlines(ctx context.Context, base string, interval string, limit int) 
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
 	}
-	rows := make([][]float64, 0, len(payload.Results))
+	hourly := make([][]float64, 0, len(payload.Results))
 	for _, r := range payload.Results {
 		if r.Close <= 0 {
 			continue
 		}
-		rows = append(rows, []float64{
+		hourly = append(hourly, []float64{
 			float64(r.Date.UnixMilli()), r.Open, r.High, r.Low, r.Close, r.Volume,
 		})
 	}
-	if len(rows) == 0 {
+	if len(hourly) == 0 {
 		return nil, fmt.Errorf("openbb klines: empty result for %s", base)
 	}
-	return rows, nil
+	if !aggregate4h {
+		return hourly, nil
+	}
+	// R9: aggregate complete aligned 1h buckets into 4h bars (open of first,
+	// extremes, close of last, volume summed). A PARTIAL tail bucket (fewer
+	// than 4 hours of coverage) is DROPPED — a 2-hour bar must never masquerade
+	// as a settled 4h bar.
+	out := make([][]float64, 0, len(hourly)/4+1)
+	i := 0
+	for i+4 <= len(hourly) {
+		bucket := hourly[i : i+4]
+		o, h, l, c, v := bucket[0][1], bucket[0][2], bucket[0][3], bucket[3][4], 0.0
+		for _, b := range bucket {
+			if b[2] > h {
+				h = b[2]
+			}
+			if l < b[3] {
+				l = b[3]
+			}
+			v += b[5]
+		}
+		out = append(out, []float64{bucket[0][0], o, h, l, c, v})
+		i += 4
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("openbb 4h aggregation: no complete bucket for %s", base)
+	}
+	return out, nil
 }
 
-func mapYFInterval(interval string) string {
+// mapYFInterval maps a system interval to a yfinance interval. R9
+// (2026-09-26 review): UNSUPPORTED intervals return an error instead of a
+// silent 60m — the old fallback made 4h/2h/3d requests receive 1h bars that
+// downstream computed AS IF they were the requested timeframe.
+func mapYFInterval(interval string) (string, error) {
 	switch interval {
-	case "1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h":
-		if interval == "1h" {
-			return "60m"
-		}
-		if interval == "30m" {
-			return "30m"
-		}
-		if interval == "15m" {
-			return "15m"
-		}
-		if interval == "5m" {
-			return "5m"
-		}
-		if interval == "1m" {
-			return "1m"
-		}
-		if interval == "2m" {
-			return "2m"
-		}
-		return "60m"
-	case "1d", "1w":
-		if interval == "1w" {
-			return "1wk"
-		}
-		return "1d"
-	case "4h":
-		return "60m" // yfinance has no 4h — callers aggregate or accept 1h
+	case "1m":
+		return "1m", nil
+	case "2m":
+		return "2m", nil
+	case "5m":
+		return "5m", nil
+	case "15m":
+		return "15m", nil
+	case "30m":
+		return "30m", nil
+	case "1h":
+		return "60m", nil
+	case "1d":
+		return "1d", nil
+	case "1w":
+		return "1wk", nil
 	}
-	return "60m"
+	return "", fmt.Errorf("yfinance does not support interval %q", interval)
 }
 
 // _ keeps security imported for parity with other providers (proxy policy

@@ -458,6 +458,13 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	fillPrice := orderFloat(order, "avgPrice")
+	if fillPrice <= 0 {
+		if orderID, ok := order["orderId"].(int64); ok {
+			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, fmt.Sprint(orderID), marketData.CurrentPrice); confirmed {
+				fillPrice = avg
+			}
+		}
+	}
 	reanchorProtectivePrices(decision, marketData.CurrentPrice, fillPrice)
 
 	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
@@ -469,6 +476,34 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
 	return nil
+}
+
+// confirmedFillPrice polls the order status for the ACTUAL average fill
+// price (R3, 2026-09-26 review): Binance's OpenLong/OpenShort response map
+// carries only orderId/status — avgPrice is always 0 there, so the old code
+// silently skipped the slippage reanchor (fillPrice==refPrice ⇒ no-op).
+// Bounded polling (5×400ms); ok=false → caller falls back to the checked
+// price with a warning.
+func (at *AutoTrader) confirmedFillPrice(symbol, orderID string, checkedPrice float64) (float64, bool) {
+	if orderID == "" {
+		return checkedPrice, false
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(400 * time.Millisecond)
+		}
+		status, err := at.trader.GetOrderStatus(symbol, orderID)
+		if err != nil {
+			continue
+		}
+		if st, _ := status["status"].(string); strings.ToUpper(st) == "NEW" {
+			continue
+		}
+		if avg := orderFloat(status, "avgPrice"); avg > 0 {
+			return avg, true
+		}
+	}
+	return checkedPrice, false
 }
 
 // orderFloat reads a float64 field from an exchange order response map.
@@ -491,14 +526,18 @@ func orderFloat(m map[string]interface{}, key string) float64 {
 // are skipped; placement failures raise an alert because the position would
 // otherwise run unprotected. quantity is used by exchange implementations that
 // place qty-sized trigger orders.
-func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) {
+func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) error {
 	// NOTE: callers pass FINAL (fill-reanchored) SL/TP — the reanchor used to
 	// live here, but it ran AFTER the recorded stop/1R-anchor were written,
 	// leaving memory on the pre-slippage plan while the exchange got the
 	// shifted one (2026-09-25 P2). Market paths reanchor explicitly before
 	// recording; pending/partial paths pre-anchor in protectExecutedSlice.
+	// R2 (2026-09-26 review): returns the SL-leg error so callers can gate
+	// their state advancement on ACTUAL success.
+	var slErr error
 	if decision.StopLoss > 0 {
 		if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
+			slErr = err
 			logger.Infof("  ⚠ Failed to set stop loss for %s: %v", decision.Symbol, err)
 			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ %s 止损单设置失败</b>\n<code>%s</code>\n该仓位当前没有交易所止损保护，请人工关注！", notify.Escape(decision.Symbol), notify.Escape(err.Error())))
 		}
@@ -537,6 +576,7 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 	// exchange and confirm each intended leg is actually there — escalate to
 	// ALERT when it is not, so a missing leg can never again be silent.
 	at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, decision.TakeProfit > 0)
+	return slErr
 }
 
 // missingLegsReport returns "" when every INTENDED leg (wantSL/wantTP) is
