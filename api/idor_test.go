@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -128,4 +129,49 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// P1 #2 (2026-09-25): trader deletion must verify ownership BEFORE purging
+// the associated equity snapshots, and purge+delete must be atomic. A
+// non-owner delete call must leave the victim's equity history intact.
+func TestIDORDelateScopedEquity(t *testing.T) {
+	srv, _, _, userA, _ := idorFixture(t)
+	st := srv.store
+
+	// Seed equity snapshots for BOTH traders.
+	if err := st.Equity().Save(&store.EquitySnapshot{TraderID: "trader-A", TotalEquity: 100, Timestamp: time.Now()}); err != nil {
+		t.Fatalf("seed equity A: %v", err)
+	}
+	if err := st.Equity().Save(&store.EquitySnapshot{TraderID: "trader-B", TotalEquity: 200, Timestamp: time.Now()}); err != nil {
+		t.Fatalf("seed equity B: %v", err)
+	}
+
+	// User A tries to delete user B's trader.
+	err := st.Trader().Delete(userA, "trader-B")
+	if err == nil {
+		t.Fatal("deleting a foreign trader must be rejected")
+	}
+
+	// B's equity history must be intact; B's trader row intact.
+	var countB int64
+	st.GormDB().Model(&store.EquitySnapshot{}).Where("trader_id = ?", "trader-B").Count(&countB)
+	if countB != 1 {
+		t.Fatalf("foreign delete must NOT purge equity snapshots, got %d rows", countB)
+	}
+	if _, err := st.Trader().GetByID("trader-B"); err != nil {
+		t.Fatal("foreign delete must not delete the trader row")
+	}
+
+	// Owner deletes their own trader: equity purge + row delete, atomic.
+	if err := st.Trader().Delete(userA, "trader-A"); err != nil {
+		t.Fatalf("own delete must succeed: %v", err)
+	}
+	var countA int64
+	st.GormDB().Model(&store.EquitySnapshot{}).Where("trader_id = ?", "trader-A").Count(&countA)
+	if countA != 0 {
+		t.Fatalf("own delete must purge own equity snapshots, got %d rows", countA)
+	}
+	if _, err := st.Trader().GetByID("trader-A"); err == nil {
+		t.Fatal("own delete must remove the trader row")
+	}
 }

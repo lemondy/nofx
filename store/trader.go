@@ -151,13 +151,25 @@ func (s *TraderStore) UpdateCustomPrompt(userID, id string, customPrompt string,
 		}).Error
 }
 
-// Delete deletes trader and associated data
+// Delete deletes a trader and its associated data — OWNERSHIP FIRST
+// (2026-09-25 P1): the old shape ran the equity-snapshot purge for ANY
+// trader_id before checking (id, user_id), so a non-owner could wipe the
+// victim's equity history through the delete endpoint while the trader row
+// itself survived. Now the ownership check gates everything and the
+// associated purge + trader delete run in one transaction (all-or-nothing).
+// Returns ErrNotFound-equivalent when the (id, user_id) pair does not exist.
 func (s *TraderStore) Delete(userID, id string) error {
-	// Delete associated equity snapshots first
-	s.db.Where("trader_id = ?", id).Delete(&EquitySnapshot{})
-
-	// Delete the trader
-	return s.db.Where("id = ? AND user_id = ?", id, userID).Delete(&Trader{}).Error
+	var trader Trader
+	if err := s.db.Where("id = ? AND user_id = ?", id, userID).First(&trader).Error; err != nil {
+		// Same error for missing AND foreign: no existence oracle.
+		return fmt.Errorf("trader not found for this user")
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("trader_id = ?", id).Delete(&EquitySnapshot{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ? AND user_id = ?", id, userID).Delete(&Trader{}).Error
+	})
 }
 
 // GetFullConfig gets trader full configuration
