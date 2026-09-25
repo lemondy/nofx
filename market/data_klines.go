@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"net/url"
 )
 
 // Note: Kline data now uses free/open API (coinank_api.Kline) which doesn't require authentication
@@ -431,4 +432,82 @@ func GetBoxData(symbol string) (*BoxData, error) {
 	currentPrice := klines[len(klines)-1].Close
 
 	return calculateBoxData(klines, currentPrice), nil
+}
+
+
+// getKlinesFromBinanceDirect pulls klines straight from Binance fapi — the
+// fallback when CoinAnk (the primary vendor) fails. 2026-09-24: CoinAnk
+// started returning 403 on ALL kline requests and every candidate went
+// DATA_INSUFFICIENT + VENDOR_DIVERGENCE → fail-closed zero opens for hours.
+// A single-vendor hard dependency was the real defect; Binance is the
+// exchange we actually trade, its data is authoritative for this system.
+// Proxy handling rides binanceGetJSON's client (SafeHTTPClient).
+func getKlinesFromBinanceDirect(symbol, interval string, limit int) ([]Kline, error) {
+	if limit <= 0 || limit > 1500 {
+		limit = 100
+	}
+	var raw [][]interface{}
+	if err := binanceGetJSON(fmt.Sprintf("/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
+		url.QueryEscape(symbol), url.QueryEscape(interval), limit), &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Kline, 0, len(raw))
+	for _, row := range raw {
+		if len(row) < 11 {
+			continue
+		}
+		k := Kline{
+			OpenTime: toI64(row[0]), Open: toF64(row[1]), High: toF64(row[2]),
+			Low: toF64(row[3]), Close: toF64(row[4]), Volume: toF64(row[5]),
+			CloseTime: toI64(row[6]), QuoteVolume: toF64(row[7]),
+			Trades: int(toF64(row[8])), TakerBuyBaseVolume: toF64(row[9]),
+			TakerBuyQuoteVolume: toF64(row[10]),
+		}
+		if k.Close > 0 {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("binance direct: empty klines for %s %s", symbol, interval)
+	}
+	return out, nil
+}
+
+func toF64(v interface{}) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case string:
+		f, _ := strconv.ParseFloat(x, 64)
+		return f
+	}
+	return 0
+}
+
+func toI64(v interface{}) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case string:
+		n, _ := strconv.ParseInt(x, 10, 64)
+		return n
+	}
+	return 0
+}
+
+// getKlinesWithFallback: CoinAnk first (exchange-specific view), Binance
+// direct when it fails. Every kline consumer in the system routes through
+// this so a vendor outage degrades to the authoritative exchange instead of
+// failing every symbol closed.
+func getKlinesWithFallback(symbol, interval, exchange string, limit int) ([]Kline, error) {
+	k, err := getKlinesFromCoinAnk(symbol, interval, exchange, limit)
+	if err == nil && len(k) > 0 {
+		return k, nil
+	}
+	k2, err2 := getKlinesFromBinanceDirect(symbol, interval, limit)
+	if err2 != nil {
+		return nil, fmt.Errorf("coinank: %v; binance direct: %v", err, err2)
+	}
+	logger.Infof("🔁 %s %s klines: CoinAnk unavailable (%v) — Binance direct fallback", symbol, interval, err)
+	return k2, nil
 }

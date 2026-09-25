@@ -102,7 +102,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		}
 	} else {
 		// Use CoinAnk for regular crypto assets with exchange-specific data
-		klines3m, err = getKlinesFromCoinAnk(symbol, "3m", exchange, 100)
+		klines3m, err = getKlinesWithFallback(symbol, "3m", exchange, 100)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 3-minute K-line from CoinAnk (%s): %v", exchange, err)
 		}
@@ -121,7 +121,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from Hyperliquid: %v", err)
 		}
 	} else {
-		klines4h, err = getKlinesFromCoinAnk(symbol, "4h", exchange, 100)
+		klines4h, err = getKlinesWithFallback(symbol, "4h", exchange, 100)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from CoinAnk (%s): %v", exchange, err)
 		}
@@ -135,7 +135,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	if useHyperliquidAPI {
 		klines1h, err = getKlinesFromHyperliquid(symbol, "1h", 100)
 	} else {
-		klines1h, err = getKlinesFromCoinAnk(symbol, "1h", exchange, 100)
+		klines1h, err = getKlinesWithFallback(symbol, "1h", exchange, 100)
 	}
 	if err != nil {
 		logger.Infof("⚠️ Failed to get %s 1h K-line (%v) — stop-floor ATR falls back to 4h", symbol, err)
@@ -297,7 +297,7 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 			}
 		} else {
 			// Use CoinAnk for regular crypto assets (default to Binance)
-			klines, err = getKlinesFromCoinAnk(symbol, tf, "binance", fetchCount)
+			klines, err = getKlinesWithFallback(symbol, tf, "binance", fetchCount)
 			if err != nil {
 				logger.Infof("⚠️ Failed to get %s %s K-line from CoinAnk: %v", symbol, tf, err)
 				continue
