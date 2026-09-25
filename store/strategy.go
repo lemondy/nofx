@@ -18,7 +18,13 @@ const (
 	// this cap. The default TEMPLATE for new strategies stays 3.
 	MaxPositions  = 10
 	MaxTimeframes = 4
-	MinKlineCount = 10
+	// MinKlineCount = 60 because the data-sufficiency hard gate requires
+	// ≥60 closed bars per configured timeframe (EMA50/MACD long-window
+	// stability, signal_layer minBars) — a UI count below this made EVERY
+	// candidate DATA_INSUFFICIENT and the strategy stopped opening entirely
+	// (user set 50 on 09-25 13:27, zero opens for 7+ hours, 2026-09-25).
+	// One source of truth: the floor equals the gate.
+	MinKlineCount = 60
 	// 120: the structured signal derives indicators from the closed-bar
 	// window — 30 bars left EMA50/MACD unstable (data_quality.sufficient
 	// flagged EVERY candidate as insufficient). 120 keeps ≥60 closed bars
