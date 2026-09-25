@@ -229,6 +229,19 @@ func (s *TraderStore) getActiveOrDefaultStrategy(userID string) (*Strategy, erro
 	return &strategy, nil
 }
 
+// GetForUser gets a trader by ID scoped to its owner — the authorization
+// primitive for every protected API that takes a trader_id (IDOR fix,
+// 2026-09-25 P1: getTraderFromQuery accepted any trader ID and let a JWT'd
+// user read another user's account/positions/orders/decisions).
+func (s *TraderStore) GetForUser(userID, traderID string) (*Trader, error) {
+	var trader Trader
+	err := s.db.Where("id = ? AND user_id = ?", traderID, userID).First(&trader).Error
+	if err != nil {
+		return nil, err
+	}
+	return &trader, nil
+}
+
 // GetByID gets a trader by ID without requiring userID (for public APIs)
 func (s *TraderStore) GetByID(traderID string) (*Trader, error) {
 	var trader Trader

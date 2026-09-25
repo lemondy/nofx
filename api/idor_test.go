@@ -1,0 +1,131 @@
+package api
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	"nofx/auth"
+	"nofx/manager"
+	"nofx/store"
+)
+
+// IDOR regression (P1, 2026-09-25): getTraderFromQuery must reject a
+// trader_id the authenticated user does not own, and ai-costs must be
+// scoped to the caller's own traders. Exercises the REAL auth + store
+// stack against a two-user fixture.
+func idorFixture(t *testing.T) (*Server, *gin.Engine, string, string, string) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	st, err := store.NewWithConfig(store.DBConfig{
+		Type: store.DBTypeSQLite,
+		Path: filepath.Join(t.TempDir(), "idor.db"),
+	})
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// Two users, one trader each.
+	userA, userB := "user-aaa", "user-bbb"
+	traderA := &store.Trader{ID: "trader-A", UserID: userA, Name: "A", IsRunning: false}
+	if err := st.Trader().Create(traderA); err != nil {
+		t.Fatalf("create trader A: %v", err)
+	}
+	if err := st.Trader().Create(&store.Trader{ID: "trader-B", UserID: userB, Name: "B"}); err != nil {
+		t.Fatalf("create trader B: %v", err)
+	}
+	// AI spend booked to trader A.
+	_ = st.AICharge().Record("trader-A", "glm-5.3-flash", "z.ai")
+
+	srv := &Server{store: st, traderManager: manager.NewTraderManager()}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	protected := r.Group("/", srv.authMiddleware())
+	protected.GET("/probe", func(c *gin.Context) {
+		_, traderID, err := srv.getTraderFromQuery(c)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"trader_id": traderID})
+	})
+	protected.GET("/ai-costs", srv.handleGetAICosts)
+
+	tokenA, err := auth.GenerateJWT(userA, "a@test")
+	if err != nil {
+		t.Fatalf("jwt: %v", err)
+	}
+	return srv, r, tokenA, userA, traderA.ID
+}
+
+func TestIDORForeignTraderRejected(t *testing.T) {
+	_, r, tokenA, _, _ := idorFixture(t)
+
+	// User A explicitly requests user B's trader → forbidden.
+	req := httptest.NewRequest(http.MethodGet, "/probe?trader_id=trader-B", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenA)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-user trader_id must be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// User A requests their own trader → passes.
+	req2 := httptest.NewRequest(http.MethodGet, "/probe?trader_id=trader-A", nil)
+	req2.Header.Set("Authorization", "Bearer "+tokenA)
+	rec2 := httptest.NewRecorder()
+	r.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("own trader_id must pass, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// No trader_id → defaults to the user's OWN first trader, never a
+	// global-map head.
+	req3 := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req3.Header.Set("Authorization", "Bearer "+tokenA)
+	rec3 := httptest.NewRecorder()
+	r.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK || !containsStr(rec3.Body.String(), "trader-A") {
+		t.Fatalf("default must resolve to the user's own trader, got %d: %s", rec3.Code, rec3.Body.String())
+	}
+}
+
+// The ai-costs endpoint must not leak other users' spend.
+func TestIDORAICostsScoped(t *testing.T) {
+	_, r, tokenA, _, _ := idorFixture(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/ai-costs?trader_id=trader-B", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenA)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign ai-costs must be forbidden, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/ai-costs?trader_id=trader-A", nil)
+	req2.Header.Set("Authorization", "Bearer "+tokenA)
+	rec2 := httptest.NewRecorder()
+	r.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("own ai-costs must pass, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func containsStr(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (haystack == needle ||
+		len(needle) == 0 ||
+		indexOf(haystack, needle) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}

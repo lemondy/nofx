@@ -95,6 +95,36 @@ func (s *AIChargeStore) GetDailyCost(period string) float64 {
 	return total
 }
 
+// GetSummaryForTrader returns summary stats for ONE trader within a period
+// — the per-user scoping primitive for the summary endpoint (IDOR fix
+// 2026-09-25: the global summary aggregated every user's AI spend).
+func (s *AIChargeStore) GetSummaryForTrader(traderID string, period string) (total float64, count int64, byModel map[string]float64) {
+	byModel = make(map[string]float64)
+	scope := func(q *gorm.DB) *gorm.DB {
+		return q.Where("trader_id = ?", traderID)
+	}
+	query := scope(s.db.Model(&AICharge{}))
+	query = applyPeriodFilter(query, period)
+	query.Count(&count)
+
+	query2 := scope(s.db.Model(&AICharge{}).Select("COALESCE(SUM(cost_usd), 0)"))
+	query2 = applyPeriodFilter(query2, period)
+	query2.Scan(&total)
+
+	type modelCost struct {
+		Model string  `gorm:"column:model"`
+		Total float64 `gorm:"column:total"`
+	}
+	var results []modelCost
+	query3 := scope(s.db.Model(&AICharge{}).Select("model, SUM(cost_usd) as total").Group("model"))
+	query3 = applyPeriodFilter(query3, period)
+	query3.Find(&results)
+	for _, r := range results {
+		byModel[r.Model] = r.Total
+	}
+	return total, count, byModel
+}
+
 // GetSummary returns summary stats for a period
 func (s *AIChargeStore) GetSummary(period string) (total float64, count int64, byModel map[string]float64) {
 	byModel = make(map[string]float64)

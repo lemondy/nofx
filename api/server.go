@@ -575,9 +575,18 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// getTraderFromQuery Get trader from query parameter
+// getTraderFromQuery resolves the query trader FOR THE AUTHENTICATED USER
+// (IDOR fix, 2026-09-25 P1): an explicitly provided trader_id must pass
+// WHERE id = ? AND user_id = ? — the manager's in-memory map is NOT an
+// authorization source (it holds every loaded trader, any user's). When
+// trader_id is omitted the user's OWN first trader is used; a user with no
+// traders gets an error instead of silently falling back to a global
+// map head that may belong to someone else.
 func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, string, error) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		return nil, "", fmt.Errorf("unauthorized")
+	}
 	traderID := c.Query("trader_id")
 
 	// Ensure user's traders are loaded into memory
@@ -587,21 +596,19 @@ func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, str
 	}
 
 	if traderID == "" {
-		// If no trader_id specified, return first trader for this user
-		ids := s.traderManager.GetTraderIDs()
-		if len(ids) == 0 {
-			return nil, "", fmt.Errorf("No available traders")
-		}
-
-		// Get user's trader list, prioritize returning user's own traders
 		userTraders, err := s.store.Trader().List(userID)
-		if err == nil && len(userTraders) > 0 {
-			traderID = userTraders[0].ID
-		} else {
-			traderID = ids[0]
+		if err != nil || len(userTraders) == 0 {
+			return nil, "", fmt.Errorf("no traders for this user")
 		}
+		traderID = userTraders[0].ID
+		return s.traderManager, traderID, nil
 	}
 
+	// Explicit trader_id: ownership is mandatory.
+	owned, err := s.store.Trader().GetForUser(userID, traderID)
+	if err != nil || owned == nil {
+		return nil, "", fmt.Errorf("trader not found for this user")
+	}
 	return s.traderManager, traderID, nil
 }
 
