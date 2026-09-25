@@ -144,6 +144,14 @@ func (at *AutoTrader) checkPositionDrawdown() {
 		}
 
 		// Calculate current P&L percentage
+		// Hands-off rule: drawdown-protect force-closes are automation too —
+		// manual positions are the user's to manage.
+		if ps, ok := pos["symbol"].(string); ok {
+			sd, _ := pos["side"].(string)
+			if !at.isAIManaged(ps, sd) {
+				continue
+			}
+		}
 		leverage := 10 // Default value
 		if lev, ok := pos["leverage"].(float64); ok {
 			leverage = int(lev)
@@ -1060,6 +1068,15 @@ func (at *AutoTrader) exchangeStopPrice(symbol, side string) float64 {
 // the AI's new price — TIGHTEN-ONLY (guard enforced): structure-based profit
 // protection the mechanical 1R/ATR ladders cannot express.
 func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+	// Hands-off rule (user directive 2026-09-25): manual positions are never
+	// adjusted by the program.
+	handsOffSide := "long"
+	if strings.Contains(decision.Action, "short") {
+		handsOffSide = "short"
+	}
+	if decision.Symbol != "" && !at.isAIManaged(decision.Symbol, handsOffSide) {
+		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — adjust_stop_loss rejected", decision.Symbol)
+	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return err
@@ -1133,6 +1150,11 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 // position (the rest must run or exit via close_*); close gates (min-hold /
 // early-close / breakout-hold) apply in applyHardRiskGates before this runs.
 func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction, side string) error {
+	// Hands-off rule (user directive 2026-09-25): manual positions are never
+	// partially closed by the program.
+	if decision.Symbol != "" && !at.isAIManaged(decision.Symbol, side) {
+		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — partial_close rejected", decision.Symbol)
+	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return err
@@ -1226,6 +1248,12 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		side, _ := pos["side"].(string)
 		markPrice, _ := pos["markPrice"].(float64)
 		if symbol == "" || side == "" || markPrice <= 0 {
+			continue
+		}
+		// Hands-off rule (user directive 2026-09-25): manual positions get no
+		// watchdog seeding, no repair, no computed protection, no alerts —
+		// the user owns their lifecycle entirely.
+		if !at.isAIManaged(symbol, side) {
 			continue
 		}
 		orders, err := at.trader.GetOpenOrders(symbol)

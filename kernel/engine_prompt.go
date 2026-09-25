@@ -755,6 +755,13 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Context) string {
 	var sb strings.Builder
 
+	// Hands-off marker (user directive 2026-09-25): manual positions are
+	// visually tagged AND the model is told the program won't act on them.
+	ownership := " | AI托管"
+	if !pos.Managed {
+		ownership = " | 手动仓(程序不干预:不可 close/adjust/partial,自动化跳过)"
+	}
+
 	holdingDuration := ""
 	if pos.UpdateTime > 0 {
 		durationMs := time.Now().UnixMilli() - pos.UpdateTime
@@ -802,10 +809,10 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f %s %.4f | Qty %.4f | Position Value %.2f USDT | Margin ROI %+.2f%% | Price Return %+.2f%% | Unrealized PnL %+.2f USDT | Peak PnL %.2f%% (margin basis) | Leverage %dx | MarginUsed %.2f | Liq Price %.4f%s\n\n",
+	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f %s %.4f | Qty %.4f | Position Value %.2f USDT | Margin ROI %+.2f%% | Price Return %+.2f%% | Unrealized PnL %+.2f USDT | Peak PnL %.2f%% (margin basis) | Leverage %dx | MarginUsed %.2f | Liq Price %.4f%s%s\n\n",
 		index, pos.Symbol, strings.ToUpper(pos.Side),
 		pos.EntryPrice, priceLabel, displayPrice, pos.Quantity, positionValue, marginROI, priceReturn, uPnL, pos.PeakPnLPct,
-		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration, ownership))
 
 	if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
 		var quantData *QuantData

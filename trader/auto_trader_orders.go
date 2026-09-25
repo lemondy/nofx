@@ -282,6 +282,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// the previous trade's peak (stale peaks poison the drawdown monitors).
 	at.ClearPeakPnLCache(decision.Symbol, "long")
 
+	at.markAIManaged(decision.Symbol, "long")
 	at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
 	return nil
@@ -464,6 +465,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// Peak PnL is per-position state — see the open_long note above.
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 
+	at.markAIManaged(decision.Symbol, "short")
 	at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
 	return nil
@@ -596,6 +598,12 @@ func (at *AutoTrader) effectiveTPCloseFraction() float64 {
 func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  🔄 Close long: %s", decision.Symbol)
 
+	// Hands-off rule (user directive 2026-09-25): the AI does not manage
+	// manually opened positions — closing them is automation acting on them.
+	if !at.isAIManaged(decision.Symbol, "long") {{
+		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — manual positions are never closed/adjusted by the program (close the position manually or take it over via a decision to open it)", decision.Symbol)
+	}}
+
 	// Get current price
 	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
 	if err != nil {
@@ -655,6 +663,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	at.ClearRecordedStopLoss(decision.Symbol, "long")
 	at.ClearInitialStopLoss(decision.Symbol, "long")
 	at.ClearPeakPnLCache(decision.Symbol, "long")
+	at.unmarkAIManaged(decision.Symbol, "long") // lifecycle complete — registry clean
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
 }
@@ -662,6 +671,12 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 // executeCloseShortWithRecord executes close short position and records detailed information
 func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  🔄 Close short: %s", decision.Symbol)
+
+	// Hands-off rule (user directive 2026-09-25): the AI does not manage
+	// manually opened positions — closing them is automation acting on them.
+	if !at.isAIManaged(decision.Symbol, "short") {{
+		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — manual positions are never closed/adjusted by the program (close the position manually or take it over via a decision to open it)", decision.Symbol)
+	}}
 
 	// Get current price
 	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
@@ -722,6 +737,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	at.ClearRecordedStopLoss(decision.Symbol, "short")
 	at.ClearInitialStopLoss(decision.Symbol, "short")
 	at.ClearPeakPnLCache(decision.Symbol, "short")
+	at.unmarkAIManaged(decision.Symbol, "short") // lifecycle complete — registry clean
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
 }

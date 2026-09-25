@@ -41,7 +41,12 @@ type PositionInfo struct {
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
 	UpdateTime       int64   `json:"update_time"`       // Position update timestamp (milliseconds)
-	StopLossPrice    float64 `json:"stop_loss_price"`   // Trigger price of the protective SL order currently on the exchange (0 = none found)
+	// AIManaged: opened by this system's AI (2026-09-25 hands-off rule).
+	// false = manually opened — the program never closes/adjusts it and the
+	// automation loop leaves it alone; close/adjust decisions on it are
+	// rejected at execution.
+	Managed       bool `json:"ai_managed"`
+	StopLossPrice float64 `json:"stop_loss_price"` // Trigger price of the protective SL order currently on the exchange (0 = none found)
 	TakeProfitPrice  float64 `json:"take_profit_price"` // Trigger price of the protective TP order currently on the exchange (0 = none found)
 }
 

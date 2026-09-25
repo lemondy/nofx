@@ -292,6 +292,7 @@ func (at *AutoTrader) runCycle() error {
 	// Hard risk gates the AI cannot override: 1d-uptrend short block and the
 	// minimum holding period lock on closes (both strategy risk_control driven).
 	at.cycleRiskReservedUSD = 0 // fresh batch — the reservation accumulates as opens pass the gate
+	at.seedAIManagedOnce()      // one-time migration: pre-registry positions presumed AI-managed
 	sortedDecisions = at.applyHardRiskGates(sortedDecisions, ctx)
 	if len(sortedDecisions) == 0 {
 		logger.Infof("🛡️ [%s] All decisions filtered by hard risk gates", at.name)
@@ -582,6 +583,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				// an earlier incarnation (e.g. an externally opened trade
 				// reusing the symbol); drop it so the monitor re-seeds fresh.
 				at.ClearPeakPnLCache(symbol, side)
+				at.unmarkAIManaged(symbol, side) // position gone — registry clean
 			}
 			updateTime = at.positionFirstSeenTime[posKey]
 		}
@@ -632,6 +634,8 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			}
 		}
 
+		managed := at.isAIManaged(symbol, side)
+
 		positionInfos = append(positionInfos, kernel.PositionInfo{
 			Symbol:           symbol,
 			Side:             side,
@@ -648,6 +652,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			UpdateTime:       updateTime,
 			StopLossPrice:    stopLossPrice,
 			TakeProfitPrice:  takeProfitPrice,
+			Managed:          managed,
 		})
 	}
 

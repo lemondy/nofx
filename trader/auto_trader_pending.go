@@ -444,6 +444,7 @@ func (at *AutoTrader) processPendingEntries() {
 			// realized RR is computable — report it against min_rr (alert
 			// only, no auto-close: that behavior change waits for user sign-off).
 			at.reportFilledRR(pe)
+			at.markAIManaged(pe.Symbol, pe.Side)
 			at.placeProtectiveOrders(&kernel.Decision{
 				Symbol: pe.Symbol, Action: "open_" + pe.Side,
 				StopLoss: pe.StopLoss, TakeProfit: pe.TakeProfit,
@@ -613,6 +614,7 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 	if newSL <= 0 || newTP <= 0 {
 		return 0
 	}
+	at.markAIManaged(pe.Symbol, pe.Side)
 	posKey := pe.Symbol + "_" + pe.Side
 	if at.GetRecordedStopLoss(pe.Symbol, pe.Side) <= 0 {
 		// First slice of this entry: the 1R anchor and the recorded stop are

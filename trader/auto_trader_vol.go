@@ -173,6 +173,11 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			qty = -qty
 		}
 		posKey := symbol + "_" + side
+		// Hands-off rule (user directive 2026-09-25): positions NOT opened by
+		// the AI get no vol-target, no trailing, no 1R lock, no breakeven arm.
+		if !at.isAIManaged(symbol, side) {
+			continue
+		}
 		initialSL := at.GetRecordedStopLoss(symbol, side)
 		if initialSL <= 0 {
 			continue // pre-upgrade position or unknown stop — leave alone

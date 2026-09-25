@@ -32,6 +32,7 @@ type Store struct {
 	gateShadow     *GateShadowStore
 	entryAssess    *EntryAssessmentStore
 	aiCharge       *AIChargeStore
+	aiManaged      *AIManagedStore
 	journal        *TradeJournalStore
 	rule           *RuleStore
 	reviewPrompt   *ReviewPromptStore
@@ -180,7 +181,10 @@ func (s *Store) initTables() error {
 		return fmt.Errorf("failed to initialize AI charge tables: %w", err)
 	}
 	if err := s.TradeJournal().initTables(); err != nil {
-		return fmt.Errorf("failed to initialize trade journal tables: %w", err)
+		return fmt.Errorf("failed to init trade journal tables: %w", err)
+	}
+	if err := s.AIManaged().initTables(); err != nil {
+		return fmt.Errorf("failed to init ai-managed tables: %w", err)
 	}
 	if err := s.Rule().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize trading rule tables: %w", err)
@@ -368,6 +372,17 @@ func (s *Store) TradeJournal() *TradeJournalStore {
 		s.journal = NewTradeJournalStore(s.gdb)
 	}
 	return s.journal
+}
+
+// AIManaged gets the AI-opened position registry (ownership marks for the
+// hands-off rule on manually opened positions).
+func (s *Store) AIManaged() *AIManagedStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.aiManaged == nil {
+		s.aiManaged = NewAIManagedStore(s.gdb)
+	}
+	return s.aiManaged
 }
 
 // ReviewPrompt returns the per-user review prompt config store.

@@ -19,6 +19,7 @@ import (
 	"nofx/trader/lighter"
 	"nofx/trader/okx"
 	"strings"
+	"os"
 	"sync"
 	"time"
 )
@@ -139,6 +140,7 @@ type AutoTrader struct {
 	dayStartDay             string  // UTC day anchor for the daily-loss halt (D2, QUANT_REVIEW 09-22)
 	dayStartEquity          float64 // first equity seen on dayStartDay — the halt's baseline
 	cycleRiskReservedUSD    float64 // stop-risk booked by opens that PASSED the exposure gate this cycle (D2 reservation, 09-25 P1)
+	aiMarksSeededOnce       sync.Once
 	customPrompt            string // Custom trading strategy prompt
 	overrideBasePrompt      bool   // Whether to override base prompt
 	lastResetTime           time.Time
@@ -667,4 +669,70 @@ func calculatePnLPercentage(unrealizedPnl, marginUsed float64) float64 {
 		return (unrealizedPnl / marginUsed) * 100
 	}
 	return 0.0
+}
+
+// ============================================================================
+// AI-managed ownership (user directive 2026-09-25): positions NOT opened by
+// the AI are hands-off for the automation — the protection watchdog, the
+// vol-target/trailing/1R-lock/breakeven loop and AI close/adjust decisions
+// all skip them. Ownership lives in the durable ai_managed_positions table:
+// every AI open path marks at fill time; everything unmarked is manual.
+// ============================================================================
+
+func (at *AutoTrader) markAIManaged(symbol, side string) {
+	if at.store == nil {
+		return
+	}
+	if err := at.store.AIManaged().Mark(at.id, symbol, strings.ToLower(side)); err == nil {
+		logger.Infof("🤖 [%s] position marked AI-managed: %s %s — automation owns its lifecycle", at.name, symbol, side)
+	}
+}
+
+func (at *AutoTrader) unmarkAIManaged(symbol, side string) {
+	if at.store == nil {
+		return
+	}
+	_ = at.store.AIManaged().Unmark(at.id, symbol, strings.ToLower(side))
+}
+
+// isAIManaged reports whether the position belongs to the automation. A
+// missing store reads as AI-managed (degrade to old behavior rather than
+// dropping protection on everything during store outages).
+func (at *AutoTrader) isAIManaged(symbol, side string) bool {
+	if at.store == nil {
+		return true
+	}
+	return at.store.AIManaged().IsMarked(at.id, symbol, strings.ToLower(side))
+}
+
+// seedAIManagedOnce: ONE-TIME migration for the deploy that introduced the
+// registry — every position already open at that moment is presumed
+// AI-managed so existing trades keep their protection. Guarded by a flag
+// file, NOT a per-boot re-seed (a per-boot seed would re-adopt manual
+// positions on every restart and defeat the hands-off rule).
+func (at *AutoTrader) seedAIManagedOnce() {
+	flag := "data/ai_marks_seeded"
+	if _, err := os.Stat(flag); err == nil {
+		return
+	}
+	if at.store == nil {
+		return
+	}
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return // retry next cycle (flag not written)
+	}
+	n := 0
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		side, _ := pos["side"].(string)
+		if symbol == "" || side == "" {
+			continue
+		}
+		at.markAIManaged(symbol, side)
+		n++
+	}
+	if err := os.WriteFile(flag, []byte(time.Now().Format(time.RFC3339)), 0o644); err == nil {
+		logger.Infof("🤖 [%s] AI-managed registry seeded: %d pre-existing positions marked (one-time migration; manual positions opened AFTER this are hands-off)", at.name, n)
+	}
 }
