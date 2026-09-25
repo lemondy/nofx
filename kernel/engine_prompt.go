@@ -414,8 +414,8 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// line. Absent when the sidecar is down.
 		if openbb.Available() {
 			if cot := openbb.CotBitcoinCached(context.Background()); cot != nil {
-				params.WriteString(fmt.Sprintf("- CFTC 比特币期货持仓周报(%s,程序注入): 全部未平仓 %s 张;杠杆基金净多 %s 张、资产管理人净多 %s 张——两类专业机构的净头寸方向是拥挤度/共识的慢变量证据,辅助判断而非触发条件\n",
-					cot.ReportDate, openbb.Usd(cot.OpenInterestAll), openbb.Usd(cot.LeveragedNetLong), openbb.Usd(cot.AssetManagersNetLong)))
+				params.WriteString(fmt.Sprintf("- CFTC 比特币期货持仓周报(%s,程序注入): 全部未平仓 %s 张;投机类(非商业)净多 %s 张、套保类(商业)净多 %s 张——投机净头寸的方向与拥挤度是慢变量证据,辅助判断而非触发条件\n",
+					cot.ReportDate, openbb.Usd(cot.OpenInterestAll), openbb.Usd(cot.SpeculatorsNetLong), openbb.Usd(cot.HedgersNetLong)))
 			}
 		}
 		params.WriteString("- 共识反向门(程序强制): directional_score 绝对值 ≥ 50 时,禁止开与其符号相反方向的仓(CONSENSUS_OPPOSED_±score)——逆着 ≥50 的方向共识做单是 30 天亏损账本里逆势单的那部分;score 是多空证据的程序计分,不是你的自由判断\n")

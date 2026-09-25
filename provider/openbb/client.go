@@ -279,10 +279,12 @@ var _ = security.SafeHTTPClient
 // report, keyless via the cftc provider. The prompt reads the net posture of
 // the two professional cohorts; absent when the sidecar is down.
 type CotBitcoin struct {
-	ReportDate            string  `json:"report_date"`
-	OpenInterestAll       float64 `json:"open_interest_all"`
-	LeveragedNetLong      float64 `json:"leveraged_funds_net_long"`
-	AssetManagersNetLong  float64 `json:"asset_managers_net_long"`
+	ReportDate      string  `json:"report_date"`
+	OpenInterestAll float64 `json:"open_interest_all"`
+	// Legacy CFTC groupings (the cftc provider's fields): non-commercial =
+	// leveraged speculators, commercial = hedgers.
+	SpeculatorsNetLong float64 `json:"non_commercial_net_long"`
+	HedgersNetLong     float64 `json:"commercial_net_long"`
 }
 
 func CotBitcoinFetch(ctx context.Context) (*CotBitcoin, error) {
@@ -305,12 +307,12 @@ func CotBitcoinFetch(ctx context.Context) (*CotBitcoin, error) {
 	}
 	var payload struct {
 		Results []struct {
-			Date                 string  `json:"date"`
-			OpenInterestAll      float64 `json:"open_interest_all"`
-			LeveragedFundsLong   float64 `json:"leveraged_funds_long_all"`
-			LeveragedFundsShort  float64 `json:"leveraged_funds_short_all"`
-			AssetManagersLong    float64 `json:"asset_managers_long_all"`
-			AssetManagersShort   float64 `json:"asset_managers_short_all"`
+			Date             string  `json:"date"`
+			OpenInterestAll  float64 `json:"open_interest_all"`
+			NonCommLongAll   float64 `json:"non_commercial_positions_long_all"`
+			NonCommShortAll  float64 `json:"non_commercial_positions_short_all"`
+			CommLongAll      float64 `json:"commercial_positions_long_all"`
+			CommShortAll     float64 `json:"commercial_positions_short_all"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -321,10 +323,10 @@ func CotBitcoinFetch(ctx context.Context) (*CotBitcoin, error) {
 	}
 	r := payload.Results[0]
 	return &CotBitcoin{
-		ReportDate:           r.Date,
-		OpenInterestAll:      r.OpenInterestAll,
-		LeveragedNetLong:     r.LeveragedFundsLong - r.LeveragedFundsShort,
-		AssetManagersNetLong: r.AssetManagersLong - r.AssetManagersShort,
+		ReportDate:         r.Date,
+		OpenInterestAll:    r.OpenInterestAll,
+		SpeculatorsNetLong: r.NonCommLongAll - r.NonCommShortAll,
+		HedgersNetLong:     r.CommLongAll - r.CommShortAll,
 	}, nil
 }
 
