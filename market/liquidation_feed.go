@@ -2,6 +2,8 @@ package market
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,10 +106,15 @@ type errLiq string
 func (e errLiq) Error() string { return string(e) }
 
 func liqConsumeOnce() error {
-	conn, _, err := websocket.DefaultDialer.Dial(liqFeedURL, nil)
+	// This host reaches Binance through the local proxy (same as every REST
+	// call — SafeHTTPClient's ProxyFromEnvironment); the default gorilla
+	// dialer ignores the environment, so wire it explicitly.
+	dialer := &websocket.Dialer{Proxy: proxyFromEnv, HandshakeTimeout: 15 * time.Second}
+	conn, _, err := dialer.Dial(liqFeedURL, nil)
 	if err != nil {
 		return err
 	}
+	logger.Infof("📡 liquidation feed connected (!forceOrder@arr)")
 	defer conn.Close()
 	// Binance requires a ping frame every ~3 min; gorilla answers pongs but
 	// we must SEND pings. Also set a read deadline slightly beyond that so a
@@ -146,6 +153,12 @@ func liqConsumeOnce() error {
 			notional: px * qty,
 		})
 	}
+}
+
+var proxyFromEnv = proxyFromEnvironment()
+
+func proxyFromEnvironment() func(*http.Request) (*url.URL, error) {
+	return http.ProxyFromEnvironment
 }
 
 func parseFloatSafe(s string) float64 {
