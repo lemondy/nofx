@@ -104,7 +104,9 @@ func Available() bool {
 		return false
 	}
 	resp.Body.Close()
-	availState, availChecked = resp.StatusCode == http.StatusOK, time.Now()
+	// Any HTTP response (even 404 on the probe path) proves the sidecar is
+	// serving — only transport failure means absent.
+	availState, availChecked = resp.StatusCode < 500, time.Now()
 	return availState
 }
 
@@ -270,3 +272,103 @@ func mapYFInterval(interval string) string {
 // _ keeps security imported for parity with other providers (proxy policy
 // lives there; the sidecar deliberately bypasses it).
 var _ = security.SafeHTTPClient
+
+
+// CotBitcoin is the CFTC Commitments of Traders picture for Bitcoin futures
+// (leveraged funds + asset managers, net positions, open interest) — weekly
+// report, keyless via the cftc provider. The prompt reads the net posture of
+// the two professional cohorts; absent when the sidecar is down.
+type CotBitcoin struct {
+	ReportDate            string  `json:"report_date"`
+	OpenInterestAll       float64 `json:"open_interest_all"`
+	LeveragedNetLong      float64 `json:"leveraged_funds_net_long"`
+	AssetManagersNetLong  float64 `json:"asset_managers_net_long"`
+}
+
+func CotBitcoinFetch(ctx context.Context) (*CotBitcoin, error) {
+	const btcCotCode = "CFTC_133741" // BITCOIN (5 Bitcoins), CFTC CFTC_133741
+	q := url.Values{}
+	q.Set("provider", "cftc")
+	q.Set("code", btcCotCode)
+	q.Set("limit", "1")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURLResolved()+"/cftc/cot?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cot: status %d", resp.StatusCode)
+	}
+	var payload struct {
+		Results []struct {
+			Date                 string  `json:"date"`
+			OpenInterestAll      float64 `json:"open_interest_all"`
+			LeveragedFundsLong   float64 `json:"leveraged_funds_long_all"`
+			LeveragedFundsShort  float64 `json:"leveraged_funds_short_all"`
+			AssetManagersLong    float64 `json:"asset_managers_long_all"`
+			AssetManagersShort   float64 `json:"asset_managers_short_all"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Results) == 0 {
+		return nil, fmt.Errorf("cot: empty")
+	}
+	r := payload.Results[0]
+	return &CotBitcoin{
+		ReportDate:           r.Date,
+		OpenInterestAll:      r.OpenInterestAll,
+		LeveragedNetLong:     r.LeveragedFundsLong - r.LeveragedFundsShort,
+		AssetManagersNetLong: r.AssetManagersLong - r.AssetManagersShort,
+	}, nil
+}
+
+// cotCache: a weekly report — 24h memoization is generous.
+var (
+	cotCache   *CotBitcoin
+	cotCacheAt time.Time
+	cotMu      sync.Mutex
+)
+
+// CotBitcoinCached returns the COT snapshot with 24h memoization; nil when
+// unavailable (sidecar down) — callers render absent.
+func CotBitcoinCached(ctx context.Context) *CotBitcoin {
+	cotMu.Lock()
+	defer cotMu.Unlock()
+	if cotCache != nil && time.Since(cotCacheAt) < 24*time.Hour {
+		return cotCache
+	}
+	c, err := CotBitcoinFetch(ctx)
+	if err != nil {
+		return nil
+	}
+	cotCache, cotCacheAt = c, time.Now()
+	return c
+}
+
+
+// Usd renders a signed integer with thousands separators for prompt lines.
+func Usd(v float64) string {
+	n := int64(v)
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	s := strconv.FormatInt(n, 10)
+	var b strings.Builder
+	for i, d := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte(d)
+	}
+	if neg {
+		return "-" + b.String()
+	}
+	return b.String()
+}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"nofx/market"
+	"nofx/provider/openbb"
 )
 
 // TFSignal is the normalized feature block for one timeframe. Pointer fields
@@ -89,6 +90,9 @@ type DerivSignal struct {
 	// stream (!forceOrder@arr), 24h rolling per symbol. Absent during cold
 	// start = the window has no events yet, never "zero liquidations".
 	Liquidation *market.LiquidationWindow `json:"liquidation,omitempty"`
+	// News headlines via the OpenBB sidecar (optional enrichment). Absent
+	// when the sidecar is down or no news provider key is configured.
+	News []openbb.NewsItem `json:"news,omitempty"`
 	// FundingRollover is the PROGRAM-verified short-side crowding condition ②
 	// ("费率刚从高位回落"), computed from the settled funding history vs the
 	// live forward rate (user review 2026-09-15 point 6: the rule demanded
@@ -688,6 +692,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	}
 	if opt.Quant != nil && opt.Quant.Liquidation != nil {
 		d.Liquidation = opt.Quant.Liquidation
+	}
+	if opt.Quant != nil && len(opt.Quant.News) > 0 {
+		d.News = opt.Quant.News
 	}
 	sig.Derivatives = d
 	// ⑤ Precomputed funding annualization on the symbol's REAL settlement
