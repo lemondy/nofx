@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"nofx/logger"
 	"nofx/market"
+	"nofx/provider/openbb"
 	"nofx/provider/nofxos"
 	"nofx/security"
 	"sort"
+	"strings"
 	"strconv"
 	"sync"
 	"time"
@@ -665,6 +667,17 @@ func binanceQuantSnapshot(symbol string) (*QuantData, error) {
 	// reports nothing rather than zeros.
 	if lw, ok := market.LiquidationStats(symbol); ok {
 		data.Liquidation = &lw
+	}
+
+	// News enrichment via the OpenBB sidecar (user directive 2026-09-25):
+	// headline feed for this base symbol; absent when the sidecar is down —
+	// the enrichment layer is optional infrastructure, never a dependency.
+	if openbb.Available() {
+		base := strings.ToUpper(symbol)
+		base = strings.TrimSuffix(strings.TrimSuffix(base, "USDT"), "USD")
+		if items := openbb.NewsForSymbol(base); len(items) > 0 {
+			data.News = items
+		}
 	}
 
 	quantMu.Lock()

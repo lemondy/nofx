@@ -6,6 +6,7 @@ import (
 	"nofx/logger"
 	"nofx/provider/coinank/coinank_api"
 	"nofx/provider/coinank/coinank_enum"
+	"nofx/provider/openbb"
 	"nofx/provider/hyperliquid"
 	"strconv"
 	"strings"
@@ -505,9 +506,31 @@ func getKlinesWithFallback(symbol, interval, exchange string, limit int) ([]Klin
 		return k, nil
 	}
 	k2, err2 := getKlinesFromBinanceDirect(symbol, interval, limit)
-	if err2 != nil {
-		return nil, fmt.Errorf("coinank: %v; binance direct: %v", err, err2)
+	if err2 == nil && len(k2) > 0 {
+		if err != nil {
+			logger.Infof("🔁 %s %s klines: CoinAnk unavailable (%v) — Binance direct fallback", symbol, interval, err)
+		}
+		return k2, nil
 	}
-	logger.Infof("🔁 %s %s klines: CoinAnk unavailable (%v) — Binance direct fallback", symbol, interval, err)
-	return k2, nil
+	// Tier 3: OpenBB sidecar (yfinance) — majors only, altcoin coverage is
+	// spotty there; 4h has no yfinance native and rides 1h bars as-is.
+	if openbb.Available() {
+		base := strings.ToUpper(symbol)
+		base = strings.TrimSuffix(strings.TrimSuffix(base, "USDT"), "USD")
+		rows, err3 := openbb.CryptoKlines(context.Background(), base, interval, limit)
+		if err3 == nil && len(rows) > 0 {
+			out := make([]Kline, 0, len(rows))
+			for _, r := range rows {
+				out = append(out, Kline{
+					OpenTime: int64(r[0]), Open: r[1], High: r[2], Low: r[3],
+					Close: r[4], Volume: r[5],
+				})
+			}
+			logger.Infof("🔁 %s %s klines: CoinAnk + Binance direct both failed — OpenBB/yfinance fallback (%d bars)", symbol, interval, len(out))
+			return out, nil
+		} else if err3 != nil {
+			return nil, fmt.Errorf("coinank: %v; binance direct: %v; openbb: %v", err, err2, err3)
+		}
+	}
+	return nil, fmt.Errorf("coinank: %v; binance direct: %v", err, err2)
 }

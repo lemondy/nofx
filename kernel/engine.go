@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
+	"nofx/provider/openbb"
 	"nofx/market/breakout"
 	"nofx/provider/hyperliquid"
 	"nofx/provider/nofxos"
@@ -518,6 +519,7 @@ type QuantData struct {
 	OI          map[string]*OIData `json:"oi,omitempty"`
 	PriceChange map[string]float64 `json:"price_change,omitempty"`
 	Liquidation *market.LiquidationWindow `json:"liquidation,omitempty"`
+	News        []openbb.NewsItem          `json:"news,omitempty"`
 }
 
 type NetflowData struct {
