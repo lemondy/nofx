@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -210,12 +212,12 @@ func CryptoKlines(ctx context.Context, base string, interval string, limit int) 
 	}
 	var payload struct {
 		Results []struct {
-			Date    time.Time `json:"date"`
-			Open    float64   `json:"open"`
-			High    float64   `json:"high"`
-			Low     float64   `json:"low"`
-			Close   float64   `json:"close"`
-			Volume  float64   `json:"volume"`
+			Date   time.Time `json:"date"`
+			Open   float64   `json:"open"`
+			High   float64   `json:"high"`
+			Low    float64   `json:"low"`
+			Close  float64   `json:"close"`
+			Volume float64   `json:"volume"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -273,7 +275,6 @@ func mapYFInterval(interval string) string {
 // lives there; the sidecar deliberately bypasses it).
 var _ = security.SafeHTTPClient
 
-
 // CotBitcoin is the CFTC Commitments of Traders picture for Bitcoin futures
 // (leveraged funds + asset managers, net positions, open interest) — weekly
 // report, keyless via the cftc provider. The prompt reads the net posture of
@@ -307,12 +308,12 @@ func CotBitcoinFetch(ctx context.Context) (*CotBitcoin, error) {
 	}
 	var payload struct {
 		Results []struct {
-			Date             string  `json:"date"`
-			OpenInterestAll  float64 `json:"open_interest_all"`
-			NonCommLongAll   float64 `json:"non_commercial_positions_long_all"`
-			NonCommShortAll  float64 `json:"non_commercial_positions_short_all"`
-			CommLongAll      float64 `json:"commercial_positions_long_all"`
-			CommShortAll     float64 `json:"commercial_positions_short_all"`
+			Date            string  `json:"date"`
+			OpenInterestAll float64 `json:"open_interest_all"`
+			NonCommLongAll  float64 `json:"non_commercial_positions_long_all"`
+			NonCommShortAll float64 `json:"non_commercial_positions_short_all"`
+			CommLongAll     float64 `json:"commercial_positions_long_all"`
+			CommShortAll    float64 `json:"commercial_positions_short_all"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -353,7 +354,6 @@ func CotBitcoinCached(ctx context.Context) *CotBitcoin {
 	return c
 }
 
-
 // Usd renders a signed integer with thousands separators for prompt lines.
 func Usd(v float64) string {
 	n := int64(v)
@@ -373,4 +373,49 @@ func Usd(v float64) string {
 		return "-" + b.String()
 	}
 	return b.String()
+}
+
+// EnsureSidecar brings the OpenBB sidecar up with the process (user
+// directive 2026-09-25): if :6900 is not already listening, launch it from
+// the repo's venv via the idempotent launcher script, then wait up to 30s
+// for the first successful probe. Strictly fail-open — an unavailable
+// sidecar degrades to "no OpenBB enrichment", never blocks startup; and a
+// sidecar the process did NOT spawn (user-managed) is left alone.
+func EnsureSidecar() {
+	if Available() {
+		logger.Infof("📡 OpenBB sidecar already listening — enrichment layer active")
+		return
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	script := filepath.Join(wd, "scripts", "start_openbb_sidecar.sh")
+	if _, err := os.Stat(script); err != nil {
+		logger.Infof("📡 OpenBB sidecar launcher not found at %s — enrichment layer off", script)
+		return
+	}
+	if _, err := os.Stat(filepath.Join(wd, ".venv-openbb", "bin", "python")); err != nil {
+		logger.Infof("📡 OpenBB venv missing (.venv-openbb) — enrichment layer off (setup: uv venv --python 3.12 .venv-openbb && uv pip install --python .venv-openbb/bin/python openbb)")
+		return
+	}
+	cmd := exec.Command("/bin/zsh", script)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		logger.Infof("📡 OpenBB sidecar launcher exited: %v — enrichment layer off", err)
+		return
+	}
+	// Wait for the first successful probe (fresh sidecar builds its router
+	// on first import — can take ~10s).
+	for i := 0; i < 10; i++ {
+		time.Sleep(3 * time.Second)
+		availMu.Lock()
+		availChecked = time.Time{} // force a fresh probe
+		availMu.Unlock()
+		if Available() {
+			logger.Infof("📡 OpenBB sidecar started by nofx — enrichment layer active")
+			return
+		}
+	}
+	logger.Infof("📡 OpenBB sidecar did not come up in 30s — enrichment layer off this run (check /tmp/openbb-api.log)")
 }

@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"nofx/provider/openbb"
 )
 
 func main() {
@@ -102,6 +103,10 @@ func main() {
 	logger.Info("📊 Using CoinAnk API for all market data (WebSocket cache disabled)")
 
 	// Create TraderManager
+	// OpenBB sidecar (user directive 2026-09-25): bring the local data
+	// enrichment service up with the process. Fail-open — see EnsureSidecar.
+	go openbb.EnsureSidecar()
+
 	traderManager := manager.NewTraderManager()
 	traderManager.SetStore(st)
 
