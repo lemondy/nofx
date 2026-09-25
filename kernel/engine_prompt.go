@@ -320,6 +320,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// 预计算(结构位+方向性缓冲,夹带),rr_scan/checkRR/模型采用三者同口径。
 		if floorMult := rc.SLMinATRMult; floorMult > 0 {
 			params.WriteString(fmt.Sprintf("- 止损(程序预计算,逐字采用): 各方向快照 hard_entry_gate 的 stop_plan_price 就是按方法论算好的止损——从近到远第一个使止损距离落进带内 [≥%.1f×ATR(1h) 噪声下限, ≤max(2×ATR(4h), 8%%)] 的对侧结构位 + 方向性缓冲(空 0.5×ATR(1h)/多 0.4×ATR(1h),取宽端保证 RR 是下界;stop_plan_source=structure 表示这是真实结构位,绝无 clamp 出来的无人区价位)。开仓时 stop_loss 逐字采用 stop_plan_price,禁止自行重算或改窄——RR 门已按它计算,采用它即保证真实 RR≥min_rr(执行端 checkRR 同口径,自选更宽止损会被拒)。failed 含 STOP_PLAN_NO_STRUCTURE(对侧无结构位,如创新高/新低后逆势)或 STOP_PLAN_OUT_OF_BAND(结构止损超出带上限)= 该方向无法按方法论设止损,放弃该设置\n", floorMult))
+			params.WriteString(fmt.Sprintf("- 止损标尺例外(程序强制,美股股票代币): DELL/AAPL/TSLA 等 bstock 标的跟随正股交易时段且有隔夜跳空,其整条止损带改用天级别 ATR——噪声下限 ≥%.1f×ATR(1d)、方向性缓冲 ×ATR(1d)、带上限 ≤max(2×ATR(1d), 8%%);快照 stop_plan 已按该标尺算好,无需也不得自行换算。移动止损的 2×ATR 跟踪带宽同样对股票代币用 ATR(1d)\n", floorMult))
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}

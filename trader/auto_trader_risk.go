@@ -488,7 +488,7 @@ func (at *AutoTrader) validateOpenRisk(decision *kernel.Decision, entryPrice, fl
 	// sits beyond 80% of that move — inside that band a wick can liquidate
 	// (or cascade-slippage the SL) before the stop triggers.
 	if decision.Leverage > 0 {
-		liqDistPct := 100.0/float64(decision.Leverage) * 0.9
+		liqDistPct := 100.0 / float64(decision.Leverage) * 0.9
 		stopDistPct := math.Abs(entryPrice-decision.StopLoss) / entryPrice * 100
 		if stopDistPct >= liqDistPct*0.8 {
 			return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: stop distance %.2f%% ≥ 80%% of the ~%.2f%% liquidation distance at %dx — price can reach liquidation before the stop; widen the stop's budget by cutting leverage or size",
@@ -642,6 +642,27 @@ func atrPctFromTimeframes(data *market.Data, nominal string, warnSymbol string, 
 // and floor ride the 1h rhythm the trade must survive) and the vol-target
 // rescale / trailing stop yardstick. Falls back toward other TFs
 // deterministically; 0 when unavailable.
+// dailyATRPct returns ATR(14) as a percent of price on the DAILY timeframe —
+// the stop-band yardstick for equity tokens (user directive 2026-09-25:
+// bstock tracks the underlying's SESSION with overnight gaps; 1h/4h ATR set
+// systematically too-tight stops). Fallback chain keeps the band enforced
+// when 1d is unavailable.
+func dailyATRPct(data *market.Data) float64 {
+	return atrPctFromTimeframes(data, "1d", "", "1d", "12h", "8h", "4h", "2h", "1h", "30m", "15m", "5m", "3m")
+}
+
+// stopBandATRs resolves the (floor, cap) ATR pair for one symbol: equity
+// tokens price BOTH off the DAILY scale (floor sl_min×ATR(1d), cap
+// 2×ATR(1d) with the 8% floor-cap retained), everything else keeps the
+// 1h-floor / 4h-cap asymmetry. The isStock check rides the market package's
+// cached classification (same source as the weekend gate).
+func (at *AutoTrader) stopBandATRs(symbol string, data *market.Data) (floorATR, capATR float64) {
+	if market.IsBStockSymbol(symbol) {
+		return dailyATRPct(data), dailyATRPct(data)
+	}
+	return oneHourATRPct(data), fourHourATRPct(data)
+}
+
 func oneHourATRPct(data *market.Data) float64 {
 	return atrPctFromTimeframes(data, "1h", "", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "30m", "15m", "5m", "3m")
 }

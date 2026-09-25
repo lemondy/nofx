@@ -1124,6 +1124,15 @@ func stopFloorPct(sig *SymbolSignal, mult float64) float64 {
 	if mult <= 0 {
 		return 0
 	}
+	// Equity tokens (user directive 2026-09-25): DAILY-scale floor — bstock
+	// tracks the underlying's session with overnight gaps, 1h ATR set
+	// systematically too-tight stops on them. Falls back to 1h when no 1d
+	// series exists (classification says stock but data thin).
+	if market.IsBStockSymbol(sig.Symbol) {
+		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
+			return mult * td.ATRPct
+		}
+	}
 	if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
 		return mult * t1h.ATRPct
 	}
@@ -1162,7 +1171,16 @@ const (
 // highs/lows); STOP_PLAN_OUT_OF_BAND = no structure lands inside the band
 // (nearest too tight, rest too wide — 放弃该设置 per methodology).
 func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (price, distPct float64, code string) {
-	t1h := sig.Timeframes["1h"]
+	// Buffer yardstick: ATR(1h) for crypto, ATR(1d) for equity tokens
+	// (session-gap rationale — see stopFloorPct). Structures still come from
+	// the ≥15m pivots; only the buffer's scale changes.
+	bufTF := "1h"
+	if market.IsBStockSymbol(sig.Symbol) {
+		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
+			bufTF = "1d"
+		}
+	}
+	t1h := sig.Timeframes[bufTF]
 	if t1h == nil || t1h.ATRPct <= 0 {
 		return 0, 0, "STOP_PLAN_NO_STRUCTURE"
 	}
@@ -1216,8 +1234,17 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	// noise-tight stops needs the fine-grained yardstick; the CAP uses the
 	// 4h scale because a ceiling must be STABLE — a 1h ATR spike must not
 	// blow the maximum stop width open mid-cycle. Not a typo (09-21 audit).
+	// Equity tokens price the whole band off the DAILY scale instead (user
+	// directive 2026-09-25): floor 1.5×ATR(1d), buffer ×ATR(1d), cap
+	// 2×ATR(1d) with the 8% minimum retained.
 	capPct := 8.0
-	if t4h := sig.Timeframes["4h"]; t4h != nil && t4h.ATRPct > 0 {
+	capTF := "4h"
+	if market.IsBStockSymbol(sig.Symbol) {
+		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
+			capTF = "1d"
+		}
+	}
+	if t4h := sig.Timeframes[capTF]; t4h != nil && t4h.ATRPct > 0 {
 		if c := 2 * t4h.ATRPct; c > capPct {
 			capPct = c
 		}

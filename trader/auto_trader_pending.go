@@ -292,7 +292,8 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	}
 
 	// All risk gates anchor at the LIMIT price — the exact fill price.
-	if err := at.validateOpenRisk(decision, decision.Price, oneHourATRPct(marketData), fourHourATRPct(marketData)); err != nil {
+	floorATR, capATR := at.stopBandATRs(decision.Symbol, marketData)
+	if err := at.validateOpenRisk(decision, decision.Price, floorATR, capATR); err != nil {
 		return err
 	}
 

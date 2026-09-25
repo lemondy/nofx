@@ -667,7 +667,7 @@ func TestExecutionTimeframeData(t *testing.T) {
 		return ks
 	}
 
-	tf := executionTimeframeData(mk(100, 2.4), mk(100, 2.4), mk(100, 2.4))
+	tf := executionTimeframeData(mk(100, 2.4), mk(100, 2.4), mk(100, 2.4), nil)
 	for _, key := range []string{"3m", "1h", "4h"} {
 		if tf[key] == nil || len(tf[key].Klines) == 0 {
 			t.Fatalf("timeframe %q missing from execution data", key)
@@ -675,7 +675,7 @@ func TestExecutionTimeframeData(t *testing.T) {
 	}
 
 	// 1h fetch failed (best-effort): floor's ATR chain rides 4h instead.
-	tf = executionTimeframeData(mk(100, 2.4), nil, mk(100, 2.4))
+	tf = executionTimeframeData(mk(100, 2.4), nil, mk(100, 2.4), nil)
 	if tf["1h"] != nil {
 		t.Fatal("1h must be absent when its fetch failed")
 	}
@@ -748,7 +748,7 @@ func TestExecutionTimeframeDataHas15m(t *testing.T) {
 			Open:     p, High: p * 1.02, Low: p * 0.98, Close: p, Volume: 100,
 		})
 	}
-	tfd := executionTimeframeData(k3m, nil, k4h)
+	tfd := executionTimeframeData(k3m, nil, k4h, nil)
 	k15, ok := tfd["15m"]
 	if !ok {
 		t.Fatal("15m series missing from execution dataset")

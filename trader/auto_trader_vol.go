@@ -166,7 +166,15 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		if err != nil {
 			continue
 		}
-		atrPct := oneHourATRPct(data)
+		// Yardstick: equity tokens ride the DAILY scale (session gaps make
+		// 1h ATR too tight for their trailing band too — same rationale as
+		// the stop band, user directive 2026-09-25); crypto keeps 1h.
+		var atrPct float64
+		if market.IsBStockSymbol(symbol) {
+			atrPct = dailyATRPct(data)
+		} else {
+			atrPct = oneHourATRPct(data)
+		}
 
 		// ── 规则1/2: volatility-targeted rescale (reduce-only) ──
 		if volEnabled && equity > 0 && atrPct > 0 {

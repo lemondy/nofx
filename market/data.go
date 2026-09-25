@@ -142,6 +142,21 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		klines1h = nil
 	}
 
+	// 1d K-lines (best-effort, 2026-09-25 user directive): equity tokens
+	// (bstock) track their underlying's SESSION — with overnight gaps the
+	// daily bar is the honest volatility yardstick, and 1h/4h ATR set
+	// systematically too-tight stops on them. Fetched for every symbol so
+	// the stock check needs no data-path branch; unused by crypto paths.
+	var klines1d []Kline
+	if useHyperliquidAPI {
+		klines1d, err = getKlinesFromHyperliquid(symbol, "1d", 100)
+	} else {
+		klines1d, err = getKlinesWithFallback(symbol, "1d", exchange, 100)
+	}
+	if err != nil {
+		klines1d = nil // silent — daily scale is an enhancement, not a requirement
+	}
+
 	// Check if data is empty
 	if len(klines3m) == 0 {
 		return nil, fmt.Errorf("3-minute K-line data is empty")
@@ -216,7 +231,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	// the whole family — the cap degenerated to the fixed 8% and the floor
 	// never enforced (09-16 AKEUSDT: a healthy 11.45% structural stop was
 	// rejected by the degenerate 8% cap the prompt never promised).
-	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h)
+	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h, klines1d)
 
 	return &Data{
 		Symbol:             symbol,
@@ -988,7 +1003,7 @@ func isStaleData(klines []Kline, symbol string) bool {
 // ATR ≈ 8× a quiet 15m's) — the supply-zone gate then rejected anchors the
 // prompt-side suppression had blessed on real 15m data, every cycle
 // (2026-09-19 BTCUSDT loop).
-func executionTimeframeData(klines3m, klines1h, klines4h []Kline) map[string]*TimeframeSeriesData {
+func executionTimeframeData(klines3m, klines1h, klines4h, klines1d []Kline) map[string]*TimeframeSeriesData {
 	tf := map[string]*TimeframeSeriesData{}
 	if len(klines3m) > 0 {
 		tf["3m"] = calculateTimeframeSeries(klines3m, "3m", len(klines3m))
@@ -1003,6 +1018,9 @@ func executionTimeframeData(klines3m, klines1h, klines4h []Kline) map[string]*Ti
 	}
 	if len(klines4h) > 0 {
 		tf["4h"] = calculateTimeframeSeries(klines4h, "4h", len(klines4h))
+	}
+	if len(klines1d) > 0 {
+		tf["1d"] = calculateTimeframeSeries(klines1d, "1d", len(klines1d))
 	}
 	return tf
 }
