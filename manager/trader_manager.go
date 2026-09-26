@@ -262,6 +262,15 @@ func (tm *TraderManager) GetCompetitionData() (map[string]interface{}, error) {
 	return comparison, nil
 }
 
+// InvalidateCompetitionCache drops cached public leaderboard data. Visibility
+// changes must take effect immediately rather than waiting for the cache TTL.
+func (tm *TraderManager) InvalidateCompetitionCache() {
+	tm.competitionCache.mu.Lock()
+	tm.competitionCache.data = nil
+	tm.competitionCache.timestamp = time.Time{}
+	tm.competitionCache.mu.Unlock()
+}
+
 // getConcurrentTraderData concurrently fetches data for multiple traders
 func (tm *TraderManager) getConcurrentTraderData(traders []*trader.AutoTrader) []map[string]interface{} {
 	type traderResult struct {

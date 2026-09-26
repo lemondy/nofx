@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +18,10 @@ import (
 func TestPumpGuardBlocksUnconfirmedExtendedPump(t *testing.T) {
 	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
 
-	// 4h: strong pump (+2%/bar for 30 bars → the 20-bar window return ≈ +49%).
+	// 4h: strong pump; the last five closed bars alone exceed the 20% guard.
 	var k4h []market.Kline
 	for i := 0; i < 30; i++ {
-		p := 100 * (1 + 0.02*float64(i))
+		p := 100 * math.Pow(1.05, float64(i))
 		k4h = append(k4h, market.Kline{
 			OpenTime: now.Add(time.Duration(i-30) * 4 * time.Hour).UnixMilli(),
 			Open:     p * 0.999, High: p * 1.004, Low: p * 0.996, Close: p, Volume: 10,
@@ -169,5 +170,28 @@ func TestPumpGuardBlocksUnconfirmedExtendedPump(t *testing.T) {
 	}
 	if got := PumpGuard4h(&store.RiskControlConfig{PumpGuard4hPct: 35}); got != 35 {
 		t.Fatalf("PumpGuard4h(35) = %v, want 35", got)
+	}
+}
+
+func TestPumpGuardUsesFiveClosed4hCandles(t *testing.T) {
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	var bars []market.Kline
+	for i := 0; i < 30; i++ {
+		p := 100 + 2*float64(i)
+		if i >= 25 {
+			p = 148 // last five 4h candles are flat after the earlier pump
+		}
+		bars = append(bars, market.Kline{
+			OpenTime: now.Add(time.Duration(i-30) * 4 * time.Hour).UnixMilli(),
+			Open:     p, High: p * 1.001, Low: p * 0.999, Close: p, Volume: 10,
+		})
+	}
+	sig := &SymbolSignal{Timeframes: map[string]*TFSignal{"4h": {ReturnPct: 25}}}
+	data := &market.Data{TimeframeData: map[string]*market.TimeframeSeriesData{
+		"4h": mkTF("4h", bars),
+	}}
+	guard := computePumpGuard(sig, data, 20, now)
+	if guard.Extended || guard.Return4hPct != 0 {
+		t.Fatalf("older 20-bar pump must not arm the 5-bar guard: %+v", guard)
 	}
 }

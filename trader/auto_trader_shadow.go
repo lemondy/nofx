@@ -107,7 +107,7 @@ func (at *AutoTrader) evaluateGateShadowBlocks() {
 		return
 	}
 	for _, row := range rows {
-		data, err := market.GetWithTimeframes(row.Symbol, []string{"1h"}, "1h", 32)
+		data, err := at.getMarketTimeframes(row.Symbol, []string{"1h"}, "1h", 32)
 		if err != nil || data == nil {
 			continue // transient — retry next cycle
 		}
@@ -126,7 +126,7 @@ func (at *AutoTrader) evaluateGateShadowBlocks() {
 		return
 	}
 	for _, row := range rows48 {
-		data, err := market.GetWithTimeframes(row.Symbol, []string{"1h"}, "1h", 56)
+		data, err := at.getMarketTimeframes(row.Symbol, []string{"1h"}, "1h", 56)
 		if err != nil || data == nil {
 			continue // transient — retry next cycle
 		}

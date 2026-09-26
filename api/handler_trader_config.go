@@ -66,6 +66,7 @@ func (s *Server) handleToggleCompetition(c *gin.Context) {
 	if trader, err := s.traderManager.GetTrader(traderID); err == nil {
 		trader.SetShowInCompetition(req.ShowInCompetition)
 	}
+	s.traderManager.InvalidateCompetitionCache()
 
 	status := "shown"
 	if !req.ShowInCompetition {

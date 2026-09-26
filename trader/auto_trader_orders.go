@@ -145,7 +145,7 @@ func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.Deci
 func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  📈 Open long: %s", decision.Symbol)
 
-	if marketData, err := market.GetWithExchange(decision.Symbol, at.exchange); err == nil {
+	if marketData, err := at.getMarketData(decision.Symbol); err == nil {
 		at.stampEntryPath(actionRecord, marketData)
 	}
 
@@ -176,7 +176,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	}
 
 	// Get current price
-	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
+	marketData, err := at.getMarketData(decision.Symbol)
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func (at *AutoTrader) reportFillSlippageRR(decision *kernel.Decision, checkedPri
 func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  📉 Open short: %s", decision.Symbol)
 
-	if marketData, err := market.GetWithExchange(decision.Symbol, at.exchange); err == nil {
+	if marketData, err := at.getMarketData(decision.Symbol); err == nil {
 		at.stampEntryPath(actionRecord, marketData)
 	}
 
@@ -362,7 +362,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	}
 
 	// Get current price
-	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
+	marketData, err := at.getMarketData(decision.Symbol)
 	if err != nil {
 		return err
 	}
@@ -648,7 +648,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	}
 
 	// Get current price
-	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
+	marketData, err := at.getMarketData(decision.Symbol)
 	if err != nil {
 		return err
 	}
@@ -722,7 +722,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	}
 
 	// Get current price
-	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
+	marketData, err := at.getMarketData(decision.Symbol)
 	if err != nil {
 		return err
 	}

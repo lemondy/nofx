@@ -155,10 +155,15 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		MarginUsedPct    float64 `json:"margin_used_pct"`   // Margin used percentage
 	}
 
-	// Use the balance of the first record as initial balance to calculate return rate
-	initialBalance := snapshots[0].Balance
-	if initialBalance == 0 {
-		initialBalance = 1 // Avoid division by zero
+	// Use the trader's configured initial equity so this endpoint reports the
+	// same total return as the batch endpoint. Balance is only wallet balance;
+	// using unrealized PnL / wallet balance omitted realized gains and losses.
+	initialBalance := 0.0
+	if trader, err := s.store.Trader().GetByID(traderID); err == nil && trader != nil {
+		initialBalance = trader.InitialBalance
+	}
+	if initialBalance <= 0 {
+		initialBalance = snapshots[0].TotalEquity
 	}
 
 	var history []EquityPoint
@@ -166,7 +171,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		// Calculate PnL percentage
 		totalPnLPct := 0.0
 		if initialBalance > 0 {
-			totalPnLPct = (snap.UnrealizedPnL / initialBalance) * 100
+			totalPnLPct = ((snap.TotalEquity - initialBalance) / initialBalance) * 100
 		}
 
 		history = append(history, EquityPoint{
@@ -457,6 +462,14 @@ func (s *Server) handleGetPublicTraderConfig(c *gin.Context) {
 		return
 	}
 
+	// Public config follows the same visibility rule as the leaderboard and
+	// equity endpoints. The manager map contains traders owned by all users,
+	// so an ID lookup alone is not an authorization check.
+	visible, err := s.store.Trader().GetByID(traderID)
+	if err != nil || visible == nil || !visible.ShowInCompetition {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist"})
+		return
+	}
 	trader, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist"})

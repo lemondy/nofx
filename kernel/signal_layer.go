@@ -40,26 +40,32 @@ type TFSignal struct {
 	// price is making new highs/lows inside the window") and must stay
 	// legible, not vanish from the JSON (09-18 audit #6: BTC 1h/4h showed no
 	// resistance key at all while price was above every 4h structure high).
-	Support           []float64 `json:"support"`               // nearest swing lows, ascending; [] = none below live price
-	Resistance        []float64 `json:"resistance"`            // nearest swing highs, descending; [] = none above live price
+	Support    []float64 `json:"support"`    // nearest swing lows, ascending; [] = none below live price
+	Resistance []float64 `json:"resistance"` // nearest swing highs, descending; [] = none above live price
+	// Full swing-pivot sets used by the hard-gate RR/stop calculations. The
+	// prompt arrays above are intentionally capped and classified against the
+	// live price; a limit entry can sit on the other side of that price, so the
+	// gate must retain uncapped pivots and re-filter them against its entry.
+	StructuralSupport    []float64 `json:"-"`
+	StructuralResistance []float64 `json:"-"`
 	// BOLLSourced tags which Support/Resistance values came from the Bollinger
 	// band rather than a swing pivot. NOT serialized (prompt JSON unchanged):
 	// scanRR uses it to keep decaying band values out of first_rr_ge_target
 	// (QUANT_REVIEW_2026-09-22 C1).
-	BOLLSourced    map[float64]bool `json:"-"`
-	SupportDistPct []float64        `json:"support_dist_pct"`    // pre-computed (level-anchor)/anchor×100, index-aligned with Support
-	ResistanceDistPct []float64     `json:"resistance_dist_pct"` // pre-computed, index-aligned with Resistance
-	MACDHist          *float64  `json:"macd_hist,omitempty"`   // normalized by price
-	MACDTrend         string    `json:"macd_trend,omitempty"`  // rising / falling / flat
-	RSI14             *float64  `json:"rsi,omitempty"`         // 0-100
-	StochRSIK         *float64  `json:"stoch_rsi_k,omitempty"` // StochRSI %K (14,14,3,3), 0-100
-	StochRSID         *float64  `json:"stoch_rsi_d,omitempty"` // StochRSI %D (3-SMA of K), 0-100
-	EMAFast           *float64  `json:"ema_fast,omitempty"`    // EMA20
-	EMASlow           *float64  `json:"ema_slow,omitempty"`    // EMA50
-	LastClosedCandle  string    `json:"last_closed_candle"`    // bullish / bearish / doji
-	LastClose         float64   `json:"last_close"`            // last CLOSED candle close
-	StructureHigh     *float64  `json:"structure_high"`        // highest close in window
-	StructureLow      *float64  `json:"structure_low"`         // lowest close in window
+	BOLLSourced       map[float64]bool `json:"-"`
+	SupportDistPct    []float64        `json:"support_dist_pct"`      // pre-computed (level-anchor)/anchor×100, index-aligned with Support
+	ResistanceDistPct []float64        `json:"resistance_dist_pct"`   // pre-computed, index-aligned with Resistance
+	MACDHist          *float64         `json:"macd_hist,omitempty"`   // normalized by price
+	MACDTrend         string           `json:"macd_trend,omitempty"`  // rising / falling / flat
+	RSI14             *float64         `json:"rsi,omitempty"`         // 0-100
+	StochRSIK         *float64         `json:"stoch_rsi_k,omitempty"` // StochRSI %K (14,14,3,3), 0-100
+	StochRSID         *float64         `json:"stoch_rsi_d,omitempty"` // StochRSI %D (3-SMA of K), 0-100
+	EMAFast           *float64         `json:"ema_fast,omitempty"`    // EMA20
+	EMASlow           *float64         `json:"ema_slow,omitempty"`    // EMA50
+	LastClosedCandle  string           `json:"last_closed_candle"`    // bullish / bearish / doji
+	LastClose         float64          `json:"last_close"`            // last CLOSED candle close
+	StructureHigh     *float64         `json:"structure_high"`        // highest close in window
+	StructureLow      *float64         `json:"structure_low"`         // lowest close in window
 	// Structure distances use the SAME convention as support_dist_pct /
 	// resistance_dist_pct: (level − LIVE price)/live×100. NEGATIVE
 	// structure_high_dist_pct means the live price has already cleared the
@@ -367,8 +373,8 @@ type DirectionGate struct {
 	// at the open dispatch: without it a market open in limit mode is
 	// degraded to the anchor limit or dropped (QUANT_REVIEW_2026-09-22 B1).
 	// omitempty keeps the common (false) prompt JSON unchanged.
-	MarketException bool `json:"market_exception,omitempty"`
-	StopFloorPct float64 `json:"stop_floor_pct,omitempty"`
+	MarketException bool    `json:"market_exception,omitempty"`
+	StopFloorPct    float64 `json:"stop_floor_pct,omitempty"`
 	// StopPlan is the precomputed METHODOLOGY stop (nearest opposite-side
 	// structure + direction-aware buffer, clamped into the band). 09-19 RR
 	// audit: the gate used to score RR at the noise-floor stop while actual
@@ -410,14 +416,24 @@ type PumpGuardBlock struct {
 // computePumpGuard evaluates the extended-pump long guard. Fail-closed: a
 // missing 4h series can never mark a coin extended, but a missing 15m series
 // on an extended coin blocks the long (no evidence of confirmation).
-func computePumpGuard(sig *SymbolSignal, data *market.Data, thresholdPct float64) *PumpGuardBlock {
+func computePumpGuard(sig *SymbolSignal, data *market.Data, thresholdPct float64, now time.Time) *PumpGuardBlock {
 	if thresholdPct <= 0 {
 		return nil
 	}
 	pg := &PumpGuardBlock{ThresholdPct: round2(thresholdPct), Confirmed: true}
-	if t4h := sig.Timeframes["4h"]; t4h != nil {
-		pg.Return4hPct = round2(t4h.ReturnPct)
-		pg.Extended = t4h.ReturnPct >= thresholdPct
+	if t4h := data.TimeframeData["4h"]; t4h != nil {
+		closed := ClosedKlines(t4h, now, tfDuration("4h"))
+		// The prompt defines the guard as a five-candle 4h window (20 hours).
+		// TFSignal.ReturnPct is a generic 20-bar window, which would stretch
+		// this particular guard to 80 hours and keep old pumps armed too long.
+		if len(closed) >= 6 {
+			from, to := closed[len(closed)-6].Close, closed[len(closed)-1].Close
+			if from > 0 {
+				ret := (to/from - 1) * 100
+				pg.Return4hPct = round2(ret)
+				pg.Extended = ret >= thresholdPct
+			}
+		}
 	}
 	if !pg.Extended {
 		return pg // guard dormant — not an extended pump
@@ -1082,7 +1098,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// layering (review 2026-09-15 points 1-3/5/7/8/10): the model reads the
 	// verdict and explains it instead of re-scanning structure and
 	// re-assembling blockers every cycle.
-	sig.PumpGuard = computePumpGuard(sig, data, opt.PumpGuard4hPct)
+	sig.PumpGuard = computePumpGuard(sig, data, opt.PumpGuard4hPct, now)
 	sig.HardGate = computeHardEntryGate(sig, opt)
 	sig.Bias = computeBiasBlock(sig, opt)
 
@@ -1200,15 +1216,24 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 		if tf == nil || tfDuration(name) < 15*time.Minute || tfDuration(name) > 4*time.Hour {
 			continue
 		}
-		src := tf.Support
+		src := tf.StructuralSupport
+		if src == nil {
+			src = tf.Support
+		}
 		if !isLong {
-			src = tf.Resistance
+			src = tf.StructuralResistance
+			if src == nil {
+				src = tf.Resistance
+			}
 		}
 		for _, l := range src {
 			if l <= 0 {
 				continue
 			}
 			if (isLong && l < entry) || (!isLong && l > entry) {
+				if !srcIsStructural(tf, isLong) && tf.BOLLSourced[l] {
+					continue // dynamic bands are not valid methodology stops
+				}
 				levels = append(levels, l)
 			}
 		}
@@ -1471,10 +1496,18 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 	// a band value decays with its window, so anchoring the rule-mandated TP
 	// to it lets the exit drift after placement (QUANT_REVIEW_2026-09-22 C1).
 	bollT := map[float64]bool{}
+	structuralT := map[float64]bool{}
 	for _, p := range pairs {
-		src := p.tf.Resistance
+		src := p.tf.StructuralResistance
+		displaySrc := p.tf.Resistance
 		if !isLong {
-			src = p.tf.Support
+			src = p.tf.StructuralSupport
+			displaySrc = p.tf.Support
+		}
+		// Older/manual signals may not carry the internal full pivot set.
+		// Fall back to the displayed levels in that case.
+		if src == nil {
+			src = displaySrc
 		}
 		for _, l := range src {
 			if l <= 0 {
@@ -1482,17 +1515,38 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 			}
 			if isLong && l > entry {
 				targets = append(targets, l)
-				if p.tf.BOLLSourced[l] {
+				if srcIsStructural(p.tf, isLong) || !p.tf.BOLLSourced[l] {
+					structuralT[l] = true
+				} else {
 					bollT[l] = true
 				}
 			}
 			if !isLong && l < entry {
 				targets = append(targets, l)
-				if p.tf.BOLLSourced[l] {
+				if srcIsStructural(p.tf, isLong) || !p.tf.BOLLSourced[l] {
+					structuralT[l] = true
+				} else {
 					bollT[l] = true
 				}
 			}
 		}
+		// Bollinger levels remain context for best_rr, but never qualify as
+		// an adopted target. If a band exactly overlaps a real swing pivot,
+		// the real structural level takes precedence below.
+		if srcIsStructural(p.tf, isLong) {
+			for _, l := range displaySrc {
+				if !p.tf.BOLLSourced[l] || l <= 0 {
+					continue
+				}
+				if (isLong && l > entry) || (!isLong && l < entry) {
+					targets = append(targets, l)
+					bollT[l] = true
+				}
+			}
+		}
+	}
+	for l := range structuralT {
+		delete(bollT, l)
 	}
 	if isLong {
 		sort.Float64s(targets) // ascending = near→far above
@@ -1803,6 +1857,10 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	}
 
 	pivHighs, pivLows := swingPivots(window, 2)
+	// Keep the full, uncapped pivot set for the hidden program gate. The
+	// prompt-facing S/R lists remain capped and live-price-relative.
+	sig.StructuralResistance = append([]float64{}, pivHighs...)
+	sig.StructuralSupport = append([]float64{}, pivLows...)
 	// Resistance: swing highs above price, nearest first. Starts non-nil so
 	// an empty side still marshals as [] — "no level on this side of the
 	// live price" is evidence, not an absence of data.
@@ -1911,6 +1969,16 @@ func classifyTrend(c []float64, fast, slow float64, hasEMA bool) string {
 	default:
 		return "range"
 	}
+}
+
+// srcIsStructural reports whether the direction-specific full pivot set is
+// available. A non-nil empty set is meaningful: the timeframe had no pivots
+// on that side, so callers must not fall back to the prompt's capped list.
+func srcIsStructural(tf *TFSignal, isLong bool) bool {
+	if isLong {
+		return tf.StructuralResistance != nil
+	}
+	return tf.StructuralSupport != nil
 }
 
 func candleColor(k market.KlineBar) string {

@@ -84,6 +84,43 @@ func TestStopPlanKORUShort(t *testing.T) {
 	}
 }
 
+func TestStopPlanUsesUncappedStructureAndSkipsBands(t *testing.T) {
+	sig := &SymbolSignal{
+		Symbol: "TESTUSDT",
+		Timeframes: map[string]*TFSignal{
+			"15m": {
+				Support:           []float64{99.3, 99.2, 99.1}, // prompt cap
+				StructuralSupport: []float64{99.3, 99.2, 99.1, 98},
+			},
+			"1h": {ATRPct: 1},
+			"4h": {ATRPct: 1},
+		},
+	}
+	price, dist, code := methodStopPlan(sig, 100, 2, true)
+	if code != "" {
+		t.Fatalf("methodStopPlan failed: %s", code)
+	}
+	// The nearest three stops are all inside the 2% noise floor. The fourth
+	// real pivot, extended by 0.4×ATR(1h), lands at 2.4% and is valid.
+	if math.Abs(price-97.6) > 1e-9 || math.Abs(dist-2.4) > 1e-9 {
+		t.Fatalf("stop plan = price %.4f / distance %.2f%%, want 97.6 / 2.40%%", price, dist)
+	}
+
+	// A dynamic Bollinger value in the prompt-facing array is not a structural
+	// stop candidate when a full pivot set is unavailable.
+	bandOnly := &SymbolSignal{
+		Symbol: "TESTUSDT",
+		Timeframes: map[string]*TFSignal{
+			"15m": {Support: []float64{98}, BOLLSourced: map[float64]bool{98: true}},
+			"1h":  {ATRPct: 1},
+			"4h":  {ATRPct: 1},
+		},
+	}
+	if _, _, code := methodStopPlan(bandOnly, 100, 2, true); code != "STOP_PLAN_NO_STRUCTURE" {
+		t.Fatalf("Bollinger-only stop source code = %q, want STOP_PLAN_NO_STRUCTURE", code)
+	}
+}
+
 func TestStopPlanNoStructureAndOutOfBand(t *testing.T) {
 	// New-highs short: every resistance sits BELOW the live price — no
 	// structural stop exists → STOP_PLAN_NO_STRUCTURE, direction dead.

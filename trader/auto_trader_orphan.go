@@ -109,7 +109,7 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 	now := time.Now()
 	for _, row := range orphanedRows(rows, live, now, orphanPositionMinAge) {
 		exitPrice := 0.0
-		if p, err := market.NewAPIClient().GetCurrentPrice(row.Symbol); err == nil && p > 0 {
+		if p, err := at.trader.GetMarketPrice(row.Symbol); err == nil && p > 0 {
 			exitPrice = p
 		}
 		if exitPrice <= 0 {

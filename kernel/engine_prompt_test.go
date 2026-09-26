@@ -458,7 +458,15 @@ func TestFormatMarketDataRecordsRRCeilings(t *testing.T) {
 	engine := NewStrategyEngine(cfg)
 
 	now := time.Now()
-	tfData := buildTF("1h", now, 80, 5.0, false) // swings via BOLL band supplements give both sides targets
+	tfData := buildTF("1h", now, 80, 5.0, false)
+	// The RR plan must be backed by real swing pivots, not only the dynamic
+	// Bollinger supplements. Add repeated closed-bar highs/lows above/below the
+	// live price so both directions have genuine structural stops and targets.
+	for i := 16; i+4 < len(tfData.Klines)-1; i += 8 {
+		tfData.Klines[i].High = tfData.Klines[i].Close * 1.03
+		lowIndex := i + 4
+		tfData.Klines[lowIndex].Low = tfData.Klines[lowIndex].Close * 0.97
+	}
 	data := withVendor(&market.Data{
 		Symbol: "TESTUSDT", CurrentPrice: tfData.Klines[len(tfData.Klines)-1].Close,
 		TimeframeData: map[string]*market.TimeframeSeriesData{"1h": tfData},

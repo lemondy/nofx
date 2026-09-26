@@ -1362,7 +1362,7 @@ func (at *AutoTrader) processProtectionWatchdog() {
 // every downstream consumer treats it as the plan. Returns true when BOTH
 // legs are on the exchange.
 func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string, markPrice float64) bool {
-	data, err := market.GetWithTimeframes(symbol, []string{"1h"}, "1h", 99)
+	data, err := at.getMarketTimeframes(symbol, []string{"1h"}, "1h", 99)
 	if err != nil || data == nil {
 		return false
 	}

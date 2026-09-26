@@ -5,7 +5,6 @@ import (
 	"math"
 	"nofx/kernel"
 	"nofx/logger"
-	"nofx/market"
 	"nofx/store"
 	notify "nofx/telegram/notify"
 	"nofx/trader/types"
@@ -211,7 +210,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		}
 	}
 
-	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
+	marketData, err := at.getMarketData(decision.Symbol)
 	if err != nil {
 		return err
 	}
@@ -475,7 +474,7 @@ func (at *AutoTrader) processPendingEntries() {
 			at.protectExecutedSlice(pe, status)
 			// Remaining size keeps the normal pending lifecycle (SL-crossed
 			// invalidation + lifetime expiry), minus the protected watermark.
-			if md, err := market.GetWithExchange(pe.Symbol, at.exchange); err == nil && md.CurrentPrice > 0 {
+			if md, err := at.getMarketData(pe.Symbol); err == nil && md.CurrentPrice > 0 {
 				invalid := (pe.Side == "long" && md.CurrentPrice <= pe.StopLoss) ||
 					(pe.Side == "short" && md.CurrentPrice >= pe.StopLoss)
 				if invalid {
@@ -502,7 +501,7 @@ func (at *AutoTrader) processPendingEntries() {
 		default: // NEW
 			pe.Cycles++
 			// Invalidation: price crossed the SL before entry — setup is dead.
-			if md, err := market.GetWithExchange(pe.Symbol, at.exchange); err == nil && md.CurrentPrice > 0 {
+			if md, err := at.getMarketData(pe.Symbol); err == nil && md.CurrentPrice > 0 {
 				invalid := (pe.Side == "long" && md.CurrentPrice <= pe.StopLoss) ||
 					(pe.Side == "short" && md.CurrentPrice >= pe.StopLoss)
 				if invalid {

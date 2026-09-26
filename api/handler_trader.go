@@ -507,6 +507,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		return
 	}
 	logger.Infof("🔧 DEBUG: CreateTrader succeeded")
+	s.traderManager.InvalidateCompetitionCache()
 
 	// Immediately load new trader into TraderManager
 	logger.Infof("🔧 DEBUG: Preparing to call LoadUserTraders")
@@ -667,6 +668,7 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		SafeInternalError(c, "Failed to update trader", err)
 		return
 	}
+	s.traderManager.InvalidateCompetitionCache()
 
 	if resetInitialBalance {
 		logger.Infof("🔄 Exchange changed for trader %s, resetting stale initial_balance to 0", traderID)
@@ -718,6 +720,7 @@ func (s *Server) handleDeleteTrader(c *gin.Context) {
 		SafeInternalError(c, "Failed to delete trader", err)
 		return
 	}
+	s.traderManager.InvalidateCompetitionCache()
 
 	// If trader is running, stop it first
 	if trader, err := s.traderManager.GetTrader(traderID); err == nil {

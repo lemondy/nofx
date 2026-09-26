@@ -82,6 +82,13 @@ func Get(symbol string) (*Data, error) {
 
 // GetWithExchange retrieves market data for the specified token using exchange-specific data
 func GetWithExchange(symbol, exchange string) (*Data, error) {
+	return GetWithExchangeAndPrice(symbol, exchange, 0)
+}
+
+// GetWithExchangeAndPrice builds trading data using the caller's live price
+// from the same exchange that will execute the order. A Binance ticker must
+// never silently stand in for another venue's quote.
+func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data, error) {
 	var klines3m, klines4h, klines1h []Kline
 	var err error
 	// Normalize symbol
@@ -102,7 +109,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 		}
 	} else {
 		// Use CoinAnk for regular crypto assets with exchange-specific data
-		klines3m, err = getKlinesWithFallback(symbol, "3m", exchange, 100)
+		klines3m, err = getExecutionKlines(symbol, "3m", exchange, 100)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 3-minute K-line from CoinAnk (%s): %v", exchange, err)
 		}
@@ -121,7 +128,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from Hyperliquid: %v", err)
 		}
 	} else {
-		klines4h, err = getKlinesWithFallback(symbol, "4h", exchange, 100)
+		klines4h, err = getExecutionKlines(symbol, "4h", exchange, 100)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get 4-hour K-line from CoinAnk (%s): %v", exchange, err)
 		}
@@ -135,7 +142,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	if useHyperliquidAPI {
 		klines1h, err = getKlinesFromHyperliquid(symbol, "1h", 100)
 	} else {
-		klines1h, err = getKlinesWithFallback(symbol, "1h", exchange, 100)
+		klines1h, err = getExecutionKlines(symbol, "1h", exchange, 100)
 	}
 	if err != nil {
 		logger.Infof("⚠️ Failed to get %s 1h K-line (%v) — stop-floor ATR falls back to 4h", symbol, err)
@@ -151,7 +158,7 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 	if useHyperliquidAPI {
 		klines1d, err = getKlinesFromHyperliquid(symbol, "1d", 100)
 	} else {
-		klines1d, err = getKlinesWithFallback(symbol, "1d", exchange, 100)
+		klines1d, err = getExecutionKlines(symbol, "1d", exchange, 100)
 	}
 	if err != nil {
 		klines1d = nil // silent — daily scale is an enhancement, not a requirement
@@ -167,24 +174,21 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 
 	// Calculate current indicators (based on 3-minute latest data)
 	currentPrice := klines3m[len(klines3m)-1].Close
-	// Live price: the kline vendor's forming candle close does not tick in
-	// real time, so query the exchange ticker for the actual current price
-	// (order placement / SL-TP anchor on this value). xyz dex assets are
-	// Hyperliquid-listed and have no Binance futures ticker — keep the close.
-	if !isXyzAsset {
-		// Exchange-native ticker (2026-09-25 P1): the live price anchors
-		// order placement / SL-TP / RR — it must come from the exchange the
-		// trade runs on, not always Binance. Only Binance has a wired native
-		// ticker here today; every OTHER non-Hyperliquid exchange keeps the
-		// Binance figure but says so loudly (the vendor-divergence gate then
-		// bounds how wrong it can be). Full per-exchange kline/ticker/OI
-		// unification is tracked as follow-up.
-		if livePrice, err := NewAPIClient().GetCurrentPrice(symbol); err == nil && livePrice > 0 {
-			currentPrice = livePrice
+	// Execution price must be supplied by the exchange adapter. Keep the
+	// Binance ticker fallback only for legacy direct Binance callers.
+	if livePrice > 0 {
+		currentPrice = livePrice
+	} else if strings.EqualFold(exchange, "binance") {
+		p, priceErr := NewAPIClient().GetCurrentPrice(symbol)
+		if priceErr != nil {
+			return nil, fmt.Errorf("failed to get Binance execution price for %s: %w", symbol, priceErr)
 		}
-		if !strings.EqualFold(exchange, "binance") {
-			logger.Warnf("⚠️ %s on %s: live price sourced from Binance ticker (%.6g) — exchange-native quote unification pending; entry/SL checks inherit the cross-venue basis", symbol, exchange, currentPrice)
+		if p <= 0 {
+			return nil, fmt.Errorf("invalid Binance execution price for %s: %g", symbol, p)
 		}
+		currentPrice = p
+	} else {
+		return nil, fmt.Errorf("exchange-native live price required for %s on %s", symbol, exchange)
 	}
 	// Patch the forming 3m candle with the live price so the intraday series
 	// and current indicators aren't anchored to the vendor's frozen close.
@@ -268,6 +272,17 @@ func GetWithExchange(symbol, exchange string) (*Data, error) {
 // primaryTimeframe: primary timeframe (used for calculating current indicators), defaults to timeframes[0]
 // count: number of K-lines for each timeframe
 func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe string, count int) (*Data, error) {
+	return getWithTimeframes(symbol, timeframes, primaryTimeframe, count, "binance", 0, false)
+}
+
+// GetWithTimeframesForExchange fetches candles and prices for the venue that
+// will execute the trade. A positive livePrice must come from that venue's
+// exchange adapter; other-venue and generic spot fallbacks are disabled.
+func GetWithTimeframesForExchange(symbol string, timeframes []string, primaryTimeframe string, count int, exchange string, livePrice float64) (*Data, error) {
+	return getWithTimeframes(symbol, timeframes, primaryTimeframe, count, exchange, livePrice, true)
+}
+
+func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe string, count int, exchange string, livePrice float64, executionData bool) (*Data, error) {
 	symbol = Normalize(symbol)
 
 	if len(timeframes) == 0 {
@@ -297,6 +312,7 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 
 	// Check if this is an xyz dex asset (use Hyperliquid API)
 	isXyzAsset := IsXyzDexAsset(symbol)
+	useHyperliquidAPI := isXyzAsset || strings.EqualFold(exchange, "hyperliquid")
 
 	// Get K-line data for each timeframe — request the strategy's configured
 	// count (floored at 200 so short configs still have indicator history;
@@ -313,16 +329,22 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		var klines []Kline
 		var err error
 
-		if isXyzAsset {
+		if useHyperliquidAPI {
 			// Use Hyperliquid API for xyz dex assets
 			klines, err = getKlinesFromHyperliquid(symbol, tf, fetchCount)
 			if err != nil {
 				logger.Infof("⚠️ Failed to get %s %s K-line from Hyperliquid: %v", symbol, tf, err)
 				continue
 			}
+		} else if executionData {
+			klines, err = getExecutionKlines(symbol, tf, exchange, fetchCount)
+			if err != nil {
+				logger.Infof("⚠️ Failed to get %s %s execution-venue K-line (%s): %v", symbol, tf, exchange, err)
+				continue
+			}
 		} else {
-			// Use CoinAnk for regular crypto assets (default to Binance)
-			klines, err = getKlinesWithFallback(symbol, tf, "binance", fetchCount)
+			// Generic analysis and strategy preview data defaults to Binance.
+			klines, err = getKlinesWithFallback(symbol, tf, exchange, fetchCount)
 			if err != nil {
 				logger.Infof("⚠️ Failed to get %s %s K-line from CoinAnk: %v", symbol, tf, err)
 				continue
@@ -358,16 +380,18 @@ func GetWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	// Calculate current indicators (based on primary timeframe latest data)
 	currentPrice := primaryKlines[len(primaryKlines)-1].Close
 
-	// Live price: the kline vendor's forming candle close does not tick in
-	// real time (it can sit at the previous close for the whole bar), so
-	// query the exchange ticker for the actual current price. xyz dex assets
-	// have no Binance futures ticker — keep the kline close for those.
-	livePrice := 0.0
-	if !isXyzAsset {
-		if p, err := NewAPIClient().GetCurrentPrice(symbol); err == nil && p > 0 {
+	// Use the same-venue quote provided by the caller for execution analysis.
+	// Only the legacy generic Binance analysis path may query Binance here.
+	if livePrice > 0 {
+		currentPrice = livePrice
+	} else if !executionData && strings.EqualFold(exchange, "binance") && !isXyzAsset {
+		p, err := NewAPIClient().GetCurrentPrice(symbol)
+		if err == nil && p > 0 {
 			livePrice = p
 			currentPrice = p
 		}
+	} else if executionData {
+		return nil, fmt.Errorf("exchange-native live price required for %s on %s", symbol, exchange)
 	}
 
 	// Refresh each timeframe's forming candle with the live price. Without

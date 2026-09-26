@@ -54,6 +54,25 @@ func TestScanRRSagaMaxStructuralRR(t *testing.T) {
 	}
 }
 
+func TestScanRRUsesFullStructureForLimitEntry(t *testing.T) {
+	// The live price is 106 and the limit entry is 100. The prompt-facing
+	// resistance list omits 104 because it is below live price, but 104 is a
+	// valid target above the planned fill and must be scanned first.
+	tfs := map[string]*TFSignal{
+		"15m": {
+			Resistance:           []float64{110},
+			StructuralResistance: []float64{104, 110, 120, 130, 140},
+		},
+	}
+	scan := scanRR(100, "limit_anchor", 2, 98, tfs, true, 1.5)
+	if !scan.Usable || scan.FirstRRGeTarget != 104 {
+		t.Fatalf("limit-entry scan = usable %v first %v best %.2f, want true/104", scan.Usable, scan.FirstRRGeTarget, scan.BestRR)
+	}
+	if scan.TargetsScanned != 5 {
+		t.Fatalf("targets_scanned = %d, want every raw pivot (5)", scan.TargetsScanned)
+	}
+}
+
 // The scan must also find the FIRST qualifying level (TP adoption rule) and
 // work mirrored for shorts (CHIP support cluster).
 func TestScanRRShortAndFirstQualifying(t *testing.T) {

@@ -187,7 +187,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		if initialSL <= 0 {
 			continue // pre-upgrade position or unknown stop — leave alone
 		}
-		data, err := market.GetWithExchange(symbol, at.exchange)
+		data, err := at.getMarketData(symbol)
 		if err != nil {
 			continue
 		}
@@ -451,7 +451,6 @@ func (at *AutoTrader) markTPRunner(posKey string) {
 	}
 	at.tpRunnerDoneMap[posKey] = true
 }
-
 
 // positionQty reads the LIVE exchange quantity for one symbol+side — R1 fix
 // (2026-09-26 review): every adapter emits `positionAmt` (short NEGATIVE on

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,26 +250,52 @@ func CryptoKlines(ctx context.Context, base string, interval string, limit int) 
 	if !aggregate4h {
 		return hourly, nil
 	}
-	// R9: aggregate complete aligned 1h buckets into 4h bars (open of first,
-	// extremes, close of last, volume summed). A PARTIAL tail bucket (fewer
-	// than 4 hours of coverage) is DROPPED — a 2-hour bar must never masquerade
-	// as a settled 4h bar.
-	out := make([][]float64, 0, len(hourly)/4+1)
-	i := 0
-	for i+4 <= len(hourly) {
-		bucket := hourly[i : i+4]
+	// Aggregate only epoch-aligned, contiguous four-hour buckets. Providers
+	// may return a partial current hour, start the series at an arbitrary hour,
+	// or omit hours; grouping every four rows would shift boundaries or bridge
+	// gaps and produce fabricated OHLCV bars.
+	const hourMS int64 = int64(time.Hour / time.Millisecond)
+	const fourHoursMS = 4 * hourMS
+	byBucket := make(map[int64][][]float64)
+	var bucketStarts []int64
+	for _, row := range hourly {
+		ts := int64(row[0])
+		start := (ts / fourHoursMS) * fourHoursMS
+		if _, ok := byBucket[start]; !ok {
+			bucketStarts = append(bucketStarts, start)
+		}
+		byBucket[start] = append(byBucket[start], row)
+	}
+	sort.Slice(bucketStarts, func(i, j int) bool { return bucketStarts[i] < bucketStarts[j] })
+	out := make([][]float64, 0, len(bucketStarts))
+	nowMS := time.Now().UnixMilli()
+	for _, start := range bucketStarts {
+		bucket := byBucket[start]
+		if len(bucket) != 4 || start+fourHoursMS > nowMS {
+			continue
+		}
+		sort.Slice(bucket, func(i, j int) bool { return bucket[i][0] < bucket[j][0] })
+		complete := true
+		for i, row := range bucket {
+			if int64(row[0]) != start+int64(i)*hourMS {
+				complete = false
+				break
+			}
+		}
+		if !complete {
+			continue
+		}
 		o, h, l, c, v := bucket[0][1], bucket[0][2], bucket[0][3], bucket[3][4], 0.0
 		for _, b := range bucket {
 			if b[2] > h {
 				h = b[2]
 			}
-			if l < b[3] {
+			if b[3] < l {
 				l = b[3]
 			}
 			v += b[5]
 		}
-		out = append(out, []float64{bucket[0][0], o, h, l, c, v})
-		i += 4
+		out = append(out, []float64{float64(start), o, h, l, c, v})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("openbb 4h aggregation: no complete bucket for %s", base)

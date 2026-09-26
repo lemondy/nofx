@@ -100,7 +100,7 @@ export const dataApi = {
 
   async getPublicTraderConfig(traderId: string): Promise<any> {
     const result = await httpClient.get<any>(
-      `${API_BASE}/trader/${traderId}/config`
+      `${API_BASE}/traders/${encodeURIComponent(traderId)}/public-config`
     )
     if (!result.success) throw new Error('Failed to fetch public trader config')
     return result.data!

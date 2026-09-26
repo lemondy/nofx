@@ -3,15 +3,15 @@ package market
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"nofx/logger"
 	"nofx/provider/coinank/coinank_api"
 	"nofx/provider/coinank/coinank_enum"
-	"nofx/provider/openbb"
 	"nofx/provider/hyperliquid"
+	"nofx/provider/openbb"
 	"strconv"
 	"strings"
 	"time"
-	"net/url"
 )
 
 // Note: Kline data now uses free/open API (coinank_api.Kline) which doesn't require authentication
@@ -71,8 +71,7 @@ func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int) ([]Kline
 	case "aster":
 		coinankExchange = coinank_enum.Aster
 	default:
-		// Default to Binance for unknown exchanges
-		coinankExchange = coinank_enum.Binance
+		return nil, fmt.Errorf("unsupported exchange for market data: %s", exchange)
 	}
 
 	// Call CoinAnk free/open API (no authentication required)
@@ -81,20 +80,10 @@ func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int) ([]Kline
 	// Use "To" side to search backward from current time (get historical klines)
 	coinankKlines, err := coinank_api.Kline(ctx, symbol, coinankExchange, ts, coinank_enum.To, limit, coinankInterval)
 	if err != nil || len(coinankKlines) == 0 {
-		// If exchange-specific data fails or returns empty, fallback to Binance
-		if coinankExchange != coinank_enum.Binance {
-			if err != nil {
-				logger.Warnf("⚠️ CoinAnk %s data failed, falling back to Binance: %v", exchange, err)
-			} else {
-				logger.Warnf("⚠️ CoinAnk %s %s data empty for %s, falling back to Binance", exchange, interval, symbol)
-			}
-			coinankKlines, err = coinank_api.Kline(ctx, symbol, coinank_enum.Binance, ts, coinank_enum.To, limit, coinankInterval)
-			if err != nil {
-				return nil, fmt.Errorf("CoinAnk API error (fallback): %w", err)
-			}
-		} else if err != nil {
-			return nil, fmt.Errorf("CoinAnk API error: %w", err)
+		if err != nil {
+			return nil, fmt.Errorf("CoinAnk %s API error: %w", exchange, err)
 		}
+		return nil, fmt.Errorf("CoinAnk returned no %s candles for %s", exchange, symbol)
 	}
 
 	// Convert coinank kline format to market.Kline format
@@ -435,7 +424,6 @@ func GetBoxData(symbol string) (*BoxData, error) {
 	return calculateBoxData(klines, currentPrice), nil
 }
 
-
 // getKlinesFromBinanceDirect pulls klines straight from Binance fapi — the
 // fallback when CoinAnk (the primary vendor) fails. 2026-09-24: CoinAnk
 // started returning 403 on ALL kline requests and every candidate went
@@ -505,6 +493,9 @@ func getKlinesWithFallback(symbol, interval, exchange string, limit int) ([]Klin
 	if err == nil && len(k) > 0 {
 		return k, nil
 	}
+	if !strings.EqualFold(exchange, "binance") {
+		return nil, fmt.Errorf("exchange-specific %s %s klines unavailable: %w", exchange, symbol, err)
+	}
 	k2, err2 := getKlinesFromBinanceDirect(symbol, interval, limit)
 	if err2 == nil && len(k2) > 0 {
 		if err != nil {
@@ -533,4 +524,23 @@ func getKlinesWithFallback(symbol, interval, exchange string, limit int) ([]Klin
 		}
 	}
 	return nil, fmt.Errorf("coinank: %v; binance direct: %v", err, err2)
+}
+
+// getExecutionKlines never substitutes another venue or a spot-data sidecar
+// for the market the trader will execute on. Binance's direct futures API is
+// an acceptable same-venue fallback; other venues fail closed when their
+// exchange-specific CoinAnk series is unavailable.
+func getExecutionKlines(symbol, interval, exchange string, limit int) ([]Kline, error) {
+	k, err := getKlinesFromCoinAnk(symbol, interval, exchange, limit)
+	if err == nil && len(k) > 0 {
+		return k, nil
+	}
+	if !strings.EqualFold(exchange, "binance") {
+		return nil, fmt.Errorf("exchange-specific %s %s klines unavailable: %w", exchange, symbol, err)
+	}
+	k, fallbackErr := getKlinesFromBinanceDirect(symbol, interval, limit)
+	if fallbackErr != nil || len(k) == 0 {
+		return nil, fmt.Errorf("Binance execution klines unavailable (CoinAnk: %v; Binance: %v)", err, fallbackErr)
+	}
+	return k, nil
 }
