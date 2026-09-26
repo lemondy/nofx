@@ -311,6 +311,13 @@ var ValidBlockingFactors = []string{
 	"LOSS_STREAK_BAN", "VOL_EXTREME", "DATA_INSUFFICIENT", "MIN_SIZE",
 	"STRUCTURE_CONFLICT", "WAIT_PULLBACK", "VENDOR_DIVERGENCE", "POOR_HISTORY",
 	"EXTENDED_PUMP", "CONSENSUS_OPPOSED", "MARKET_CLOSED",
+	// ALL_CANDIDATES_HARD_BLOCKED: the regime-skip SYNTHESIZED wait (2026-
+	// 09-27 data-quality fix). The old tag CONFLICT_UNRESOLVED misdescribed
+	// these cycles — the actual blockers are RR_MAX/STOP_PLAN/VENDOR_DIVERGENCE/
+	// MICRO_TREND/POOR_HISTORY etc. (per-coin, preserved in the compressed
+	// prompt lines and gate_shadow_blocks), not directional conflict. A
+	// dedicated code keeps the blocker statistics meaningful.
+	"ALL_CANDIDATES_HARD_BLOCKED",
 }
 
 // ValidWaitStates is the per-coin trading state machine (user review
