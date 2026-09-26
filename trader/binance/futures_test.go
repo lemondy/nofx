@@ -242,12 +242,21 @@ func NewBinanceFuturesTestSuite(t *testing.T) *BinanceFuturesTestSuite {
 				"code": 200,
 				"msg":  "success",
 			}
+		case path == "/fapi/v1/symbolConfig":
+			marginType := "ISOLATED"
+			if r.URL.Query().Get("symbol") == "BTCUSDT" {
+				marginType = "CROSSED"
+			}
+			respBody = []map[string]interface{}{{
+				"symbol": r.URL.Query().Get("symbol"), "marginType": marginType,
+			}}
 
 		// Mock ChangePositionMode - /fapi/v1/positionSide/dual
 		case path == "/fapi/v1/positionSide/dual":
-			respBody = map[string]interface{}{
-				"code": 200,
-				"msg":  "success",
+			if r.Method == http.MethodGet {
+				respBody = map[string]interface{}{"dualSidePosition": true}
+			} else {
+				respBody = map[string]interface{}{"code": 200, "msg": "success"}
 			}
 
 		// Mock ServerTime - /fapi/v1/time
@@ -311,6 +320,45 @@ func TestFuturesTrader_CommonInterface(t *testing.T) {
 
 	// Run all common interface tests
 	suite.RunAllTests()
+}
+
+func TestSetMarginModeFailsClosedWhenExchangeStateDisagrees(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		hedge      bool
+		marginType string
+	}{
+		{name: "one-way mode", hedge: false, marginType: "ISOLATED"},
+		{name: "cross margin", hedge: true, marginType: "CROSSED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/fapi/v1/positionSide/dual":
+					if r.Method == http.MethodGet {
+						_ = json.NewEncoder(w).Encode(map[string]bool{"dualSidePosition": tc.hedge})
+					} else {
+						_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "msg": "success"})
+					}
+				case "/fapi/v1/marginType":
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "msg": "success"})
+				case "/fapi/v1/symbolConfig":
+					_ = json.NewEncoder(w).Encode([]map[string]string{{"symbol": "SOLUSDT", "marginType": tc.marginType}})
+				default:
+					http.Error(w, "unexpected endpoint", http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			client := futures.NewClient("key", "secret")
+			client.BaseURL = server.URL
+			client.HTTPClient = server.Client()
+			trader := &FuturesTrader{client: client}
+			if err := trader.SetMarginMode("SOLUSDT", false); err == nil {
+				t.Fatal("opening must stop if Hedge Mode or isolated margin cannot be verified")
+			}
+		})
+	}
 }
 
 // ============================================================

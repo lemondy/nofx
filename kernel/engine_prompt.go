@@ -141,6 +141,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString(fmt.Sprintf("- Example: equity %.0f, stop distance 6.48%% → %.0f × %.1f ÷ 6.48 ≈ %.1f USDT notional (risk at stop = %.0f × %.1f%% ≈ %.2f USDT)\n",
 		accountEquity, accountEquity, riskPctDefault, accountEquity*riskPctDefault/6.48, accountEquity, riskPctDefault, accountEquity*riskPctDefault/100))
 	sb.WriteString("- Wider stop → smaller position. `confidence` decides WHETHER to open, never a multiplier on position value — do NOT size from Position Value Limit percentages\n")
+	sb.WriteString(fmt.Sprintf("- Binance Hedge Mode: at most one LONG and one SHORT per symbol. Their combined gross stop-risk (including resting entries) must stay within the SAME %.1f%% equity risk budget; split that budget across sides, never count opposite risks as offsetting. Same-side orders merge on the exchange and are not separate isolated positions.\n", riskPctDefault))
 	sb.WriteString("- **DO NOT** just use available_balance as position_size_usd\n\n")
 
 	// 4. Trading frequency (editable)

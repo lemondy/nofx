@@ -26,7 +26,9 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actio
 			// anchor exists — take the default limit path instead.
 			return at.executeOpenLimitLongWithRecord(decision, actionRecord)
 		}
-		at.dropPendingEntry(decision.Symbol) // market entry supersedes any pending limit
+		if err := at.cancelPendingSide(decision.Symbol, "long"); err != nil {
+			return fmt.Errorf("cannot replace pending long entry: %w", err)
+		}
 		return at.executeOpenLongWithRecord(decision, actionRecord)
 	case "open_short":
 		decision, err := at.marketExceptionGate(decision, actionRecord, false)
@@ -36,7 +38,9 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actio
 		if decision.Action == "open_short_limit" {
 			return at.executeOpenLimitShortWithRecord(decision, actionRecord)
 		}
-		at.dropPendingEntry(decision.Symbol)
+		if err := at.cancelPendingSide(decision.Symbol, "short"); err != nil {
+			return fmt.Errorf("cannot replace pending short entry: %w", err)
+		}
 		return at.executeOpenShortWithRecord(decision, actionRecord)
 	case "open_long_limit":
 		return at.executeOpenLimitLongWithRecord(decision, actionRecord)
@@ -160,7 +164,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// OTHER symbols occupy slots too (same accounting as the limit path) —
 	// counting only open positions let a market open push open+pending past
 	// the cap when the limit path had already been refused.
-	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingSymbols(), decision.Symbol)); err != nil {
+	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingKeys(), pendingEntryKey(decision.Symbol, "long"))); err != nil {
 		return err
 	}
 
@@ -237,7 +241,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 
 	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
 	// the prompt states the budget, this enforces it (audit 09-13 #2).
-	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
+	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, "long", decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
 		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
 	}
 	// Calculate quantity with adjusted position size
@@ -246,9 +250,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	actionRecord.Price = marketData.CurrentPrice
 
 	// Set margin mode
-	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
-		logger.Infof("  ⚠️ Failed to set margin mode: %v", err)
-		// Continue execution, doesn't affect trading
+	if err := at.trader.SetMarginMode(decision.Symbol, at.entryUsesCrossMargin()); err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: margin mode not verified: %w", decision.Action, decision.Symbol, err)
 	}
 
 	// Open position
@@ -347,7 +350,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// OTHER symbols occupy slots too (same accounting as the limit path) —
 	// counting only open positions let a market open push open+pending past
 	// the cap when the limit path had already been refused.
-	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingSymbols(), decision.Symbol)); err != nil {
+	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingKeys(), pendingEntryKey(decision.Symbol, "short"))); err != nil {
 		return err
 	}
 
@@ -424,7 +427,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 
 	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
 	// the prompt states the budget, this enforces it (audit 09-13 #2).
-	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
+	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, "short", decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
 		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
 	}
 	// Calculate quantity with adjusted position size
@@ -433,8 +436,8 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	actionRecord.Price = marketData.CurrentPrice
 
 	// Set margin mode
-	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
-		logger.Infof("  ⚠️ Failed to set margin mode: %v", err)
+	if err := at.trader.SetMarginMode(decision.Symbol, at.entryUsesCrossMargin()); err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: margin mode not verified: %w", decision.Action, decision.Symbol, err)
 		// Continue execution, doesn't affect trading
 	}
 
@@ -640,9 +643,9 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 
 	// Hands-off rule (user directive 2026-09-25): the AI does not manage
 	// manually opened positions — closing them is automation acting on them.
-	if !at.isAIManaged(decision.Symbol, "long") {{
+	if !at.isAIManaged(decision.Symbol, "long") {
 		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — manual positions are never closed/adjusted by the program (close the position manually or take it over via a decision to open it)", decision.Symbol)
-	}}
+	}
 
 	// Get current price
 	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)
@@ -714,9 +717,9 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 
 	// Hands-off rule (user directive 2026-09-25): the AI does not manage
 	// manually opened positions — closing them is automation acting on them.
-	if !at.isAIManaged(decision.Symbol, "short") {{
+	if !at.isAIManaged(decision.Symbol, "short") {
 		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — manual positions are never closed/adjusted by the program (close the position manually or take it over via a decision to open it)", decision.Symbol)
-	}}
+	}
 
 	// Get current price
 	marketData, err := market.GetWithExchange(decision.Symbol, at.exchange)

@@ -100,8 +100,8 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 	// only cancels tagged orders absent from here.
 	owned := map[string]bool{}
 	at.pendingEntriesMu.RLock()
-	for sym, pe := range at.pendingEntries {
-		owned[sym+"|"+pe.OrderID] = true
+	for _, pe := range at.pendingEntries {
+		owned[pe.Symbol+"|"+pe.OrderID] = true
 	}
 	at.pendingEntriesMu.RUnlock()
 
@@ -130,11 +130,12 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 				Leverage: row.Leverage, OrderID: row.OrderID, PlacedAt: row.PlacedAt,
 			}
 			at.setPendingEntry(pe)
+			owned[row.Symbol+"|"+row.OrderID] = true
 			logger.Infof("🔧 [%s] Pending-entry re-claimed: %s %s %.6g @ %.6g (order %s)", at.name, pe.Symbol, pe.Side, pe.Quantity, pe.Price, pe.OrderID)
 		case "FILLED":
 			at.finalizePendingFill(row)
 		default: // CANCELED / EXPIRED / REJECTED
-			if err := at.store.PendingEntry().Delete(at.id, row.Symbol); err != nil {
+			if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 				logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 			}
 			logger.Infof("🔧 [%s] Pending-entry %s (order %s) already %s while offline — row dropped", at.name, row.Symbol, row.OrderID, st)
@@ -171,7 +172,7 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
 	// (R6: the AI-managed mark below is written BEFORE this row delete in
 	// the flow — ownership persists even if the delete fails.)
-	if err := at.store.PendingEntry().Delete(at.id, row.Symbol); err != nil {
+	if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 		logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 	}
 	// Position may have been closed externally in the offline window; check

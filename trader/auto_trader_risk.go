@@ -838,25 +838,26 @@ func marginExceedsBudget(usedMargin, newMargin, equity, budgetFrac float64) bool
 }
 
 // pendingMarginReserved sums the margin that resting AI limit-entry orders
-// on OTHER symbols would consume if they all filled (notional ÷ leverage).
+// on other symbol+side keys would consume if they all filled.
 // Each placement passed the margin gate against the used margin AT PLACEMENT
 // TIME — none of them sees the others — so without this reservation N
 // pending limits checked individually could all fill and jointly blow the
-// budget. excludeSymbol is the symbol currently being opened (its own pending
-// entry was already dropped/replaced on that path).
-func (at *AutoTrader) pendingMarginReserved(excludeSymbol string) float64 {
+// budget. excludeKey is the same-side entry being replaced; an opposite-side
+// order on the same symbol still reserves margin.
+func (at *AutoTrader) pendingMarginReserved(excludeKey string) float64 {
 	at.pendingEntriesMu.RLock()
 	defer at.pendingEntriesMu.RUnlock()
 	total := 0.0
-	for sym, pe := range at.pendingEntries {
-		if sym == excludeSymbol || pe == nil || pe.Price <= 0 || pe.Quantity <= 0 {
+	for key, pe := range at.pendingEntries {
+		if key == excludeKey || pe == nil || pe.Price <= 0 || pe.Quantity <= 0 {
 			continue
 		}
 		lev := float64(pe.Leverage)
 		if lev <= 0 {
 			lev = 1 // assume worst case: no leverage → full notional as margin
 		}
-		total += pe.Price * pe.Quantity / lev
+		remaining := math.Max(0, pe.Quantity-pe.ProtectedQty)
+		total += pe.Price * remaining / lev
 	}
 	return total
 }
@@ -868,7 +869,7 @@ func (at *AutoTrader) pendingMarginReserved(excludeSymbol string) float64 {
 // Resting limit entries count as reserved margin (audit 09-13 #4: N pending
 // limits each checked in isolation can jointly exceed the budget once they
 // all fill). Fail-open on data errors.
-func (at *AutoTrader) marginBudgetBlocksOpen(symbol string, newSizeUSD, newLeverage, equity float64) (bool, string) {
+func (at *AutoTrader) marginBudgetBlocksOpen(symbol, side string, newSizeUSD, newLeverage, equity float64) (bool, string) {
 	if at.config.StrategyConfig == nil || newSizeUSD <= 0 || newLeverage <= 0 || equity <= 0 {
 		return false, ""
 	}
@@ -881,13 +882,14 @@ func (at *AutoTrader) marginBudgetBlocksOpen(symbol string, newSizeUSD, newLever
 		return false, ""
 	}
 	newMargin := newSizeUSD / newLeverage
-	used := usedMarginOf(positions) + at.pendingMarginReserved(symbol)
+	pending := at.pendingMarginReserved(pendingEntryKey(symbol, side))
+	used := usedMarginOf(positions) + pending
 	if !marginExceedsBudget(used, newMargin, equity, budget) {
 		return false, ""
 	}
 	return true, fmt.Sprintf(
 		"margin budget: used %.2f (incl. %.2f reserved by resting limit entries) + new %.2f USDT (size %.2f @ %.0fx) would exceed %.0f%% × equity %.2f (%.2f USDT) — reduce size/leverage or close a position first",
-		used, at.pendingMarginReserved(symbol), newMargin, newSizeUSD, newLeverage, budget*100, equity, budget*equity)
+		used, pending, newMargin, newSizeUSD, newLeverage, budget*100, equity, budget*equity)
 }
 
 // ============================================================================
@@ -1572,7 +1574,8 @@ func finestSubHourTrend(data *market.Data) (string, string) {
 // ============================================================================
 
 // accountRiskExposureBlocks reports whether opening d would push total open
-// stop-risk past max_account_risk_pct × equity. Existing risk is
+// stop-risk past the account cap or this symbol's single-trade risk budget.
+// Existing risk is
 // Σ|qty|×|entry − exchange SL| from the cycle's position snapshot;
 // unprotected positions are worst-cased at the stop-band cap
 // (kernel.UnprotectedStopWorstCasePct). The new trade's risk uses the
@@ -1580,11 +1583,19 @@ func finestSubHourTrend(data *market.Data) (string, string) {
 func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx float64, ctx *kernel.Context) (bool, string, float64) {
 	rc := at.config.StrategyConfig.RiskControl
 	capPct := rc.EffectiveMaxAccountRiskPct()
+	symbolCapPct := rc.RiskPerTradePct
+	if symbolCapPct <= 0 {
+		symbolCapPct = 1.5
+	}
 	equity := ctx.Account.TotalEquity
+	if equity <= 0 && at.exchange == "binance" {
+		return true, "cannot verify Binance symbol stop-risk without positive account equity", 0
+	}
 	if equity <= 0 || entryPx <= 0 || d.StopLoss <= 0 {
 		return false, "", 0 // unpriceable → other gates (mandatory SL) handle it
 	}
 	totalRisk := 0.0
+	symbolRisk := 0.0
 	unprotected := 0
 	for _, p := range ctx.Positions {
 		if p.Quantity <= 0 || p.EntryPrice <= 0 {
@@ -1596,8 +1607,32 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		} else {
 			unprotected++
 		}
-		totalRisk += p.Quantity * p.EntryPrice * stopDistPct / 100
+		risk := p.Quantity * p.EntryPrice * stopDistPct / 100
+		totalRisk += risk
+		if market.Normalize(p.Symbol) == market.Normalize(d.Symbol) {
+			symbolRisk += risk
+		}
 	}
+	// Both sides' resting limits reserve risk. Exclude only the same-side
+	// order that this decision replaces; opposite-side exposure still counts.
+	side := "long"
+	if strings.Contains(d.Action, "short") {
+		side = "short"
+	}
+	excludeKey := pendingEntryKey(d.Symbol, side)
+	at.pendingEntriesMu.RLock()
+	for key, pe := range at.pendingEntries {
+		if key == excludeKey || pe == nil || pe.Price <= 0 || pe.StopLoss <= 0 {
+			continue
+		}
+		remaining := math.Max(0, pe.Quantity-pe.ProtectedQty)
+		risk := remaining * math.Abs(pe.Price-pe.StopLoss)
+		totalRisk += risk
+		if market.Normalize(pe.Symbol) == market.Normalize(d.Symbol) {
+			symbolRisk += risk
+		}
+	}
+	at.pendingEntriesMu.RUnlock()
 	// R8 (2026-09-26 review): the candidate is priced ALONE — the caller
 	// books candidateRisk only when the candidate PASSES, so the reservation
 	// accumulates linearly (20→40→60), never compounding (the old shape fed
@@ -1605,12 +1640,17 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 	// charges risk for candidates a later gate rejects.
 	candidateRisk := d.PositionSizeUSD * math.Abs(entryPx-d.StopLoss) / entryPx
 	reserved := at.cycleRiskReservedUSD
+	symbolReserved := at.cycleSymbolRiskReservedUSD[market.Normalize(d.Symbol)]
 	existingPct := totalRisk / equity * 100
 	candidatePct := candidateRisk / equity * 100
 	reservedPct := reserved / equity * 100
-	if existingPct+candidatePct+reservedPct > capPct {
+	if capPct > 0 && existingPct+candidatePct+reservedPct > capPct {
 		return true, fmt.Sprintf("open stop-risk would exceed max_account_risk_pct %.1f%% of equity %.2f: existing %.2f%% + candidate %.2f%% + reserved-this-cycle %.2f%%%s",
 			capPct, equity, existingPct, candidatePct, reservedPct, unprotectedSuffix(unprotected)), candidateRisk
+	}
+	if at.exchange == "binance" && (symbolRisk+candidateRisk+symbolReserved)/equity*100 > symbolCapPct+1e-9 {
+		return true, fmt.Sprintf("%s gross long+short stop-risk would exceed %.2f%% of equity %.2f: existing %.2f + candidate %.2f + reserved-this-cycle %.2f USDT",
+			d.Symbol, symbolCapPct, equity, symbolRisk, candidateRisk, symbolReserved), candidateRisk
 	}
 	return false, "", candidateRisk
 }
@@ -1662,9 +1702,6 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		return decisions
 	}
 	rc := at.config.StrategyConfig.RiskControl
-	if rc.MinHoldMinutes <= 0 && rc.EarlyCloseMinHours >= 0 && !rc.BlockShort1dUptrend && !rc.EntryTimingGate && rc.CloseRejectBreakoutPct <= 0 && !rc.LossStreakBanEnabled && rc.AccountMaxDrawdownPct <= 0 && rc.EffectiveMaxAccountRiskPct() <= 0 && rc.EffectiveDailyMaxLossPct() <= 0 {
-		return decisions
-	}
 	filtered := make([]kernel.Decision, 0, len(decisions))
 	for _, d := range decisions {
 		// Account-level circuit breaker (user directive, prompt 09-13): once
@@ -1725,7 +1762,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		// altcoin stops are one big position; this bounds the full-load
 		// stop-out (3.5% × 5 correlated positions ≈ 17.5% was one bad cycle
 		// from the account breaker).
-		if strings.HasPrefix(d.Action, "open_") && rc.EffectiveMaxAccountRiskPct() > 0 {
+		if strings.HasPrefix(d.Action, "open_") {
 			entryPx := d.Price
 			if gs, ok := at.cycleGateStates[market.Normalize(d.Symbol)]; ok && gs != nil {
 				basis := gs.LongEntryPrice
@@ -1871,6 +1908,12 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		// R8: the decision survived EVERY gate — now book its stop-risk so
 		// later decisions in this batch see it.
 		at.cycleRiskReservedUSD += d.CycleReservedRiskUSD
+		if d.CycleReservedRiskUSD > 0 {
+			if at.cycleSymbolRiskReservedUSD == nil {
+				at.cycleSymbolRiskReservedUSD = make(map[string]float64)
+			}
+			at.cycleSymbolRiskReservedUSD[market.Normalize(d.Symbol)] += d.CycleReservedRiskUSD
+		}
 		filtered = append(filtered, d)
 	}
 	return filtered

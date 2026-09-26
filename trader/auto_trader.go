@@ -140,6 +140,7 @@ type AutoTrader struct {
 	dayStartDay             string  // UTC day anchor for the daily-loss halt (D2, QUANT_REVIEW 09-22)
 	dayStartEquity          float64 // first equity seen on dayStartDay — the halt's baseline
 	cycleRiskReservedUSD    float64 // stop-risk booked by opens that PASSED the exposure gate this cycle (D2 reservation, 09-25 P1)
+	cycleSymbolRiskReservedUSD map[string]float64 // same-cycle stop-risk reserved per symbol
 	aiMarksSeededOnce       sync.Once
 	customPrompt            string // Custom trading strategy prompt
 	overrideBasePrompt      bool   // Whether to override base prompt
@@ -171,13 +172,19 @@ type AutoTrader struct {
 	authBlockedReason       string                      // Why auth blocking was activated
 	gateNotify              map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
 	gateNotifyMu            sync.Mutex
-	pendingEntries          map[string]*pendingEntry // limit-entry state machine (symbol → order)
+	pendingEntries          map[string]*pendingEntry // limit-entry state machine (symbol|side → order)
 	pendingEntriesMu        sync.RWMutex
 	volResizeLast           map[string]time.Time // per-position vol-resize cooldown
 	volResizeMu             sync.Mutex
 	tpRunnerDoneMap         map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
 	openTP                  map[string]float64 // recorded decision TP per open position (symbol_side)
 	openTPMu                sync.RWMutex
+}
+
+// Binance hedge legs must use isolated margin for this strategy. Other
+// exchanges keep their configured margin mode.
+func (at *AutoTrader) entryUsesCrossMargin() bool {
+	return at.exchange != "binance" && at.config.IsCrossMargin
 }
 
 // NewAutoTrader creates an automatic trader

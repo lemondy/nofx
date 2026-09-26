@@ -113,20 +113,47 @@ func TestLimitEntryMarketFallbackDefault(t *testing.T) {
 // Pending state lifecycle via the map helpers.
 func TestPendingEntryLifecycle(t *testing.T) {
 	at := &AutoTrader{}
-	if at.getPendingEntry("SOLUSDT") != nil {
+	if at.getPendingEntry("SOLUSDT", "long") != nil {
 		t.Fatal("empty map must return nil")
 	}
 	at.setPendingEntry(&pendingEntry{Symbol: "SOLUSDT", Side: "long", Price: 103, OrderID: "123"})
-	if pe := at.getPendingEntry("SOLUSDT"); pe == nil || pe.OrderID != "123" {
+	if pe := at.getPendingEntry("SOLUSDT", "long"); pe == nil || pe.OrderID != "123" {
 		t.Fatalf("set/get broken: %+v", pe)
 	}
 	// Replace semantics: same symbol, new order.
 	at.setPendingEntry(&pendingEntry{Symbol: "SOLUSDT", Side: "long", Price: 102, OrderID: "456"})
-	if pe := at.getPendingEntry("SOLUSDT"); pe == nil || pe.OrderID != "456" {
+	if pe := at.getPendingEntry("SOLUSDT", "long"); pe == nil || pe.OrderID != "456" {
 		t.Fatalf("replace broken: %+v", pe)
 	}
-	at.dropPendingEntry("SOLUSDT")
-	if at.getPendingEntry("SOLUSDT") != nil {
+	at.setPendingEntry(&pendingEntry{Symbol: "SOLUSDT", Side: "short", Price: 104, OrderID: "789"})
+	at.dropPendingEntry("SOLUSDT", "long")
+	if at.getPendingEntry("SOLUSDT", "long") != nil {
 		t.Fatal("drop broken")
+	}
+	if pe := at.getPendingEntry("SOLUSDT", "short"); pe == nil || pe.OrderID != "789" {
+		t.Fatalf("opposite side must remain: %+v", pe)
+	}
+}
+
+func TestBinanceEntryAlwaysUsesIsolatedMargin(t *testing.T) {
+	at := &AutoTrader{exchange: "binance", config: AutoTraderConfig{IsCrossMargin: true}}
+	if at.entryUsesCrossMargin() {
+		t.Fatal("Binance hedge entry must use isolated margin even with legacy cross config")
+	}
+	at.exchange = "bybit"
+	if !at.entryUsesCrossMargin() {
+		t.Fatal("other exchanges must keep their configured margin mode")
+	}
+}
+
+func TestPendingCancelKeepsOwnershipOnFailure(t *testing.T) {
+	at := &AutoTrader{}
+	pe := &pendingEntry{Symbol: "SOLUSDT", Side: "long", OrderID: "live-order"}
+	at.setPendingEntry(pe)
+	if err := at.cancelPending(pe); err == nil {
+		t.Fatal("unsupported cancellation must fail")
+	}
+	if at.getPendingEntry("SOLUSDT", "long") == nil {
+		t.Fatal("failed cancellation must retain the resting order's ownership")
 	}
 }

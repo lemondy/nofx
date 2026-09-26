@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"nofx/logger"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/adshao/go-binance/v2/futures"
@@ -67,6 +68,18 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 
 // SetMarginMode sets margin mode
 func (t *FuturesTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
+	// Every order carries LONG or SHORT positionSide. A failed constructor-time
+	// mode switch must not leave the executor trading in one-way mode.
+	if err := t.setDualSidePosition(); err != nil {
+		return fmt.Errorf("cannot confirm Binance Hedge Mode for %s: %w", symbol, err)
+	}
+	mode, err := t.client.NewGetPositionModeService().Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("cannot verify Binance Hedge Mode for %s: %w", symbol, err)
+	}
+	if mode == nil || !mode.DualSidePosition {
+		return fmt.Errorf("cannot open %s: Binance account is not in Hedge Mode", symbol)
+	}
 	var marginType futures.MarginType
 	if isCrossMargin {
 		marginType = futures.MarginTypeCrossed
@@ -75,7 +88,7 @@ func (t *FuturesTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 	}
 
 	// Try to set margin mode
-	err := t.client.NewChangeMarginTypeService().
+	err = t.client.NewChangeMarginTypeService().
 		Symbol(symbol).
 		MarginType(marginType).
 		Do(context.Background())
@@ -85,35 +98,26 @@ func (t *FuturesTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 		marginModeStr = "Isolated Margin"
 	}
 
-	if err != nil {
-		// If error message contains "No need to change", margin mode is already set to target value
-		if contains(err.Error(), "No need to change margin type") {
-			logger.Infof("  ✓ %s margin mode is already %s", symbol, marginModeStr)
-			return nil
-		}
-		// If there is an open position, margin mode cannot be changed, but this doesn't affect trading
-		if contains(err.Error(), "Margin type cannot be changed if there exists position") {
-			logger.Infof("  ⚠️ %s has open positions, cannot change margin mode, continuing with current mode", symbol)
-			return nil
-		}
-		// Detect Multi-Assets mode (error code -4168)
-		if contains(err.Error(), "Multi-Assets mode") || contains(err.Error(), "-4168") || contains(err.Error(), "4168") {
-			logger.Infof("  ⚠️ %s detected Multi-Assets mode, forcing Cross Margin mode", symbol)
-			logger.Infof("  💡 Tip: To use Isolated Margin mode, please disable Multi-Assets mode in Binance")
-			return nil
-		}
-		// Detect Unified Account API (Portfolio Margin)
-		if contains(err.Error(), "unified") || contains(err.Error(), "portfolio") || contains(err.Error(), "Portfolio") {
-			logger.Infof("  ❌ %s detected Unified Account API, unable to trade futures", symbol)
-			return fmt.Errorf("please use 'Spot & Futures Trading' API permission, do not use 'Unified Account API'")
-		}
-		logger.Infof("  ⚠️ Failed to set margin mode: %v", err)
-		// Don't return error, let trading continue
-		return nil
+	if err != nil && !contains(err.Error(), "No need to change margin type") &&
+		!contains(err.Error(), "Margin type cannot be changed if there exists position") {
+		return fmt.Errorf("cannot set %s margin mode for %s: %w", marginModeStr, symbol, err)
 	}
-
-	logger.Infof("  ✓ %s margin mode set to %s", symbol, marginModeStr)
-	return nil
+	// An existing position can prevent changing the contract's mode. Read the
+	// actual symbol configuration rather than treating that error as success.
+	configs, err := t.client.NewGetSymbolConfigService().Symbol(symbol).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("cannot verify %s margin mode for %s: %w", marginModeStr, symbol, err)
+	}
+	for _, config := range configs {
+		if config != nil && config.Symbol == symbol {
+			if !strings.EqualFold(config.MarginType, string(marginType)) {
+				return fmt.Errorf("%s margin mode is %s, expected %s", symbol, config.MarginType, marginType)
+			}
+			logger.Infof("  ✓ %s margin mode verified as %s", symbol, marginModeStr)
+			return nil
+		}
+	}
+	return fmt.Errorf("cannot verify %s margin mode for %s: symbol configuration missing", marginModeStr, symbol)
 }
 
 // SetLeverage sets leverage (with smart detection and cooldown period)

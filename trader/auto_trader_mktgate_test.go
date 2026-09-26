@@ -86,7 +86,7 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 	ctx := &kernel.Context{
 		Account: kernel.AccountInfo{TotalEquity: 1000},
 		Positions: []kernel.PositionInfo{
-			{Symbol: "AUSDT", Side: "long", EntryPrice: 100, Quantity: 1, StopLossPrice: 95},  // risk 5
+			{Symbol: "AUSDT", Side: "long", EntryPrice: 100, Quantity: 1, StopLossPrice: 95},   // risk 5
 			{Symbol: "BUSDT", Side: "short", EntryPrice: 50, Quantity: 2, StopLossPrice: 51.5}, // risk 3
 		},
 	}
@@ -128,6 +128,39 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 	d = &kernel.Decision{Symbol: "CUSDT", Price: 200, StopLoss: 0, PositionSizeUSD: 9000}
 	if blocked, _, _ := at.accountRiskExposureBlocks(d, 200, ctx); blocked {
 		t.Fatal("unpriceable decision must be left to the mandatory-SL gate")
+	}
+}
+
+func TestBinanceSymbolGrossStopRiskIncludesBothSidesAndPending(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{MaxAccountRiskPct: 10, RiskPerTradePct: 1.5})
+	at.exchange = "binance"
+	ctx := &kernel.Context{
+		Account: kernel.AccountInfo{TotalEquity: 1000},
+		Positions: []kernel.PositionInfo{{
+			Symbol: "SOLUSDT", Side: "long", EntryPrice: 100, Quantity: 1, StopLossPrice: 95,
+		}}, // 5 USDT
+	}
+	at.setPendingEntry(&pendingEntry{
+		Symbol: "SOLUSDT", Side: "short", Price: 100, Quantity: 1, StopLoss: 105,
+	}) // 5 USDT reserved
+	d := &kernel.Decision{Action: "open_short", Symbol: "SOLUSDT", Price: 100, StopLoss: 105, PositionSizeUSD: 120}
+	if blocked, _, _ := at.accountRiskExposureBlocks(d, 100, ctx); blocked {
+		t.Fatal("replacing the same-side pending entry must not count it twice")
+	}
+	d.Action = "open_long"
+	d.StopLoss = 95
+	blocked, reason, _ := at.accountRiskExposureBlocks(d, 100, ctx)
+	if !blocked || !strings.Contains(reason, "gross long+short stop-risk") {
+		t.Fatalf("opposite-side pending risk must count against the symbol budget: blocked=%v reason=%s", blocked, reason)
+	}
+	at.dropPendingEntry("SOLUSDT", "short")
+	at.cycleSymbolRiskReservedUSD = map[string]float64{"SOLUSDT": 7}
+	if blocked, reason, _ := at.accountRiskExposureBlocks(d, 100, ctx); !blocked || !strings.Contains(reason, "gross long+short stop-risk") {
+		t.Fatalf("5 existing + 6 candidate + 7 reserved exceeds 15: blocked=%v reason=%s", blocked, reason)
+	}
+	ctx.Account.TotalEquity = 0
+	if blocked, _, _ := at.accountRiskExposureBlocks(d, 100, ctx); !blocked {
+		t.Fatal("unknown equity must block Binance opens because the risk budget cannot be verified")
 	}
 }
 

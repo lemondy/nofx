@@ -18,13 +18,12 @@ import (
 // resting GTC order: nobody would manage its expiry, and a fill would go
 // unprotected (SL/TP are placed by the pending-entry lifecycle on FILLED).
 // Rows are written on every set/drop; startup reconciliation restores
-// ownership from them. One resting entry per trader+symbol (replace
-// semantics, same as the map).
+// ownership from them. One resting entry per trader+symbol+side.
 type PendingEntryDB struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID   string    `gorm:"column:trader_id;index:idx_pending_trader_symbol,unique" json:"trader_id"`
-	Symbol     string    `gorm:"column:symbol;index:idx_pending_trader_symbol,unique" json:"symbol"`
-	Side       string    `gorm:"column:side;size:8" json:"side"` // long / short
+	TraderID   string    `gorm:"column:trader_id;index:idx_pending_trader_symbol_side,unique" json:"trader_id"`
+	Symbol     string    `gorm:"column:symbol;index:idx_pending_trader_symbol_side,unique" json:"symbol"`
+	Side       string    `gorm:"column:side;size:8;index:idx_pending_trader_symbol_side,unique" json:"side"` // long / short
 	Price      float64   `gorm:"column:price" json:"price"`
 	Quantity   float64   `gorm:"column:quantity" json:"quantity"`
 	StopLoss   float64   `gorm:"column:stop_loss" json:"stop_loss"`
@@ -45,13 +44,20 @@ func NewPendingEntryStore(db *gorm.DB) *PendingEntryStore {
 }
 
 func (s *PendingEntryStore) initTables() error {
+	// The old unique index allowed only one side per symbol. Remove it before
+	// AutoMigrate creates the per-side index, preserving existing rows.
+	if s.db.Migrator().HasIndex(&PendingEntryDB{}, "idx_pending_trader_symbol") {
+		if err := s.db.Migrator().DropIndex(&PendingEntryDB{}, "idx_pending_trader_symbol"); err != nil {
+			return err
+		}
+	}
 	return s.db.AutoMigrate(&PendingEntryDB{})
 }
 
-// Upsert writes/refreshes the shadow row for one trader+symbol.
+// Upsert writes/refreshes the shadow row for one trader+symbol+side.
 func (s *PendingEntryStore) Upsert(rec *PendingEntryDB) error {
 	var existing PendingEntryDB
-	err := s.db.Where("trader_id = ? AND symbol = ?", rec.TraderID, rec.Symbol).First(&existing).Error
+	err := s.db.Where("trader_id = ? AND symbol = ? AND side = ?", rec.TraderID, rec.Symbol, rec.Side).First(&existing).Error
 	if err == nil {
 		rec.ID = existing.ID
 		return s.db.Save(rec).Error
@@ -63,8 +69,8 @@ func (s *PendingEntryStore) Upsert(rec *PendingEntryDB) error {
 }
 
 // Delete removes the shadow row (order dropped/filled/cancelled).
-func (s *PendingEntryStore) Delete(traderID, symbol string) error {
-	return s.db.Where("trader_id = ? AND symbol = ?", traderID, symbol).Delete(&PendingEntryDB{}).Error
+func (s *PendingEntryStore) Delete(traderID, symbol, side string) error {
+	return s.db.Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, side).Delete(&PendingEntryDB{}).Error
 }
 
 // List returns all shadow rows of one trader (startup reconciliation input).

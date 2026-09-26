@@ -17,7 +17,7 @@ import (
 // pendingEntry tracks one placed limit-entry order through its lifecycle:
 // placed → filled (SL/TP placed at the exact limit price) | expired (N cycles
 // unfilled → cancelled) | invalidated (price crossed the SL before entry) |
-// replaced (a newer decision for the same symbol).
+// replaced (a newer decision for the same symbol and side).
 type pendingEntry struct {
 	Symbol       string
 	Side         string // "long" / "short"
@@ -32,24 +32,26 @@ type pendingEntry struct {
 	ProtectedQty float64 // executed size already carrying SL/TP (partial-fill watermark)
 }
 
+func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
+
 func (at *AutoTrader) setPendingEntry(pe *pendingEntry) {
 	at.pendingEntriesMu.Lock()
 	defer at.pendingEntriesMu.Unlock()
 	if at.pendingEntries == nil {
 		at.pendingEntries = make(map[string]*pendingEntry)
 	}
-	at.pendingEntries[pe.Symbol] = pe
+	at.pendingEntries[pendingEntryKey(pe.Symbol, pe.Side)] = pe
 	at.persistPendingEntry(pe)
 }
 
-func (at *AutoTrader) dropPendingEntry(symbol string) {
+func (at *AutoTrader) dropPendingEntry(symbol, side string) {
 	at.pendingEntriesMu.Lock()
-	delete(at.pendingEntries, symbol)
+	delete(at.pendingEntries, pendingEntryKey(symbol, side))
 	at.pendingEntriesMu.Unlock()
 	// The shadow row must die with the map state — a surviving row would make
 	// the next startup re-claim an order that is already gone.
 	if at.store != nil {
-		if err := at.store.PendingEntry().Delete(at.id, symbol); err != nil {
+		if err := at.store.PendingEntry().Delete(at.id, symbol, side); err != nil {
 			logger.Infof("⚠️ [%s] drop pending entry %s: shadow row delete failed: %v", at.name, symbol, err)
 		}
 	}
@@ -81,10 +83,17 @@ func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) {
 	}
 }
 
-func (at *AutoTrader) getPendingEntry(symbol string) *pendingEntry {
+func (at *AutoTrader) getPendingEntry(symbol, side string) *pendingEntry {
 	at.pendingEntriesMu.RLock()
 	defer at.pendingEntriesMu.RUnlock()
-	return at.pendingEntries[symbol]
+	return at.pendingEntries[pendingEntryKey(symbol, side)]
+}
+
+func (at *AutoTrader) cancelPendingSide(symbol, side string) error {
+	if pe := at.getPendingEntry(symbol, side); pe != nil {
+		return at.cancelPending(pe)
+	}
+	return nil
 }
 
 // validateLimitEntryPrice sanity-checks the trigger price against the live
@@ -189,7 +198,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	// Slot accounting: open positions + resting limit entries on OTHER
 	// symbols + this order. Resting entries must occupy slots too, otherwise
 	// several unfilled limits could all fill into more positions than the cap.
-	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingSymbols(), decision.Symbol)); err != nil {
+	if err := at.enforceMaxPositions(nextSlotCount(len(positions), at.snapshotPendingKeys(), pendingEntryKey(decision.Symbol, side))); err != nil {
 		return err
 	}
 	posSide := "long"
@@ -247,9 +256,10 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 				// open_long/open_short dispatch does), so drop a replaced
 				// resting order here — otherwise it would survive next to
 				// the fresh market position.
-				if old := at.getPendingEntry(decision.Symbol); old != nil {
-					_ = grid.CancelOrder(old.Symbol, old.OrderID)
-					at.dropPendingEntry(old.Symbol)
+				if old := at.getPendingEntry(decision.Symbol, side); old != nil {
+					if err := at.cancelPending(old); err != nil {
+						return fmt.Errorf("cannot cancel replaced limit entry for %s %s: %w", old.Symbol, old.Side, err)
+					}
 					logger.Infof("  🔄 Cancelled replaced pending limit entry for %s (@ %.6g)", old.Symbol, old.Price)
 				}
 				if side == "long" {
@@ -323,21 +333,22 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 
 	// Margin-budget gate: (used + new) margin ≤ max_margin_usage × equity —
 	// the prompt states the budget, this enforces it (audit 09-13 #2).
-	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
+	if blocked, reason := at.marginBudgetBlocksOpen(decision.Symbol, side, decision.PositionSizeUSD, float64(decision.Leverage), equity); blocked {
 		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
 	}
 	quantity := decision.PositionSizeUSD / decision.Price
 	actionRecord.Quantity = quantity
 	actionRecord.Price = decision.Price
 
-	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
-		logger.Infof("  ⚠️ Failed to set margin mode: %v", err)
+	if err := at.trader.SetMarginMode(decision.Symbol, at.entryUsesCrossMargin()); err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: margin mode not verified: %w", decision.Action, decision.Symbol, err)
 	}
 
-	// Replace any pending entry for this symbol (new decision supersedes).
-	if old := at.getPendingEntry(decision.Symbol); old != nil {
-		_ = grid.CancelOrder(old.Symbol, old.OrderID)
-		at.dropPendingEntry(old.Symbol)
+	// Replace only this side; an opposite-side limit entry remains owned.
+	if old := at.getPendingEntry(decision.Symbol, side); old != nil {
+		if err := at.cancelPending(old); err != nil {
+			return fmt.Errorf("cannot cancel replaced limit entry for %s %s: %w", old.Symbol, old.Side, err)
+		}
 		logger.Infof("  🔄 Replaced pending limit entry for %s (@ %.6g)", old.Symbol, old.Price)
 	}
 
@@ -370,9 +381,9 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	return nil
 }
 
-// snapshotPendingSymbols returns the symbols currently holding a resting
+// snapshotPendingKeys returns the symbol+side keys currently holding a resting
 // limit entry in the pending map (copy under lock).
-func (at *AutoTrader) snapshotPendingSymbols() []string {
+func (at *AutoTrader) snapshotPendingKeys() []string {
 	at.pendingEntriesMu.RLock()
 	defer at.pendingEntriesMu.RUnlock()
 	syms := make([]string, 0, len(at.pendingEntries))
@@ -382,12 +393,12 @@ func (at *AutoTrader) snapshotPendingSymbols() []string {
 	return syms
 }
 
-// nextSlotCount computes the position-slot count AFTER placing a new entry
-// for symbol: open positions + resting entries on other symbols + 1.
-func nextSlotCount(openPositions int, pendingSymbols []string, symbol string) int {
+// nextSlotCount computes the count after placing a new entry, replacing only
+// a resting entry for the same symbol+side.
+func nextSlotCount(openPositions int, pendingKeys []string, key string) int {
 	n := openPositions + 1
-	for _, s := range pendingSymbols {
-		if s != symbol {
+	for _, s := range pendingKeys {
+		if s != key {
 			n++
 		}
 	}
@@ -447,14 +458,14 @@ func (at *AutoTrader) processPendingEntries() {
 			// plan/actual fill. protectExecutedSlice above is the SINGLE
 			// protection reconcile: it places the missing slice at the
 			// actual avgPrice and only advances the watermark on success.
-			at.dropPendingEntry(pe.Symbol)
+			at.dropPendingEntry(pe.Symbol, pe.Side)
 			logger.Infof("✅ [%s] Limit entry FILLED: %s %s @ %.6g — protective orders anchored", at.name, pe.Symbol, pe.Side, pe.Price)
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场成交 %s</b>\n<i>%s @ %.6g,保护单已挂</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
 		case "CANCELED", "EXPIRED", "REJECTED":
 			// Residual protection (P1 2026-09-25): a cancel/expiry after a
 			// partial fill must not strand the executed slice on ATR-fallback.
 			at.protectExecutedSlice(pe, status)
-			at.dropPendingEntry(pe.Symbol)
+			at.dropPendingEntry(pe.Symbol, pe.Side)
 			logger.Infof("📌 [%s] Limit entry %s %s externally (%s) — state dropped (executed slice protected if any)", at.name, pe.Symbol, st, st)
 		case "PARTIALLY_FILLED":
 			// P1 (2026-09-25): protect the executed slice NOW at the actual
@@ -475,7 +486,7 @@ func (at *AutoTrader) processPendingEntries() {
 						logger.Infof("⚠️ [%s] Limit entry %s invalidation cancel FAILED (%v) — kept pending, retried next cycle", at.name, pe.Symbol, cerr)
 						continue
 					}
-					at.dropPendingEntry(pe.Symbol)
+					at.dropPendingEntry(pe.Symbol, pe.Side)
 					logger.Infof("📌 [%s] Limit entry %s invalidated after partial fill: remaining slice cancelled, executed slice keeps its protection", at.name, pe.Symbol)
 					continue
 				}
@@ -486,7 +497,7 @@ func (at *AutoTrader) processPendingEntries() {
 					continue
 				}
 				logger.Infof("📌 [%s] Limit entry %s expired after partial fill: remaining slice cancelled, executed slice keeps its protection", at.name, pe.Symbol)
-				at.dropPendingEntry(pe.Symbol)
+				at.dropPendingEntry(pe.Symbol, pe.Side)
 			}
 		default: // NEW
 			pe.Cycles++
@@ -552,16 +563,15 @@ func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
 		CancelOrder(symbol, orderID string) error
 	})
 	if !ok {
-		at.dropPendingEntry(pe.Symbol)
 		return fmt.Errorf("exchange does not support order cancellation")
 	}
-	err := grid.CancelOrder(pe.Symbol, pe.OrderID)
-	at.dropPendingEntry(pe.Symbol)
-	if err != nil {
+	if err := grid.CancelOrder(pe.Symbol, pe.OrderID); err != nil {
 		logger.Infof("📌 [%s] Cancel pending entry %s (order %s): %v", at.name, pe.Symbol, pe.OrderID, err)
+		return err
 	}
+	at.dropPendingEntry(pe.Symbol, pe.Side)
 	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价单已撤销 %s</b>\n<i>%s @ %.6g 未成交,撤销重评</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
-	return err
+	return nil
 }
 
 // limitEntryLifetime resolves a limit order's unfilled lifetime: the older
