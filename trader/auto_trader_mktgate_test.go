@@ -97,11 +97,29 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 		t.Fatal("1.8% total risk must pass a 10% cap")
 	}
 
-	// New risk 10.4% (2000 notional × 5.2% stop) → blocked.
+	// R8-clamp semantics (2026-09-26 NILUSDT): an oversized candidate is
+	// CLAMPED to the risk budget (1.5% default) and PASSES — the executor
+	// would size it identically; hard-rejecting what sizing would shrink is
+	// inconsistent. 10.4% raw → 1.5% clamped → 0.8+1.5 = 2.3% ≤ 10%.
+	d = &kernel.Decision{Symbol: "CUSDT", Price: 100, StopLoss: 94.8, PositionSizeUSD: 2000}
+	blocked, _, cand := at.accountRiskExposureBlocks(d, 100, ctx)
+	if blocked {
+		t.Fatalf("oversized candidate must be clamped into compliance, got blocked: %v", blocked)
+	}
+	if cand > 15.0+1e-9 {
+		t.Fatalf("booked risk must be the clamped 1.5%% (15U of 1000), got %.2f", cand)
+	}
+
+	// The account cap now binds via EXISTING exposure: two big positions
+	// (4.75%+4.75%) + a clamped 1.5% candidate = 11% > 10% → blocked.
+	ctx.Positions = []kernel.PositionInfo{
+		{Symbol: "AUSDT", Side: "long", EntryPrice: 100, Quantity: 9.5, StopLossPrice: 95},
+		{Symbol: "BUSDT", Side: "long", EntryPrice: 100, Quantity: 9.5, StopLossPrice: 95},
+	}
 	d = &kernel.Decision{Symbol: "CUSDT", Price: 100, StopLoss: 94.8, PositionSizeUSD: 2000}
 	blocked, reason, _ := at.accountRiskExposureBlocks(d, 100, ctx)
 	if !blocked {
-		t.Fatal("risk pushing total past the cap must block")
+		t.Fatal("existing 9.5%% + candidate 1.5%% must block at the 10%% cap")
 	}
 	if !strings.Contains(reason, "10.0%") {
 		t.Fatalf("reason should quote the cap, got: %s", reason)

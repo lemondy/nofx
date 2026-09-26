@@ -1739,6 +1739,19 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 	// the reservation into the candidate AND re-booked it: 20→60→140), never
 	// charges risk for candidates a later gate rejects.
 	candidateRisk := d.PositionSizeUSD * math.Abs(entryPx-d.StopLoss) / entryPx
+	// 2026-09-26 NILUSDT: the gate ran on the RAW AI proposal while the
+	// executor's clampSizeToRisk would have downsized it to the risk budget —
+	// a 2.002% proposal got hard-rejected by a 2.00% cap it would never
+	// actually run at. Evaluate the CLAMPED candidate (clamp-only sizing:
+	// max notional = equity×riskPct ÷ dist ⇒ clamped risk = equity×riskPct),
+	// so oversized proposals shrink into compliance instead of dying.
+	riskBudgetPct := rc.RiskPerTradePct
+	if riskBudgetPct <= 0 {
+		riskBudgetPct = 1.5
+	}
+	if maxRisk := equity * riskBudgetPct / 100; candidateRisk > maxRisk {
+		candidateRisk = maxRisk
+	}
 	reserved := at.cycleRiskReservedUSD
 	symbolReserved := at.cycleSymbolRiskReservedUSD[market.Normalize(d.Symbol)]
 	existingPct := totalRisk / equity * 100
