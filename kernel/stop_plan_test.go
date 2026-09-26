@@ -362,3 +362,37 @@ func microFilterFor(t *testing.T, sig *SymbolSignal, microTF string) *ExecutionF
 	sig.ExecutionFilter = saved
 	return ef
 }
+
+// 2026-09-27 external review P0: the reward side must be hard-snapped to the
+// gated first_rr_ge_target exactly like the stop side — stop locked + TP
+// elastic = systematic realized-R:R degradation. Mirrors TestCorrectStopLossToPlan.
+func TestCorrectTakeProfitToPlan(t *testing.T) {
+	gates := map[string]*GateState{
+		"ZECUSDT":    {LongTakeProfit: 1648.0, ShortTakeProfit: 1200.5},
+		"NOTARGETUSDT": {}, // rr_scan nil/unusable → nothing to snap to
+	}
+	decs := []Decision{
+		{Symbol: "ZECUSDT", Action: "open_long_limit", TakeProfit: 1700.0},  // model's own math, 3% off
+		{Symbol: "ZECUSDT", Action: "open_short", TakeProfit: 1200.1},       // within 0.05% echo tolerance
+		{Symbol: "ZECUSDT", Action: "open_long", TakeProfit: 0},             // placeholder zero
+		{Symbol: "NOTARGETUSDT", Action: "open_long", TakeProfit: 100.0},    // no target — untouched
+		{Symbol: "ETHUSDT", Action: "hold", TakeProfit: 999.0},              // not an open — untouched
+	}
+	correctTakeProfitToPlan(decs, gates, StopPlanTolerancePct)
+
+	if decs[0].TakeProfit != 1648.0 {
+		t.Errorf("drifting TP not snapped: %.4f, want 1648.0", decs[0].TakeProfit)
+	}
+	if decs[1].TakeProfit != 1200.1 {
+		t.Errorf("echo-tolerance TP was modified: %.4f", decs[1].TakeProfit)
+	}
+	if decs[2].TakeProfit != 1648.0 {
+		t.Errorf("placeholder zero not filled from target: %.4f", decs[2].TakeProfit)
+	}
+	if decs[3].TakeProfit != 100.0 {
+		t.Errorf("no-target symbol must pass through, got %.4f", decs[3].TakeProfit)
+	}
+	if decs[4].TakeProfit != 999.0 {
+		t.Errorf("non-open action must pass through, got %.4f", decs[4].TakeProfit)
+	}
+}

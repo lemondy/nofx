@@ -457,3 +457,45 @@ func correctStopLossToPlan(decisions []Decision, gates map[string]*GateState, to
 		d.StopLoss = plan
 	}
 }
+
+// correctTakeProfitToPlan mirrors correctStopLossToPlan for the REWARD side
+// (2026-09-27 external review, P0): the stop was hard-snapped to the gated
+// stop_plan while the TP was only prompt-advised — the model could emit a
+// direction-correct, RR-passing TP sitting NOWHERE near the planned
+// structure (first_rr_ge_target). With the stop locked and the TP elastic,
+// realized R:R drifts systematically worse than the gate's math. Same
+// tolerance (StopPlanTolerancePct), same placeholder-0 rule.
+func correctTakeProfitToPlan(decisions []Decision, gates map[string]*GateState, tolerancePct float64) {
+	for i := range decisions {
+		d := &decisions[i]
+		isLong := strings.HasPrefix(d.Action, "open_long")
+		isShort := strings.HasPrefix(d.Action, "open_short")
+		if !isLong && !isShort {
+			continue
+		}
+		gs, ok := gates[market.Normalize(d.Symbol)]
+		if !ok || gs == nil {
+			continue
+		}
+		plan := gs.LongTakeProfit
+		if !isLong {
+			plan = gs.ShortTakeProfit
+		}
+		if plan <= 0 {
+			continue // no structural target this direction — nothing to snap to
+		}
+		if d.TakeProfit <= 0 {
+			logger.Infof("📐 [%s] %s placeholder take_profit → first_rr_ge_target %.6g",
+				d.Symbol, d.Action, plan)
+			d.TakeProfit = plan
+			continue
+		}
+		dev := (d.TakeProfit - plan) / plan * 100
+		if math.Abs(dev) <= tolerancePct {
+			continue
+		}
+		logger.Infof("📐 [%s] %s take_profit %.6g → first_rr_ge_target %.6g (%+.2f%% drift — the gated target is the trade)",
+			d.Symbol, d.Action, d.TakeProfit, plan, dev)
+		d.TakeProfit = plan
+	}
+}

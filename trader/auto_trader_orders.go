@@ -271,6 +271,17 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0)
 
 	fillPrice := orderFloat(order, "avgPrice")
+	if fillPrice <= 0 {
+		// R3 (2026-09-26 review) — LONG side. The raw order response carries
+		// no avgPrice on Binance; without polling, the slippage reanchor
+		// silently no-opped on longs while shorts got it (the 09-26 review's
+		// P0 asymmetry — my earlier edit landed only the short side).
+		if orderID, ok := order["orderId"].(int64); ok {
+			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, fmt.Sprint(orderID), marketData.CurrentPrice); confirmed {
+				fillPrice = avg
+			}
+		}
+	}
 	// Reanchor BEFORE recording (2026-09-25 P2): the recorded stop and the
 	// write-once 1R anchor must describe the REAL opening risk at the actual
 	// fill, not the pre-slippage plan.

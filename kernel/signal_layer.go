@@ -1328,20 +1328,43 @@ const UnprotectedStopWorstCasePct = 8.0
 func marketExceptionEvidence(sig *SymbolSignal, isLong bool) bool {
 	if isLong {
 		if sig.BBRide != nil && sig.BBRide.Ride {
-			return true
+			return fundingAllowsMarketException(sig, isLong)
 		}
 	} else {
 		if sig.ShortRide != nil && sig.ShortRide.Ride {
-			return true
+			return fundingAllowsMarketException(sig, isLong)
 		}
 	}
 	if sig.Breakout != nil && sig.Breakout.Status == "confirmed" &&
 		sig.Breakout.VolumeConfirm && sig.Breakout.OIConfirm &&
 		breakoutDirectionMatches(sig, isLong) &&
 		directionScoreAtLeast(sig, isLong, MarketExceptionMinScore) {
-		return true
+		return fundingAllowsMarketException(sig, isLong)
 	}
 	return false
+}
+
+// MarketExceptionMaxFundingAnnPct: a market-order exception chasing into a
+// band-ride/breakout is exactly where crowded-leverage squeezes bite — the
+// 2026-09-27 external review's cheap structural filter. Funding ANNUALIZED
+// beyond this on the CROWDED side (positive = longs crowded, blocks longs;
+// negative = shorts crowded, blocks shorts) downgrades the exception: the
+// setup must take the limit-anchor path instead of paying top-of-book at the
+// most squeeze-prone price.
+const MarketExceptionMaxFundingAnnPct = 50.0
+
+// fundingAllowsMarketException reports whether the crowd-side funding is
+// cool enough for a market-order chase. UNKNOWN → false (fail-closed: no
+// funding data ⇒ no market exception).
+func fundingAllowsMarketException(sig *SymbolSignal, isLong bool) bool {
+	if sig.Derivatives == nil || sig.Derivatives.FundingAnnualizedPct == nil {
+		return false
+	}
+	f := *sig.Derivatives.FundingAnnualizedPct
+	if isLong {
+		return f <= MarketExceptionMaxFundingAnnPct
+	}
+	return f >= -MarketExceptionMaxFundingAnnPct
 }
 
 // breakoutDirectionMatches: a confirmed BREAKOUT is a long exception, a

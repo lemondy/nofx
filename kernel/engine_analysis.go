@@ -245,6 +245,10 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 			// model stop re-hits the noise-floor rejection (the ZEC/AVAX
 			// wasted-cycle loop this was written to end).
 			correctStopLossToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
+			// Reward-side symmetry (2026-09-27 external review P0): the stop
+			// is hard-snapped to the gated plan; the TP must be too, or the
+			// model's elastic TP silently degrades the gated R:R math.
+			correctTakeProfitToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
 			// Anchor correction can downgrade an already-validated open into a
 			// wait. Re-run action-aware validation so its stage and mandatory
 			// dataset annotations match the final action that will be executed.
