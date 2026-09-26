@@ -1,8 +1,9 @@
 package breakout
 
 import (
+	"errors"
+	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,8 +69,9 @@ func lastTuneAttempt() time.Time {
 }
 
 func markTuneAttempt() {
-	_ = os.MkdirAll(filepath.Dir(tuneMarkerPath), 0o755)
-	_ = os.WriteFile(tuneMarkerPath, []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)), 0o644)
+	if err := atomicWriteJSON(tuneMarkerPath, []byte(strconv.FormatInt(time.Now().UnixMilli(), 10))); err != nil {
+		logger.Errorf("⚠️ tune marker persist FAILED: %v", err)
+	}
 }
 
 // DefaultScheduler returns the process-wide scheduler.
@@ -107,11 +109,20 @@ func (s *Scheduler) Start() {
 				la := lastTuneAttempt()
 				return la.IsZero() || time.Since(la) >= tuneInterval
 			}
+			starvedUntil := time.Time{}
 			run := func() {
-				if s.runTuning() {
+				err := s.runTuning()
+				switch {
+				case err == nil:
 					markTuneAttempt()
 					pendingRetry = false
-				} else {
+					starvedUntil = time.Time{}
+				case errors.Is(err, ErrStarved):
+					// P0 (2026-09-26 review): starvation is structural, not
+					// transient — retry daily, not every 10 minutes.
+					pendingRetry = false
+					starvedUntil = time.Now().Add(24 * time.Hour)
+				default:
 					pendingRetry = true
 				}
 			}
@@ -129,7 +140,7 @@ func (s *Scheduler) Start() {
 						run()
 					}
 				case <-retry.C:
-					if pendingRetry {
+					if pendingRetry && time.Now().After(starvedUntil) {
 						run()
 					}
 				case <-s.stop:
@@ -196,11 +207,11 @@ func (s *Scheduler) Start() {
 // Returns false when the pass could not run (list-symbols or backtest error,
 // e.g. a 429 on the shared proxy IP) so the caller can retry soon instead of
 // sleeping the full weekly interval.
-func (s *Scheduler) runTuning() (ok bool) {
+func (s *Scheduler) runTuning() (runErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("🚨 Breakout tuning panicked (recovered): %v", r)
-			ok = false
+			runErr = fmt.Errorf("panic: %v", r)
 		}
 	}()
 	// 30 symbols: the old top-15 under-covered the high-ATR alts the
@@ -209,7 +220,7 @@ func (s *Scheduler) runTuning() (ok bool) {
 	symbols, err := TopVolumeSymbols(30)
 	if err != nil {
 		logger.Warnf("⚠️ Breakout tuning: failed to list symbols: %v", err)
-		return false
+		return err
 	}
 	hasBTC := false
 	for _, sym := range symbols {
@@ -223,9 +234,9 @@ func (s *Scheduler) runTuning() (ok bool) {
 	}
 	if _, err := TuneFromBacktest(symbols); err != nil {
 		logger.Warnf("⚠️ Breakout tuning failed: %v", err)
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
 // Stop terminates the loop.

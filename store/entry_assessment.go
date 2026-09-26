@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"encoding/json"
 	"time"
 
@@ -121,6 +122,16 @@ func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat
 		stats[bi].Assessments++
 
 		if a.Direction != "long" && a.Direction != "short" {
+			continue
+		}
+		// P1 fix (2026-09-26 review): ONLY open actions may consume a trade
+		// outcome. The direction check alone let a "wait long" assessment
+		// claim the NEXT same-symbol long trade as its own outcome — with
+		// wait rows outnumbering opens 10,238:315 the wait buckets were
+		// describing trades the wait explicitly did NOT take. Wait rows
+		// count toward Assessments but stay outcome-free.
+		aAction := strings.ToLower(a.Action)
+		if !strings.HasPrefix(aAction, "open") {
 			continue
 		}
 		side := "LONG"

@@ -53,7 +53,10 @@ func TestUpdateShortWeights(t *testing.T) {
 	// Cohort: high "structure" scores predicted profitable shorts (positive
 	// outcome), high "overbought" predicted pain (negative outcome).
 	var samples []shortSample
-	for i := 0; i < 20; i++ {
+	// 40 samples: above the shortTunerMinComponentN=30 significance gate
+	// (P1, 2026-09-26 review — the update must not move weights on thin-n
+	// noise).
+	for i := 0; i < 40; i++ {
 		structure := 80.0
 		overbought := 20.0
 		outcome := 3.0 // profitable short
@@ -72,7 +75,10 @@ func TestUpdateShortWeights(t *testing.T) {
 			},
 		})
 	}
-	out := updateShortWeights(samples, base, shortTunerEta)
+	out, ok := updateShortWeights(samples, base, shortTunerEta)
+	if !ok {
+		t.Fatal("strong correlations must pass the significance gate")
+	}
 	if out["structure"] <= base["structure"] {
 		t.Fatalf("predictive component must gain weight: %.3f → %.3f", base["structure"], out["structure"])
 	}

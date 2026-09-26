@@ -2,6 +2,7 @@ package breakout
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -67,14 +68,20 @@ type BacktestSummary struct {
 	// selected on the TRAIN segment must verify on the held-out TEST segment
 	// (bucket edge positive AND above the test-wide average) or they are
 	// rejected, not applied.
-	CostRoundTripPct float64 `json:"cost_round_trip_pct"`
-	TrainSignals     int     `json:"train_signals"`
-	TestSignals      int     `json:"test_signals"`
+	CostRoundTripPct float64  `json:"cost_round_trip_pct"`
+	TrainSignals     int      `json:"train_signals"`
+	TestSignals      int      `json:"test_signals"`
 	Verified         []string `json:"verified,omitempty"`
 	Rejected         []string `json:"rejected,omitempty"`
 }
 
 const backtestPath = "data/breakout_backtest.json"
+
+// ErrStarved marks a tuning run that produced too few signals to evaluate —
+// distinct from a hard failure: the scheduler backs off 24h instead of its
+// 10-minute transient-failure retry (P0, 2026-09-26 review: a starved run
+// used to report success and sleep the full 7 days).
+var ErrStarved = errors.New("backtest starved: insufficient signals")
 
 // RunBacktest replays the scorer over historical 15m klines for the given
 // symbols and returns the signal outcomes. Scores carry the ONLINE penalty
@@ -111,15 +118,35 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			continue
 		}
 
-		// Levels use the full fetched history as a static approximation
-		// (rebuilding per-bar daily levels would multiply cost with little gain).
-		levels := buildLevels(d1, k1h)
+		// P1 fix (2026-09-26 review) — point-in-time levels: the old shape
+		// built levels ONCE from the FULL future daily/1h history, so early
+		// signals saw highs/lows/VPVR that had not formed yet (lookahead
+		// bias). Levels now rebuild at most once per UTC day from data
+		// SLICED to the signal time; a signal can never see a future bar.
+		now0 := time.UnixMilli(k15[btWarmupBars].OpenTime)
+		sliceTo := func(bars []Kline, t time.Time) []Kline {
+			out := bars[:0]
+			for _, k := range bars {
+				if time.UnixMilli(k.OpenTime).Before(t) {
+					out = append(out, k)
+				}
+			}
+			return out
+		}
+		currentDay := now0.UTC().Format("2006-01-02")
+		levels := buildLevels(sliceTo(d1, now0), sliceTo(k1h, now0))
 
 		end := len(k15) - btForwardBars24h
 		for i := btWarmupBars; i < end; i += 3 { // stride 3 keeps cost sane
 			series := k15[:i+1]
-			levelsHere := levels // static
-			sh := &shared{}      // point-in-time OI/funding/depth are unavailable historically — context dims score neutral
+			barTime := time.UnixMilli(series[len(series)-1].OpenTime)
+			sigTime := barTime
+			if day := sigTime.UTC().Format("2006-01-02"); day != currentDay {
+				currentDay = day
+				levels = buildLevels(sliceTo(d1, sigTime), sliceTo(k1h, sigTime))
+			}
+			levelsHere := levels
+			sh := &shared{} // point-in-time OI/funding/depth are unavailable historically — context dims score neutral
 
 			tfs := map[string]map[string]*TFReport{
 				"15m": {
@@ -137,7 +164,7 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			if down.Score > up.Score {
 				dir, score = DirDown, down.Score
 			}
-			sigTime := time.UnixMilli(series[len(series)-1].OpenTime).UTC()
+			sigTime = time.UnixMilli(series[len(series)-1].OpenTime).UTC()
 			regime, regimeMult := regimeAt(regimeBars, sigTime, dir)
 			score *= regimeMult
 			// Online extended-pattern penalty (A2): Analyze() multiplies the
@@ -328,6 +355,21 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	summary.TrainSignals = trainN
 	summary.TestSignals = testN
 
+	// P0 (2026-09-26 review): starvation is a FAILURE, not "parameters
+	// already optimal" — reporting success here let the scheduler write the
+	// 7-day marker on an empty run and silence tuning for a week. The
+	// summary is still persisted (observability), the error propagates.
+	if len(signals) < btMinSample {
+		summary.Changes = []string{fmt.Sprintf("STARVED: %d signals < %d minimum — no evaluation possible", len(signals), btMinSample)}
+		if data, err := json.MarshalIndent(summary, "", "  "); err == nil {
+			if err := atomicWriteJSON(backtestPath, data); err != nil {
+				logger.Errorf("⚠️ backtest summary persist FAILED: %v", err)
+			}
+		}
+		logger.Warnf("🐷 Backtest tuning STARVED: %d signals < %d minimum — retry scheduled, parameters untouched", len(signals), btMinSample)
+		return nil, fmt.Errorf("%w: %d signals < %d minimum", ErrStarved, len(signals), btMinSample)
+	}
+
 	params := GetParams()
 	summary.Params = params
 
@@ -337,7 +379,7 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	}
 
 	if len(changes) == 0 {
-		logger.Infof("🐷 Backtest tuning: %d signals analyzed, parameters already optimal", len(signals))
+		logger.Infof("🐷 Backtest tuning: %d signals analyzed (%d train / %d test), no verified change — parameters unchanged", len(signals), trainN, testN)
 	} else {
 		for _, ch := range changes {
 			logger.Infof("🐷 Backtest tuning: %s", ch)
@@ -422,17 +464,21 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 			winVol = append(winVol, s.VolMultiple)
 		}
 	}
-	if len(winATR) >= btMinSample {
-		half := func(key string, target, current *float64) {
-			t := clampParam(key, *target)
+	if len(winATR) >= btMinSample && len(winVol) >= btMinSample {
+		// P1 fix (2026-09-26 review): the old shape passed the SAME pointer as
+		// target and current (a guaranteed no-op) and never computed the
+		// medians it collected. Now: target = winner median, half-step toward
+		// it, clamped — the small bounded drift the design intended.
+		half := func(key string, target float64, current *float64) {
+			t := clampParam(key, target)
 			if math.Abs(t-*current) < 0.01 {
 				return
 			}
 			*current = clampParam(key, *current+0.5*(t-*current))
-			changes = append(changes, fmt.Sprintf("%s: %.3f → %.3f (train-median, half-step)", key, prevValue(key, prev), *current))
+			changes = append(changes, fmt.Sprintf("%s: %.3f → %.3f (train-median %.3f, half-step)", key, prevValue(key, prev), *current, t))
 		}
-		half("price_atr_center", &next.PriceATRCenter, &next.PriceATRCenter)
-		half("vol_center", &next.VolCenter, &next.VolCenter)
+		half("price_atr_center", median(winATR), &next.PriceATRCenter)
+		half("vol_center", median(winVol), &next.VolCenter)
 	}
 
 	if len(changes) == 0 {

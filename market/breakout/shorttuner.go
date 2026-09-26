@@ -81,11 +81,14 @@ func DefaultShortWeights() map[string]float64 {
 	}
 }
 
-// shortWeights returns the effective weights (tuned values when present and
-// sane, designed defaults otherwise).
+// shortWeights returns the effective weights. P0 fix (2026-09-26 review):
+// persisted ShortWeights are ONLY honored while the tuner update is ENABLED —
+// the railed file (structure 0.0299 etc., written by the pre-disable binary
+// on 09-23) kept feeding live scoring after the update switch went off.
+// Disabled ⇒ designed defaults, full stop; the polluted file becomes inert.
 func shortWeights() map[string]float64 {
 	p := GetParams()
-	if len(p.ShortWeights) == 0 {
+	if !shortTunerUpdateEnabled() || len(p.ShortWeights) == 0 {
 		return DefaultShortWeights()
 	}
 	w := make(map[string]float64, len(shortWeightKeys))
@@ -118,13 +121,14 @@ func SetShortTuningPath(p string) {
 }
 
 type shortSample struct {
-	TS         int64              `json:"ts"`
-	Symbol     string             `json:"symbol"`
-	Score      float64            `json:"score"`
-	Price      float64            `json:"price"`
-	Components map[string]float64 `json:"components"`
-	Evaluated  bool               `json:"evaluated"`
-	Outcome    float64            `json:"outcome,omitempty"` // % short PnL at +24h
+	TS          int64              `json:"ts"`
+	Symbol      string             `json:"symbol"`
+	Score       float64            `json:"score"`
+	Price       float64            `json:"price"`
+	Components  map[string]float64 `json:"components"`
+	Evaluated   bool               `json:"evaluated"`
+	Outcome     float64            `json:"outcome,omitempty"`     // % short PnL at +24h
+	Unpriceable bool               `json:"unpriceable,omitempty"` // delisted/no quote — excluded from correlations
 }
 
 // SampleShortSignals journals the current top-10 for future evaluation.
@@ -219,8 +223,8 @@ func RunShortTuner(now time.Time) {
 		}
 		nowPrice, ok := priceOf[s.Symbol]
 		if !ok || nowPrice <= 0 {
-			s.Evaluated = true // delisted/no data — drop from future evaluation
-			s.Outcome = 0
+			s.Evaluated = true   // delisted/no data — drop from future evaluation
+			s.Unpriceable = true // P1: excluded from correlations (Outcome=0 was a fake zero)
 			changed = true
 			continue
 		}
@@ -239,21 +243,35 @@ func RunShortTuner(now time.Time) {
 	// accumulating for the eventual fixed update rule; only the weight write
 	// is gated.
 	if shortTunerUpdateEnabled() {
+		// P1 fix (2026-09-26 review): the update now runs on an INCREMENTAL
+		// window (samples evaluated since the LAST successful tune, tracked
+		// via shortTunerLastTunedMs in the params file) instead of re-mul-
+		// tiplying exp(η·corr) over the same cumulative cohort forever.
 		var eval []shortSample
+		lastTuned := GetParams().ShortTunerLastTunedMs
 		for _, s := range samples {
-			if s.Evaluated && len(s.Components) > 0 {
+			// Delisted/unpriceable samples carry Outcome=0 — including them
+			// poisoned the correlations with fake zeros. Excluded.
+			if s.Evaluated && !s.Unpriceable && s.TS > lastTuned && len(s.Components) > 0 {
 				eval = append(eval, s)
 			}
 		}
 		if len(eval) >= shortTunerMinSamples {
 			w := shortWeights()
-			newW := updateShortWeights(eval, w, shortTunerEta)
-			if !weightsClose(newW, w) {
+			newW, ok := updateShortWeights(eval, w, shortTunerEta)
+			if !ok {
+				logger.Infof("🩸 Short tuner: %d samples but no component passed significance (|corr| ≥ %.2f, n ≥ %d) — weights unchanged", len(eval), shortTunerMinCorr, shortTunerMinComponentN)
+			} else if !weightsClose(newW, w) {
 				p := GetParams()
 				p.ShortWeights = newW
+				p.ShortTunerLastTunedMs = time.Now().UnixMilli()
 				ApplyParams(p)
-				logger.Infof("🩸 Short tuner: weights updated from %d evaluated samples: %v", len(eval), formatWeights(newW))
+				logger.Infof("🩸 Short tuner: weights updated from %d NEW samples (since last tune): %v", len(eval), formatWeights(newW))
 				changed = true
+			} else {
+				p := GetParams()
+				p.ShortTunerLastTunedMs = time.Now().UnixMilli()
+				ApplyParams(p)
 			}
 		}
 	} else {
@@ -273,10 +291,21 @@ func RunShortTuner(now time.Time) {
 	}
 }
 
-// updateShortWeights nudges each component weight by exp(η × corr(component,
-// outcome)) over the evaluated cohort, then clamps and renormalizes. Pure.
-func updateShortWeights(samples []shortSample, base map[string]float64, eta float64) map[string]float64 {
+const (
+	// P1 (2026-09-26 review): the update fires only on SIGNIFICANT
+	// correlations with enough per-component samples — small-noise corr on
+	// thin components was what railed weights into the clamp bounds.
+	shortTunerMinCorr       = 0.15
+	shortTunerMinComponentN = 30
+)
+
+// updateShortWeights nudges each SIGNIFICANT component weight by
+// exp(η × corr(component, outcome)) over the evaluated cohort, then clamps
+// and renormalizes. ok=false when NO component passes significance — the
+// weights must not move on noise. Pure.
+func updateShortWeights(samples []shortSample, base map[string]float64, eta float64) (map[string]float64, bool) {
 	out := make(map[string]float64, len(shortWeightKeys))
+	anySignificant := false
 	for _, k := range shortWeightKeys {
 		var xs, ys []float64
 		for _, s := range samples {
@@ -288,7 +317,15 @@ func updateShortWeights(samples []shortSample, base map[string]float64, eta floa
 			ys = append(ys, s.Outcome)
 		}
 		corr := pearson(xs, ys)
-		out[k] = base[k] * math.Exp(eta*corr)
+		if len(xs) >= shortTunerMinComponentN && math.Abs(corr) >= shortTunerMinCorr {
+			anySignificant = true
+			out[k] = base[k] * math.Exp(eta*corr)
+		} else {
+			out[k] = base[k]
+		}
+	}
+	if !anySignificant {
+		return nil, false
 	}
 	// Clamp + renormalize.
 	const lo, hi = 0.03, 0.30
@@ -303,12 +340,12 @@ func updateShortWeights(samples []shortSample, base map[string]float64, eta floa
 		total += out[k]
 	}
 	if total <= 0 {
-		return DefaultShortWeights()
+		return DefaultShortWeights(), true
 	}
 	for _, k := range shortWeightKeys {
 		out[k] = math.Round(out[k]/total*10000) / 10000
 	}
-	return out
+	return out, true
 }
 
 func pearson(xs, ys []float64) float64 {

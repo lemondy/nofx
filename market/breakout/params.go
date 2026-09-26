@@ -1,8 +1,11 @@
 package breakout
 
 import (
+	"nofx/logger"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -47,6 +50,10 @@ type TunableParams struct {
 	// re-enable after the update rule is fixed (incremental window +
 	// significance test).
 	ShortTunerEnabled *bool `json:"short_tuner_enabled,omitempty"`
+	// ShortTunerLastTunedMs: timestamp of the last SUCCESSFUL weight update —
+	// the incremental-window boundary so the tuner evaluates only NEW samples
+	// instead of re-multiplying the same cohort (P1, 2026-09-26 review).
+	ShortTunerLastTunedMs int64 `json:"short_tuner_last_tuned_ms,omitempty"`
 }
 
 func defaultParams() TunableParams {
@@ -102,6 +109,25 @@ func SetParamsPath(p string) {
 	paramsPath = p
 	paramsLoaded = false
 	paramsMu.Unlock()
+}
+
+// atomicWriteJSON writes data via temp-file + rename so a crash mid-write
+// can never leave a truncated JSON (P2, 2026-09-26 review: the old direct
+// WriteFile could corrupt breakout_params.json on exit, and the next boot
+// silently fell back to defaults). Write errors are LOGGED, not swallowed.
+func atomicWriteJSON(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename %s: %w", tmp, err)
+	}
+	return nil
 }
 
 // GetParams returns a copy of the current tunable parameters (loading from
@@ -160,6 +186,7 @@ func saveParamsLocked() {
 	if err != nil {
 		return
 	}
-	_ = os.MkdirAll("data", 0o755)
-	_ = os.WriteFile(paramsPath, data, 0o644)
+	if err := atomicWriteJSON(paramsPath, data); err != nil {
+		logger.Errorf("⚠️ breakout params persist FAILED (memory-only this run): %v", err)
+	}
 }
