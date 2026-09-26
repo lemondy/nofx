@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ============================================================================
@@ -61,26 +62,29 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	engineConfig := engine.GetConfig()
 	engineConfig.ClampLimits()
 
-	// Token estimation check — block if exceeding the specific model's context limit
+	// The config estimate is an early advisory only. Dynamic prompt content
+	// (raw OHLCV, positions, history and rules) is measured after the prompt is
+	// built; it must never be admitted solely from this static estimate.
 	estimate := engineConfig.EstimateTokens()
 
 	// Determine context limit for the specific model being used
 	contextLimit := 131072 // safe default (strictest common limit)
+	outputReserve := 16384
 	var providerName string
 	if embedder, ok := mcpClient.(mcp.ClientEmbedder); ok {
 		base := embedder.BaseClient()
 		providerName = base.Provider
 		contextLimit = store.GetContextLimitForClient(base.Provider, base.Model)
+		if base.Cfg != nil && base.Cfg.MaxContext > 0 {
+			contextLimit = base.Cfg.MaxContext
+		}
+		if base.MaxTokens > 0 {
+			outputReserve = base.MaxTokens
+		}
 	}
 
-	if estimate.Total > contextLimit {
-		logger.Errorf("🚫 Token estimate %d exceeds %s context limit %d — blocking analysis",
-			estimate.Total, providerName, contextLimit)
-		return nil, fmt.Errorf("estimated %d tokens exceeds model context limit of %d; reduce coins, timeframes, or K-line count",
-			estimate.Total, contextLimit)
-	}
 	if estimate.Total*100/contextLimit >= 80 {
-		logger.Infof("⚠️  Token estimate %d — approaching %s context limit %d",
+		logger.Infof("⚠️  Static token estimate %d — approaching %s context limit %d; final prompt will be measured after rendering",
 			estimate.Total, providerName, contextLimit)
 	}
 
@@ -125,6 +129,23 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 
 	// 3. Build User Prompt using strategy engine
 	userPrompt := engine.BuildUserPrompt(ctx)
+	inputBudget := contextLimit - outputReserve
+	if inputBudget <= 0 {
+		inputBudget = contextLimit / 2
+	}
+	actualPromptTokens := estimateRenderedPromptTokens(systemPrompt, userPrompt)
+	if actualPromptTokens > inputBudget && engineConfig.Indicators.EnableRawKlines {
+		logger.Infof("⚠️  Rendered prompt estimate %d exceeds input budget %d; removing raw OHLCV from the rendered snapshot",
+			actualPromptTokens, inputBudget)
+		userPrompt = stripRawKlinesFromPrompt(userPrompt)
+		actualPromptTokens = estimateRenderedPromptTokens(systemPrompt, userPrompt)
+	}
+	if actualPromptTokens > inputBudget {
+		logger.Errorf("🚫 Rendered prompt estimate %d exceeds %s input budget %d (context %d, output reserve %d)",
+			actualPromptTokens, providerName, inputBudget, contextLimit, outputReserve)
+		return nil, fmt.Errorf("rendered prompt requires approximately %d tokens but model input budget is %d; reduce coins, timeframes, rules, or output token reserve",
+			actualPromptTokens, inputBudget)
+	}
 
 	// 3.5 Regime-level skip (09-19 audit): when EVERY candidate is
 	// double-blocked by the hard gate (no allowed direction, no
@@ -162,11 +183,16 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		allBlocked = allBlocked && allLocked
 		if allBlocked {
 			logger.Infof("⏭️  [Regime Skip] 全部 %d 个候选双向硬门拦截且无持仓 — 跳过本次 LLM 调用,程序合成 wait(下一周期快照自动重评)", len(ctx.CandidateCoins))
+			entryQuality := 0
 			fd := &FullDecision{
 				Decisions: []Decision{{
-					Symbol:    "ALL",
-					Action:    "wait",
-					Reasoning: fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
+					Symbol:          "ALL",
+					Action:          "wait",
+					Reasoning:       fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
+					EntryQuality:    &entryQuality,
+					BlockingFactors: []string{"CONFLICT_UNRESOLVED"},
+					NoTradeReasons:  []string{"全部候选双向硬门拦截", "下一周期快照自动重评"},
+					Stage:           "NO_SETUP",
 				}},
 				SystemPrompt: systemPrompt,
 				UserPrompt:   userPrompt,
@@ -214,6 +240,20 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 			// model stop re-hits the noise-floor rejection (the ZEC/AVAX
 			// wasted-cycle loop this was written to end).
 			correctStopLossToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
+			// Anchor correction can downgrade an already-validated open into a
+			// wait. Re-run action-aware validation so its stage and mandatory
+			// dataset annotations match the final action that will be executed.
+			err = validateDecisions(
+				decision.Decisions,
+				ctx.Account.TotalEquity,
+				riskConfig.BTCETHMaxLeverage,
+				riskConfig.AltcoinMaxLeverage,
+				riskConfig.BTCETHMaxPositionValueRatio,
+				riskConfig.AltcoinMaxPositionValueRatio,
+				engine.EffectiveMinPositionSize(),
+				positionSymbolsFromContext(ctx),
+				ctx.GateStates,
+			)
 		}
 	}
 
@@ -222,6 +262,29 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	}
 
 	return decision, nil
+}
+
+// estimateRenderedPromptTokens counts the content that will actually be sent.
+// ASCII-heavy JSON averages about three characters per token; CJK and other
+// non-ASCII runes can consume one or more tokens, so count them as two. The
+// estimate is deliberately conservative because a truncated decision JSON is
+// unusable and model-specific tokenizers are not available in this package.
+func estimateRenderedPromptTokens(parts ...string) int {
+	total := 0
+	for _, part := range parts {
+		ascii, nonASCII := 0, 0
+		for len(part) > 0 {
+			r, size := utf8.DecodeRuneInString(part)
+			part = part[size:]
+			if r <= 0x7f {
+				ascii++
+			} else {
+				nonASCII++
+			}
+		}
+		total += (ascii+2)/3 + nonASCII*2 + 10
+	}
+	return total
 }
 
 // ============================================================================

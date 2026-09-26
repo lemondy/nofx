@@ -84,6 +84,20 @@ func TestEstimateTokens_HighConfig(t *testing.T) {
 	}
 }
 
+func TestEstimateTokensIncludesRawKlines(t *testing.T) {
+	withRaw := GetDefaultStrategyConfig("en")
+	withRaw.Indicators.EnableRawKlines = true
+	withoutRaw := withRaw
+	withoutRaw.Indicators.EnableRawKlines = false
+
+	rawEstimate := withRaw.EstimateTokens()
+	compactEstimate := withoutRaw.EstimateTokens()
+	if rawEstimate.Breakdown.MarketData <= compactEstimate.Breakdown.MarketData {
+		t.Fatalf("raw OHLCV must increase market-data estimate: raw=%d compact=%d",
+			rawEstimate.Breakdown.MarketData, compactEstimate.Breakdown.MarketData)
+	}
+}
+
 func TestGetContextLimit(t *testing.T) {
 	if got := GetContextLimit("deepseek"); got != 131072 {
 		t.Errorf("deepseek limit = %d, want 131072", got)

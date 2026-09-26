@@ -77,6 +77,9 @@ func TestConcentrationWarnings(t *testing.T) {
 	if len(warns) != 1 || !strings.Contains(warns[0], "BBBUSDT") {
 		t.Fatalf("expected one warning vs BBBUSDT, got %v", warns)
 	}
+	if strings.Contains(warns[0], "同向beta") || !strings.Contains(warns[0], "集中敞口还是对冲") {
+		t.Fatalf("candidate direction is unknown; warning must stay neutral: %v", warns)
+	}
 	// Missing market data fails open.
 	if warns := concentrationWarnings(&Context{}, "AAAUSDT"); len(warns) != 0 {
 		t.Fatalf("no-data must produce no warnings, got %v", warns)

@@ -100,6 +100,9 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	if !validActions[d.Action] {
 		return fmt.Errorf("invalid action: %s", d.Action)
 	}
+	if d.Action == "hold" && !hasPosition {
+		return fmt.Errorf("hold requires an existing position; use wait when flat")
+	}
 
 	// Position-management actions carry required fields (user 2026-09-13:
 	// expose the backend's stop-move/partial-close capabilities to the AI).
@@ -143,6 +146,10 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	if len(d.BlockingFactors) > 0 {
 		d.BlockingFactors = NormalizeBlockingFactors(d.BlockingFactors)
 	}
+	// Required decision annotations are dataset inputs, not trading gates.
+	// Backfill omissions from program-owned hard-gate evidence rather than
+	// accepting sparse rows or rejecting an otherwise safe wait/hold batch.
+	backfillDecisionAnnotations(d, hasPosition, gs)
 	// Position-management self-assessment hygiene (hold on open positions):
 	// clamp quality, strip non-vocabulary flags.
 	if len(d.ManagementFlags) > 0 {
@@ -171,6 +178,8 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		d.WaitState = DeriveWaitStateFromGate(d.WaitBias, gs)
 		if d.WaitState == "" || d.WaitState == "BLOCKED" {
 			d.NextTrigger = "" // only WATCH_*/READY_* carry a re-check trigger
+		} else if d.NextTrigger == "" {
+			d.NextTrigger = "下一周期方向信号更新 + RECHECK_ALL_HARD_GATES"
 		}
 		if st := WaitStateToStage(d.WaitState, d.WaitBias); st != "" {
 			d.Stage = st
@@ -268,6 +277,135 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	}
 
 	return nil
+}
+
+func backfillDecisionAnnotations(d *Decision, hasPosition bool, gs *GateState) {
+	isOpen := strings.HasPrefix(d.Action, "open_long") || strings.HasPrefix(d.Action, "open_short")
+	if d.Action == "wait" || isOpen {
+		if d.EntryQuality == nil {
+			q := d.Confidence
+			if q < 0 {
+				q = 0
+			}
+			d.EntryQuality = &q
+		}
+		if d.BlockingFactors == nil {
+			d.BlockingFactors = []string{}
+		}
+	}
+	if d.Action == "wait" {
+		codes := gateFailureCodes(gs, d.WaitBias)
+		if len(d.BlockingFactors) == 0 {
+			for _, code := range codes {
+				if factor := blockingFactorForGateCode(code); factor != "" {
+					d.BlockingFactors = append(d.BlockingFactors, factor)
+				}
+			}
+			d.BlockingFactors = NormalizeBlockingFactors(d.BlockingFactors)
+		}
+		if len(d.BlockingFactors) == 0 {
+			if d.WaitBias == "long" || d.WaitBias == "short" {
+				d.BlockingFactors = []string{"WAIT_PULLBACK"}
+			} else {
+				d.BlockingFactors = []string{"RANGE_NO_DIRECTION"}
+			}
+		}
+		if len(d.NoTradeReasons) == 0 {
+			for _, code := range codes {
+				if len(d.NoTradeReasons) == 4 {
+					break
+				}
+				if !containsString(d.NoTradeReasons, code) {
+					d.NoTradeReasons = append(d.NoTradeReasons, code)
+				}
+			}
+		}
+		if len(d.NoTradeReasons) == 0 {
+			d.NoTradeReasons = []string{"未形成合规入场条件"}
+		}
+		if len(d.NoTradeReasons) > 4 {
+			d.NoTradeReasons = d.NoTradeReasons[:4]
+		}
+		if len(d.NoTradeReasons) == 1 {
+			d.NoTradeReasons = append(d.NoTradeReasons, "等待下一周期重新评估")
+		}
+	}
+	if d.Action == "hold" && hasPosition {
+		if d.ManagementQuality == nil {
+			q := 50
+			d.ManagementQuality = &q
+		}
+		if d.ManagementFlags == nil {
+			d.ManagementFlags = []string{}
+		}
+		if len(d.NoTradeReasons) == 0 {
+			d.NoTradeReasons = []string{"持仓管理条件未触发", "继续按保护单管理"}
+		} else if len(d.NoTradeReasons) > 4 {
+			d.NoTradeReasons = d.NoTradeReasons[:4]
+		}
+	}
+}
+
+func gateFailureCodes(gs *GateState, waitBias string) []string {
+	if gs == nil {
+		return nil
+	}
+	var source []string
+	switch waitBias {
+	case "long":
+		source = gs.LongFailed
+	case "short":
+		source = gs.ShortFailed
+	default:
+		source = append(append([]string{}, gs.LongFailed...), gs.ShortFailed...)
+	}
+	out := make([]string, 0, len(source))
+	for _, code := range source {
+		if code != "" && !containsString(out, code) {
+			out = append(out, code)
+		}
+	}
+	return out
+}
+
+func blockingFactorForGateCode(code string) string {
+	switch {
+	case strings.HasPrefix(code, "RR_MAX_"):
+		return "RR_LOW"
+	case code == "LIMIT_ANCHOR_SUPPRESSED":
+		return "ANCHOR_SUPPRESSED"
+	case strings.HasPrefix(code, "MICRO_TREND_"):
+		return "TIMING_GATE"
+	case code == "EXTENDED_PUMP_UNCONFIRMED":
+		return "EXTENDED_PUMP"
+	case strings.HasPrefix(code, "STOP_PLAN_"):
+		return "STRUCTURE_CONFLICT"
+	case code == "DATA_INSUFFICIENT":
+		return "DATA_INSUFFICIENT"
+	case code == "MIN_SIZE_DEAD_ZONE":
+		return "MIN_SIZE"
+	case code == "LOSS_STREAK_BANNED":
+		return "LOSS_STREAK_BAN"
+	case strings.HasPrefix(code, "VENDOR_DIVERGENCE_"):
+		return "VENDOR_DIVERGENCE"
+	case strings.HasPrefix(code, "CONSENSUS_OPPOSED_"):
+		return "CONSENSUS_OPPOSED"
+	case code == "POOR_HISTORY":
+		return "POOR_HISTORY"
+	case code == "STOCK_WEEKEND":
+		return "MARKET_CLOSED"
+	default:
+		return "CONFLICT_UNRESOLVED"
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // StopPlanTolerancePct: same echo-drift allowance as the limit anchors — the

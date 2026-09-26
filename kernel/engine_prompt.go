@@ -237,7 +237,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("  - 程序自动机制仍在: 1R 减仓 50%+保本、1.5R 跟踪止损、25% 全平、回撤保护——这些动作是**补充**,不是替代\n")
 	sb.WriteString("- `wait_bias`: wait 决策的方向语义,枚举 \"long\"/\"short\"/留空——见上三类分类;它承载方向判断,directional_score 是它的证据,no_trade_reason 不承载方向判断\n")
 	sb.WriteString("- **`management_quality` + `management_flags`(IN_POSITION hold 必填,数据集字段)**: management_quality 是你对\"继续持有\"这个判断的诚实自评 0-100(90+: 趋势完好+结构无损+浮盈保护已到位;70-89: 持有理由成立但需盯一个风险;50-69: 边缘,理由在弱化;<50: 该考虑离场——此时应输出 close/partial 而不是低分 hold)。management_flags 固定枚举(逐字): BREAKEVEN_WARRANTED|PARTIAL_WARRANTED|TRAIL_SUFFICIENT|TREND_INTACT|STRUCTURE_WEAKENING|CHOP_RISK|VOL_SPIKE|EVENT_RISK。**若你认为该保本/该部分止盈,正确动作是输出 adjust_stop_loss / partial_close_*,而不是 hold+flag**——hold+flag 的语义是\"我判断了,但程序阶梯/时机还没到,暂不动作\"\n")
-	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK|VENDOR_DIVERGENCE|POOR_HISTORY|CONSENSUS_OPPOSED。其中 `LOSS_STREAK_BAN` **只允许用于快照 JSON 里有 `loss_streak` 字段的币**——那是程序按成交记录算出的连亏禁开期;快照没有该字段 = 程序判定未熔断,给这样的币标 LOSS_STREAK_BAN 属于标签造假(09-15 审计:模型曾给刚连胜两笔的币标此标签 17 次)。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。**`confidence` 与 `entry_quality` 是同一口径:填同一个数**(confidence 是执行端闸门字段,entry_quality 是数据集字段——不要给它们不同的值,也不要花预算分别计算)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
+	sb.WriteString("- **`entry_quality` + `blocking_factors`(open_* 与 wait 决策必填,数据集字段)**: entry_quality 是你对自己偏好方向入场质量的诚实自评 0-100——90+: 多周期共振+RR≥3+确认齐全;80-89: 强设置(RR≥2+至少两项确认);70-79: 方向对但缺一项关键条件;60-69: 有雏形缺多项;<60: 仅有雏形。blocking_factors 只能用固定枚举(逐字): RR_LOW|ANCHOR_SUPPRESSED|TIMING_GATE|BREAKOUT_UNCONFIRMED|RANGE_NO_DIRECTION|CONFLICT_UNRESOLVED|CROWDING_HIGH|LOSS_STREAK_BAN|VOL_EXTREME|DATA_INSUFFICIENT|MIN_SIZE|STRUCTURE_CONFLICT|WAIT_PULLBACK|VENDOR_DIVERGENCE|POOR_HISTORY|CONSENSUS_OPPOSED|EXTENDED_PUMP|MARKET_CLOSED。其中 `LOSS_STREAK_BAN` **只允许用于快照 JSON 里有 `loss_streak` 字段的币**——那是程序按成交记录算出的连亏禁开期;快照没有该字段 = 程序判定未熔断,给这样的币标 LOSS_STREAK_BAN 属于标签造假(09-15 审计:模型曾给刚连胜两笔的币标此标签 17 次)。两者必须自洽(所有阻塞标签解除时 entry_quality 应≥80)。**`confidence` 与 `entry_quality` 是同一口径:填同一个数**(confidence 是执行端闸门字段,entry_quality 是数据集字段——不要给它们不同的值,也不要花预算分别计算)。这是质量→胜率回测数据集的原始数据——评分诚实度决定这套数据有没有价值,不许为凑高分虚报\n")
 	sb.WriteString("- **`next_trigger` 对方向性 wait(WATCH_*/READY_*)必填**: 一句话写「触发事件 + RECHECK_ALL_HARD_GATES」——触发事件只是重评条件,事件发生后一切硬门(止损结构/RR≥min/时点/锚点呼吸/min_size/数据质量)必须重新全过,绝不是开仓许可;禁止只写「等15m转down」这类单事件表述(转down≠可开仓)。**时间语义纪律**: 决策在下一周期快照自动重评,禁止输出任何以天/周为尺度的搁置结论(「下周重评」等均为错误措辞)\n")
 
 	sb.WriteString("- **STRICT JSON**: Output raw JSON only — no placeholders (`?`, `？`, `N/A`, `—`) or trailing commas for unknown values. If a value is unknown, use `0` or omit the field entirely\n")
@@ -307,7 +307,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门(程序强制): 4h 趋势窗口(5根)涨幅 ≥ %.0f%% 的币,EMA 多头标签滞后于行情,禁止把暴跌初段当\"趋势回踩\"买入——该方向开仓要求回踩已确认: 15m 收盘收复 EMA20 且 15m 摆动低点抬高(各币快照 pump_guard.extended/confirmed 已程序判定);extended=true 且 confirmed=false 时做多被拒(EXTENDED_PUMP_UNCONFIRMED),no_trade_reason 直接引用该码,不要凭感觉改判;该门与入场时点门独立,两者都过才能做多\n", pg))
 		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
-		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,no_trade_reason 逐项对应 failed 写客观事实,不要凭感觉增减拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)仍可主张——**例外成立与否以程序判定 `market_exception` 为准,且市价开仓在执行端逐条复核(无证据按锚点降级限价,confidence<80 拦截)**;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
+		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,从 failed 去重后按风险优先级选 2-4 项写入 no_trade_reason,不得编造列表外的拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)仍可主张——**例外成立与否以程序判定 `market_exception` 为准,且市价开仓在执行端逐条复核(无证据按锚点降级限价,confidence<80 拦截)**;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门(程序强制): K线数据源与实时行情偏差超过 %.1f%% 时,该币两个方向的开仓都被拦(VENDOR_DIVERGENCE)——entry/SL/TP 全部按实时价定价,数据源偏差过大使整套设置失真(09-18 MYXUSDT −2.57%% 教训);阈值可在策略页配置\n", v))
 		}
@@ -525,6 +525,23 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		if ctx.TradingStats.WindowDays > 0 {
 			windowLabel = fmt.Sprintf("近%d天", ctx.TradingStats.WindowDays)
 		}
+		// Strategy health is language-independent program truth. Compute it
+		// once, then localize only the prose below so switching the prompt
+		// language cannot change the model's risk posture.
+		edge := "POSITIVE_EDGE"
+		if ctx.TradingStats.ProfitFactor < 0.9 {
+			edge = "NEGATIVE_EDGE"
+		} else if ctx.TradingStats.ProfitFactor < 1.1 {
+			edge = "NO_EDGE"
+		}
+		expR := expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)
+		expSourceZH := "估算,亏损按-1R假设"
+		expSourceEN := "estimated, losses assumed -1R"
+		if ctx.TradingStats.MeasuredRSamples >= MinMeasuredRSamples {
+			expR = ctx.TradingStats.MeasuredExpectancyR
+			expSourceZH = fmt.Sprintf("实测,%d笔R", ctx.TradingStats.MeasuredRSamples)
+			expSourceEN = fmt.Sprintf("measured,%d R samples", ctx.TradingStats.MeasuredRSamples)
+		}
 
 		if lang == LangChinese {
 			if statsWindowDays > 0 {
@@ -545,30 +562,15 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 				ctx.TradingStats.AvgLoss,
 				ctx.TradingStats.MaxDrawdownPct))
 
-			// Performance hints based on profit factor, sharpe, and drawdown
-			// ⑲ machine-readable edge status: NEGATIVE_EDGE tightens the
-			// trade-selection bar instead of relying on prose encouragement.
-			edge := "POSITIVE_EDGE"
-			if ctx.TradingStats.ProfitFactor < 0.9 {
-				edge = "NEGATIVE_EDGE"
-			} else if ctx.TradingStats.ProfitFactor < 1.1 {
-				edge = "NO_EDGE"
-			}
 			// expectancy_r: MEASURED from journal R multiples when enough
 			// planned-stop trades exist; the old estimate assumed every loser
 			// = −1R while the real baseline measured −0.70R — a systematic
 			// pessimism the model read every cycle (E1, QUANT_REVIEW 09-22).
 			// The label states which caliber rendered.
-			expR := expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)
-			expSource := "估算,亏损按-1R假设"
-			if ctx.TradingStats.MeasuredRSamples >= MinMeasuredRSamples {
-				expR = ctx.TradingStats.MeasuredExpectancyR
-				expSource = fmt.Sprintf("实测,%d笔R", ctx.TradingStats.MeasuredRSamples)
-			}
 			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
-				edge, ctx.TradingStats.ProfitFactor, expR, expSource, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
+				edge, ctx.TradingStats.ProfitFactor, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
 			if edge == "NEGATIVE_EDGE" {
-				sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置,其余一律 hold 并在 no_trade_reason 写明\n", windowLabel))
+				sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置;无持仓候选一律 wait,已有持仓按管理规则 hold/close,并在 no_trade_reason 写明\n", windowLabel))
 			}
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("表现: 良好 - 保持当前策略\n")
@@ -599,6 +601,11 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 				ctx.TradingStats.AvgWin,
 				ctx.TradingStats.AvgLoss,
 				ctx.TradingStats.MaxDrawdownPct))
+			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, window %s)\n",
+				edge, ctx.TradingStats.ProfitFactor, expR, expSourceEN, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, enWindow))
+			if edge == "NEGATIVE_EDGE" {
+				sb.WriteString(fmt.Sprintf("⚠️ The strategy has no positive edge in the %s window (PF<0.9): only take exceptionally strong, multi-timeframe setups with clearly superior RR; flat candidates must use wait, while existing positions follow hold/close management rules, with no_trade_reason populated.\n", enWindow))
+			}
 
 			// Performance hints based on profit factor, sharpe, and drawdown
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
@@ -751,6 +758,68 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	sb.WriteString("Now please analyze and output your decision (Chain of Thought + JSON)\n")
 
 	return sb.String()
+}
+
+// stripRawKlinesFromPrompt removes only top-level signal "ohlcv" JSON values
+// from an already rendered prompt. This preserves the exact gate/timestamp
+// snapshot and avoids recomputing signals or repeating live-data calls during
+// context-budget degradation.
+func stripRawKlinesFromPrompt(prompt string) string {
+	const marker = `,"ohlcv":`
+	for {
+		markerAt := strings.Index(prompt, marker)
+		if markerAt < 0 {
+			return prompt
+		}
+		valueAt := markerAt + len(marker)
+		valueEnd, ok := jsonCompositeEnd(prompt, valueAt)
+		if !ok {
+			return prompt // fail closed: never corrupt the surrounding signal JSON
+		}
+		prompt = prompt[:markerAt] + prompt[valueEnd:]
+	}
+}
+
+func jsonCompositeEnd(s string, start int) (int, bool) {
+	if start >= len(s) || (s[start] != '{' && s[start] != '[') {
+		return 0, false
+	}
+	open := s[start]
+	close := byte('}')
+	if open == '[' {
+		close = ']'
+	}
+	depth := 0
+	inString, escaped := false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			continue
+		}
+		switch c {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Context) string {
@@ -1729,7 +1798,18 @@ func (e *StrategyEngine) renderSignalBlock(sig *SymbolSignal) string {
 	}
 
 	sb.WriteString(fmt.Sprintf("=== %s Structured Signal (all times UTC, closed candles only) ===\n", sig.Symbol))
-	sb.WriteString(RenderSignalJSON(sig))
+	// External news contains provider-controlled free-form text. Keep it in
+	// application data, but remove raw headlines and URLs at the execution
+	// prompt boundary: JSON escaping does not prevent semantic prompt injection.
+	promptSignal := sig
+	if sig.Derivatives != nil && len(sig.Derivatives.News) > 0 {
+		copySig := *sig
+		copyDerivatives := *sig.Derivatives
+		copyDerivatives.News = nil
+		copySig.Derivatives = &copyDerivatives
+		promptSignal = &copySig
+	}
+	sb.WriteString(RenderSignalJSON(promptSignal))
 	sb.WriteString("\n")
 	return sb.String()
 }
@@ -1758,8 +1838,21 @@ func renderBlockedCoinLine(sig *SymbolSignal) string {
 		}
 		return strings.Join(g.Failed, "+")
 	}
-	return fmt.Sprintf("- long: %s | short: %s → 输出 wait,no_trade_reason 逐项引用上述阻断码,不要再展开分析",
-		fmtDir(sig.HardGate.Long), fmtDir(sig.HardGate.Short))
+	score := 0
+	if sig.SignalConflict != nil {
+		score = sig.SignalConflict.DirectionalScore
+	}
+	bias := "unknown"
+	if sig.Bias != nil {
+		bias = fmt.Sprintf("scanner=%s,structure=%s,execution=%s", sig.Bias.Scanner, sig.Bias.Structure, sig.Bias.Execution)
+	}
+	history := ""
+	if sig.TraderHistory != nil {
+		history = fmt.Sprintf(" | history=%d trades,win_rate=%.0f%%,pnl=%+.2fU",
+			sig.TraderHistory.ClosedTrades, sig.TraderHistory.WinRatePct, sig.TraderHistory.RealizedPnL)
+	}
+	return fmt.Sprintf("- directional_score: %+d | bias: %s%s | hard_blockers.long: %s | hard_blockers.short: %s → 输出 wait;保留上述完整阻断集合,但 no_trade_reason 仅选去重后优先级最高的 2-4 项,blocking_factors 使用对应固定枚举,不要再展开分析",
+		score, bias, history, fmtDir(sig.HardGate.Long), fmtDir(sig.HardGate.Short))
 }
 
 // oneHAgainstCandles counts the trailing consecutive CLOSED 1h candles that
@@ -2042,9 +2135,9 @@ func closes1hFromMarketData(data *market.Data) []float64 {
 }
 
 // concentrationWarnings lists open positions whose 1h returns are highly
-// correlated with the candidate's — the account stacking the same beta
-// factor without noticing. Same-direction positions only (a hedge is not
-// concentration). Pure over the shared snapshot: no extra API calls.
+// correlated with the candidate's. Candidate direction is not known while
+// building the prompt, so this is neutral evidence; the model applies it only
+// after selecting long/short. Pure over the shared snapshot: no extra calls.
 func concentrationWarnings(ctx *Context, symbol string) []string {
 	cand := closes1hFromMarketData(ctx.MarketDataMap[symbol])
 	if len(cand) == 0 {
@@ -2061,7 +2154,7 @@ func concentrationWarnings(ctx *Context, symbol string) []string {
 		}
 		r := pearsonOfReturns(cand, posCloses)
 		if r >= 0.75 {
-			out = append(out, fmt.Sprintf("与持仓%s相关性%.2f(同向beta敞口,注意集中度)", p.Symbol, r))
+			out = append(out, fmt.Sprintf("与持仓%s的1h收益相关性%.2f(方向确定后再判断是集中敞口还是对冲)", p.Symbol, r))
 		}
 	}
 	return out

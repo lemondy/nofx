@@ -1027,9 +1027,10 @@ func (c *StrategyConfig) EstimateTokens() TokenEstimate {
 		klineCount = 20
 	}
 
-	// Per coin per timeframe: the structured signal renders DERIVED fields
-	// (trend/indicators/levels/quality), not raw klines — cost is constant
-	// per TF regardless of kline count.
+	// Per coin per timeframe: structured derived fields are constant-size.
+	// When raw klines are enabled the prompt also carries five numeric values
+	// per closed bar, so include that dominant dynamic cost in the advisory
+	// estimate. The execution path still measures the fully rendered prompt.
 	charsPerCoinTF := 450
 
 	// Add enabled indicator overhead per timeframe
@@ -1052,9 +1053,14 @@ func (c *StrategyConfig) EstimateTokens() TokenEstimate {
 	if c.Indicators.EnableVolume {
 		indicatorCharsPerLine += 10
 	}
-	_ = klineCount // indicator detail is folded into the 450-char structured block
-
+	charsPerCoinTF += indicatorCharsPerLine
 	totalMarketChars := numCoins * numTimeframes * charsPerCoinTF
+	if c.Indicators.EnableRawKlines {
+		// [open,high,low,close,volume] plus commas/brackets. Sixty chars per
+		// bar is conservative for the rounded numeric JSON emitted by the
+		// signal renderer.
+		totalMarketChars += numCoins * numTimeframes * klineCount * 60
+	}
 
 	// OI + Funding per coin
 	if c.Indicators.EnableOI || c.Indicators.EnableFundingRate {

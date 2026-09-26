@@ -193,10 +193,7 @@ func TestDeriveDecisionStage(t *testing.T) {
 		t.Fatalf("declared stage %q survived; want derived IN_POSITION", d.Stage)
 	}
 	d2 := Decision{Symbol: "TUSDT", Action: "hold", Stage: "TRIGGERED"}
-	if err := validateDecision(&d2, 100, 3, 3, 1, 1, 12, false, nil); err != nil {
-		t.Fatalf("flat hold must validate: %v", err)
-	}
-	if d2.Stage != "NO_SETUP" {
-		t.Fatalf("declared stage %q survived; want derived NO_SETUP", d2.Stage)
+	if err := validateDecision(&d2, 100, 3, 3, 1, 1, 12, false, nil); err == nil {
+		t.Fatal("flat hold must be rejected; a flat symbol uses wait")
 	}
 }

@@ -68,7 +68,7 @@ func TestWaitStateHygiene(t *testing.T) {
 
 	// Non-wait actions never carry the annotation.
 	d5 := Decision{Symbol: "XUSDT", Action: "hold", WaitState: "READY_LONG", NextTrigger: "junk"}
-	if err := validateDecision(&d5, 52, 10, 5, 10, 1.5, 12, false, nil); err != nil {
+	if err := validateDecision(&d5, 52, 10, 5, 10, 1.5, 12, true, nil); err != nil {
 		t.Fatalf("hold rejected: %v", err)
 	}
 	if d5.WaitState != "" || d5.NextTrigger != "" {
