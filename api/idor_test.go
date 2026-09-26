@@ -175,3 +175,65 @@ func TestIDORDelateScopedEquity(t *testing.T) {
 		t.Fatal("own delete must remove the trader row")
 	}
 }
+
+// Public equity-history regression (2026-09-26): the IDOR fix made
+// getTraderFromQuery require a user, silently 400ing every unauthenticated
+// dashboard call. The public resolver must serve competition-visible
+// traders and reject hidden/missing ones identically.
+func TestPublicEquityHistoryVisibility(t *testing.T) {
+	srv, _, _, userA, _ := idorFixture(t)
+	st := srv.store
+
+	// trader-A: visible (default true). A hidden twin for the contrast.
+	// (Create+false field alone doesn't stick: GORM's default:true tag omits
+	// zero-value bools from the INSERT, so the DB default wins — flip it via
+	// the explicit update path instead.)
+	if err := st.Trader().Create(&store.Trader{ID: "trader-hidden", UserID: userA, Name: "H"}); err != nil {
+		t.Fatalf("seed hidden trader: %v", err)
+	}
+	if err := st.Trader().UpdateShowInCompetition(userA, "trader-hidden", false); err != nil {
+		t.Fatalf("hide trader: %v", err)
+	}
+
+	r := gin.New()
+	r.GET("/pub-equity", func(c *gin.Context) {
+		id, err := srv.getTraderIDPublic(c)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"trader_id": id})
+	})
+
+	// Visible trader → 200.
+	req := httptest.NewRequest(http.MethodGet, "/pub-equity?trader_id=trader-A", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("visible trader must resolve, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Hidden trader → same error as missing (no existence oracle).
+	req2 := httptest.NewRequest(http.MethodGet, "/pub-equity?trader_id=trader-hidden", nil)
+	rec2 := httptest.NewRecorder()
+	r.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("hidden trader must NOT resolve, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// Missing trader → same error.
+	req3 := httptest.NewRequest(http.MethodGet, "/pub-equity?trader_id=trader-ghost", nil)
+	rec3 := httptest.NewRecorder()
+	r.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusNotFound {
+		t.Fatalf("missing trader must 404, got %d", rec3.Code)
+	}
+
+	// Empty trader_id → error.
+	req4 := httptest.NewRequest(http.MethodGet, "/pub-equity", nil)
+	rec4 := httptest.NewRecorder()
+	r.ServeHTTP(rec4, req4)
+	if rec4.Code != http.StatusNotFound {
+		t.Fatalf("missing trader_id must 404, got %d", rec4.Code)
+	}
+}

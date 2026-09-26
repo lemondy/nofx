@@ -122,7 +122,10 @@ func (s *Server) handleCompetition(c *gin.Context) {
 // handleEquityHistory Return rate historical data
 // Query directly from database, not dependent on trader in memory (so historical data can be retrieved after restart)
 func (s *Server) handleEquityHistory(c *gin.Context) {
-	_, traderID, err := s.getTraderFromQuery(c)
+	// PUBLIC route — the authed getTraderFromQuery broke it after the IDOR
+	// fix (user_id is empty here, every call 400'd). Public resolver with
+	// the competition-visibility gate instead (2026-09-26).
+	traderID, err := s.getTraderIDPublic(c)
 	if err != nil {
 		SafeBadRequest(c, "Invalid trader ID")
 		return
@@ -310,7 +313,16 @@ func (s *Server) handleEquityHistoryBatch(c *gin.Context) {
 		requestBody.TraderIDs = requestBody.TraderIDs[:20]
 	}
 
-	result := s.getEquityHistoryForTraders(requestBody.TraderIDs, requestBody.Hours)
+	// Public route: only competition-visible traders may be queried (the
+	// per-trader equity curve is the same surface as the leaderboard).
+	visible := make([]string, 0, len(requestBody.TraderIDs))
+	for _, id := range requestBody.TraderIDs {
+		if t, err := s.store.Trader().GetByID(id); err == nil && t != nil && t.ShowInCompetition {
+			visible = append(visible, id)
+		}
+	}
+
+	result := s.getEquityHistoryForTraders(visible, requestBody.Hours)
 	c.JSON(http.StatusOK, result)
 }
 

@@ -582,6 +582,25 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
+// getTraderIDPublic resolves a trader_id for PUBLIC display endpoints
+// (equity-history, competition views). No auth — but the trader must exist
+// AND be flagged show_in_competition (the same visibility the public
+// leaderboard honors): IDOR fix (643be58d) made the authed helper
+// user-scoped, which silently broke these unauthenticated dashboard calls
+// (400 for every request). Returns the ID or an error; no manager load.
+func (s *Server) getTraderIDPublic(c *gin.Context) (string, error) {
+	traderID := c.Query("trader_id")
+	if traderID == "" {
+		return "", fmt.Errorf("trader_id is required")
+	}
+	t, err := s.store.Trader().GetByID(traderID)
+	if err != nil || t == nil || !t.ShowInCompetition {
+		// Same error for missing and hidden — no existence oracle.
+		return "", fmt.Errorf("trader not found")
+	}
+	return traderID, nil
+}
+
 // getTraderFromQuery resolves the query trader FOR THE AUTHENTICATED USER
 // (IDOR fix, 2026-09-25 P1): an explicitly provided trader_id must pass
 // WHERE id = ? AND user_id = ? — the manager's in-memory map is NOT an
