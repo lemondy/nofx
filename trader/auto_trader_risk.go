@@ -1240,6 +1240,103 @@ func missingProtection(orders []types.OpenOrder, positionSide string) (needSL, n
 // trend-run (the trail owns the exit); wrong-side plan prices are logged
 // instead of placed; every check fails open. The AI has no place-SL/TP
 // action — without this watchdog a naked position stays naked.
+// orphanProtectiveOrder reports whether one protective order's position is
+// GONE: hedge mode matches the exact side; one-way mode books orders as
+// BOTH — alive if ANY position exists on the symbol. LIMIT entries are
+// never protective and are excluded by the caller's type filter.
+func orphanProtectiveOrder(o types.OpenOrder, live map[string]bool) bool {
+	ps := strings.ToUpper(o.PositionSide)
+	switch ps {
+	case "LONG":
+		return !live[strings.ToUpper(o.Symbol)+"_long"]
+	case "SHORT":
+		return !live[strings.ToUpper(o.Symbol)+"_short"]
+	default: // BOTH / "" — one-way mode
+		return !live[strings.ToUpper(o.Symbol)+"_long"] && !live[strings.ToUpper(o.Symbol)+"_short"]
+	}
+}
+
+// sweepOrphanedProtection cancels SL/TP orders whose position has vanished
+// (user directive 2026-09-26): SL/TP triggers and external closes can leave
+// the OTHER leg resting forever — it would trigger on a future re-opened
+// position at a stale price. Scoped to symbols the system has tracked (AI
+// marks, pending entries, first-seen keys); candidates with a live position
+// on the matching side are skipped.
+func (at *AutoTrader) sweepOrphanedProtection(positions []map[string]interface{}) {
+	if at.config.StrategyConfig != nil && at.config.StrategyConfig.StrategyType == "grid_trading" {
+		return // grid keeps its own order books
+	}
+	live := make(map[string]bool, len(positions))
+	symbols := make(map[string]bool)
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		side, _ := pos["side"].(string)
+		if symbol == "" || side == "" {
+			continue
+		}
+		symbol = strings.ToUpper(symbol)
+		symbols[symbol] = true
+		live[symbol+"_"+strings.ToLower(side)] = true
+	}
+	// Candidate symbols: everything the system has ever tracked protection
+	// for (AI marks, first-seen keys, pending entries) plus current
+	// position symbols (mixed partial-mismatch cases).
+	for _, m := range func() []store.AIManagedPosition {
+		if at.store == nil {
+			return nil
+		}
+		ms, _ := at.store.AIManaged().List(at.id)
+		return ms
+	}() {
+		symbols[strings.ToUpper(m.Symbol)] = true
+	}
+	for key := range at.positionFirstSeenTime {
+		parts := strings.SplitN(key, "_", 2)
+		if len(parts) == 2 {
+			symbols[strings.ToUpper(parts[0])] = true
+		}
+	}
+	for _, key := range at.snapshotPendingKeys() {
+		// key form: symbol_side
+		parts := strings.SplitN(key, "_", 2)
+		if len(parts) == 2 {
+			symbols[strings.ToUpper(parts[0])] = true
+		}
+	}
+
+	canceller, canSide := at.trader.(interface {
+		CancelProtectiveOrdersForSide(symbol, positionSide string) error
+	})
+	for symbol := range symbols {
+		orders, err := at.trader.GetOpenOrders(symbol)
+		if err != nil || len(orders) == 0 {
+			continue
+		}
+		for _, o := range orders {
+			t := strings.ToUpper(o.Type)
+			if !strings.Contains(t, "STOP") && !strings.Contains(t, "TAKE_PROFIT") {
+				continue // LIMIT entries etc. are not protection
+			}
+			if !orphanProtectiveOrder(o, live) {
+				continue
+			}
+			ps := strings.ToUpper(o.PositionSide)
+			if canSide {
+				if err := canceller.CancelProtectiveOrdersForSide(o.Symbol, ps); err != nil {
+					logger.Infof("⚠️ [%s] orphan sweep: cancel %s %s failed: %v", at.name, o.Symbol, ps, err)
+					continue
+				}
+			} else {
+				// Adapters without the side-scoped cancel: cancel only the
+				// SL half is wrong (TP would linger) — skip rather than
+				// half-clean; Binance (the live exchange) has the capability.
+				continue
+			}
+			logger.Infof("🧹 [%s] orphan sweep: cancelled %s protection for %s %s — no matching position", at.name, o.Type, o.Symbol, o.PositionSide)
+		}
+	}
+}
+
 func (at *AutoTrader) processProtectionWatchdog() {
 	if at.config.StrategyConfig == nil {
 		return
@@ -1352,6 +1449,9 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🛡️ 保护单补挂 %s</b>\n<i>%s(按开仓计划价自动补挂)</i>", notify.Escape(symbol), strings.Join(repaired, " + ")))
 		}
 	}
+	// Per-cycle orphan sweep (user directive 2026-09-26): protective orders
+	// whose position has vanished are cancelled.
+	at.sweepOrphanedProtection(positions)
 }
 
 // placeComputedProtection: the naked-position fallback (09-19 user directive
