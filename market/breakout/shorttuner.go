@@ -259,18 +259,31 @@ func RunShortTuner(now time.Time) {
 		if len(eval) >= shortTunerMinSamples {
 			w := shortWeights()
 			newW, ok := updateShortWeights(eval, w, shortTunerEta)
-			if !ok {
-				logger.Infof("🩸 Short tuner: %d samples but no component passed significance (|corr| ≥ %.2f, n ≥ %d) — weights unchanged", len(eval), shortTunerMinCorr, shortTunerMinComponentN)
-			} else if !weightsClose(newW, w) {
+			// Cursor = max consumed sample TS (P1, 2026-09-26 re-review):
+			// time.Now() would jump PAST the most recent 24h of samples that
+			// have not matured yet — they'd never be selected once they did.
+			cursor := lastTuned
+			for _, s := range eval {
+				if s.TS > cursor {
+					cursor = s.TS
+				}
+			}
+			switch {
+			case !ok:
+				logger.Infof("🩸 Short tuner: %d samples but no component passed significance (|corr| ≥ %.2f, n ≥ %d) — weights unchanged, cursor advanced to %d", len(eval), shortTunerMinCorr, shortTunerMinComponentN, cursor)
+				p := GetParams()
+				p.ShortTunerLastTunedMs = cursor
+				ApplyParams(p)
+			case !weightsClose(newW, w):
 				p := GetParams()
 				p.ShortWeights = newW
-				p.ShortTunerLastTunedMs = time.Now().UnixMilli()
+				p.ShortTunerLastTunedMs = cursor
 				ApplyParams(p)
 				logger.Infof("🩸 Short tuner: weights updated from %d NEW samples (since last tune): %v", len(eval), formatWeights(newW))
 				changed = true
-			} else {
+			default:
 				p := GetParams()
-				p.ShortTunerLastTunedMs = time.Now().UnixMilli()
+				p.ShortTunerLastTunedMs = cursor
 				ApplyParams(p)
 			}
 		}

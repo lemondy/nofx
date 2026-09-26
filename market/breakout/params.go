@@ -141,12 +141,20 @@ func GetParams() TunableParams {
 
 // ApplyParams merges new values (clamped) and persists.
 func ApplyParams(p TunableParams) {
+	_ = ApplyParamsChecked(p)
+}
+
+// ApplyParamsChecked applies and returns the PERSIST error (P2, 2026-09-26
+// re-review: a memory-only update that failed to save must not be reported
+// as a successful tune — the scheduler would write the 7-day marker and the
+// change would silently vanish on restart).
+func ApplyParamsChecked(p TunableParams) error {
 	paramsMu.Lock()
 	defer paramsMu.Unlock()
 	loadParamsLocked()
 	p.UpdatedAt = time.Now()
 	currentParams = clampParams(p)
-	saveParamsLocked()
+	return saveParamsChecked()
 }
 
 func clampParams(p TunableParams) TunableParams {
@@ -182,11 +190,15 @@ func loadParamsLocked() {
 }
 
 func saveParamsLocked() {
-	data, err := json.MarshalIndent(currentParams, "", "  ")
-	if err != nil {
-		return
-	}
-	if err := atomicWriteJSON(paramsPath, data); err != nil {
+	if err := saveParamsChecked(); err != nil {
 		logger.Errorf("⚠️ breakout params persist FAILED (memory-only this run): %v", err)
 	}
+}
+
+func saveParamsChecked() error {
+	data, err := json.MarshalIndent(currentParams, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal params: %w", err)
+	}
+	return atomicWriteJSON(paramsPath, data)
 }

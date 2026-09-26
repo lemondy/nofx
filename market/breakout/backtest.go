@@ -83,6 +83,22 @@ const backtestPath = "data/breakout_backtest.json"
 // used to report success and sleep the full 7 days).
 var ErrStarved = errors.New("backtest starved: insufficient signals")
 
+// sliceClosed keeps only bars that have fully CLOSED by time t — filtered by
+// CLOSE time (OpenTime+dur), not open time: a bar that opened before the
+// signal but closes after it stores its FINAL OHLC, which is future data
+// (P1, 2026-09-26 re-review). Package-level so tests pin it directly.
+func sliceClosed(bars []Kline, t time.Time, barDur time.Duration) []Kline {
+	out := make([]Kline, 0, len(bars))
+	for _, k := range bars {
+		// <= : a bar closing EXACTLY at the signal time is fully known and
+		// legitimate input (reviewer rule: OpenTime+dur <= signalCloseTime).
+		if !time.UnixMilli(k.OpenTime).Add(barDur).After(t) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // RunBacktest replays the scorer over historical 15m klines for the given
 // symbols and returns the signal outcomes. Scores carry the ONLINE penalty
 // layers that are kline-replayable (extended-pattern ×0.65, BTC-regime
@@ -124,17 +140,8 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 		// bias). Levels now rebuild at most once per UTC day from data
 		// SLICED to the signal time; a signal can never see a future bar.
 		now0 := time.UnixMilli(k15[btWarmupBars].OpenTime)
-		sliceTo := func(bars []Kline, t time.Time) []Kline {
-			out := bars[:0]
-			for _, k := range bars {
-				if time.UnixMilli(k.OpenTime).Before(t) {
-					out = append(out, k)
-				}
-			}
-			return out
-		}
 		currentDay := now0.UTC().Format("2006-01-02")
-		levels := buildLevels(sliceTo(d1, now0), sliceTo(k1h, now0))
+		levels := buildLevels(sliceClosed(d1, now0, 24*time.Hour), sliceClosed(k1h, now0, time.Hour))
 
 		end := len(k15) - btForwardBars24h
 		for i := btWarmupBars; i < end; i += 3 { // stride 3 keeps cost sane
@@ -143,7 +150,7 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			sigTime := barTime
 			if day := sigTime.UTC().Format("2006-01-02"); day != currentDay {
 				currentDay = day
-				levels = buildLevels(sliceTo(d1, sigTime), sliceTo(k1h, sigTime))
+				levels = buildLevels(sliceClosed(d1, sigTime, 24*time.Hour), sliceClosed(k1h, sigTime, time.Hour))
 			}
 			levelsHere := levels
 			sh := &shared{} // point-in-time OI/funding/depth are unavailable historically — context dims score neutral
@@ -374,8 +381,9 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	summary.Params = params
 
 	if data, err := json.MarshalIndent(summary, "", "  "); err == nil {
-		_ = os.MkdirAll("data", 0o755)
-		_ = os.WriteFile(backtestPath, data, 0o644)
+		if err := atomicWriteJSON(backtestPath, data); err != nil {
+			logger.Errorf("⚠️ backtest summary persist FAILED: %v", err)
+		}
 	}
 
 	if len(changes) == 0 {
@@ -487,7 +495,12 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 	next.UpdatedAt = time.Now()
 	next.BacktestAt = time.Now()
 	next.Samples = len(signals)
-	ApplyParams(next)
+	// P2 (2026-09-26 re-review): a persist failure must FAIL the tune — the
+	// scheduler would otherwise write the 7-day marker for a change that
+	// lives only in memory and dies on restart.
+	if err := ApplyParamsChecked(next); err != nil {
+		return append(changes, "PERSIST FAILED: "+err.Error()), verified, rejected, trainN, testN
+	}
 	return changes, verified, rejected, trainN, testN
 }
 

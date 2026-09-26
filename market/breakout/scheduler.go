@@ -105,9 +105,22 @@ func (s *Scheduler) Start() {
 			time.Sleep(30 * time.Second)
 			const tuneInterval = 7 * 24 * time.Hour
 			pendingRetry := false
+			// P1 (2026-09-26 re-review): a marker written by the OLD binary
+			// reporting SUCCESS on a starved run (signals < minimum) must not
+			// silence tuning until its 7-day expiry — treat it as due.
+			markerStarved := func() bool {
+				sum, err := LoadBacktestSummary()
+				if err != nil || sum == nil {
+					return false // no summary → the marker alone decides
+				}
+				return sum.Signals < btMinSample
+			}
 			due := func() bool {
 				la := lastTuneAttempt()
-				return la.IsZero() || time.Since(la) >= tuneInterval
+				if la.IsZero() || time.Since(la) >= tuneInterval {
+					return true
+				}
+				return markerStarved()
 			}
 			starvedUntil := time.Time{}
 			run := func() {
@@ -136,7 +149,11 @@ func (s *Scheduler) Start() {
 			for {
 				select {
 				case <-hour.C:
-					if due() {
+					// P1: starvedUntil gates THIS branch too — the 24h backoff
+					// was only consulted in the 10-minute retry path, while
+					// due() stayed true after starved runs (no success marker)
+					// and re-ran the backtest hourly.
+					if due() && time.Now().After(starvedUntil) {
 						run()
 					}
 				case <-retry.C:
