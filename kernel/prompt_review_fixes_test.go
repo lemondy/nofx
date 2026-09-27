@@ -73,14 +73,19 @@ func TestBlockedCandidateCompressionKeepsDecisionContext(t *testing.T) {
 		Bias:           &BiasBlock{Scanner: "none", Structure: "long", Execution: "none"},
 		TraderHistory:  &TraderHistoryStat{ClosedTrades: 5, WinRatePct: 20, RealizedPnL: -3},
 	}
-	line := renderBlockedCoinLine(sig)
-	for _, want := range []string{"directional_score: +100", "structure=long", "history=5 trades", "hard_blockers.long", "2-4"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("compressed line missing %q: %s", want, line)
+	table := renderBlockedCoinTable([]blockedCoinRow{{symbol: "TESTUSDT", sig: sig}}, 0)
+	for _, want := range []string{"directional_score", "+100", "long/none", "RR_MAX_0.50", "POOR_HISTORY", "CONSENSUS_OPPOSED_100", "VENDOR_DIVERGENCE_1.20", "5 trades,win 20%,-3.00U"} {
+		if !strings.Contains(table, want) {
+			t.Fatalf("blocked table missing %q:\n%s", want, table)
 		}
 	}
-	if strings.Contains(line, "逐项引用") {
-		t.Fatalf("compressed line retained the contradictory cite-every-code rule: %s", line)
+	// The mechanical-wait rule lives in the section header, stated ONCE —
+	// not repeated per row.
+	if n := strings.Count(table, "2-4"); n != 1 {
+		t.Fatalf("wait instruction must appear exactly once, got %d:\n%s", n, table)
+	}
+	if strings.Contains(table, "逐项引用") {
+		t.Fatalf("blocked table retained the contradictory cite-every-code rule:\n%s", table)
 	}
 }
 
@@ -108,11 +113,13 @@ func TestStrategyHealthIsLanguageIndependent(t *testing.T) {
 		if !strings.Contains(out, "strategy_health: NEGATIVE_EDGE") {
 			t.Fatalf("%s prompt missing strategy health: %s", lang, out)
 		}
-		if lang == "zh" && (!strings.Contains(out, "无持仓候选一律 wait") || strings.Contains(out, "其余一律 hold")) {
-			t.Fatalf("Chinese NEGATIVE_EDGE action guidance is inconsistent: %s", out)
+		// 09-27 review #4: the health gate is now program-enforced — the
+		// prose NAMES the resolved thresholds instead of vague "极强/占优".
+		if lang == "zh" && (!strings.Contains(out, "NEG_EDGE_TREND_MISALIGNED") || !strings.Contains(out, "|directional_score| ≥ 80") || strings.Contains(out, "证据极强")) {
+			t.Fatalf("Chinese NEGATIVE_EDGE prose must carry the programmatic gate: %s", out)
 		}
-		if lang == "en" && !strings.Contains(out, "flat candidates must use wait") {
-			t.Fatalf("English NEGATIVE_EDGE action guidance missing: %s", out)
+		if lang == "en" && (!strings.Contains(out, "PROGRAM-ENFORCED") || strings.Contains(out, "exceptionally strong")) {
+			t.Fatalf("English NEGATIVE_EDGE prose must carry the programmatic gate: %s", out)
 		}
 	}
 }

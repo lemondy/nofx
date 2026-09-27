@@ -174,6 +174,12 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		}
 		allLocked := true
 		for _, p := range ctx.Positions {
+			// Manual positions have NO legal model action this cycle (hold
+			// only, user review 2026-09-27 #3) — they must never force the
+			// LLM call the way an actionable AI position does.
+			if !p.Managed {
+				continue
+			}
 			md := ctx.MarketDataMap[p.Symbol]
 			if locked, _ := positionCloseLocked(p, md, &engine.GetConfig().RiskControl); !locked {
 				allLocked = false // fail-open: unknown hold age or live data → call the LLM

@@ -327,6 +327,14 @@ type KlineConfig struct {
 	EnableMultiTimeframe bool `json:"enable_multi_timeframe"`
 	// selected timeframe list (new: supports multi-timeframe selection)
 	SelectedTimeframes []string `json:"selected_timeframes,omitempty"`
+	// PromptKlineBars caps how many CLOSED bars per timeframe the LLM prompt
+	// carries (user review 2026-09-27: 60 bars × 4 TFs ≈ 9.9k chars ≈ 63% of
+	// a full signal, while every traded field is already program-computed).
+	// The full PrimaryCount history still feeds the indicators and stays
+	// re-fetchable from the exchange; the prompt keeps the newest N bars +
+	// a per-TF last-closed timestamp. 0 = default 20; negative = full
+	// PrimaryCount (legacy / audit escape hatch).
+	PromptKlineBars int `json:"prompt_kline_bars,omitempty"`
 }
 
 // ExternalDataSource external data source configuration
@@ -379,6 +387,25 @@ type RiskControlConfig struct {
 	// whole setup (MYXUSDT 09-18: −2.57%). 0 = default 1%; negative =
 	// disabled. Surfaced via hard_entry_gate.failed VENDOR_DIVERGENCE_x.xx.
 	MaxVendorDivergencePct float64 `json:"max_vendor_divergence_pct"`
+	// NegativeEdgeGate: when the strategy is on the NEGATIVE_EDGE (rolling
+	// stats window PF < 0.9), opens must ADDITIONALLY pass a health gate —
+	// |directional_score| ≥ negative_edge_min_score, trend+regime EMA
+	// direction aligned with the trade, first-target RR ≥
+	// negative_edge_min_rr, and no net-losing recent history on the symbol.
+	// Codes NEG_EDGE_* land in hard_entry_gate.failed with no exception
+	// path (user review 2026-09-27 #4 — the prose "证据极强/RR 明显占优"
+	// had no numbers, so open and wait were both arguable). nil/true =
+	// enabled; false = gate off. Thresholds are backtest-calibratable
+	// knobs, not final constants. (CODE ENFORCED)
+	NegativeEdgeGate *bool `json:"negative_edge_gate,omitempty"`
+	// NEG_EDGE score threshold. 0 = default 80; negative = condition off.
+	NegativeEdgeMinScore float64 `json:"negative_edge_min_score"`
+	// NEG_EDGE first-target RR floor. 0 = default 2.0; negative = off.
+	NegativeEdgeMinRR float64 `json:"negative_edge_min_rr"`
+	// NegativeEdgeBlockLosingSymbol: block opens on symbols this trader is
+	// recently net-losing on (≥2 closed trades, realized PnL < 0).
+	// nil/true = block; false = off.
+	NegativeEdgeBlockLosingSymbol *bool `json:"negative_edge_block_losing_symbol,omitempty"`
 	// StockWeekendNoOpen: block new opens on Binance tokenized stocks
 	// (underlyingSubType "Stocks") during the US-market weekend (Sat/Sun ET)
 	// — weekend volatility and edge are poor until Binance supports 24h stock
@@ -760,7 +787,7 @@ Only enter positions when multiple signals resonate. Freely use any effective an
 
 1. Check positions → whether to take profit/stop loss
 2. Scan candidate coins + multi-timeframe → whether strong signals exist
-3. Write chain of thought first, then output structured JSON`,
+3. Write a SHORT decision_summary first (cited program fields/block codes only), then output the strict JSON`,
 		}
 	}
 

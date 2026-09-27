@@ -384,3 +384,47 @@ func EffectiveMaxVendorDivergencePct(rc *store.RiskControlConfig) float64 {
 	}
 	return rc.MaxVendorDivergencePct
 }
+
+// NEGATIVE_EDGE health-gate resolvers (user review 2026-09-27 #4). The
+// prose "证据极强/RR 明显占优" carried no numbers, so open and wait were
+// both arguable from the same prompt (BRUSDT: score −50, net-losing history,
+// RR 1.84 cleared the plain min_rr). These turn the prose into hard-gate
+// codes; the thresholds are backtest-calibratable knobs, not constants.
+// Single definitions — the prompt builder and the signal layer read through
+// these, never the raw config.
+
+// NegativeEdgeGateEnabled: nil/true = the health gate is active while the
+// strategy is on the NEGATIVE_EDGE; false disables it entirely.
+func NegativeEdgeGateEnabled(rc *store.RiskControlConfig) bool {
+	return rc == nil || rc.NegativeEdgeGate == nil || *rc.NegativeEdgeGate
+}
+
+// NegativeEdgeMinScore resolves the |directional_score| floor:
+// 0/unset = 80 default; negative = score condition off.
+func NegativeEdgeMinScore(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.NegativeEdgeMinScore == 0 {
+		return 80
+	}
+	if rc.NegativeEdgeMinScore < 0 {
+		return 0
+	}
+	return rc.NegativeEdgeMinScore
+}
+
+// NegativeEdgeMinRR resolves the first-target RR floor:
+// 0/unset = 2.0 default; negative = RR condition off.
+func NegativeEdgeMinRR(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.NegativeEdgeMinRR == 0 {
+		return 2
+	}
+	if rc.NegativeEdgeMinRR < 0 {
+		return 0
+	}
+	return rc.NegativeEdgeMinRR
+}
+
+// NegativeEdgeBlockLosingSymbol: nil/true = opens on recently net-losing
+// symbols are blocked while the gate is active; false = off.
+func NegativeEdgeBlockLosingSymbol(rc *store.RiskControlConfig) bool {
+	return rc == nil || rc.NegativeEdgeBlockLosingSymbol == nil || *rc.NegativeEdgeBlockLosingSymbol
+}

@@ -215,9 +215,18 @@ type SymbolSignal struct {
 	SignalConflict *SignalConflict `json:"signal_conflict,omitempty"`
 	// OHLCV raw candles per configured timeframe (user directive 2026-09-25):
 	// the strategy UI's 市场数据 panel (enable_raw_klines) promises raw bars
-	// alongside the derived metrics. CLOSED bars only, oldest→newest, last
-	// PrimaryCount per timeframe. [open, high, low, close, volume]
+	// alongside the derived metrics. CLOSED bars only, oldest→newest, prompt
+	// keeps the most recent ResolvePromptKlineBars per timeframe (default 20
+	// — 09-27 review: the full 60-bar dump was ~63% of the prompt and the
+	// derived fields already encode what the model trades on). Full history
+	// stays re-fetchable from the exchange for audit/backtest.
+	// [open, high, low, close, volume]
 	OHLCV map[string][][5]float64 `json:"ohlcv,omitempty"`
+	// OHLCVLastClosed maps timeframe → close time (UTC) of the newest bar in
+	// OHLCV[tf] — the freshness stamp the trimmed series needs (09-27
+	// review: with 20 shipped bars the model must know WHEN the newest
+	// closed bar is without counting back from Time).
+	OHLCVLastClosed map[string]string `json:"ohlcv_last_closed_utc,omitempty"`
 }
 
 // RoleTimeframes names the job of each timeframe (⑨): execution TF times the
@@ -351,6 +360,10 @@ type RRScan struct {
 	BestTarget      float64   `json:"best_target,omitempty"`        // farthest scanned level (max RR)
 	BestRR          float64   `json:"best_rr"`                      // RR upper bound AT THE METHODOLOGY STOP — < min_rr ⇒ RR fails for sure
 	FirstRRGeTarget float64   `json:"first_rr_ge_target,omitempty"` // nearest level with RR ≥ min_rr — the TP to use
+	// FirstTargetRR is the RR AT FirstRRGeTarget (the rule-adopted TP) — the
+	// NEGATIVE_EDGE health gate's "first_target_rr ≥ threshold" reads this,
+	// so a 1.6R-min-qualifying target stays visible as < 2.0 (BRUSDT case).
+	FirstTargetRR float64 `json:"first_target_rr,omitempty"`
 	// FirstTargetBeyondStructure: the adopted TP sits beyond EVERY timeframe's
 	// structure_high/low — no historical resistance/support reference exists
 	// there (the prompt requires the model to note the uncertainty).
@@ -387,7 +400,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -556,6 +569,14 @@ type SignalOptions struct {
 	// (MYXUSDT 09-18) — entry, stop and target are all priced off the wrong
 	// tick. <=0 (disabled) skips the check.
 	MaxVendorDivergencePct float64
+	// NEGATIVE_EDGE health gate (user review 2026-09-27 #4): active only
+	// while the strategy's rolling stats sit on the negative edge (PF<0.9).
+	// Resolved via the NegativeEdge* resolvers in anchor_offset.go — the
+	// prompt prose and this gate always quote the same numbers.
+	NegativeEdge            bool    // strategy_health == NEGATIVE_EDGE this cycle
+	NegativeEdgeMinScore    float64 // |directional_score| floor; 0 = condition off
+	NegativeEdgeMinRR       float64 // first-target RR floor; 0 = condition off
+	NegativeEdgeBlockLosing bool    // block net-losing symbols
 	// ConfiguredTimeframes is the strategy's fetched timeframe list
 	// (Indicators.Klines.SelectedTimeframes as expanded by the fetch path).
 	// DataQuality requires 60+ bars only for timeframes the strategy ACTUALLY
@@ -1387,6 +1408,33 @@ func directionScoreAtLeast(sig *SymbolSignal, isLong bool, min int) bool {
 	return score <= -min
 }
 
+// negativeEdgeAligned: the trend TF and regime TF EMA directions must BOTH
+// match the trade side (fast>slow = long side, fast<slow = short side) —
+// pullback/rally quadrants keep their EMA side, so alignment follows the
+// slope, not the price-vs-fast label. Missing EMA evidence = not demonstrably
+// aligned (fail-closed: the NEGATIVE_EDGE prose demands exceptional evidence,
+// and absent evidence cannot demonstrate it).
+func negativeEdgeAligned(sig *SymbolSignal, isLong bool) bool {
+	trendTF, regimeTF := sig.RoleTFs.TrendTF, sig.RoleTFs.RegimeTF
+	if trendTF == "" {
+		trendTF = "1h"
+	}
+	if regimeTF == "" {
+		regimeTF = "4h"
+	}
+	for _, name := range []string{trendTF, regimeTF} {
+		t := sig.Timeframes[name]
+		if t == nil || t.EMAFast == nil || t.EMASlow == nil {
+			return false
+		}
+		longSide := *t.EMAFast > *t.EMASlow
+		if longSide != isLong {
+			return false
+		}
+	}
+	return true
+}
+
 // computeHardEntryGate evaluates, per direction, every program-decidable
 // open blocker — micro-trend (when the timing gate is enabled, mirroring the
 // executor's config switch), limit-anchor suppression (fail-closed unless a
@@ -1475,6 +1523,36 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			sc := sig.SignalConflict.DirectionalScore
 			if (isLong && sc <= -50) || (!isLong && sc >= 50) {
 				add(fmt.Sprintf("CONSENSUS_OPPOSED_%d", sc))
+			}
+		}
+		// NEGATIVE_EDGE health gate (user review 2026-09-27 #4): while the
+		// strategy's rolling stats have PF<0.9, "only exceptional setups" is
+		// a program verdict, not prose — every condition lands its own code
+		// so the wait reason is citable and gate_shadow_blocks can calibrate
+		// the thresholds later.
+		if opt.NegativeEdge {
+			score := 0
+			if sig.SignalConflict != nil {
+				score = sig.SignalConflict.DirectionalScore
+			}
+			if opt.NegativeEdgeMinScore > 0 && math.Abs(float64(score)) < opt.NegativeEdgeMinScore {
+				add(fmt.Sprintf("NEG_EDGE_SCORE_%+d_LT_%.0f", score, opt.NegativeEdgeMinScore))
+			}
+			if !negativeEdgeAligned(sig, isLong) {
+				add("NEG_EDGE_TREND_MISALIGNED")
+			}
+			if opt.NegativeEdgeMinRR > 0 {
+				firstRR := 0.0
+				if g.RR != nil {
+					firstRR = g.RR.FirstTargetRR
+				}
+				if firstRR < opt.NegativeEdgeMinRR {
+					add(fmt.Sprintf("NEG_EDGE_RR_%.2f_LT_%.1f", firstRR, opt.NegativeEdgeMinRR))
+				}
+			}
+			if opt.NegativeEdgeBlockLosing && sig.TraderHistory != nil &&
+				sig.TraderHistory.ClosedTrades >= 2 && sig.TraderHistory.RealizedPnL < 0 {
+				add(fmt.Sprintf("NEG_EDGE_LOSING_SYMBOL_%+.2fU", sig.TraderHistory.RealizedPnL))
 			}
 		}
 		if opt.MaxVendorDivergencePct > 0 {
@@ -1629,6 +1707,7 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		}
 		if minRR > 0 && !out.Usable && v >= minRR-1e-9 && !bollT[t] {
 			out.FirstRRGeTarget = t
+			out.FirstTargetRR = round2(v)
 			out.Usable = true
 			if isLong && maxSH > 0 && t > maxSH {
 				out.FirstTargetBeyondStructure = true

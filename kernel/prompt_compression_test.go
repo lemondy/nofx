@@ -99,7 +99,7 @@ func TestLockedPositionCompresses(t *testing.T) {
 		"KORUUSDT": {Symbol: "KORUUSDT", CurrentPrice: 19.28, TimeframeData: tfs},
 	}}
 	pos := PositionInfo{
-		Symbol: "KORUUSDT", Side: "short",
+		Symbol: "KORUUSDT", Side: "short", Managed: true,
 		EntryPrice: 19.23, MarkPrice: 19.28, Quantity: 3.62,
 		Leverage: 5, UpdateTime: now.Add(-46 * time.Minute).UnixMilli(),
 		StopLossPrice: 19.85, TakeProfitPrice: 18.40,

@@ -161,12 +161,28 @@ func TestRegimeSkipKeepsCallWhenPositionsOpen(t *testing.T) {
 	ctx := regimeCtx(t, engine, []string{"BADUSDT"})
 	ctx.Positions = []PositionInfo{{
 		Symbol: "HELdUSDT", Side: "long", EntryPrice: 1, MarkPrice: 1, Quantity: 1, Leverage: 1,
+		Managed: true,
 	}}
 
 	if _, err := GetFullDecisionWithStrategy(ctx, mock, engine, "balanced"); err != nil {
 		t.Logf("parse error tolerated: %v", err)
 	}
 	if mock.calls == 0 {
-		t.Fatal("open positions always warrant an LLM call (hold/adjust/close management)")
+		t.Fatal("open AI positions always warrant an LLM call (hold/adjust/close management)")
+	}
+
+	// 09-27 review #3: a MANUAL position has no legal model action (hold
+	// only) — it must not force the LLM call the way an actionable AI
+	// position does.
+	mock2 := &recordingAIClient{}
+	ctx2 := regimeCtx(t, engine, []string{"BADUSDT"})
+	ctx2.Positions = []PositionInfo{{
+		Symbol: "MANUALUSDT", Side: "long", EntryPrice: 1, MarkPrice: 1, Quantity: 1, Leverage: 1,
+	}}
+	if _, err := GetFullDecisionWithStrategy(ctx2, mock2, engine, "balanced"); err != nil {
+		t.Logf("parse error tolerated: %v", err)
+	}
+	if mock2.calls != 0 {
+		t.Fatal("manual-only positions must not force the LLM call (hold-only, automation skipped)")
 	}
 }

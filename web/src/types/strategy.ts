@@ -172,6 +172,8 @@ export interface KlineConfig {
   enable_multi_timeframe: boolean;
   // 新增：支持选择多个时间周期
   selected_timeframes?: string[];
+  // Prompt 侧每周期保留的最近已闭合K线根数(0=默认20,负数=完整 primary_count)
+  prompt_kline_bars?: number;
 }
 
 export interface ExternalDataSource {

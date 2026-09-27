@@ -175,16 +175,17 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString("# 📋 Decision Process\n\n")
 		sb.WriteString("1. Check positions → Should we take profit/stop-loss\n")
 		sb.WriteString("2. Scan candidate coins + multi-timeframe → Are there strong signals\n")
-		sb.WriteString("3. Write chain of thought first, then output structured JSON\n\n")
+		sb.WriteString("3. Write a SHORT decision_summary first, then output the strict JSON\n\n")
 	}
 
 	// 7. Output format
 	sb.WriteString("# Output Format (Strictly Follow)\n\n")
-	sb.WriteString("**Must use XML tags <reasoning> and <decision> to separate chain of thought and decision JSON, avoiding parsing errors**\n\n")
+	sb.WriteString("**Must use XML tags <reasoning> and <decision> to separate the decision_summary and the decision JSON, avoiding parsing errors**\n\n")
 	sb.WriteString("## Format Requirements\n\n")
 	sb.WriteString("<reasoning>\n")
-	sb.WriteString("Your chain of thought analysis...\n")
-	sb.WriteString("- Briefly analyze your thinking process \n")
+	sb.WriteString("decision_summary — 简短、可审计,不写隐藏推理链:\n")
+	sb.WriteString("- 每个决策一行: action + 你实际采用的程序字段/阻断码(如 hard_entry_gate.allowed、failed 里的 RR_MAX/NEG_EDGE_*、sentiment_regime)+ 关键价格\n")
+	sb.WriteString("- summary 只列采用的程序字段与阻断码,不要自由发挥长段推理;无附加条件就写「无附加条件」\n")
 	sb.WriteString("</reasoning>\n\n")
 	sb.WriteString("<decision>\n")
 	sb.WriteString("Step 2: JSON decision array\n\n")
@@ -307,7 +308,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门(程序强制): 4h 趋势窗口(5根)涨幅 ≥ %.0f%% 的币,EMA 多头标签滞后于行情,禁止把暴跌初段当\"趋势回踩\"买入——该方向开仓要求回踩已确认: 15m 收盘收复 EMA20 且 15m 摆动低点抬高(各币快照 pump_guard.extended/confirmed 已程序判定);extended=true 且 confirmed=false 时做多被拒(EXTENDED_PUMP_UNCONFIRMED),no_trade_reason 直接引用该码,不要凭感觉改判;该门与入场时点门独立,两者都过才能做多\n", pg))
 		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
-		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,从 failed 去重后按风险优先级选 2-4 项写入 no_trade_reason,不得编造列表外的拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)仍可主张——**例外成立与否以程序判定 `market_exception` 为准,且市价开仓在执行端逐条复核(无证据按锚点降级限价,confidence<80 拦截)**;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY 任一项时不存在任何例外\n")
+		params.WriteString("- 开仓硬门(程序判定,禁止自行重算): 各币快照 `hard_entry_gate.long/short` 已把该方向所有程序可判的拦路条件评完(微趋势时点/暴涨延伸做多确认/限价锚点/结构RR上限/数据充分性/最小仓位死区/连亏熔断/股票周末/数据源偏差/NEGATIVE_EDGE 附加门),`failed` 即阻断码完整列表,allowed=true 表示全部通过。open_* 只允许出现在 allowed=true 的方向;allowed=false 时输出 wait/hold,从 failed 去重后按风险优先级选 2-4 项写入 no_trade_reason,不得编造列表外的拦截理由。例外路径只有一条: failed 仅含 LIMIT_ANCHOR_SUPPRESSED(限价路径被禁)时,策略规定的市价单例外(突破追入/布林上轨骑行/布林下轨骑行做空)仍可主张——**例外成立与否以程序判定 `market_exception` 为准,且市价开仓在执行端逐条复核(无证据按锚点降级限价,confidence<80 拦截)**;failed 含 RR_MAX/STOP_PLAN_*/MICRO_TREND/EXTENDED_PUMP/LOSS_STREAK_BANNED/MIN_SIZE_DEAD_ZONE/DATA_INSUFFICIENT/STOCK_WEEKEND/VENDOR_DIVERGENCE/CONSENSUS_OPPOSED/POOR_HISTORY/NEG_EDGE_* 任一项时不存在任何例外\n")
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门(程序强制): K线数据源与实时行情偏差超过 %.1f%% 时,该币两个方向的开仓都被拦(VENDOR_DIVERGENCE)——entry/SL/TP 全部按实时价定价,数据源偏差过大使整套设置失真(09-18 MYXUSDT −2.57%% 教训);阈值可在策略页配置\n", v))
 		}
@@ -448,7 +449,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		if body := sentiment.Render(); body != "" {
 			sb.WriteString("## 大盘情绪(组合解读,不要只看单一数字)\n")
 			sb.WriteString(body + "\n")
-			sb.WriteString("组合解读规则: ①三源同向极端(加密贪婪>80+美股>75+多空账户比>2+资金费年化>50%)=拥挤区,逆向风险最高,新开仓一律保守并在 reasoning 说明;②源间背离时以价格结构与硬门判定为准,情绪只作择时背景;③情绪是慢变量,本身不构成开/平仓理由,也不覆盖任何程序硬门。缺数来源按剩余来源判断。\n\n")
+			sb.WriteString("组合解读规则: ①三源同向极端(加密贪婪>80+美股>75+多空账户比>2+资金费年化>50%)=拥挤区,逆向风险最高,新开仓一律保守并在 reasoning 说明;②源间背离时以价格结构与硬门判定为准,情绪只作择时背景;③情绪是慢变量,本身不构成开/平仓理由,也不覆盖任何程序硬门。缺数来源按剩余来源判断。`sentiment_regime`/`sentiment_trade_effect` 是程序按上述规则算好的组合枚举,直接引用即可,不要再自行组合;各来源的[数据日]与拉取时间已单独标注,以它们判断新旧,不要假设数据是刚刚的。\n\n")
 		}
 	}
 
@@ -540,12 +541,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		// Strategy health is language-independent program truth. Compute it
 		// once, then localize only the prose below so switching the prompt
 		// language cannot change the model's risk posture.
-		edge := "POSITIVE_EDGE"
-		if ctx.TradingStats.ProfitFactor < 0.9 {
-			edge = "NEGATIVE_EDGE"
-		} else if ctx.TradingStats.ProfitFactor < 1.1 {
-			edge = "NO_EDGE"
-		}
+		edge := StrategyHealthEdge(ctx.TradingStats.ProfitFactor)
 		expR := expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)
 		expSourceZH := "估算,亏损按-1R假设"
 		expSourceEN := "estimated, losses assumed -1R"
@@ -582,7 +578,22 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
 				edge, ctx.TradingStats.ProfitFactor, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
 			if edge == "NEGATIVE_EDGE" {
-				sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):只做证据极强、多周期共振且 RR 明显占优的设置;无持仓候选一律 wait,已有持仓按管理规则 hold/close,并在 no_trade_reason 写明\n", windowLabel))
+				// The 09-27 review: "证据极强/RR 明显占优" carried no numbers,
+				// so open and wait were both arguable (BRUSDT passed the plain
+				// min_rr at score −50 with net-losing history). The gate now
+				// enforces the conditions — this prose only NAMES them, and
+				// always through the same resolvers the gate reads.
+				clauses := []string{
+					fmt.Sprintf("|directional_score| ≥ %.0f(NEG_EDGE_SCORE_*)", NegativeEdgeMinScore(&e.config.RiskControl)),
+					"trend_tf+regime_tf 的 EMA 方向均与交易方向一致(NEG_EDGE_TREND_MISALIGNED)",
+				}
+				if rr := NegativeEdgeMinRR(&e.config.RiskControl); rr > 0 {
+					clauses = append(clauses, fmt.Sprintf("first_target_rr ≥ %.1f(NEG_EDGE_RR_*)", rr))
+				}
+				if NegativeEdgeBlockLosingSymbol(&e.config.RiskControl) {
+					clauses = append(clauses, "该币近 ≥2 笔净亏禁开(NEG_EDGE_LOSING_SYMBOL)")
+				}
+				sb.WriteString(fmt.Sprintf("⚠️ 当前策略整体无正期望(窗口 %s 内 PF<0.9):NEGATIVE_EDGE 附加开仓门已程序化并入各币 hard_entry_gate 的 failed 列表,不存在例外路径,开仓需全部满足: %s;未全过的设置一律 wait 并在 no_trade_reason 引用对应阻断码,已有持仓按管理规则 hold/close\n", windowLabel, strings.Join(clauses, ";")))
 			}
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("表现: 良好 - 保持当前策略\n")
@@ -616,7 +627,17 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, window %s)\n",
 				edge, ctx.TradingStats.ProfitFactor, expR, expSourceEN, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, enWindow))
 			if edge == "NEGATIVE_EDGE" {
-				sb.WriteString(fmt.Sprintf("⚠️ The strategy has no positive edge in the %s window (PF<0.9): only take exceptionally strong, multi-timeframe setups with clearly superior RR; flat candidates must use wait, while existing positions follow hold/close management rules, with no_trade_reason populated.\n", enWindow))
+				clauses := []string{
+					fmt.Sprintf("|directional_score| >= %.0f (NEG_EDGE_SCORE_*)", NegativeEdgeMinScore(&e.config.RiskControl)),
+					"trend_tf + regime_tf EMA direction both aligned with the trade (NEG_EDGE_TREND_MISALIGNED)",
+				}
+				if rr := NegativeEdgeMinRR(&e.config.RiskControl); rr > 0 {
+					clauses = append(clauses, fmt.Sprintf("first_target_rr >= %.1f (NEG_EDGE_RR_*)", rr))
+				}
+				if NegativeEdgeBlockLosingSymbol(&e.config.RiskControl) {
+					clauses = append(clauses, "symbols with >=2 recent net-losing trades are blocked (NEG_EDGE_LOSING_SYMBOL)")
+				}
+				sb.WriteString(fmt.Sprintf("⚠️ The strategy has no positive edge in the %s window (PF<0.9): the NEGATIVE_EDGE entry gate is PROGRAM-ENFORCED inside each symbol's hard_entry_gate failed list with no exception path — an open requires ALL of: %s. Setups that fail any condition must wait and cite the codes in no_trade_reason; existing positions follow hold/close management rules.\n", enWindow, strings.Join(clauses, "; ")))
 			}
 
 			// Performance hints based on profit factor, sharpe, and drawdown
@@ -686,10 +707,13 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		rendered = append(rendered, coin)
 	}
 	sb.WriteString(fmt.Sprintf("## Candidate Coins (%d coins)\n\n", len(rendered)))
+	// 09-27 review #5: double-blocked candidates collect into ONE compact
+	// table with the mechanical-wait instruction stated once — the per-coin
+	// repetition spent tokens re-telling every blocked coin how to wait.
+	var blockedCoins []blockedCoinRow
 	displayedCount := 0
 	for _, coin := range rendered {
 		marketData := ctx.MarketDataMap[coin.Symbol]
-		displayedCount++
 		var quantData *QuantData
 		if ctx.QuantDataMap != nil {
 			quantData = ctx.QuantDataMap[coin.Symbol]
@@ -700,15 +724,16 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		// no-exception blocker (RR_MAX / MICRO_TREND / DATA_INSUFFICIENT /
 		// MIN_SIZE / LOSS_STREAK / STOCK_WEEKEND / VENDOR_DIVERGENCE) can
 		// only ever produce a mechanical wait — reading its full 3.5-4.5k
-		// chars of JSON adds nothing. Compress to one line; a direction whose
-		// only block is LIMIT_ANCHOR_SUPPRESSED keeps the full JSON (the
-		// market-order exception paths read evidence from it). GateStates /
-		// RRCeilings bookkeeping already ran inside computeCoinSignal.
+		// chars of JSON adds nothing. Compress to a table row; a direction
+		// whose only block is LIMIT_ANCHOR_SUPPRESSED keeps the full JSON
+		// (the market-order exception paths read evidence from it).
+		// GateStates / RRCeilings bookkeeping already ran inside
+		// computeCoinSignal.
 		if sig != nil && bothDirectionsHardBlocked(sig) {
-			sb.WriteString(fmt.Sprintf("### %d. %s%s — 双向硬门拦截,本期 wait(细节省略)\n%s\n\n",
-				displayedCount, coin.Symbol, sourceTags, renderBlockedCoinLine(sig)))
+			blockedCoins = append(blockedCoins, blockedCoinRow{symbol: coin.Symbol, tags: sourceTags, sig: sig})
 			continue
 		}
+		displayedCount++
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
 		// Scanner output is EVIDENCE, not a conclusion: neutral structured
 		// hint, no prescriptive direction instruction.
@@ -755,6 +780,12 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		}
 		sb.WriteString("\n")
 	}
+	// The blocked table renders AFTER the full candidates so numbering stays
+	// continuous; loss-heavy coins were already demoted to the tail of
+	// `rendered`, and mechanically-blocked coins belong at the very end.
+	if len(blockedCoins) > 0 {
+		sb.WriteString(renderBlockedCoinTable(blockedCoins, displayedCount))
+	}
 	sb.WriteString("\n")
 
 	// 09-18 token audit ⑥: the three ranking blocks self-describe as
@@ -767,7 +798,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	}
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("Now please analyze and output your decision (Chain of Thought + JSON)\n")
+	sb.WriteString("Now output your decision: a SHORT decision_summary + the strict JSON (per Output Format)\n")
 
 	return sb.String()
 }
@@ -896,6 +927,18 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 		pos.EntryPrice, priceLabel, displayPrice, pos.Quantity, positionValue, marginROI, priceReturn, uPnL, pos.PeakPnLPct,
 		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration, ownership))
 
+	// Manual position (user review 2026-09-27 #3): automation skips it —
+	// close/partial/adjust are all rejected executor-side. The close-lock
+	// template's "仍可 adjust_stop_loss" line contradicted the ownership
+	// header and baited the model into a guaranteed-rejected action (HYPE
+	// case), so manual positions branch to hold-only BEFORE any market JSON:
+	// nothing here is actionable, rendering 4 TFs of data only spends tokens
+	// and invites proposals the program will refuse.
+	if !pos.Managed {
+		sb.WriteString(fmt.Sprintf("=== %s — 手动仓,自动化跳过 ===\n只能输出 hold;禁止 close/partial_close/adjust_stop_loss(执行端对手动仓一律拒绝)。本仓不参与本轮分析,无需评估其市场数据。\n\n", pos.Symbol))
+		return sb.String()
+	}
+
 	if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
 		var quantData *QuantData
 		if ctx.QuantDataMap != nil {
@@ -937,6 +980,58 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 	}
 
 	return sb.String()
+}
+
+// DefaultPromptKlineBars is how many closed bars per timeframe the prompt
+// ships when the config doesn't say (user review 2026-09-27: 15-20 recent
+// bars carry the actionable micro-structure; the 60-bar dump was ~63% of a
+// full signal and diluted the program-computed fields the model trades on).
+const DefaultPromptKlineBars = 20
+
+// ResolvePromptKlineBars caps the prompt-side OHLCV per timeframe:
+// >0 = keep N (clamped into [10, primaryCount]); 0 = default 20;
+// negative = full primaryCount (legacy / audit escape hatch).
+func ResolvePromptKlineBars(promptBars, primaryCount int) int {
+	if promptBars < 0 {
+		return primaryCount
+	}
+	n := promptBars
+	if n == 0 {
+		n = DefaultPromptKlineBars
+	}
+	if n < 10 {
+		n = 10
+	}
+	if n > primaryCount {
+		n = primaryCount
+	}
+	return n
+}
+
+// StrategyHealthEdge names the profit-factor regime of the rolling stats
+// window: NEGATIVE_EDGE < 0.9 ≤ NO_EDGE < 1.1 ≤ POSITIVE_EDGE. The single
+// definition shared by the stats block (strategy_health line) and the
+// NEGATIVE_EDGE health gate in computeCoinSignal, so the prose, the gate
+// codes and the shadow-block dataset can never disagree about the regime.
+func StrategyHealthEdge(pf float64) string {
+	switch {
+	case pf < 0.9:
+		return "NEGATIVE_EDGE"
+	case pf < 1.1:
+		return "NO_EDGE"
+	default:
+		return "POSITIVE_EDGE"
+	}
+}
+
+// strategyEdge resolves the cycle's health regime from the context (no
+// stats yet = POSITIVE_EDGE — the health gate must never arm on absence of
+// data).
+func (e *StrategyEngine) strategyEdge(ctx *Context) string {
+	if ctx == nil || ctx.TradingStats == nil || ctx.TradingStats.TotalTrades == 0 {
+		return "POSITIVE_EDGE"
+	}
+	return StrategyHealthEdge(ctx.TradingStats.ProfitFactor)
 }
 
 // formatMarketContext compresses the three market-wide ranking blocks (OI
@@ -1421,6 +1516,14 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// Vendor-vs-live divergence hard gate (09-18 audit): a large
 		// vendor gap prices every anchor/SL/TP off the wrong tick.
 		MaxVendorDivergencePct: EffectiveMaxVendorDivergencePct(&e.config.RiskControl),
+		// NEGATIVE_EDGE health gate (user review 2026-09-27 #4): the same
+		// PF regime the stats block prints, resolved through the shared
+		// helpers so prompt prose and gate codes never quote different
+		// numbers.
+		NegativeEdge:            NegativeEdgeGateEnabled(&e.config.RiskControl) && e.strategyEdge(ctx) == "NEGATIVE_EDGE",
+		NegativeEdgeMinScore:    NegativeEdgeMinScore(&e.config.RiskControl),
+		NegativeEdgeMinRR:       NegativeEdgeMinRR(&e.config.RiskControl),
+		NegativeEdgeBlockLosing: NegativeEdgeBlockLosingSymbol(&e.config.RiskControl),
 	}
 	// DataQuality's bar requirements must match what fetchMarketDataWithStrategy
 	// actually fetches — including its legacy expansion of an empty
@@ -1622,7 +1725,8 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// panel promises raw candles alongside the derived metrics. CLOSED bars
 		// only (the forming candle is dropped — every derived field above is
 		// closed-basis and mixing bases invites lookahead reads), oldest→newest,
-		// last PrimaryCount per configured timeframe.
+		// prompt keeps the most recent ResolvePromptKlineBars per configured
+		// timeframe (default 20) + the newest closed bar's timestamp per TF.
 		if e.config.Indicators.EnableRawKlines && len(data.TimeframeData) > 0 {
 			count := e.config.Indicators.Klines.PrimaryCount
 			if count < store.MinKlineCount {
@@ -1631,29 +1735,35 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			if count > store.MaxKlineCount {
 				count = store.MaxKlineCount
 			}
+			keep := ResolvePromptKlineBars(e.config.Indicators.Klines.PromptKlineBars, count)
 			ov := map[string][][5]float64{}
+			lastClosed := map[string]string{}
 			for _, tf := range opt.ConfiguredTimeframes {
 				ts := data.TimeframeData[tf]
 				if ts == nil || len(ts.Klines) == 0 {
 					continue
 				}
 				dur := tfDuration(tf).Milliseconds()
-				bars := make([][5]float64, 0, count)
+				bars := make([][5]float64, 0, keep)
+				newestClosed := int64(0)
 				for _, k := range ts.Klines {
 					if k.Time+dur > opt.Now.UnixMilli() {
 						continue // forming candle
 					}
 					bars = append(bars, [5]float64{k.Open, k.High, k.Low, k.Close, k.Volume})
+					newestClosed = k.Time
 				}
-				if len(bars) > count {
-					bars = bars[len(bars)-count:]
+				if len(bars) > keep {
+					bars = bars[len(bars)-keep:]
 				}
 				if len(bars) > 0 {
 					ov[tf] = bars
+					lastClosed[tf] = time.UnixMilli(newestClosed).UTC().Format("2006-01-02T15:04:05Z")
 				}
 			}
 			if len(ov) > 0 {
 				sig.OHLCV = ov
+				sig.OHLCVLastClosed = lastClosed
 			}
 		}
 		// Data-incomplete symbols are barred from trading — nothing beyond
@@ -1786,7 +1896,7 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 // once per coin — duplicating it across 8+ candidates wasted ~21k chars every cycle.
 const signalBlockLegend = `Naming: each timeframe block reports ITS BAR GRANULARITY only. trend_window_return_pct = change over return_window_hours (window ≠ bar length). price_change_60m_live_pct / price_change_24h_live_pct = LIVE price vs 60m/24h ago. prev_hour_close_change_pct = last FULLY CLOSED hour, close-to-close. Do not mix them. All fields you need are in this JSON — read it carefully.
 Naming addendum: macd_hist = MACD LINE (EMA12−EMA26) ÷ price ×100 — NOT the signal histogram; macd_trend = line slope vs previous bar.
-Derived fields (program-computed, use directly — do not re-derive): role_tfs(execution/trend/regime 时间框架分工) | execution_filter(微趋势对齐预判: long_allowed/short_allowed, 开启入场时点闸门时为硬规则) | hard_entry_gate(程序对每方向开仓硬门的最终判定: allowed/entry_price/limit_allowed/stop_floor_pct/rr_scan/failed 阻断码列表——open_* 只允许输出在 allowed=true 的方向;wait/hold 的客观理由直接引用 failed,不要再自行组装三道门) | rr_scan(程序已遍历全部时间块的全部 S/R 结构位: best_rr=按方法论止损 stop_plan(最近对侧结构位+方向性缓冲)算出的 RR 上限,usable=false ⇒ 该方向 RR 门结构性不可能通过——结论措辞用 MAX_STRUCTURAL_RR=best_rr,而不是"最近阻力位 RR 不足";first_rr_ge_target=规则要求的最近达标结构位,开仓时 take_profit 直接采用它;stop_price(=stop_plan_price)就是方法论止损价,开仓 stop_loss 逐字采用它——RR 门按它计算,采用这对组合即保证真实 RR≥min_rr,见"止损(程序预计算)") | bias(方向判读的三个来源 scanner/structure/execution——"scanner=short" 只表示扫描器快照姿态偏空,不等于市场空头证据强,三者可以相反且都合法) | funding_rollover(程序按结算历史计算的"费率刚从高位回落": detected 是做空条件②的唯一可验证依据,字段缺失=历史拉取失败=UNKNOWN 按不满足处理) | limit_buy_price/limit_sell_price(0=锚点被程序抑制,该方向禁止挂单开仓,与 entry_rule_triggered 无关;注意: 这只是限价路径被禁≠该方向整体禁止——方向可开性只看 hard_entry_gate.allowed) | bb_ride/short_ride(15m 上轨/下轨骑行市价证据, 程序预算: 量能暴增+连续≥3 根同向收盘贴带; 分别对应市价例外二(多)/例外三(空)) | breakout.status(below|approach|broken_unconfirmed|confirmed|fake_break|retest_hold|extended, 相对1h结构位的突破判定,含量能/OI确认;extended=早已越过且未回踩) | directional_score(-100..+100 净方向共识,已剔除range噪音) | signal_conflict.types(SCANNER_VS_STRUCTURE|TIMEFRAME_SPLIT|SCANNER_VS_SCANNER|EXECUTION_VS_STRUCTURE — 两个扫描器对同一币给出相反方向,或 15m 微观窗口只放行与 1h+4h 结构相反的方向(ZEC 09-18: +100 看多共识下只许做空),必须先表态信哪个) | data_quality.sufficient(false=历史长度不足以支撑EMA50/MACD类长窗指标) | funding_rate(原始费率小数,不是百分比:0.0001 = 0.01% 每结算期,勿再×100或当百分比读) | funding_annualized_pct(费率年化百分比,已按 funding_settle_hours 实测结算间隔年化,拥挤度判断直接用它) | no_trade_reason(hold/wait必填)
+Derived fields (program-computed, use directly — do not re-derive): role_tfs(execution/trend/regime 时间框架分工) | execution_filter(微趋势对齐预判: long_allowed/short_allowed, 开启入场时点闸门时为硬规则) | hard_entry_gate(程序对每方向开仓硬门的最终判定: allowed/entry_price/limit_allowed/stop_floor_pct/rr_scan/failed 阻断码列表——open_* 只允许输出在 allowed=true 的方向;wait/hold 的客观理由直接引用 failed,不要再自行组装三道门) | rr_scan(程序已遍历全部时间块的全部 S/R 结构位: best_rr=按方法论止损 stop_plan(最近对侧结构位+方向性缓冲)算出的 RR 上限,usable=false ⇒ 该方向 RR 门结构性不可能通过——结论措辞用 MAX_STRUCTURAL_RR=best_rr,而不是"最近阻力位 RR 不足";first_rr_ge_target=规则要求的最近达标结构位,开仓时 take_profit 直接采用它;stop_price(=stop_plan_price)就是方法论止损价,开仓 stop_loss 逐字采用它——RR 门按它计算,采用这对组合即保证真实 RR≥min_rr,见"止损(程序预计算)") | bias(方向判读的三个来源 scanner/structure/execution——"scanner=short" 只表示扫描器快照姿态偏空,不等于市场空头证据强,三者可以相反且都合法) | funding_rollover(程序按结算历史计算的"费率刚从高位回落": detected 是做空条件②的唯一可验证依据,字段缺失=历史拉取失败=UNKNOWN 按不满足处理) | limit_buy_price/limit_sell_price(0=锚点被程序抑制,该方向禁止挂单开仓,与 entry_rule_triggered 无关;注意: 这只是限价路径被禁≠该方向整体禁止——方向可开性只看 hard_entry_gate.allowed) | bb_ride/short_ride(15m 上轨/下轨骑行市价证据, 程序预算: 量能暴增+连续≥3 根同向收盘贴带; 分别对应市价例外二(多)/例外三(空)) | breakout.status(below|approach|broken_unconfirmed|confirmed|fake_break|retest_hold|extended, 相对1h结构位的突破判定,含量能/OI确认;extended=早已越过且未回踩) | directional_score(-100..+100 净方向共识,已剔除range噪音) | signal_conflict.types(SCANNER_VS_STRUCTURE|TIMEFRAME_SPLIT|SCANNER_VS_SCANNER|EXECUTION_VS_STRUCTURE — 两个扫描器对同一币给出相反方向,或 15m 微观窗口只放行与 1h+4h 结构相反的方向(ZEC 09-18: +100 看多共识下只许做空),必须先表态信哪个) | data_quality.sufficient(false=历史长度不足以支撑EMA50/MACD类长窗指标) | funding_rate(原始费率小数,不是百分比:0.0001 = 0.01% 每结算期,勿再×100或当百分比读) | funding_annualized_pct(费率年化百分比,已按 funding_settle_hours 实测结算间隔年化,拥挤度判断直接用它) | no_trade_reason(hold/wait必填) | ohlcv+ohlcv_last_closed_utc(每周期原始K线只保留最近≤20根已闭合柱[open,high,low,close,volume],时间戳=该周期最新闭合柱的UTC时间——微观结构看这20根足够,勿要求更多历史;衍生指标已基于完整60根算好)
 trend 字段是 EMA 斜率口径(ema_fast vs ema_slow + 价格相对 fast),trend_window_return_pct 是窗口端点收益——两者可以合法地方向相反(震荡反弹的下行趋势等),不是需要「解决」的矛盾。结构位与现价的相对位置(全部按 LIVE 价预计算,勿自行重算): support/resistance 数组已按现价过滤,空数组 [] 是明确证据——resistance:[] = 现价上方窗口内已无任何摆动高点(正在创新高,上方无结构参考),support:[] 同理镜像;structure_high_dist_pct / structure_low_dist_pct = (结构位−现价)/现价×100,与 support_dist_pct 同符号约定——structure_high_dist_pct 为负 = 现价已越过该周期结构高点(高TF结构位滞后于现价,严禁把它当"上方阻力"用,此时上方结构参考失效,做空止损口径需明确标注这一点);data_freshness.vendor_vs_live_divergence_pct = K线数据源与实时行情的偏差,绝对值超阈值时 hard_entry_gate 直接给两方向加 VENDOR_DIVERGENCE 阻断码(entry/SL/TP 全部按实时价定价,数据源偏差过大=整套设置失真);liquidity.spread_pct = 程序实测盘口点差(占中间价),超阈值的币点差门会拦开仓
 数据新鲜度优先级: 同一字段冲突时取时间戳更新者——Structured Signal timestamp > 实时 derivatives/liquidity > scanner/rankings 快照。榜单与 hint 里的价格/费率是旧快照,严禁参与 entry/SL/TP/RR 精确计算(它们与结构化现价可差 1% 以上),只用于市场情绪/资金轮动语境。
 
@@ -1838,33 +1948,52 @@ func bothDirectionsHardBlocked(sig *SymbolSignal) bool {
 		!sig.HardGate.Long.Allowed && !sig.HardGate.Short.Allowed
 }
 
-// renderBlockedCoinLine: the one-line compression for a double-blocked
-// candidate — the failed codes ARE the decision content.
-func renderBlockedCoinLine(sig *SymbolSignal) string {
-	fmtDir := func(g *DirectionGate) string {
-		if g == nil {
-			return "unknown"
+// blockedCoinRow is one double-blocked candidate waiting for the compact
+// table render (symbol + source tags + its already-computed signal).
+type blockedCoinRow struct {
+	symbol string
+	tags   string
+	sig    *SymbolSignal
+}
+
+// renderBlockedCoinTable: one compact markdown table for every
+// double-blocked candidate (09-27 review #5 — the wait instruction used to
+// repeat at the end of every per-coin line). The failed codes ARE the
+// decision content; the header states the mechanical-wait rule ONCE.
+func renderBlockedCoinTable(coins []blockedCoinRow, firstNum int) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("### 双向硬门拦截候选(%d 个,本期一律 wait,细节省略)\n\n", len(coins)))
+	sb.WriteString("统一规则(对本表每一行生效,不再逐行重复): 输出 wait;no_trade_reason 从该行两侧 hard_blockers 去重后按风险优先级选 2-4 项,blocking_factors 使用对应固定枚举;不要展开分析,不要给出表外理由。\n\n")
+	sb.WriteString("| # | symbol | directional_score | bias(scanner/structure/execution) | hard_blockers.long | hard_blockers.short | history |\n")
+	sb.WriteString("|---|--------|-------------------|-----------------------------------|--------------------|---------------------|---------|\n")
+	for i, bc := range coins {
+		sig := bc.sig
+		score := 0
+		if sig.SignalConflict != nil {
+			score = sig.SignalConflict.DirectionalScore
 		}
-		if len(g.Failed) == 0 {
-			return "allowed"
+		bias := "unknown"
+		if sig.Bias != nil {
+			bias = fmt.Sprintf("%s/%s/%s", sig.Bias.Scanner, sig.Bias.Structure, sig.Bias.Execution)
 		}
-		return strings.Join(g.Failed, "+")
+		codes := func(g *DirectionGate) string {
+			if g == nil {
+				return "unknown"
+			}
+			if len(g.Failed) == 0 {
+				return "allowed"
+			}
+			return strings.Join(g.Failed, "+")
+		}
+		history := "—"
+		if sig.TraderHistory != nil {
+			history = fmt.Sprintf("%d trades,win %.0f%%,%+.2fU", sig.TraderHistory.ClosedTrades, sig.TraderHistory.WinRatePct, sig.TraderHistory.RealizedPnL)
+		}
+		sb.WriteString(fmt.Sprintf("| %d | %s%s | %+d | %s | %s | %s | %s |\n",
+			firstNum+i+1, bc.symbol, bc.tags, score, bias, codes(sig.HardGate.Long), codes(sig.HardGate.Short), history))
 	}
-	score := 0
-	if sig.SignalConflict != nil {
-		score = sig.SignalConflict.DirectionalScore
-	}
-	bias := "unknown"
-	if sig.Bias != nil {
-		bias = fmt.Sprintf("scanner=%s,structure=%s,execution=%s", sig.Bias.Scanner, sig.Bias.Structure, sig.Bias.Execution)
-	}
-	history := ""
-	if sig.TraderHistory != nil {
-		history = fmt.Sprintf(" | history=%d trades,win_rate=%.0f%%,pnl=%+.2fU",
-			sig.TraderHistory.ClosedTrades, sig.TraderHistory.WinRatePct, sig.TraderHistory.RealizedPnL)
-	}
-	return fmt.Sprintf("- directional_score: %+d | bias: %s%s | hard_blockers.long: %s | hard_blockers.short: %s → 输出 wait;保留上述完整阻断集合,但 no_trade_reason 仅选去重后优先级最高的 2-4 项,blocking_factors 使用对应固定枚举,不要再展开分析",
-		score, bias, history, fmtDir(sig.HardGate.Long), fmtDir(sig.HardGate.Short))
+	sb.WriteString("\n")
+	return sb.String()
 }
 
 // oneHAgainstCandles counts the trailing consecutive CLOSED 1h candles that

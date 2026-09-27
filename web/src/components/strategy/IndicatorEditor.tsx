@@ -448,9 +448,28 @@ export function IndicatorEditor({
  className="w-16 px-2 py-1 rounded text-xs text-center"
  style={{ background: '#E9E4D6', border: '1px solid #C0B9A2', color: '#1E1E1A' }}
  />
+ <span className="text-[10px]" style={{ color: '#6E6E60' }}>Prompt根数:</span>
+ <input
+ type="number"
+ value={config.klines.prompt_kline_bars ?? 0}
+ onChange={(e) =>
+ !disabled &&
+ onChange({
+ ...config,
+ klines: { ...config.klines, prompt_kline_bars: parseInt(e.target.value) || 0 },
+ })
+ }
+ disabled={disabled}
+ min={-1}
+ max={60}
+ title="喂给 AI 的每周期最近K线根数:0=默认20,负数=完整历史"
+ className="w-16 px-2 py-1 rounded text-xs text-center"
+ style={{ background: '#E9E4D6', border: '1px solid #C0B9A2', color: '#1E1E1A' }}
+ />
  </div>
  </div>
  <p className="text-[10px] mb-2" style={{ color: '#8A8A7C' }}>{ts(indicator.timeframesDesc, language)}</p>
+ <p className="text-[10px] mb-2" style={{ color: '#8A8A7C' }}>Prompt根数 = 每周期只把最近 N 根已闭合 K 线喂给 AI(0=默认 20,负数=完整历史);指标仍按完整历史计算。</p>
 
  {/* Timeframe Grid */}
  <div className="space-y-1.5">

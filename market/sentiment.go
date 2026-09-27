@@ -17,11 +17,19 @@ import (
 // sentiment sources rendered together at the head of the user prompt, with an
 // explicit combine-don't-overindex instruction:
 //   1. Alternative.me  — crypto macro fear & greed (daily)
-//   2. feargreedchart  — US-stock macro fear & greed, CNN-style components
+//   2. feargreedchart  — US-stock macro fear & greed proxy (its OWN five-
+//                        component model over Yahoo Finance data — NOT CNN's
+//                        official index; weights happen to match 25/25/20/15/15)
 //   3. Binance         — contract crowding: global long/short account ratio
 //                        + premiumIndex last funding (BTC/ETH)
 // All sources are KEYLESS and fail-open: a failed source renders as absent,
 // never as a fabricated value. Caches match each source's natural cadence.
+//
+// Time semantics (user review 2026-09-27): the composite is cached up to 30
+// minutes, so "as of now" stamped at render time lied about freshness. Every
+// source therefore carries the timestamp ITS DATA describes (SourceAt /
+// MarketDate / RatioPeriodEnd / FundingAt) and the composite carries the wall
+// clock it was FETCHED at — render reads only stored fields, never Now().
 // ============================================================================
 
 // CryptoFG is the Alternative.me fear & greed reading.
@@ -29,12 +37,20 @@ type CryptoFG struct {
 	Value          int    `json:"value"`
 	Classification string `json:"classification"`
 	YesterdayValue int    `json:"yesterday_value"`
+	// SourceAt is the UTC date the reading describes (the API's own
+	// timestamp — a daily index, so the value ages up to 24h by design).
+	SourceAt string `json:"source_at,omitempty"`
 }
 
-// StockFG is the CNN-style stock fear & greed composite.
+// StockFG is the US-stock fear & greed proxy (FearGreedChart's independent
+// model — not CNN's official index).
 type StockFG struct {
 	Score      int                `json:"score"`
 	Components []StockFGComponent `json:"components"`
+	// MarketDate is the trading day the score describes (latest close —
+	// weekends/holders keep showing Friday until Monday's close lands).
+	MarketDate string `json:"market_date,omitempty"`
+	FetchedAt  string `json:"fetched_at,omitempty"` // API series generation time (UTC)
 }
 
 type StockFGComponent struct {
@@ -49,6 +65,10 @@ type BinanceCrowd struct {
 	ETHLS       float64 `json:"eth_ls_ratio"`
 	BTCAFunding float64 `json:"btc_funding"` // raw per-interval rate (decimal)
 	ETHFunding  float64 `json:"eth_funding"`
+	// RatioPeriodEnd is the close of the 1h stats window the L/S ratios come
+	// from (Binance returns one row; its timestamp IS the data's age).
+	RatioPeriodEnd string `json:"ratio_period_end,omitempty"`
+	FundingAt      string `json:"funding_at,omitempty"` // premiumIndex quote time (UTC)
 }
 
 // MarketSentiment is the composite block; nil fields = source unavailable.
@@ -56,7 +76,15 @@ type MarketSentiment struct {
 	Crypto  *CryptoFG     `json:"crypto_fg,omitempty"`
 	Stock   *StockFG      `json:"stock_fg,omitempty"`
 	Binance *BinanceCrowd `json:"binance_crowding,omitempty"`
-	Notes   []string      `json:"notes,omitempty"` // per-source fetch failures
+	// FetchedAt is the wall clock the composite was fetched at (UTC) — the
+	// honest "how old is this cache" stamp (TTL 30 min).
+	FetchedAt string `json:"fetched_at,omitempty"`
+	// Regime / TradeEffect are the PROGRAM's combination verdict over the
+	// three sources (see classifySentimentRegime) — the model cites the enum
+	// instead of re-deriving the three combine rules every cycle.
+	Regime      string   `json:"sentiment_regime,omitempty"`
+	TradeEffect string   `json:"sentiment_trade_effect,omitempty"`
+	Notes       []string `json:"notes,omitempty"` // per-source fetch failures
 }
 
 var (
@@ -97,7 +125,13 @@ func fetchCryptoFG() *CryptoFG {
 	if err1 != nil || err2 != nil {
 		return nil
 	}
-	return &CryptoFG{Value: today, Classification: payload.Data[0].ValueClassification, YesterdayValue: yest}
+	out := &CryptoFG{Value: today, Classification: payload.Data[0].ValueClassification, YesterdayValue: yest}
+	// The reading's own date (unix seconds, daily 00:00 UTC) — the honest
+	// as-of for a value that is up to 24h old by design.
+	if sec, err := strconv.ParseInt(payload.Data[0].Timestamp, 10, 64); err == nil && sec > 0 {
+		out.SourceAt = time.Unix(sec, 0).UTC().Format("2006-01-02")
+	}
+	return out
 }
 
 func fetchStockFG() *StockFG {
@@ -110,6 +144,11 @@ func fetchStockFG() *StockFG {
 				Wt   int    `json:"wt"`
 			} `json:"components"`
 		} `json:"score"`
+		Recent []struct {
+			Date  string `json:"date"`
+			Score int    `json:"score"`
+		} `json:"recent"`
+		Ts int64 `json:"ts"`
 	}
 	if err := sentimentHTTPGet("https://feargreedchart.com/api", &payload); err != nil {
 		return nil
@@ -121,6 +160,14 @@ func fetchStockFG() *StockFG {
 	if out.Score <= 0 {
 		return nil
 	}
+	// The trading day the CURRENT score describes = the latest dated entry
+	// (score matches; on weekends that is Friday's close — disclose it).
+	if n := len(payload.Recent); n > 0 && payload.Recent[n-1].Date != "" {
+		out.MarketDate = payload.Recent[n-1].Date
+	}
+	if payload.Ts > 0 {
+		out.FetchedAt = time.UnixMilli(payload.Ts).UTC().Format("2006-01-02 15:04 UTC")
+	}
 	return out
 }
 
@@ -129,21 +176,29 @@ func fetchBinanceCrowd() *BinanceCrowd {
 	ls := func(symbol string) float64 {
 		var rows []struct {
 			LongShortRatio string `json:"longShortRatio"`
+			Timestamp      int64  `json:"timestamp"`
 		}
 		if err := sentimentHTTPGet("https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol="+symbol+"&period=1h&limit=1", &rows); err != nil || len(rows) == 0 {
 			return 0
 		}
 		v, _ := strconv.ParseFloat(rows[0].LongShortRatio, 64)
+		if rows[0].Timestamp > 0 {
+			out.RatioPeriodEnd = time.UnixMilli(rows[0].Timestamp).UTC().Format("2006-01-02 15:04 UTC")
+		}
 		return v
 	}
 	premium := func(symbol string) float64 {
 		var p struct {
 			LastFundingRate string `json:"lastFundingRate"`
+			Time            int64  `json:"time"`
 		}
 		if err := sentimentHTTPGet("https://fapi.binance.com/fapi/v1/premiumIndex?symbol="+symbol, &p); err != nil {
 			return 0
 		}
 		v, _ := strconv.ParseFloat(p.LastFundingRate, 64)
+		if p.Time > 0 {
+			out.FundingAt = time.UnixMilli(p.Time).UTC().Format("2006-01-02 15:04 UTC")
+		}
 		return v
 	}
 	out.BTCLS = ls("BTCUSDT")
@@ -186,9 +241,82 @@ func GetMarketSentiment() *MarketSentiment {
 	if out.Binance == nil {
 		out.Notes = append(out.Notes, "binance_crowding_fetch_failed")
 	}
+	// Wall clock of the FETCH — the only "now" this package is allowed to
+	// stamp (the render path reads stored fields so a 29-minute-old cache
+	// can never pose as fresh, user review 2026-09-27).
+	out.FetchedAt = time.Now().UTC().Format("2006-01-02 15:04 UTC")
+	out.Regime, out.TradeEffect = classifySentimentRegime(out)
 	sentimentCache = out
 	sentimentCachedAt = time.Now()
 	return out
+}
+
+// classifySentimentRegime is the program's verdict over the three combine
+// rules the prompt states: side (extreme needs BOTH macro sources), leverage
+// crowding (funding annualized ≥50% or L/S accounts >2 on a major), and the
+// resulting trade effect (crowded extremes → conservative opens; diverging
+// sources → structure wins; otherwise context-only). Pure function of the
+// stored values — never of the wall clock.
+func classifySentimentRegime(m *MarketSentiment) (regime, effect string) {
+	crypto, stock := 50, 50
+	haveCrypto, haveStock := false, false
+	if m.Crypto != nil {
+		crypto, haveCrypto = m.Crypto.Value, true
+	}
+	if m.Stock != nil {
+		stock, haveStock = m.Stock.Score, true
+	}
+	side := "NEUTRAL"
+	bothGreed := haveCrypto && haveStock && crypto >= 75 && stock >= 75
+	bothFear := haveCrypto && haveStock && crypto <= 25 && stock <= 25
+	split := haveCrypto && haveStock && ((crypto >= 75 && stock <= 25) || (crypto <= 25 && stock >= 75))
+	switch {
+	case split:
+		side = "DIVERGENT"
+	case bothGreed:
+		side = "EXTREME_GREED"
+	case bothFear:
+		side = "EXTREME_FEAR"
+	case crypto >= 55 || stock >= 55:
+		side = "GREED"
+	case crypto <= 45 || stock <= 45:
+		side = "FEAR"
+	}
+
+	crowding := ""
+	if m.Binance != nil {
+		crowded := false
+		for _, f := range []float64{m.Binance.BTCAFunding, m.Binance.ETHFunding} {
+			if fundingAnnualized(f) >= 50 || fundingAnnualized(f) <= -50 {
+				crowded = true
+			}
+		}
+		for _, r := range []float64{m.Binance.BTCLS, m.Binance.ETHLS} {
+			if r > 2 {
+				crowded = true
+			}
+		}
+		if crowded {
+			crowding = "_LEVERAGE_CROWDED"
+		} else {
+			crowding = "_NOT_LEVERAGE_CROWDED"
+		}
+	} else {
+		crowding = "_CROWDING_UNKNOWN"
+	}
+	if side == "NEUTRAL" {
+		return "NEUTRAL", "CONTEXT_ONLY"
+	}
+	regime = side + crowding
+	switch {
+	case side == "EXTREME_GREED" && crowding == "_LEVERAGE_CROWDED":
+		effect = "CONSERVATIVE_OPENS" // combine rule ①: crowding zone
+	case side == "DIVERGENT":
+		effect = "STRUCTURE_WINS" // combine rule ②
+	default:
+		effect = "CONTEXT_ONLY" // combine rule ③
+	}
+	return regime, effect
 }
 
 // fundingAnnualized converts a raw per-8h-settlement funding decimal to an
@@ -212,7 +340,11 @@ func (m *MarketSentiment) Render() string {
 		} else if m.Crypto.Value < m.Crypto.YesterdayValue {
 			dir = "较昨日回落"
 		}
-		sb_ = append(sb_, fmt.Sprintf("加密宏观情绪(Alternative.me): %d %s(%s,昨日 %d)", m.Crypto.Value, m.Crypto.Classification, dir, m.Crypto.YesterdayValue))
+		line := fmt.Sprintf("加密宏观情绪(Alternative.me): %d %s(%s,昨日 %d)", m.Crypto.Value, m.Crypto.Classification, dir, m.Crypto.YesterdayValue)
+		if m.Crypto.SourceAt != "" {
+			line += "[数据日 " + m.Crypto.SourceAt + "]"
+		}
+		sb_ = append(sb_, line)
 	}
 	if m.Stock != nil {
 		comps := make([]string, 0, len(m.Stock.Components))
@@ -220,7 +352,14 @@ func (m *MarketSentiment) Render() string {
 			comps = append(comps, fmt.Sprintf("%s %d(权重%d%%)", c.Name, c.Val, c.Wt))
 		}
 		sort.Strings(comps)
-		sb_ = append(sb_, fmt.Sprintf("美股宏观情绪(CNN 口径): %d;分量: %s", m.Stock.Score, strings.Join(comps, ", ")))
+		// FearGreedChart's own methodology is an independent five-component
+		// model over Yahoo Finance data — it is NOT CNN's official index and
+		// must not be presented as one (user review 2026-09-27 #2).
+		line := fmt.Sprintf("美股情绪代理(FearGreedChart 独立模型,非CNN官方): %d;分量: %s", m.Stock.Score, strings.Join(comps, ", "))
+		if m.Stock.MarketDate != "" {
+			line += "[数据日 " + m.Stock.MarketDate + " 收盘]"
+		}
+		sb_ = append(sb_, line)
 	}
 	if m.Binance != nil {
 		parts := ""
@@ -260,9 +399,39 @@ func (m *MarketSentiment) Render() string {
 	if len(failed) > 0 {
 		body += "\n(缺数来源: " + strings.Join(failed, "、") + " — 按剩余来源与价格结构判断)"
 	}
-	// As-of stamp: funding drifts per settlement interval — the model must
-	// know the snapshot age when comparing against live prices.
-	body += "\n数据截至: " + time.Now().UTC().Format("2006-01-02 15:04 UTC")
+	// Program's combination verdict as citable enums (user review 2026-09-27):
+	// the model references these instead of re-deriving the three combine
+	// rules; they never override program hard gates.
+	regime, effect := m.Regime, m.TradeEffect
+	if regime == "" {
+		regime, effect = classifySentimentRegime(m)
+	}
+	body += "\nsentiment_regime: " + regime + " | sentiment_trade_effect: " + effect + "(程序判定,仅为背景,不覆盖硬门)"
+	// Per-source as-of stamps (user review 2026-09-27 #1): the composite is
+	// cached ≤30min, so freshness comes from the stored data timestamps —
+	// funding drifts per settlement, the daily indexes age by design, and a
+	// stale cache must never pose as "just fetched".
+	var stamps []string
+	if m.Crypto != nil && m.Crypto.SourceAt != "" {
+		stamps = append(stamps, "crypto_fng="+m.Crypto.SourceAt)
+	}
+	if m.Stock != nil && m.Stock.MarketDate != "" {
+		stamps = append(stamps, "stock="+m.Stock.MarketDate+"收盘")
+	}
+	if m.Binance != nil {
+		if m.Binance.RatioPeriodEnd != "" {
+			stamps = append(stamps, "多空比窗口="+m.Binance.RatioPeriodEnd)
+		}
+		if m.Binance.FundingAt != "" {
+			stamps = append(stamps, "funding="+m.Binance.FundingAt)
+		}
+	}
+	if len(stamps) > 0 {
+		body += "\n数据截至(各来源独立): " + strings.Join(stamps, "; ")
+	}
+	if m.FetchedAt != "" {
+		body += " | 快照拉取: " + m.FetchedAt + "(缓存最长30分钟)"
+	}
 	return body
 }
 
