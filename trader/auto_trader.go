@@ -595,12 +595,19 @@ func nextAlignedWait(interval time.Duration, now time.Time) time.Duration {
 // Stop stops the automatic trading
 func (at *AutoTrader) Stop() {
 	at.isRunningMutex.Lock()
-	if !at.isRunning {
-		at.isRunningMutex.Unlock()
-		return
-	}
+	wasRunning := at.isRunning
 	at.isRunning = false
 	at.isRunningMutex.Unlock()
+
+	// Exchange-config updates rebuild the AutoTrader with a new SDK client.
+	// Stop the old Binance sync ticker before dropping that client; it embeds
+	// the API key and otherwise survives independently of the main loop.
+	if binanceTrader, ok := at.trader.(*binance.FuturesTrader); ok {
+		binanceTrader.StopOrderSync()
+	}
+	if !wasRunning {
+		return
+	}
 
 	close(at.stopMonitorCh) // Notify monitoring goroutine to stop
 	at.monitorWg.Wait()     // Wait for monitoring goroutine to finish

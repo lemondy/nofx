@@ -9,6 +9,7 @@ import (
 	"nofx/logger"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/adshao/go-binance/v2/futures"
@@ -85,6 +86,15 @@ type FuturesTrader struct {
 
 	// Cache validity period (15 seconds)
 	cacheDuration time.Duration
+
+	// Background order-sync lifecycle. Exchange credentials are immutable on
+	// the SDK client, so a config reload must stop the old sync loop before the
+	// old FuturesTrader is discarded; otherwise it keeps calling Binance every
+	// 30 seconds with stale credentials forever.
+	orderSyncMu     sync.Mutex
+	orderSyncStop   chan struct{}
+	orderSyncDone   chan struct{}
+	syncAuthAlerted atomic.Bool
 }
 
 // NewFuturesTrader creates futures trader

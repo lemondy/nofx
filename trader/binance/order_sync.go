@@ -396,35 +396,82 @@ func (t *FuturesTrader) determineOrderAction(side, positionSide string, realized
 	return "open_short"
 }
 
-// syncAuthAlerted suppresses repeated auth alerts until a sync succeeds again.
-var syncAuthAlerted atomic.Bool
-
 // StartOrderSync starts background order sync task for Binance
 func (t *FuturesTrader) StartOrderSync(traderID string, exchangeID string, exchangeType string, st *store.Store, interval time.Duration) {
-	// Run first sync immediately
-	go func() {
-		logger.Infof("🔄 [%s] Running initial Binance order sync (exchange %s)...", traderID, exchangeID)
-		if err := t.SyncOrdersFromBinance(traderID, exchangeID, exchangeType, st); err != nil {
-			logger.Infof("⚠️  [%s] Initial Binance order sync failed (exchange %s): %v", traderID, exchangeID, err)
+	first := true
+	run := func() {
+		if first {
+			logger.Infof("🔄 [%s] Running initial Binance order sync (exchange %s)...", traderID, exchangeID)
+			first = false
 		}
-	}()
+		if err := t.SyncOrdersFromBinance(traderID, exchangeID, exchangeType, st); err != nil {
+			logger.Infof("⚠️  [%s] Binance order sync failed (exchange %s): %v", traderID, exchangeID, err)
+			if IsAuthOrIPError(err) && !t.syncAuthAlerted.Swap(true) {
+				notify.Notify("ALERT", t.notifyLabel(), fmt.Sprintf("<b>🚨 Binance 认证/IP 校验失败（exchange %s），订单同步不可用</b>\n请检查该 API Key 的 IP 白名单与合约权限（当前出口 IP 见日志）；订单同步保留恢复探测，配置更新会重建客户端。", exchangeID))
+			}
+		} else {
+			// Recovered — re-arm the alert for future failures.
+			t.syncAuthAlerted.Store(false)
+		}
+	}
+	if t.startOrderSyncLoop(interval, run) {
+		logger.Infof("🔄 Binance order sync started (interval: %v)", interval)
+	} else {
+		logger.Infof("🔄 [%s] Binance order sync already running; duplicate start ignored", traderID)
+	}
+}
 
-	// Then run periodically
-	ticker := time.NewTicker(interval)
+// startOrderSyncLoop owns the ticker lifecycle. Keeping this helper free of
+// exchange calls makes stop/duplicate-start behavior deterministic in tests.
+func (t *FuturesTrader) startOrderSyncLoop(interval time.Duration, run func()) bool {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	t.orderSyncMu.Lock()
+	defer t.orderSyncMu.Unlock()
+	if t.orderSyncStop != nil {
+		return false
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.orderSyncStop = stop
+	t.orderSyncDone = done
+
 	go func() {
-		for range ticker.C {
-			if err := t.SyncOrdersFromBinance(traderID, exchangeID, exchangeType, st); err != nil {
-				logger.Infof("⚠️  [%s] Binance order sync failed (exchange %s): %v", traderID, exchangeID, err)
-				if IsAuthOrIPError(err) && !syncAuthAlerted.Swap(true) {
-					notify.Notify("ALERT", t.notifyLabel(), fmt.Sprintf("<b>🚨 Binance 认证/IP 校验失败（exchange %s），交易同步已停止</b>\n请检查该 API Key 的 IP 白名单与合约权限（当前出口 IP 见日志），修复后自动恢复。", exchangeID))
-				}
-			} else {
-				// Recovered — re-arm the alert for future failures.
-				syncAuthAlerted.Store(false)
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		run() // initial sync immediately
+		for {
+			select {
+			case <-ticker.C:
+				run()
+			case <-stop:
+				return
 			}
 		}
 	}()
-	logger.Infof("🔄 Binance order sync started (interval: %v)", interval)
+	return true
+}
+
+// StopOrderSync stops and joins the background sync loop. This must run before
+// a FuturesTrader is removed during API-key/exchange config reload, otherwise
+// the discarded client survives through its ticker and keeps using stale keys.
+func (t *FuturesTrader) StopOrderSync() {
+	t.orderSyncMu.Lock()
+	stop, done := t.orderSyncStop, t.orderSyncDone
+	if stop == nil {
+		t.orderSyncMu.Unlock()
+		return
+	}
+	close(stop)
+	t.orderSyncStop = nil
+	t.orderSyncDone = nil
+	t.orderSyncMu.Unlock()
+
+	<-done
+	logger.Infof("⏹ Binance order sync stopped")
 }
 
 // fillNotified suppresses duplicate fill alerts until a successful sync.
