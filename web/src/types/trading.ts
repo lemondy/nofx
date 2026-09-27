@@ -40,6 +40,12 @@ export interface Position {
   unrealized_pnl_pct: number
   liquidation_price: number
   margin_used: number
+  // 交易所实查的该仓挂单腿(09-27):SL/TP algo 触发价 + 未成交入场限价;查询失败时缺省
+  protection?: {
+    sl_price?: number
+    tp_price?: number
+    limit_price?: number
+  } | null
 }
 
 export interface DecisionAction {

@@ -608,6 +608,8 @@ export function TraderDashboardPage({
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('positionValue', language)}>{t('traderDashboard.value', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-center hidden md:table-cell" title={t('leverage', language)}>{t('traderDashboard.lev', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('unrealizedPnL', language)}>{t('traderDashboard.uPnL', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('unrealizedPnL', language)}>{t('traderDashboard.pnlPct', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('traderDashboard.ordersHint', language)}>{t('traderDashboard.orders', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('liqPrice', language)}>{t('traderDashboard.liq', language)}</th>
  </tr>
  </thead>
@@ -669,6 +671,37 @@ export function TraderDashboardPage({
  {pos.unrealized_pnl >= 0 ? '+' : ''}
  {pos.unrealized_pnl.toFixed(2)}
  </span>
+ </td>
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-right">
+ <span
+ className={`font-bold ${(pos.unrealized_pnl_pct ?? 0) >= 0 ? 'text-nofx-green' : 'text-nofx-red'}`}
+ >
+ {(pos.unrealized_pnl_pct ?? 0) >= 0 ? '+' : ''}
+ {(pos.unrealized_pnl_pct ?? 0).toFixed(2)}%
+ </span>
+ </td>
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-right hidden md:table-cell">
+ {(() => {
+ const sl = pos.protection?.sl_price
+ const tp = pos.protection?.tp_price
+ const lim = pos.protection?.limit_price
+ if (sl == null && tp == null && lim == null) {
+ return <span className="text-nofx-text-muted" title={t('traderDashboard.ordersMissing', language)}>—</span>
+ }
+ return (
+ <span className="inline-flex flex-col items-end gap-0.5 leading-tight">
+ {sl != null && (
+ <span className="text-nofx-red" title={`SL ${formatPrice(sl)}`}>SL {formatPrice(sl)}</span>
+ )}
+ {tp != null && (
+ <span className="text-nofx-green" title={`TP ${formatPrice(tp)}`}>TP {formatPrice(tp)}</span>
+ )}
+ {lim != null && (
+ <span className="text-nofx-gold" title={`LIMIT ${formatPrice(lim)}`}>LMT {formatPrice(lim)}</span>
+ )}
+ </span>
+ )
+ })()}
  </td>
  <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-muted hidden md:table-cell">{formatPrice(pos.liquidation_price)}</td>
  </tr>

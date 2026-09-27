@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"nofx/logger"
 	"nofx/market"
@@ -184,6 +185,53 @@ func (s *Server) handlePositions(c *gin.Context) {
 	if err != nil {
 		SafeInternalError(c, "Get positions", err)
 		return
+	}
+
+	// Attach each position's resting exchange orders (user request 09-27):
+	// the SL/TP algo legs and any pending entry limit, read LIVE from the
+	// exchange — the DB/memory echoes drift (09-13: the watchdog had to
+	// reseed stops from exchange orders after a restart). Fail-open: a
+	// failed order query renders the position without protection info
+	// rather than failing the whole endpoint.
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		side, _ := pos["side"].(string)
+		if symbol == "" {
+			continue
+		}
+		orders, err := trader.GetOpenOrders(symbol)
+		if err != nil {
+			logger.Warnf("⚠️ [positions] open orders query failed for %s: %v", symbol, err)
+			continue
+		}
+		protection := map[string]interface{}{}
+		for _, o := range orders {
+			// Hedge mode keys orders by positionSide; one-way mode reports
+			// BOTH — accept both, plus the empty edge, so one-way accounts
+			// still see their legs.
+			if o.PositionSide != "" && !strings.EqualFold(o.PositionSide, side) && !strings.EqualFold(o.PositionSide, "BOTH") {
+				continue
+			}
+			trigger := o.StopPrice
+			if trigger <= 0 {
+				trigger = o.Price
+			}
+			switch {
+			case strings.Contains(o.Type, "STOP"):
+				if trigger > 0 {
+					protection["sl_price"] = trigger
+				}
+			case strings.Contains(o.Type, "TAKE_PROFIT"):
+				if trigger > 0 {
+					protection["tp_price"] = trigger
+				}
+			case o.Type == "LIMIT":
+				if o.Price > 0 {
+					protection["limit_price"] = o.Price
+				}
+			}
+		}
+		pos["protection"] = protection
 	}
 
 	c.JSON(http.StatusOK, positions)
