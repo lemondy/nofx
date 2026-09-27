@@ -699,7 +699,7 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 				LongerTimeframe:      "4h",
 				LongerCount:          10,
 				EnableMultiTimeframe: true,
-				SelectedTimeframes:   []string{"5m", "15m", "1h"},
+				SelectedTimeframes:   []string{"5m", "15m", "1h", "4h"},
 			},
 			EnableRawKlines:   true, // Required - raw OHLCV data for AI analysis
 			EnableEMA:         false,

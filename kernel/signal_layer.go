@@ -158,7 +158,12 @@ type SymbolSignal struct {
 	PrimaryTF           string  `json:"primary_tf"`
 	// Explicit timeframe roles (⑨): one field, three jobs — which TF drives
 	// execution timing, which carries the tradeable trend, which sets regime.
-	RoleTFs        RoleTimeframes       `json:"role_tfs"`
+	RoleTFs RoleTimeframes `json:"role_tfs"`
+	// MarketRegime is the deterministic trend x volatility classification
+	// derived from CLOSED 1h/4h bars. It is execution evidence, not an LLM
+	// sentiment label: market-order chase exceptions fail closed unless the
+	// confirmed regime matches their direction.
+	MarketRegime   *MarketRegime        `json:"market_regime,omitempty"`
 	Timeframes     map[string]*TFSignal `json:"timeframes"`
 	Derivatives    *DerivSignal         `json:"derivatives,omitempty"`
 	Liquidity      *LiquiditySignal     `json:"liquidity,omitempty"`
@@ -952,6 +957,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 
 	// ⑨ Role timeframes.
 	sig.RoleTFs = RoleTimeframes{ExecutionTF: opt.PrimaryTF, TrendTF: "1h", RegimeTF: "4h"}
+	// First-class market regime (closed 1h/4h bars only). This is computed
+	// before hard_entry_gate because market-order exceptions consume it.
+	sig.MarketRegime = computeMarketRegime(data, now)
 
 	// ⑩ Data quality — complete (fetched) vs sufficient (enough history for
 	// the indicator stack: RSI14/MACD(26)/EMA50 need ≥60 closed bars).
@@ -1347,6 +1355,12 @@ const UnprotectedStopWorstCasePct = 8.0
 // The kernel verdict lands on DirectionGate.MarketException, which the
 // trader enforces at the open dispatch.
 func marketExceptionEvidence(sig *SymbolSignal, isLong bool) bool {
+	// A chase is permitted only after two closed 1h evaluations agree on a
+	// direction-matched trend regime. RANGE/CHOP/UNKNOWN fail closed; ordinary
+	// structure-based limit entries continue through their existing gates.
+	if !marketRegimeAllowsException(sig, isLong) {
+		return false
+	}
 	if isLong {
 		if sig.BBRide != nil && sig.BBRide.Ride {
 			return fundingAllowsMarketException(sig, isLong)

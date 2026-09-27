@@ -192,16 +192,16 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 			entryQuality := 0
 			fd := &FullDecision{
 				Decisions: []Decision{{
-					Symbol:          "ALL",
-					Action:          "wait",
-					Reasoning:       fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
-					EntryQuality:    &entryQuality,
+					Symbol:       "ALL",
+					Action:       "wait",
+					Reasoning:    fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
+					EntryQuality: &entryQuality,
 					// 2026-09-27 data-quality fix: CONFLICT_UNRESOLVED misdescribed
-				// regime-skip cycles (the real blockers are per-coin hard-gate
-				// codes — RR_MAX/STOP_PLAN/VENDOR_DIVERGENCE/MICRO_TREND/…,
-				// preserved in the compressed prompt lines and the
-				// gate_shadow_blocks table). Dedicated enum instead.
-				BlockingFactors: []string{"ALL_CANDIDATES_HARD_BLOCKED"},
+					// regime-skip cycles (the real blockers are per-coin hard-gate
+					// codes — RR_MAX/STOP_PLAN/VENDOR_DIVERGENCE/MICRO_TREND/…,
+					// preserved in the compressed prompt lines and the
+					// gate_shadow_blocks table). Dedicated enum instead.
+					BlockingFactors: []string{"ALL_CANDIDATES_HARD_BLOCKED"},
 					NoTradeReasons:  []string{"全部候选双向硬门拦截", "下一周期快照自动重评"},
 					Stage:           "NO_SETUP",
 				}},
@@ -326,11 +326,19 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 			timeframes = append(timeframes, config.Indicators.Klines.LongerTimeframe)
 		}
 	}
+	// Programmatic market regime always needs closed 1h + 4h history. Saved
+	// strategies created before the regime field commonly list only
+	// 5m/15m/1h; append missing frames at runtime instead of silently emitting
+	// UNKNOWN and disabling every market-order exception.
+	timeframes = withRequiredRegimeTimeframes(timeframes)
 	if primaryTimeframe == "" {
 		primaryTimeframe = timeframes[0]
 	}
-	if klineCount <= 0 {
-		klineCount = 30
+	if klineCount < store.MinKlineCount {
+		klineCount = store.MinKlineCount
+	}
+	if klineCount > store.MaxKlineCount {
+		klineCount = store.MaxKlineCount
 	}
 
 	logger.Infof("📊 Strategy timeframes: %v, Primary: %s, Kline count: %d", timeframes, primaryTimeframe, klineCount)

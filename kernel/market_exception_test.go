@@ -11,13 +11,15 @@ func TestMarketExceptionEvidenceDirectionMatched(t *testing.T) {
 	cool := func() *DerivSignal { f := 10.0; return &DerivSignal{FundingAnnualizedPct: &f} }
 	hot := func() *DerivSignal { f := 60.0; return &DerivSignal{FundingAnnualizedPct: &f} }
 
-	longRide := &SymbolSignal{BBRide: &BBRide{Ride: true}, Derivatives: cool()}
+	upRegime := func() *MarketRegime { return &MarketRegime{Regime: "TREND_UP", ConfirmedBars: 2} }
+	downRegime := func() *MarketRegime { return &MarketRegime{Regime: "TREND_DOWN", ConfirmedBars: 2} }
+	longRide := &SymbolSignal{BBRide: &BBRide{Ride: true}, Derivatives: cool(), MarketRegime: upRegime()}
 	if !marketExceptionEvidence(longRide, true) {
 		t.Fatal("long bb_ride with cool funding must evidence the long exception")
 	}
 	// 2026-09-27 external review P2: funding-heat filter — crowded-side
 	// funding downgrades the market exception (fail-closed on UNKNOWN).
-	hotLongRide := &SymbolSignal{BBRide: &BBRide{Ride: true}, Derivatives: hot()}
+	hotLongRide := &SymbolSignal{BBRide: &BBRide{Ride: true}, Derivatives: hot(), MarketRegime: upRegime()}
 	if marketExceptionEvidence(hotLongRide, true) {
 		t.Fatal("long bb_ride with +60% funding (longs crowded) must NOT get the market exception")
 	}
@@ -29,7 +31,7 @@ func TestMarketExceptionEvidenceDirectionMatched(t *testing.T) {
 		t.Fatal("a long bb_ride must NOT evidence the short exception (short_ride absent)")
 	}
 
-	shortRide := &SymbolSignal{ShortRide: &BBShortRide{Ride: true}, Derivatives: cool()}
+	shortRide := &SymbolSignal{ShortRide: &BBShortRide{Ride: true}, Derivatives: cool(), MarketRegime: downRegime()}
 	if !marketExceptionEvidence(shortRide, false) {
 		t.Fatal("short_ride must evidence the short exception")
 	}
@@ -40,8 +42,13 @@ func TestMarketExceptionEvidenceDirectionMatched(t *testing.T) {
 	// Breakout confirmed + volume + OI but no directional score → no
 	// exception: the six conditions are conjunctive.
 	mkBreakout := func(dir string) *SymbolSignal {
+		regime := upRegime()
+		if dir == "breakdown" {
+			regime = downRegime()
+		}
 		return &SymbolSignal{
-			Breakout: &BreakoutState{Status: "confirmed", VolumeConfirm: true, OIConfirm: true, Direction: dir},
+			Breakout:     &BreakoutState{Status: "confirmed", VolumeConfirm: true, OIConfirm: true, Direction: dir},
+			MarketRegime: regime,
 		}
 	}
 	if marketExceptionEvidence(mkBreakout("breakout"), true) {
@@ -66,5 +73,20 @@ func TestMarketExceptionEvidenceDirectionMatched(t *testing.T) {
 	wrongSide.SignalConflict = &SignalConflict{DirectionalScore: 100}
 	if marketExceptionEvidence(wrongSide, false) {
 		t.Fatal("a BREAKOUT confirmation must not fire the SHORT exception regardless of score")
+	}
+
+	// Regime is a hard precondition for chasing. RANGE/CHOP/UNKNOWN, the
+	// opposite trend, and an unconfirmed one-bar transition all fail closed.
+	for name, regime := range map[string]*MarketRegime{
+		"missing":       nil,
+		"range":         {Regime: "RANGE_NORMAL", ConfirmedBars: 2},
+		"chop":          {Regime: "CHOP_HIGH_VOL", ConfirmedBars: 2},
+		"opposite":      {Regime: "TREND_DOWN", ConfirmedBars: 2},
+		"not_confirmed": {Regime: "TREND_UP", ConfirmedBars: 1},
+	} {
+		s := &SymbolSignal{BBRide: &BBRide{Ride: true}, Derivatives: cool(), MarketRegime: regime}
+		if marketExceptionEvidence(s, true) {
+			t.Errorf("%s regime must block a long market exception", name)
+		}
 	}
 }
