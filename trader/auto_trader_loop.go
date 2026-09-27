@@ -598,7 +598,13 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				// an earlier incarnation (e.g. an externally opened trade
 				// reusing the symbol); drop it so the monitor re-seeds fresh.
 				at.ClearPeakPnLCache(symbol, side)
-				at.unmarkAIManaged(symbol, side) // position gone — registry clean
+				// NOTE (2026-09-26 review #2 residual, BEATUSDT 09-27): NO
+				// unmarkAIManaged here — this branch fires when updateTime is
+				// UNKNOWN (missing createdTime, always after a restart), NOT
+				// when the position is gone. Unmarking here wiped the AI mark
+				// of every LIVE position on the first cycle after a restart
+				// (mark written 07:10, wiped by the 10:22 restart, adjust
+				// rejected hands-off at 13:06).
 			}
 			updateTime = at.positionFirstSeenTime[posKey]
 		}

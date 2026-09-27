@@ -699,7 +699,12 @@ func (at *AutoTrader) unmarkAIManaged(symbol, side string) {
 	if at.store == nil {
 		return
 	}
-	_ = at.store.AIManaged().Unmark(at.id, symbol, strings.ToLower(side))
+	if err := at.store.AIManaged().Unmark(at.id, symbol, strings.ToLower(side)); err == nil {
+		// Warn-level: an unexpected unmark = automation silently stops
+		// managing a live position (the BEATUSDT 09-27 vanish was invisible
+		// because this had no log).
+		logger.Warnf("🤖 [%s] AI-managed mark removed: %s %s — automation hands-off from here", at.name, symbol, strings.ToLower(side))
+	}
 }
 
 // isAIManaged reports whether the position belongs to the automation. A
