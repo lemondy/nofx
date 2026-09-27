@@ -133,14 +133,13 @@ func TestMarketRegimePromptContract(t *testing.T) {
 	cfg.RiskControl.LimitEntryEnabled = true
 	prompt := NewStrategyEngine(cfg).BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		"market_regime.confirmed_bars", "TREND_UP", "TREND_DOWN",
-		"RANGE_LOW_VOL/RANGE_NORMAL/CHOP_HIGH_VOL/UNKNOWN",
+		"market_regime", "hard_entry_gate", "market_exception=true",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing regime contract %q", want)
 		}
 	}
-	for _, want := range []string{"Market regime (program-computed", "ADX", "Bollinger width", "do not veto an otherwise valid structure-based limit entry"} {
+	for _, want := range []string{"market_regime", "均为程序结果", "禁止重算"} {
 		if !strings.Contains(signalBlockLegend, want) {
 			t.Fatalf("signal legend missing regime contract %q", want)
 		}

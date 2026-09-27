@@ -181,10 +181,9 @@ func TestStopPlanPromptWording(t *testing.T) {
 	sp := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"止损(程序预计算,逐字采用)",
-		"stop_plan_price 就是按方法论算好的止损",
-		"空 0.5×ATR(1h)/多 0.4×ATR(1h)",
+		"stop_plan_price 已按对侧结构+方向缓冲生成",
 		"STOP_PLAN_NO_STRUCTURE", "STOP_PLAN_OUT_OF_BAND",
-		"stop_plan_price + first_rr_ge_target",
+		"stop_plan_price 与 first_rr_ge_target 必须成对采用",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Errorf("system prompt missing %q", want)
@@ -368,15 +367,15 @@ func microFilterFor(t *testing.T, sig *SymbolSignal, microTF string) *ExecutionF
 // elastic = systematic realized-R:R degradation. Mirrors TestCorrectStopLossToPlan.
 func TestCorrectTakeProfitToPlan(t *testing.T) {
 	gates := map[string]*GateState{
-		"ZECUSDT":    {LongTakeProfit: 1648.0, ShortTakeProfit: 1200.5},
+		"ZECUSDT":      {LongTakeProfit: 1648.0, ShortTakeProfit: 1200.5},
 		"NOTARGETUSDT": {}, // rr_scan nil/unusable → nothing to snap to
 	}
 	decs := []Decision{
-		{Symbol: "ZECUSDT", Action: "open_long_limit", TakeProfit: 1700.0},  // model's own math, 3% off
-		{Symbol: "ZECUSDT", Action: "open_short", TakeProfit: 1200.1},       // within 0.05% echo tolerance
-		{Symbol: "ZECUSDT", Action: "open_long", TakeProfit: 0},             // placeholder zero
-		{Symbol: "NOTARGETUSDT", Action: "open_long", TakeProfit: 100.0},    // no target — untouched
-		{Symbol: "ETHUSDT", Action: "hold", TakeProfit: 999.0},              // not an open — untouched
+		{Symbol: "ZECUSDT", Action: "open_long_limit", TakeProfit: 1700.0}, // model's own math, 3% off
+		{Symbol: "ZECUSDT", Action: "open_short", TakeProfit: 1200.1},      // within 0.05% echo tolerance
+		{Symbol: "ZECUSDT", Action: "open_long", TakeProfit: 0},            // placeholder zero
+		{Symbol: "NOTARGETUSDT", Action: "open_long", TakeProfit: 100.0},   // no target — untouched
+		{Symbol: "ETHUSDT", Action: "hold", TakeProfit: 999.0},             // not an open — untouched
 	}
 	correctTakeProfitToPlan(decs, gates, StopPlanTolerancePct)
 

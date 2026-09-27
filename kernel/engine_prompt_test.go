@@ -169,8 +169,8 @@ func TestStopBandWordingMatchesExecutor(t *testing.T) {
 	for _, want := range []string{
 		"止损(程序预计算,逐字采用)",
 		"stop_plan_price",
-		"≥1.5×ATR(1h) 噪声下限",
-		"max(2×ATR(4h), 8%)",
+		"≥1.5×ATR(1h)",
+		"max(2×ATR(4h),8%)",
 		"STOP_PLAN_NO_STRUCTURE", "STOP_PLAN_OUT_OF_BAND",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -197,7 +197,7 @@ func TestStopBandWordingMatchesExecutor(t *testing.T) {
 }
 
 func extractStopLine(prompt string) string {
-	i := strings.Index(prompt, "止损(程序校验)")
+	i := strings.Index(prompt, "止损(")
 	if i < 0 {
 		return "(stop-loss line missing)"
 	}
@@ -223,14 +223,11 @@ func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		"rr_scan",
-		"全部时间块(含 execution_tf/15m)全部 resistance/support",
-		"直接采用 `rr_scan.first_rr_ge_target`",
-		"第一个 RR≥1.5",
-		"MAX_STRUCTURAL_RR",
-		"RR 门结构性失败",
-		"没有 rr_scan 字段", // manual fallback kept for symbols without the block
-		"无可用结构位",
+		"rr_scan.first_rr_ge_target",
+		"MAX_STRUCTURAL_RR=best_rr",
+		"usable=false",
+		"stop_plan_price 与 first_rr_ge_target 必须成对采用",
+		"最低RR=1.5",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("TP rule missing %q", want)
@@ -249,21 +246,12 @@ func TestBreakoutChaseExceptionWording(t *testing.T) {
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		"例外一(突破追入)",
-		"例外二(布林上轨骑行,只做多)",
-		"`bb_ride.ride`=true",
-		"布林上轨骑行",
-		"`bb_ride.ride`=true",
-		"`breakout.status`=\"confirmed\"",
-		"`breakout.volume_confirmation`=true",
-		"`breakout.oi_confirmation`=true",
-		"`directional_score`≥80",
-		"`signal_conflict.directional_conflict`=false",
-		"连亏禁开仓期",
-		"例外不满足仍必须用限价单",
-		"例外三(布林下轨骑行,只做空)",
-		"`short_ride.ride`=true",
-		"open_short` 市价追入",
+		"hard_entry_gate",
+		"`allowed=false` 必须 wait",
+		"`allowed=true && limit_allowed=true`",
+		"`allowed=true && limit_allowed=false && market_exception=true`",
+		"confidence≥80",
+		"不存在其他例外",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("breakout-chase exception missing %q", want)
@@ -328,7 +316,7 @@ func TestBuildUserPromptManagementFields(t *testing.T) {
 	for _, want := range []string{
 		"management_quality", "management_flags",
 		"BREAKEVEN_WARRANTED", "PARTIAL_WARRANTED",
-		"该考虑离场", "正确动作是输出 adjust_stop_loss / partial_close_*",
+		"直接输出 adjust_stop_loss/partial_close_*", "不要 hold+flag",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("management contract missing %q", want)
@@ -346,7 +334,7 @@ func TestBuildUserPromptRallyWindow(t *testing.T) {
 	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
 		"做空需 down/rally(下跌趋势中的反弹=空头入场窗)",
-		"空 0.5×ATR(1h)/多 0.4×ATR(1h)",
+		"止损(程序预计算,逐字采用)",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("rally window prompt missing %q", want)
@@ -414,13 +402,13 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 
 	sys1 := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		"开仓硬门(程序判定,禁止自行重算)",
-		"stop_price(=stop_plan_price)就是方法论止损价",
+		"开仓硬门(唯一权威,禁止重算)",
+		"stop_loss 复制 stop_plan_price",
 		"derivatives.funding_rollover.detected",
 		"禁止从 scanner patterns",
 		"RECHECK_ALL_HARD_GATES",
 		"数据新鲜度优先级",
-		"不要把 limit_entry_offset_pct 当成呼吸阈值",
+		"不要用 limit_entry_offset_pct 自行重算",
 	} {
 		if !strings.Contains(sys1, want) {
 			t.Errorf("system prompt missing %q", want)
@@ -433,14 +421,10 @@ func TestPromptProgramTruthGateWording(t *testing.T) {
 
 	sys := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		// 09-19 audit 八: the "don't output wait_state/decision_stage"
-		// documentation was deleted outright (teaching cost > value); the
-		// BEHAVIORAL contract survives in the slimmed next_trigger line.
-		"next_trigger` 对方向性 wait(WATCH_*/READY_*)必填",
+		"方向性 wait 的 next_trigger 必须是",
 		"RECHECK_ALL_HARD_GATES",
-		"重评条件", "禁止输出任何以天/周为尺度的搁置结论",
-		"只允许收紧到保本或更好(CODE ENFORCED)",
-		"仍锁定亏损的移动",
+		"每周期自动重评", "禁止按天/周搁置",
+		"只允许收紧到保本或更好",
 	} {
 		if !strings.Contains(sys, want) {
 			t.Errorf("system prompt missing %q", want)
@@ -507,15 +491,15 @@ func TestRiskBudgetSingleSource(t *testing.T) {
 	sp := engine.BuildSystemPrompt(75, "")
 	for _, want := range []string{
 		"equity × 3.5% (risk budget)",
-		"75 × 3.5 ÷ 6.48 ≈ 40.5 USDT",
-		"风险金额3.5U",
-		"本策略当前风险预算就是正文这个 3.5%",
+		"100 × 3.5 ÷ 6.48 ≈ 54.0 USDT",
+		"risk at stop ≈ 3.50 USDT",
+		"actual sizing uses current user-prompt equity",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Errorf("system prompt missing %q", want)
 		}
 	}
-	for _, gone := range []string{"× 1.5 ÷ 6.48", "风险金额1.5U", "名义价值50U"} {
+	for _, gone := range []string{"× 1.5 ÷ 6.48", "equity 75", "按量化权益"} {
 		if strings.Contains(sp, gone) {
 			t.Errorf("hardcoded 1.5%% example still present: %q", gone)
 		}
@@ -525,8 +509,11 @@ func TestRiskBudgetSingleSource(t *testing.T) {
 	// prose AND examples.
 	engine0 := NewStrategyEngine(&store.StrategyConfig{})
 	sp0 := engine0.BuildSystemPrompt(100, "")
-	if !strings.Contains(sp0, "× 1.5 ÷ 6.48") || !strings.Contains(sp0, "风险金额1.5U") {
+	if !strings.Contains(sp0, "100 × 1.5 ÷ 6.48") || !strings.Contains(sp0, "risk at stop ≈ 1.50 USDT") {
 		t.Error("default 1.5% must render consistently in prose and examples")
+	}
+	if sp != engine.BuildSystemPrompt(9999.99, "") {
+		t.Error("system prompt must remain byte-stable across live equity changes")
 	}
 }
 
@@ -566,28 +553,54 @@ func TestBuildSystemPromptRendersPumpGuard(t *testing.T) {
 
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildSystemPrompt(100, "")
-	for _, want := range []string{"暴涨延伸做多确认门", "≥ 20%", "EXTENDED_PUMP_UNCONFIRMED"} {
+	for _, want := range []string{"暴涨延伸做多确认门", "≥20%", "EXTENDED_PUMP_UNCONFIRMED"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("default-guard prompt missing %q", want)
 		}
 	}
-	// The blocker line must carry the code in the NO-EXCEPTION list.
-	i := strings.Index(prompt, "任一项时不存在任何例外")
-	seg := prompt[max(0, i-700) : i+10]
-	if !strings.Contains(seg, "EXTENDED_PUMP") {
-		t.Fatal("EXTENDED_PUMP not in the no-exception blocker list")
+	if !strings.Contains(prompt, "hard_entry_gate.failed 给出 EXTENDED_PUMP_UNCONFIRMED") {
+		t.Fatal("pump guard must delegate its verdict to the hard gate")
 	}
 
 	// Configured threshold must flow through verbatim; disabled (negative)
 	// must drop the line entirely.
 	cfg.RiskControl.PumpGuard4hPct = 35
 	engine = NewStrategyEngine(cfg)
-	if !strings.Contains(engine.BuildSystemPrompt(100, ""), "≥ 35%") {
+	if !strings.Contains(engine.BuildSystemPrompt(100, ""), "≥35%") {
 		t.Fatal("configured 35% threshold missing from prompt")
 	}
 	cfg.RiskControl.PumpGuard4hPct = -1
 	engine = NewStrategyEngine(cfg)
 	if strings.Contains(engine.BuildSystemPrompt(100, ""), "暴涨延伸做多确认门") {
 		t.Fatal("disabled guard must not render its params line")
+	}
+}
+
+func TestSystemPromptOutputContractIsCompactAndUnambiguous(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.RiskControl.LimitEntryEnabled = true
+	cfg.RiskControl.SLMinATRMult = 1.5
+	cfg.RiskControl.MinRiskRewardRatio = 1.5
+	prompt := NewStrategyEngine(cfg).BuildSystemPrompt(123.45, "")
+
+	for _, want := range []string{
+		"Output exactly two XML blocks and nothing else",
+		"<reasoning>", "</reasoning>", "<decision>", "</decision>",
+		"strict JSON array without Markdown fences",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("canonical output contract missing %q", want)
+		}
+	}
+	for _, gone := range []string{
+		"Output raw JSON only", "```json", "1R 减仓 50%+保本、1.5R 跟踪止损、25% 全平",
+		"CFTC 比特币期货持仓周报",
+	} {
+		if strings.Contains(prompt, gone) {
+			t.Errorf("obsolete or dynamic system-prompt content remains: %q", gone)
+		}
+	}
+	if len(prompt) > 26000 {
+		t.Errorf("system prompt grew to %d bytes; compact contract budget is 26000", len(prompt))
 	}
 }

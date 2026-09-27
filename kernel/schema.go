@@ -74,10 +74,10 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "可用余额",
 			NameEN:    "Available Balance",
 			Unit:      "USDT",
-			FormulaZH: "总权益 - 未实现盈亏 - 已用保证金（= 钱包余额 - 已用保证金）",
-			FormulaEN: "Total Equity - Unrealized PnL - Used Margin (= Wallet Balance - Used Margin)",
-			DescZH:    "可用于开新仓位的保证金。开仓占用保证金、持仓浮亏都会使其减少；它不是初始资金加已实现盈亏，也不包含已用保证金",
-			DescEN:    "Margin available for opening new positions. Decreases when positions lock margin or float at a loss; NOT initial capital + realized PnL, and excludes used margin",
+			FormulaZH: "总权益 - 已用保证金（本系统的策略可用额口径）",
+			FormulaEN: "Total Equity - Used Margin (this system's strategy-available convention)",
+			DescZH:    "用于策略仓位与保证金校验的可用额，不等于交易所 availableBalance；交易所还可能预留挂单保证金和维持保证金",
+			DescEN:    "Amount used by strategy position and margin checks. It is not the exchange availableBalance, which may also reserve order and maintenance margin",
 		},
 		"PnL": {
 			NameZH:    "总盈亏百分比",
@@ -118,17 +118,17 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "已实现盈亏",
 			NameEN:    "Realized PnL",
 			Unit:      "USDT",
-			FormulaZH: "(出场价 - 进场价) × 数量 - 手续费",
-			FormulaEN: "(Exit Price - Entry Price) × Quantity − Fees",
-			DescZH:    "已平仓交易的实际盈亏，包含手续费。正值=盈利，负值=亏损",
-			DescEN:    "Actual profit/loss of closed trades including fees. Positive=profit, Negative=loss",
+			FormulaZH: "方向因子 × (出场价 - 进场价) × 数量 - 手续费 - 资金费（多=+1，空=-1）",
+			FormulaEN: "side_factor × (Exit - Entry) × Quantity - Fees - Funding (long=+1, short=-1)",
+			DescZH:    "已平仓交易的实际盈亏，包含手续费与资金费。正值=盈利，负值=亏损",
+			DescEN:    "Actual profit/loss of closed trades including fees and funding. Positive=profit, Negative=loss",
 		},
 		"PnL%": {
 			NameZH:    "盈亏百分比",
 			NameEN:    "PnL Percentage",
 			Unit:      "%",
-			FormulaZH: "(出场价 - 进场价) / 进场价 × 100(纯价格回报,不含杠杆)",
-			FormulaEN: "(Exit - Entry) / Entry × 100 (price return, no leverage)",
+			FormulaZH: "方向因子 × (出场价 - 进场价) / 进场价 × 100（纯价格回报，不含杠杆）",
+			FormulaEN: "side_factor × (Exit - Entry) / Entry × 100 (price return, no leverage)",
 			DescZH:    "已平仓交易的收益率，+6.71%表示盈利6.71%",
 			DescEN:    "Return on closed trade, +6.71% means 6.71% profit",
 		},
@@ -146,8 +146,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "未实现盈亏百分比",
 			NameEN:    "Unrealized PnL Percentage",
 			Unit:      "%",
-			FormulaZH: "(当前价 - 进场价) / 进场价 × 100(纯价格回报,不含杠杆;保证金口径 ROI = 此值 × 杠杆)",
-			FormulaEN: "(Current - Entry) / Entry × 100 (price return; margin-basis ROI = this × leverage)",
+			FormulaZH: "方向因子 × (当前价 - 进场价) / 进场价 × 100（纯价格回报；保证金口径 ROI 约为该值 × 杠杆）",
+			FormulaEN: "side_factor × (Current - Entry) / Entry × 100 (price return; margin-basis ROI is approximately this × leverage)",
 			DescZH:    "当前持仓的浮动盈亏，未平仓前是浮动的",
 			DescEN:    "Floating P&L of current position, not realized until closed",
 		},
@@ -162,8 +162,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH: "杠杆倍数",
 			NameEN: "Leverage",
 			Unit:   "x",
-			DescZH: "3x表示价格变动1%，持仓盈亏变动3%。杠杆越高，风险越大",
-			DescEN: "3x means 1% price move = 3% position PnL. Higher leverage = higher risk",
+			DescZH: "3x时价格变动1%，保证金口径ROI约变3%（未计费用）。杠杆越高，风险越大",
+			DescEN: "At 3x, a 1% price move changes margin-basis ROI by about 3% before costs. Higher leverage increases risk",
 		},
 		"MarginUsed": {
 			NameZH:    "占用保证金",
@@ -178,8 +178,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH: "强平价格",
 			NameEN: "Liquidation Price",
 			Unit:   "USDT",
-			DescZH: "价格触及此值时会被强制平仓。0.0000表示无爆仓风险",
-			DescEN: "Price at which position will be force-closed. 0.0000 = no liquidation risk",
+			DescZH: "价格触及此值时可能被强制平仓。0 表示未知或不适用，不得解释为没有强平风险",
+			DescEN: "Price at which the position may be force-closed. Zero means unknown or not applicable, not risk-free",
 		},
 	},
 
@@ -188,8 +188,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH: "持仓量",
 			NameEN: "Open Interest",
 			Unit:   "USDT",
-			DescZH: "未平仓合约的总价值。持仓量增加=资金流入，减少=资金流出",
-			DescEN: "Total value of open contracts. Increasing OI = capital inflow, decreasing = outflow",
+			DescZH: "未平仓合约的总量或名义价值。增加表示未平仓合约扩张，减少表示合约收缩；不能单独证明多空方向",
+			DescEN: "Total amount or notional value of open contracts. Rising OI means expansion and falling OI contraction; OI alone does not prove direction",
 		},
 	},
 }
@@ -221,29 +221,29 @@ var OIInterpretation = OIInterpretationType{
 		ZH string
 		EN string
 	}{
-		ZH: "强多头趋势（新多单开仓，资金流入做多）",
-		EN: "Strong bullish trend (new longs opening, capital flowing into long positions)",
+		ZH: "未平仓合约扩张且价格上涨，偏多推断；仍需结合成交、资金费率与结构确认",
+		EN: "Open contracts expand while price rises: a bullish inference that still needs flow, funding, and structure confirmation",
 	},
 	OIUp_PriceDown: struct {
 		ZH string
 		EN string
 	}{
-		ZH: "强空头趋势（新空单开仓，资金流入做空）",
-		EN: "Strong bearish trend (new shorts opening, capital flowing into short positions)",
+		ZH: "未平仓合约扩张且价格下跌，偏空推断；仍需结合成交、资金费率与结构确认",
+		EN: "Open contracts expand while price falls: a bearish inference that still needs flow, funding, and structure confirmation",
 	},
 	OIDown_PriceUp: struct {
 		ZH string
 		EN string
 	}{
-		ZH: "空头平仓（空头止损离场，可能出现反转）",
-		EN: "Shorts covering (shorts stopped out, potential reversal)",
+		ZH: "合约收缩且价格上涨，可能有空头回补；不是确定结论",
+		EN: "Contracts shrink while price rises: possible short covering, not a definitive conclusion",
 	},
 	OIDown_PriceDown: struct {
 		ZH string
 		EN string
 	}{
-		ZH: "多头平仓（多头止损离场，可能出现反转）",
-		EN: "Longs closing (longs stopped out, potential reversal)",
+		ZH: "合约收缩且价格下跌，可能有多头平仓；不是确定结论",
+		EN: "Contracts shrink while price falls: possible long liquidation, not a definitive conclusion",
 	},
 }
 
@@ -264,26 +264,26 @@ func getSchemaPromptZH() string {
 
 	// Account metrics
 	prompt += "### 账户指标\n"
-	for key, field := range DataDictionary["AccountMetrics"] {
-		prompt += formatFieldDefZH(key, field)
+	for _, key := range []string{"Equity", "Balance", "PnL", "MarginUsage"} {
+		prompt += formatFieldDefZH(key, DataDictionary["AccountMetrics"][key])
 	}
 
 	// Trade metrics
 	prompt += "\n### 交易指标\n"
-	for key, field := range DataDictionary["TradeMetrics"] {
-		prompt += formatFieldDefZH(key, field)
+	for _, key := range []string{"Profit", "PnL%", "HoldDuration", "Entry", "Exit"} {
+		prompt += formatFieldDefZH(key, DataDictionary["TradeMetrics"][key])
 	}
 
 	// Position metrics
 	prompt += "\n### 持仓指标\n"
-	for key, field := range DataDictionary["PositionMetrics"] {
-		prompt += formatFieldDefZH(key, field)
+	for _, key := range []string{"UnrealizedPnL%", "PeakPnL%", "Leverage", "MarginUsed", "LiqPrice"} {
+		prompt += formatFieldDefZH(key, DataDictionary["PositionMetrics"][key])
 	}
 
 	// Market data
 	prompt += "\n### 市场数据\n"
-	for key, field := range DataDictionary["MarketData"] {
-		prompt += formatFieldDefZH(key, field)
+	for _, key := range []string{"OI"} {
+		prompt += formatFieldDefZH(key, DataDictionary["MarketData"][key])
 	}
 
 	// OI interpretation
@@ -303,26 +303,26 @@ func getSchemaPromptEN() string {
 
 	// Account Metrics
 	prompt += "### Account Metrics\n"
-	for key, field := range DataDictionary["AccountMetrics"] {
-		prompt += formatFieldDefEN(key, field)
+	for _, key := range []string{"Equity", "Balance", "PnL", "MarginUsage"} {
+		prompt += formatFieldDefEN(key, DataDictionary["AccountMetrics"][key])
 	}
 
 	// Trade Metrics
 	prompt += "\n### Trade Metrics\n"
-	for key, field := range DataDictionary["TradeMetrics"] {
-		prompt += formatFieldDefEN(key, field)
+	for _, key := range []string{"Profit", "PnL%", "HoldDuration", "Entry", "Exit"} {
+		prompt += formatFieldDefEN(key, DataDictionary["TradeMetrics"][key])
 	}
 
 	// Position Metrics
 	prompt += "\n### Position Metrics\n"
-	for key, field := range DataDictionary["PositionMetrics"] {
-		prompt += formatFieldDefEN(key, field)
+	for _, key := range []string{"UnrealizedPnL%", "PeakPnL%", "Leverage", "MarginUsed", "LiqPrice"} {
+		prompt += formatFieldDefEN(key, DataDictionary["PositionMetrics"][key])
 	}
 
 	// Market Data
 	prompt += "\n### Market Data\n"
-	for key, field := range DataDictionary["MarketData"] {
-		prompt += formatFieldDefEN(key, field)
+	for _, key := range []string{"OI"} {
+		prompt += formatFieldDefEN(key, DataDictionary["MarketData"][key])
 	}
 
 	// OI Interpretation

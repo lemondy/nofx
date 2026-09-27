@@ -95,8 +95,8 @@ func TestPromptMentionsBBRide(t *testing.T) {
 	cfg.RiskControl.LimitEntryEnabled = true
 	engine = NewStrategyEngine(cfg)
 	sp := engine.BuildSystemPrompt(100, "")
-	for _, want := range []string{"布林上轨骑行", "`bb_ride.ride`=true", "confidence≥80",
-		"布林下轨骑行", "`short_ride.ride`=true"} {
+	for _, want := range []string{"布林上轨骑行", "bb_ride", "confidence≥80",
+		"布林下轨骑行", "short_ride", "market_exception=true"} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("prompt missing %q", want)
 		}
