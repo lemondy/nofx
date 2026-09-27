@@ -161,7 +161,10 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 		klines1d, err = getExecutionKlines(symbol, "1d", exchange, 100)
 	}
 	if err != nil {
-		klines1d = nil // silent — daily scale is an enhancement, not a requirement
+		// Crypto paths ignore the absent daily series. Bstock entry validation
+		// detects the missing exact 1d ATR and fails closed rather than falling
+		// back to an intraday risk scale.
+		klines1d = nil
 	}
 
 	// Check if data is empty
@@ -1037,8 +1040,9 @@ func isStaleData(klines []Kline, symbol string) bool {
 }
 
 // executionTimeframeData builds the TimeframeData map the execution-side
-// risk gates read (3m/4h always fetched; 1h best-effort — its absence makes
-// the stop-floor fall back to 4h, a wider but still-enforced floor). 15m is
+// risk gates read (3m/4h always fetched; 1h and 1d best-effort). Missing 1h
+// uses the crypto fallback chain; missing 1d makes bstock entries fail closed.
+// 15m is
 // AGGREGATED locally from the 3m series (5:1, zero extra vendor calls):
 // ComputeSymbolSignals treats 15m as the execution TF, and without this key
 // ExecutionATRPct silently fell back to the longest available series (4h

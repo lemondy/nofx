@@ -594,6 +594,7 @@ func TestSystemPromptOutputContractIsCompactAndUnambiguous(t *testing.T) {
 		"Max Leverage: Altcoins 3x | BTC/ETH 3x",
 		"后端对 TP 与 SL 使用同一 0.05% 容差强制吸附",
 		"串联(AND)", "净方向风险上限(程序强制)",
+		"BSTOCK_DAILY_DATA_UNAVAILABLE", "盘前、正常盘、盘后和夜间均允许按 15m",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("canonical output contract missing %q", want)

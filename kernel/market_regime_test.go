@@ -27,6 +27,40 @@ func TestRequiredRegimeTimeframesPreserveOrderAndDeduplicate(t *testing.T) {
 	}
 }
 
+func TestRequiredSymbolTimeframesAddsDailyOnlyForBStock(t *testing.T) {
+	market.SetEquityClassificationForTesting(
+		map[string]bool{"AAPLUSDT": true},
+		map[string]bool{"AAPLUSDT": true},
+	)
+	defer market.SetEquityClassificationForTesting(nil, nil)
+
+	base := []string{"5m", "15m", "1h", "4h"}
+	stock := withRequiredSymbolTimeframes(base, "AAPLUSDT")
+	wantStock := []string{"5m", "15m", "1h", "4h", "1d"}
+	if !equalStrings(stock, wantStock) {
+		t.Fatalf("bstock timeframes = %v, want %v", stock, wantStock)
+	}
+	crypto := withRequiredSymbolTimeframes(base, "BTCUSDT")
+	if !equalStrings(crypto, base) {
+		t.Fatalf("crypto timeframes = %v, want unchanged %v", crypto, base)
+	}
+	if len(base) != 4 {
+		t.Fatalf("input config mutated: %v", base)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func regimeTF(now time.Time, tf string, bars int, price func(int) float64) *market.TimeframeSeriesData {
 	dur := tfDuration(tf)
 	series := &market.TimeframeSeriesData{Timeframe: tf}

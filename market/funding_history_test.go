@@ -40,4 +40,12 @@ func TestIsUSMarketWeekend(t *testing.T) {
 	if IsUSMarketWeekend(dateUTC(2026, 9, 15, 14)) {
 		t.Error("Tuesday 2026-09-15 must not be weekend")
 	}
+	// Weekday pre-market and after-hours remain eligible for bstock opens;
+	// only the ET weekday determines this gate, not regular-session hours.
+	if IsUSMarketWeekend(dateUTC(2026, 9, 15, 9)) {
+		t.Error("Tuesday pre-market must not be blocked by the weekend gate")
+	}
+	if IsUSMarketWeekend(dateUTC(2026, 9, 16, 1)) {
+		t.Error("Tuesday after-hours ET must not be blocked by the weekend gate")
+	}
 }

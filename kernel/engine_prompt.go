@@ -310,7 +310,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// 预计算(结构位+方向性缓冲,夹带),rr_scan/checkRR/模型采用三者同口径。
 		if floorMult := rc.SLMinATRMult; floorMult > 0 {
 			params.WriteString(fmt.Sprintf("- 止损(程序预计算,逐字采用): stop_plan_price 已按对侧结构+方向缓冲生成,距离带为≥%.1f×ATR(1h)且≤max(2×ATR(4h),8%%);直接复制,STOP_PLAN_NO_STRUCTURE/STOP_PLAN_OUT_OF_BAND 时 wait\n", floorMult))
-			params.WriteString(fmt.Sprintf("- 止损标尺例外(程序强制,美股股票代币): DELL/AAPL/TSLA 等 bstock 使用4h–1d结构位,整条止损带改用天级别 ATR——噪声下限 ≥%.1f×ATR(1d)、方向性缓冲 ×ATR(1d)、带上限 ≤max(2×ATR(1d), 8%%);stop_plan 已按该标尺算好,禁止自行换算。移动止损也用 ATR(1d)\n", floorMult))
+			params.WriteString(fmt.Sprintf("- 股票代币风险标尺(程序强制): DELL/AAPL/TSLA 等 bstock 的止损与止盈结构都使用4h–1d;止损噪声下限 ≥%.1f×ATR(1d)、方向性缓冲 ×ATR(1d)、带上限 ≤max(2×ATR(1d), 8%%)。ATR(1d)缺失时硬门返回 BSTOCK_DAILY_DATA_UNAVAILABLE,不降级到日内 ATR;15m 仅继续负责入场时点。\n", floorMult))
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
@@ -385,7 +385,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString(fmt.Sprintf("- 日内亏损熔断(程序强制): 净值较今日开盘基线回撤 ≥ %.1f%% 时,当日所有新开仓被拦截至下一个 UTC 日,平仓/止损不受影响——连亏日强制降频,不是可选建议\n", v))
 		}
 		if noOpen := e.config.RiskControl.StockWeekendNoOpen; noOpen == nil || *noOpen {
-			params.WriteString("- 股票类代币周末禁开新仓(程序强制): DELL/SKHY 等 bstock 标的周末(美东周六/周日)波动率与胜率都低——候选里出现股票类代币时,本周末只允许 hold/close,不输出任何 open_*\n")
+			params.WriteString("- 股票类代币周末禁开新仓(程序强制): DELL/SKHY 等 bstock 仅在美东周六/周日禁止新开仓;美东周一至周五的盘前、正常盘、盘后和夜间均允许按 15m 执行门评估开仓。周末只允许 hold/close,不输出任何 open_*\n")
 		}
 		if v := e.config.EffectiveUSStockSessionBoostPct(); v > 0 {
 			params.WriteString(fmt.Sprintf("- 美股盘中时段股票标的加权(程序施加,美东周一至五 09:30–16:00 生效): 美股股票类代币(AAPL/TSLA/SPY 等 EQUITY 代币)在 short_scan 候选中的得分已按 +%.0f%% 加权后再截断——它们跟随标的正股交易时段,波动相对加密货币更低、历史胜率更高;候选 reasons 里的「美股盘中时段加权」即此标记。注意:加权改变排序不改变闸门,RR/止损带/时点门照常执行;且此类标的流动性薄于主流加密,点差门(max_spread_pct)会自动拦截过宽盘口,滑点预期要按更宽计\n", v))
@@ -692,7 +692,8 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		sig := e.computeCoinSignal(marketData, quantData, ctx, &coin)
 		// 09-18 token audit ①: a candidate whose BOTH directions carry a
 		// no-exception blocker (RR_MAX / MICRO_TREND / DATA_INSUFFICIENT /
-		// MIN_SIZE / LOSS_STREAK / STOCK_WEEKEND / VENDOR_DIVERGENCE) can
+		// BSTOCK_DAILY_DATA_UNAVAILABLE / MIN_SIZE / LOSS_STREAK /
+		// STOCK_WEEKEND / VENDOR_DIVERGENCE) can
 		// only ever produce a mechanical wait — reading its full 3.5-4.5k
 		// chars of JSON adds nothing. Compress to a table row; a direction
 		// whose only block is LIMIT_ANCHOR_SUPPRESSED keeps the full JSON
@@ -1513,7 +1514,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				tfs = append(tfs, l)
 			}
 		}
-		opt.ConfiguredTimeframes = withRequiredRegimeTimeframes(tfs)
+		opt.ConfiguredTimeframes = withRequiredSymbolTimeframes(tfs, data.Symbol)
 	}
 	opt.Quant = quantData
 	{

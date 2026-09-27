@@ -63,6 +63,26 @@ func TestValidateOpenRisk(t *testing.T) {
 	}
 }
 
+func TestValidateOpenRiskRejectsBStockWithoutDailyATR(t *testing.T) {
+	market.SetEquityClassificationForTesting(
+		map[string]bool{"AAPLUSDT": true},
+		map[string]bool{"AAPLUSDT": true},
+	)
+	defer market.SetEquityClassificationForTesting(nil, nil)
+
+	at := riskTestTrader(store.RiskControlConfig{MinRiskRewardRatio: 1.5, SLMinATRMult: 1.5})
+	d := &kernel.Decision{
+		Action: "open_long", Symbol: "AAPLUSDT",
+		StopLoss: 95, TakeProfit: 110, Leverage: 3,
+	}
+	if err := at.validateOpenRisk(d, 100, 0, 0); err == nil || !strings.Contains(err.Error(), "BSTOCK_DAILY_DATA_UNAVAILABLE") {
+		t.Fatalf("bstock without daily ATR must fail closed, got %v", err)
+	}
+	if err := at.validateOpenRisk(d, 100, 2, 2); err != nil {
+		t.Fatalf("bstock with daily ATR should use normal risk validation: %v", err)
+	}
+}
+
 func TestMinHoldBlocksClose(t *testing.T) {
 	at := riskTestTrader(store.RiskControlConfig{MinHoldMinutes: 10})
 

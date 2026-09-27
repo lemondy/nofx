@@ -35,6 +35,24 @@ func withRequiredRegimeTimeframes(timeframes []string) []string {
 	return out
 }
 
+// withRequiredSymbolTimeframes adds symbol-specific risk frames after the
+// common regime frames. Bstock stops and targets use the 4h-1d structure
+// horizon with ATR(1d), so their prompt path must always fetch 1d instead of
+// silently falling back to the crypto 1h/4h scale. Intraday frames remain in
+// place for entry timing, including weekday pre/after-market trading.
+func withRequiredSymbolTimeframes(timeframes []string, symbol string) []string {
+	out := withRequiredRegimeTimeframes(timeframes)
+	if !market.IsBStockSymbol(symbol) {
+		return out
+	}
+	for _, tf := range out {
+		if tf == "1d" {
+			return out
+		}
+	}
+	return append(out, "1d")
+}
+
 // MarketRegime is a deterministic, auditable trend x volatility state. The
 // enum is intentionally small because it feeds execution gates; Inputs retain
 // the measurements so the verdict never becomes an opaque replacement for

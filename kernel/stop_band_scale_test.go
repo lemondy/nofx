@@ -35,6 +35,22 @@ func TestStopBandScaleForStocks(t *testing.T) {
 	if got := stopFloorPct(sigStock, 1.5); got != 7.5 {
 		t.Fatalf("stock floor = %.2f, want 7.5 (1d scale)", got)
 	}
+	missingDaily := &SymbolSignal{Symbol: "AAPLUSDT", Timeframes: map[string]*TFSignal{
+		"1h": {ATRPct: 1.0}, "4h": {ATRPct: 2.0},
+	}}
+	if got := stopFloorPct(missingDaily, 1.5); got != 0 {
+		t.Fatalf("bstock without 1d ATR must not fall back to intraday ATR; got %.2f", got)
+	}
+	missingDaily.Price = 100
+	missingDaily.LimitBuyPrice = 99
+	missingDaily.LimitSellPrice = 101
+	missingDaily.DataQuality = &DataQuality{Sufficient: true}
+	gate := computeHardEntryGate(missingDaily, SignalOptions{SLMinATRMult: 1.5})
+	for name, direction := range map[string]*DirectionGate{"long": gate.Long, "short": gate.Short} {
+		if !has(direction.Failed, "BSTOCK_DAILY_DATA_UNAVAILABLE") {
+			t.Fatalf("%s gate missing daily-data blocker: %v", name, direction.Failed)
+		}
+	}
 
 	// Cap: crypto cap 2×ATR(4h)=4 < stock cap 2×ATR(1d)=10 — verify via the
 	// band acceptance: a structure 8% away is OUT of band for crypto but IN
@@ -74,5 +90,26 @@ func TestStopBandScaleForStocks(t *testing.T) {
 	_, _, codeC := methodStopPlan(sigCryptoLv, 100, 1.5, true)
 	if codeC != "STOP_PLAN_OUT_OF_BAND" {
 		t.Fatalf("crypto plan must reject the 8%% structure (cap 4), got %q", codeC)
+	}
+}
+
+func TestBStockRRUsesFourHourToDailyTargets(t *testing.T) {
+	market.SetEquityClassificationForTesting(
+		map[string]bool{"AAPLUSDT": true},
+		map[string]bool{"AAPLUSDT": true},
+	)
+	defer market.SetEquityClassificationForTesting(nil, nil)
+
+	tfs := map[string]*TFSignal{
+		"15m": {StructuralResistance: []float64{106}},
+		"4h":  {StructuralResistance: []float64{112}},
+		"1d":  {StructuralResistance: []float64{120}},
+	}
+	scan := scanRRForSymbol("AAPLUSDT", 100, "limit_anchor", 10, 90, tfs, true, 1)
+	if scan.TargetsScanned != 2 {
+		t.Fatalf("bstock targets_scanned = %d, want 2 (4h + 1d only)", scan.TargetsScanned)
+	}
+	if scan.FirstRRGeTarget != 112 || scan.BestTarget != 120 {
+		t.Fatalf("bstock RR targets first=%g best=%g, want 112/120", scan.FirstRRGeTarget, scan.BestTarget)
 	}
 }

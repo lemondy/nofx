@@ -410,9 +410,10 @@ type RiskControlConfig struct {
 	NegativeEdgeBlockLosingSymbol *bool `json:"negative_edge_block_losing_symbol,omitempty"`
 	// StockWeekendNoOpen: block new opens on Binance tokenized stocks
 	// (underlyingSubType "Stocks") during the US-market weekend (Sat/Sun ET)
-	// — weekend volatility and edge are poor until Binance supports 24h stock
-	// trading. nil/true = block (default ON); false = allow. Closes, SL/TP
-	// fills and drawdown-protect are unaffected. (CODE ENFORCED)
+	// only. Weekday pre-market, regular session, after-hours, and overnight
+	// remain eligible and continue to use the 15m execution gate. nil/true =
+	// block weekends (default ON); false = allow. Closes, SL/TP fills and
+	// drawdown-protect are unaffected. (CODE ENFORCED)
 	StockWeekendNoOpen *bool `json:"stock_weekend_no_open,omitempty"`
 	// ProfitLockAtR: the R-multiple (PnL ÷ initial stop distance) that arms
 	// the profit lock — at this level the program market-trims 50% of the

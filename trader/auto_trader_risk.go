@@ -497,6 +497,13 @@ func (at *AutoTrader) validateOpenRisk(decision *kernel.Decision, entryPrice, fl
 	if at.config.StrategyConfig == nil || entryPrice <= 0 {
 		return nil
 	}
+	// Bstock risk geometry is deliberately daily-scale. If the 1d series is
+	// unavailable, reject instead of degrading to crypto ATRs or the fixed 8%
+	// cap; that would make the executor validate a different plan than the
+	// prompt-side 4h-1d stop/target scan.
+	if market.IsBStockSymbol(decision.Symbol) && (floorATRPct <= 0 || capATRPct <= 0) {
+		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: BSTOCK_DAILY_DATA_UNAVAILABLE (ATR(1d) required)", decision.Action, decision.Symbol)
+	}
 	minRR := at.config.StrategyConfig.RiskControl.MinRiskRewardRatio
 	isLong := strings.HasPrefix(decision.Action, "open_long")
 
@@ -693,13 +700,17 @@ func atrPctFromTimeframes(data *market.Data, nominal string, warnSymbol string, 
 // and floor ride the 1h rhythm the trade must survive) and the vol-target
 // rescale / trailing stop yardstick. Falls back toward other TFs
 // deterministically; 0 when unavailable.
-// dailyATRPct returns ATR(14) as a percent of price on the DAILY timeframe —
-// the stop-band yardstick for equity tokens (user directive 2026-09-25:
-// bstock tracks the underlying's SESSION with overnight gaps; 1h/4h ATR set
-// systematically too-tight stops). Fallback chain keeps the band enforced
-// when 1d is unavailable.
+// dailyATRPct returns exact ATR(14) on the DAILY timeframe. Bstock callers
+// fail closed when it is unavailable; falling back to an intraday ATR would
+// silently change the configured stop/target rhythm.
 func dailyATRPct(data *market.Data) float64 {
-	return atrPctFromTimeframes(data, "1d", "", "1d", "12h", "8h", "4h", "2h", "1h", "30m", "15m", "5m", "3m")
+	if data == nil || data.TimeframeData == nil {
+		return 0
+	}
+	if tf := data.TimeframeData["1d"]; tf != nil {
+		return atrPercentFromSeries(tf)
+	}
+	return 0
 }
 
 // stopBandATRs resolves the (floor, cap) ATR pair for one symbol: equity
@@ -709,7 +720,8 @@ func dailyATRPct(data *market.Data) float64 {
 // cached classification (same source as the weekend gate).
 func (at *AutoTrader) stopBandATRs(symbol string, data *market.Data) (floorATR, capATR float64) {
 	if market.IsBStockSymbol(symbol) {
-		return dailyATRPct(data), dailyATRPct(data)
+		daily := dailyATRPct(data)
+		return daily, daily
 	}
 	return oneHourATRPct(data), fourHourATRPct(data)
 }
@@ -1945,9 +1957,9 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				}
 			}
 		}
-		// Stock weekend block: Binance tokenized stocks (bstock) trade on
-		// weekends but the US market doesn't — volatility and edge are poor
-		// (user 2026-09-11). nil/true = block; closes/SL/TP unaffected.
+		// Stock weekend block: only Sat/Sun ET are prohibited. Weekday
+		// pre-market, regular session, after-hours, and overnight remain
+		// eligible; closes/SL/TP are always unaffected.
 		if strings.HasPrefix(d.Action, "open_") {
 			if noOpen := rc.StockWeekendNoOpen; noOpen == nil || *noOpen {
 				if bt, ok := at.trader.(interface {

@@ -405,7 +405,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -1169,14 +1169,14 @@ func stopFloorPct(sig *SymbolSignal, mult float64) float64 {
 	if mult <= 0 {
 		return 0
 	}
-	// Equity tokens (user directive 2026-09-25): DAILY-scale floor — bstock
-	// tracks the underlying's session with overnight gaps, 1h ATR set
-	// systematically too-tight stops on them. Falls back to 1h when no 1d
-	// series exists (classification says stock but data thin).
+	// Equity tokens use a DAILY-scale floor. Missing daily data must fail
+	// closed in computeHardEntryGate; falling back to 1h would silently switch
+	// the stop methodology back to crypto scale.
 	if market.IsBStockSymbol(sig.Symbol) {
 		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
 			return mult * td.ATRPct
 		}
+		return 0
 	}
 	if t1h, ok := sig.Timeframes["1h"]; ok && t1h != nil {
 		return mult * t1h.ATRPct
@@ -1223,10 +1223,8 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	bufTF := "1h"
 	minStructureTF, maxStructureTF := 15*time.Minute, 4*time.Hour
 	if market.IsBStockSymbol(sig.Symbol) {
-		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
-			bufTF = "1d"
-			minStructureTF, maxStructureTF = 4*time.Hour, 24*time.Hour
-		}
+		bufTF = "1d"
+		minStructureTF, maxStructureTF = 4*time.Hour, 24*time.Hour
 	}
 	t1h := sig.Timeframes[bufTF]
 	if t1h == nil || t1h.ATRPct <= 0 {
@@ -1295,9 +1293,7 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	capPct := 8.0
 	capTF := "4h"
 	if market.IsBStockSymbol(sig.Symbol) {
-		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
-			capTF = "1d"
-		}
+		capTF = "1d"
 	}
 	if t4h := sig.Timeframes[capTF]; t4h != nil && t4h.ATRPct > 0 {
 		if c := 2 * t4h.ATRPct; c > capPct {
@@ -1458,6 +1454,11 @@ func negativeEdgeAligned(sig *SymbolSignal, isLong bool) bool {
 // loss-streak ban, stock weekend. allowed = nothing failed.
 func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
+	bstockDailyReady := true
+	if market.IsBStockSymbol(sig.Symbol) {
+		td := sig.Timeframes["1d"]
+		bstockDailyReady = td != nil && td.ATRPct > 0
+	}
 	evaluate := func(isLong bool) *DirectionGate {
 		g := &DirectionGate{Failed: []string{}}
 		anchor := sig.LimitBuyPrice
@@ -1472,6 +1473,9 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		}
 		g.StopFloorPct = round2(floorPct)
 		add := func(code string) { g.Failed = append(g.Failed, code) }
+		if !bstockDailyReady {
+			add("BSTOCK_DAILY_DATA_UNAVAILABLE")
+		}
 		if floorPct > 0 {
 			if price, dist, code := methodStopPlan(sig, g.EntryPrice, floorPct, isLong); code != "" {
 				add(code)
@@ -1479,7 +1483,7 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 				g.StopPlanPrice = price
 				g.StopPlanPct = round2(dist)
 				g.StopPlanSource = "structure"
-				g.RR = scanRR(g.EntryPrice, g.EntryBasis, dist, price, sig.Timeframes, isLong, opt.MinRR)
+				g.RR = scanRRForSymbol(sig.Symbol, g.EntryPrice, g.EntryBasis, dist, price, sig.Timeframes, isLong, opt.MinRR)
 			}
 		}
 		if opt.EntryTimingGate && sig.ExecutionFilter != nil {
@@ -1587,22 +1591,35 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 	return &HardEntryGate{Long: evaluate(true), Short: evaluate(false)}
 }
 
-// scanRR walks EVERY structural target on the take-profit side across ALL
-// timeframe blocks, near→far, deduped within 0.05% (same tolerance as the
-// S/R builder), computing each one's RR at the METHODOLOGY stop (structure +
-// buffer, band-clamped — the same stop the executor's checkRR validates).
+// scanRR walks crypto structural targets over the 15m-4h horizon. The
+// symbol-aware wrapper below switches bstock targets to 4h-1d so TP and SL
+// represent the same holding rhythm.
+func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
+	return scanRRWindow(entry, basis, stopPct, stopPrice, tfs, isLong, minRR, 15*time.Minute, 4*time.Hour)
+}
+
+func scanRRForSymbol(symbol string, entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
+	if market.IsBStockSymbol(symbol) {
+		return scanRRWindow(entry, basis, stopPct, stopPrice, tfs, isLong, minRR, 4*time.Hour, 24*time.Hour)
+	}
+	return scanRR(entry, basis, stopPct, stopPrice, tfs, isLong, minRR)
+}
+
+// scanRRWindow walks EVERY structural target on the take-profit side inside
+// the supplied timeframe window, near→far, deduped within 0.05% (same
+// tolerance as the S/R builder), computing each target's RR at the adopted
+// methodology stop.
 // first_rr_ge_target is the
 // rule-mandated pick (nearest qualifying level); best_rr is the definitive
 // upper bound used to declare the RR gate structurally failed.
-func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
-	// scanRR needs the TF NAME for the 15m–4h window filter — rebuild pairs.
+func scanRRWindow(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64, minTF, maxTF time.Duration) *RRScan {
 	type tfLevels struct {
 		name string
 		tf   *TFSignal
 	}
 	var pairs []tfLevels
 	for name, tf := range tfs {
-		if tf == nil || tfDuration(name) < 15*time.Minute || tfDuration(name) > 4*time.Hour {
+		if tf == nil || tfDuration(name) < minTF || tfDuration(name) > maxTF {
 			continue
 		}
 		pairs = append(pairs, tfLevels{name, tf})
@@ -1696,10 +1713,11 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 		TargetsScanned:  len(uniq),
 		Targets:         uniq,
 	}
-	// Global structure extremes across all timeframes — a TP beyond them has
+	// Global structure extremes across the SAME target horizon — a TP beyond them has
 	// no historical reference (09-19 audit 六: TP 1648.08 vs structure_high 1588).
 	maxSH, minSL := 0.0, 0.0
-	for _, tf := range tfs {
+	for _, p := range pairs {
+		tf := p.tf
 		if tf == nil {
 			continue
 		}
