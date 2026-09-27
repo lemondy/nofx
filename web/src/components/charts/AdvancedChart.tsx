@@ -923,9 +923,21 @@ export function AdvancedChart({
  })
  }
 
- // Auto-fit view only on initial load, avoid jitter on refresh
+ // Initial load: show only the most recent ~VISIBLE_BARS candles instead of
+ // fitContent — 1500 bars squeezed into one screen made candles ~2px wide
+ // and unreadable (user report 2026-09-27). Scroll/zoom still reaches the
+ // full fetched history natively.
  if (isInitialLoadRef.current) {
- chartRef.current?.timeScale().fitContent()
+ const VISIBLE_BARS = 120
+ const bars = klineListRef.current
+ const ts = chartRef.current?.timeScale()
+ if (ts && bars && bars.length > 2) {
+ const from = bars[Math.max(0, bars.length - VISIBLE_BARS)]
+ const to = bars[bars.length - 1]
+ ts.setVisibleRange({ from: from.time as any, to: to.time as any })
+ } else if (ts) {
+ ts.applyOptions({ barSpacing: 10 })
+ }
  isInitialLoadRef.current = false
  }
  setLoading(false)
