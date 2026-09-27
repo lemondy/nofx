@@ -228,13 +228,17 @@ export const riskControl = {
   maxMarginUsageDesc: { zh: '保证金使用率上限，由代码强制执行', en: 'Maximum margin utilization, enforced by code', es: 'Límite de margen' },
   riskPerTradePct: { zh: '单笔风险预算（代码强制）', en: 'Per-Trade Risk Budget (CODE ENFORCED)', es: 'Riesgo por Operación (CÓDIGO)' },
   riskPerTradePctDesc: { zh: '单笔风险金额 = 权益 × 此%；仓位名义价值 = 风险金额 ÷ 止损距离%（程序强制缩仓，止损越宽仓位越小）；0 = 默认 1.5%。调杠杆只改变占用保证金，不改变此风险', en: 'Risk per trade = equity × this %; position notional = risk ÷ stop-distance% (size clamped by code — wider stop, smaller position); 0 = default 1.5%. Leverage changes margin used, not this risk', es: 'Riesgo = equity × %; posición = riesgo ÷ distancia de stop; 0 = 1.5 por defecto' },
+  maxAccountRiskPct: { zh: '账户总止损风险 %（代码强制）', en: 'Gross Stop Risk % (CODE ENFORCED)', es: 'Riesgo Bruto de Stop % (CÓDIGO)' },
+  maxAccountRiskPctDesc: { zh: '所有持仓、挂单与本周期已放行决策的止损风险总和；0 = 默认 10%，负数 = 禁用', en: 'Total stop risk across positions, resting entries, and admitted decisions; 0 = default 10%, negative = disabled', es: 'Riesgo total de stop; 0 = 10%, negativo = desactivado' },
+  maxNetDirectionalRiskPct: { zh: '净方向止损风险 %（代码强制）', en: 'Net Directional Risk % (CODE ENFORCED)', es: 'Riesgo Direccional Neto % (CÓDIGO)' },
+  maxNetDirectionalRiskPctDesc: { zh: '|多头止损风险−空头止损风险|占权益上限，用于限制同方向集中；0 = 默认 6%，负数 = 禁用', en: '|long stop risk − short stop risk| as a share of equity; 0 = default 6%, negative = disabled', es: '|riesgo largo − riesgo corto| / equity; 0 = 6%, negativo = desactivado' },
   vendorDivergence: { zh: '数据源偏差门 %（代码强制）', en: 'Vendor Divergence Gate % (CODE ENFORCED)', es: 'Umbral de Desviación % (CÓDIGO)' },
   vendorDivergenceDesc: { zh: 'K线数据源与实时行情偏差超过此百分比时，该币双向开仓都被拦（VENDOR_DIVERGENCE）——entry/SL/TP 全按实时价定价，偏差过大使整套设置失真；0 = 默认 2%，负数 = 禁用', en: 'Blocks both directions when the candle-source vs live-price divergence exceeds this % (VENDOR_DIVERGENCE) — entry/SL/TP are all priced off the live tick; 0 = default 2%, negative = disabled', es: 'Bloquea aperturas si la desviación supera este %; 0 = 2 por defecto, negativo = desactivado' },
   entryRequirements: { zh: '开仓要求', en: 'Entry Requirements', es: 'Requisitos de Entrada' },
   minPositionSize: { zh: '最小开仓金额', en: 'Min Position Size', es: 'Tamaño Mínimo' },
   minPositionSizeDesc: { zh: 'USDT 最小名义价值', en: 'Minimum notional value in USDT', es: 'Valor mínimo en USDT' },
-  minConfidence: { zh: '最小信心度', en: 'Min Confidence', es: 'Confianza Mínima' },
-  minConfidenceDesc: { zh: 'AI 开仓信心度阈值', en: 'AI confidence threshold for entry', es: 'Umbral de confianza AI' },
+  minConfidence: { zh: '最小信心度（代码强制）', en: 'Min Confidence (CODE ENFORCED)', es: 'Confianza Mínima (CÓDIGO)' },
+  minConfidenceDesc: { zh: '开仓信心度低于此值时后端直接拒绝', en: 'The backend rejects entries below this confidence threshold', es: 'El backend rechaza entradas por debajo de este umbral' },
 };
 
 // ============================================================================

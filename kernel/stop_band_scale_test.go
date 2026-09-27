@@ -42,9 +42,9 @@ func TestStopBandScaleForStocks(t *testing.T) {
 	// = OUT; stock buf 2% → stop 10% ≤ 10 = IN).
 	// Direct cap check through methodStopPlan needs S/R levels — build one.
 	sigStockLv := &SymbolSignal{Symbol: "AAPLUSDT", Timeframes: map[string]*TFSignal{
-		"1h": {ATRPct: 1.0, Support: []float64{92.0}},
+		"1h": {ATRPct: 1.0, Support: []float64{99.0}}, // ignored for bstock stop structure
 		"4h": {ATRPct: 2.0},
-		"1d": {ATRPct: 5.0},
+		"1d": {ATRPct: 5.0, Support: []float64{92.0}},
 	}}
 	price, dist, code := methodStopPlan(sigStockLv, 100, 7.5, true)
 	if code != "" {
@@ -55,6 +55,14 @@ func TestStopBandScaleForStocks(t *testing.T) {
 	}
 	if dist < 7.5 || dist > 10 {
 		t.Fatalf("stock stop distance %.2f outside the daily band", dist)
+	}
+	stockWithOnlyIntradayStructure := &SymbolSignal{Symbol: "AAPLUSDT", Timeframes: map[string]*TFSignal{
+		"1h": {ATRPct: 1.0, Support: []float64{92.0}},
+		"4h": {ATRPct: 2.0},
+		"1d": {ATRPct: 5.0},
+	}}
+	if _, _, got := methodStopPlan(stockWithOnlyIntradayStructure, 100, 7.5, true); got != "STOP_PLAN_NO_STRUCTURE" {
+		t.Fatalf("bstock must not mix a 1h pivot with daily ATR; got %q", got)
 	}
 
 	// Crypto mirror: the SAME 8%-away structure is OUT of band (cap 4).

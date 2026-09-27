@@ -353,10 +353,10 @@ type RiskControlConfig struct {
 	// Max number of coins held simultaneously (CODE ENFORCED)
 	MaxPositions int `json:"max_positions"`
 
-	// BTC/ETH exchange leverage for opening positions (AI guided)
-	BTCETHMaxLeverage int `json:"btc_eth_max_leverage"`
-	// Altcoin exchange leverage for opening positions (AI guided)
-	AltcoinMaxLeverage int `json:"altcoin_max_leverage"`
+	// BTC/ETH exchange leverage ceiling for opening positions (CODE ENFORCED)
+	BTCETHMaxLeverage int `json:"btc_eth_max_leverage"` // CODE ENFORCED: open decisions are clamped to this ceiling
+	// Altcoin exchange leverage ceiling for opening positions (CODE ENFORCED)
+	AltcoinMaxLeverage int `json:"altcoin_max_leverage"` // CODE ENFORCED: open decisions are clamped to this ceiling
 
 	// BTC/ETH single position max value = equity × this ratio (CODE ENFORCED, default: 5)
 	BTCETHMaxPositionValueRatio float64 `json:"btc_eth_max_position_value_ratio"`
@@ -371,7 +371,9 @@ type RiskControlConfig struct {
 	// Min take_profit / stop_loss ratio (CODE ENFORCED at open: entries with a
 	// lower computed ratio are rejected)
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
-	// Min AI confidence to open position (AI guided)
+	// Min AI confidence to open position. Decisions below it are rejected by
+	// the executor; confidence remains a model assessment, but it cannot lower
+	// the configured admission threshold. (CODE ENFORCED)
 	MinConfidence int `json:"min_confidence"`
 
 	// Min holding period in minutes before AI-initiated closes are allowed.
@@ -578,6 +580,12 @@ type RiskControlConfig struct {
 	// 0 = default 10, negative = disabled. (CODE ENFORCED, QUANT_REVIEW
 	// 2026-09-22 D2)
 	MaxAccountRiskPct float64 `json:"max_account_risk_pct"`
+	// MaxNetDirectionalRiskPct caps |long stop-risk - short stop-risk| as a
+	// percentage of equity, including resting entries and decisions already
+	// admitted in the current cycle. This cheaply limits correlated one-way
+	// concentration that a gross-risk sum cannot see. 0 = default 6,
+	// negative = disabled. (CODE ENFORCED)
+	MaxNetDirectionalRiskPct float64 `json:"max_net_directional_risk_pct"`
 	// DailyMaxLossPct halts new opens for the rest of the UTC day once equity
 	// is down pct% from that day's first-seen equity. Closes/SL/TP unaffected.
 	// 0 = default 10, negative = disabled. (CODE ENFORCED, QUANT_REVIEW
@@ -596,6 +604,18 @@ func (r RiskControlConfig) EffectiveMaxAccountRiskPct() float64 {
 		return DefaultMaxAccountRiskPct
 	}
 	return r.MaxAccountRiskPct
+}
+
+// EffectiveMaxNetDirectionalRiskPct resolves the one-way concentration cap:
+// 0/unset -> DefaultMaxNetDirectionalRiskPct, negative -> disabled (0).
+func (r RiskControlConfig) EffectiveMaxNetDirectionalRiskPct() float64 {
+	if r.MaxNetDirectionalRiskPct < 0 {
+		return 0
+	}
+	if r.MaxNetDirectionalRiskPct == 0 {
+		return DefaultMaxNetDirectionalRiskPct
+	}
+	return r.MaxNetDirectionalRiskPct
 }
 
 // EffectiveDailyMaxLossPct resolves the daily-loss halt threshold:
@@ -645,8 +665,9 @@ func (c *StrategyConfig) EffectiveUSStockSessionBoostPct() float64 {
 // helpers above — rendered into the prompt from these constants so the text
 // can never drift from the enforced value.
 const (
-	DefaultMaxAccountRiskPct = 10.0
-	DefaultDailyMaxLossPct   = 10.0
+	DefaultMaxAccountRiskPct        = 10.0
+	DefaultMaxNetDirectionalRiskPct = 6.0
+	DefaultDailyMaxLossPct          = 10.0
 )
 
 // EffectiveStatsWindowDays resolves the stats window in days: 0 means
@@ -735,17 +756,18 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 		},
 		RiskControl: RiskControlConfig{
 			MaxPositions:                 3,   // Max 3 coins simultaneously (CODE ENFORCED)
-			BTCETHMaxLeverage:            5,   // BTC/ETH exchange leverage (AI guided)
-			AltcoinMaxLeverage:           5,   // Altcoin exchange leverage (AI guided)
+			BTCETHMaxLeverage:            5,   // BTC/ETH exchange leverage ceiling (CODE ENFORCED)
+			AltcoinMaxLeverage:           5,   // Altcoin exchange leverage ceiling (CODE ENFORCED)
 			BTCETHMaxPositionValueRatio:  5.0, // BTC/ETH: max position = 5x equity (CODE ENFORCED)
 			AltcoinMaxPositionValueRatio: 1.0, // Altcoin: max position = 1x equity (CODE ENFORCED)
 			MaxMarginUsage:               0.9, // Max 90% margin usage (CODE ENFORCED)
 			MinPositionSize:              12,  // Min 12 USDT per position (CODE ENFORCED)
 			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (CODE ENFORCED at open — struct field comment is the source of truth)
-			MinConfidence:                75,  // Min 75% confidence (AI guided)
+			MinConfidence:                75,  // Min 75% confidence (CODE ENFORCED)
 
-			MaxAccountRiskPct: 10.0, // Σ open stop-risk + new risk ≤ 10% equity (CODE ENFORCED)
-			DailyMaxLossPct:   10.0, // Daily-loss halt: opens blocked at −10% from day-start equity (CODE ENFORCED)
+			MaxAccountRiskPct:        10.0, // Σ open stop-risk + new risk ≤ 10% equity (CODE ENFORCED)
+			MaxNetDirectionalRiskPct: 6.0,  // |long risk-short risk| ≤ 6% equity (CODE ENFORCED)
+			DailyMaxLossPct:          10.0, // Daily-loss halt: opens blocked at −10% from day-start equity (CODE ENFORCED)
 		},
 	}
 

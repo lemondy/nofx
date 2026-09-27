@@ -97,17 +97,17 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// 09-19 audit: min RR is double-enforced (rr_scan gate + executor
 	// checkRR) — it was mis-filed under AI GUIDED and read as relaxable.
 	sb.WriteString(fmt.Sprintf("- Min Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss — 程序双重校验,不可放宽)\n", riskControl.MinRiskRewardRatio))
+	sb.WriteString(fmt.Sprintf("- Max Leverage: Altcoins %dx | BTC/ETH %dx (超限值由后端强制下调)\n",
+		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
+	if riskControl.MinConfidence > 0 {
+		sb.WriteString(fmt.Sprintf("- Min Confidence: ≥%d (低于门槛的开仓由后端拒绝)\n", riskControl.MinConfidence))
+	}
 	// Margin-budget reality check (audit 09-13): the value-ratio limits and
 	// the margin budget bind at different points — state the binding one.
 	// 09-19 audit: "holds about 0 full-size positions" read as "opening is
 	// banned this cycle". State the FORMULA and point at the live numbers in
 	// the account line instead of a misleading count.
 	sb.WriteString("- Margin-budget reality: 开仓名义余量 ≈ 账户行 Available × 杠杆;使用当前 user prompt 的实时数字校验,Max Margin Usage 先于 Max Positions 约束并发\n\n")
-
-	sb.WriteString("## AI GUIDED (Recommended, you should follow):\n")
-	sb.WriteString(fmt.Sprintf("- Trading Leverage: Altcoins max %dx | BTC/ETH max %dx\n",
-		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
-	sb.WriteString(fmt.Sprintf("- Min Confidence: ≥%d to open position\n\n", riskControl.MinConfidence))
 
 	// Position sizing guidance — ONE formula, matching the 程序强制缩仓 rule in
 	// the params block (risk budget ÷ stop distance, then clamped). The old
@@ -129,14 +129,19 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString(fmt.Sprintf("- Binance Hedge Mode: at most one LONG and one SHORT per symbol. Their combined gross stop-risk (including resting entries) must stay within the SAME %.1f%% equity risk budget; split that budget across sides, never count opposite risks as offsetting. Same-side orders merge on the exchange and are not separate isolated positions.\n", riskPctDefault))
 	sb.WriteString("- **DO NOT** just use available_balance as position_size_usd\n\n")
 
-	// 4. Trading frequency (editable)
-	if promptSections.TradingFrequency != "" {
-		sb.WriteString(promptSections.TradingFrequency)
-		sb.WriteString("\n\n")
-	} else {
-		sb.WriteString("# Trading Frequency\n\n")
-		sb.WriteString("- No frequency cap: trade as often as independent, evidence-backed setups appear. Every decision is judged on its own quality (trend alignment, RR, confirmation) — never on how many trades already happened this hour or this cycle.\n")
-		sb.WriteString("- Multiple symbols per cycle are independent decisions — judge each on its own evidence.\n\n")
+	// 4. Trading frequency (editable). When the personalized strategy already
+	// defines a frequency policy, it is the sole rendered policy; showing a
+	// second generic rule forces the model to arbitrate contradictory prose.
+	customControlsFrequency := promptDefinesFrequency(e.config.CustomPrompt)
+	if !customControlsFrequency {
+		if promptSections.TradingFrequency != "" {
+			sb.WriteString(promptSections.TradingFrequency)
+			sb.WriteString("\n\n")
+		} else {
+			sb.WriteString("# Trading Frequency\n\n")
+			sb.WriteString("- No frequency cap: trade as often as independent, evidence-backed setups appear. Every decision is judged on its own quality (trend alignment, RR, confirmation) — never on how many trades already happened this hour or this cycle.\n")
+			sb.WriteString("- Multiple symbols per cycle are independent decisions — judge each on its own evidence.\n\n")
+		}
 	}
 
 	// 5. Entry standards (editable)
@@ -204,7 +209,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		actions += "(本策略默认限价入场: open_long/open_short 仅三类例外成立时可用)"
 	}
 	sb.WriteString("- `action`: " + actions + "\n")
-	sb.WriteString(fmt.Sprintf("- 开仓必填: leverage, position_size_usd, stop_loss, take_profit, confidence(0-100且≥%d);限价开仓另需 price。`risk_usd`、开仓的 `entry_quality` 和硬门 `blocking_factors` 由后端计算/回填,不要输出。\n", riskControl.MinConfidence))
+	sb.WriteString(fmt.Sprintf("- 开仓必填: leverage, position_size_usd, stop_loss, take_profit, confidence(0-100且≥%d);限价开仓另需 price。后端会拒绝低 confidence、下调超限 leverage;`risk_usd`、开仓的 `entry_quality` 和硬门 `blocking_factors` 由后端计算/回填,不要输出。\n", riskControl.MinConfidence))
 	sb.WriteString("- 所有数值必须是数字,禁止公式、占位符或单位字符串。\n")
 	if riskControl.LimitEntryEnabled {
 		sb.WriteString("- 开仓路径只看 hard_entry_gate: `allowed=false` 必须 wait;`allowed=true && limit_allowed=true` 默认输出对应 open_*_limit 并逐字复制 entry_price;`allowed=true && limit_allowed=false && market_exception=true` 才可输出市价 open_*,且 confidence≥80。不存在其他例外。\n")
@@ -212,7 +217,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("- wait: 无方向优势时 wait_bias 省略;方向明确但暂不可执行时填 long/short。hard_entry_gate.failed 存在时 no_trade_reason 逐项复制阻断码,不要改写成反向观点;程序会映射 blocking_factors。方向性 wait 的 next_trigger 必须是`触发事件 + RECHECK_ALL_HARD_GATES`;每周期自动重评,禁止按天/周搁置。\n")
 	sb.WriteString("- **持仓管理动作(浮盈/结构变化时用,优先于全平)**:\n")
 	sb.WriteString("  - `adjust_stop_loss`: 只允许收紧到保本或更好;做多新 SL 必须高于旧 SL、低于现价且≥开仓价,做空镜像。\n")
-	sb.WriteString("  - `partial_close_long` / `partial_close_short`(部分平仓): 输出 `close_fraction`(0<frac≤0.5)平掉对应比例,用于按结构位分批止盈/减仓;每仓位累计部分平仓 ≤75%(程序强制),全平用 close_*;受最短持仓/提前平仓门约束(同 close)\n")
+	sb.WriteString("  - `partial_close_long` / `partial_close_short`(部分平仓): 输出 `close_fraction`(0<frac≤0.5)平掉当前剩余仓位的对应比例。后端按初始数量统计程序自动减仓+LLM减仓,总减仓不得超过75%;若剩余名义价值低于 min size 则拒绝部分平仓,全平用 close_*。\n")
 	sb.WriteString("- hold 必填 no_trade_reason、management_quality(0-100)和 management_flags;枚举: BREAKEVEN_WARRANTED|PARTIAL_WARRANTED|TRAIL_SUFFICIENT|TREND_INTACT|STRUCTURE_WEAKENING|CHOP_RISK|VOL_SPIKE|EVENT_RISK。若已需要保本或减仓,直接输出 adjust_stop_loss/partial_close_*,不要 hold+flag。\n")
 	sb.WriteString("- wait 的 entry_quality 表示偏好方向当前质量;open 只填 confidence,后端会复制为 entry_quality。\n")
 	sb.WriteString("- price/stop_loss/take_profit 为0表示不可交易或被抑制,绝不是占位符;未知时省略并 wait。\n\n")
@@ -237,10 +242,24 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString("# 📌 Personalized Trading Strategy\n\n")
 		sb.WriteString(e.config.CustomPrompt)
 		sb.WriteString("\n\n")
-		sb.WriteString("Note: The above personalized strategy is a supplement to the basic rules and cannot violate the basic risk control principles; 个性化策略与基础提示的**交易频率/仓位节奏**规则冲突时,以个性化策略为准(风险硬规则不受影响)。\n")
+		if customControlsFrequency {
+			sb.WriteString("Note: 上述个性化策略是本 prompt 唯一交易频率/仓位节奏规则;风险硬门仍不可违反。\n")
+		} else {
+			sb.WriteString("Note: The above personalized strategy supplements the base rules and cannot violate program-enforced risk controls.\n")
+		}
 	}
 
 	return sb.String()
+}
+
+func promptDefinesFrequency(prompt string) bool {
+	p := strings.ToLower(prompt)
+	for _, marker := range []string{"频率", "频繁交易", "过度交易", "交易次数", "frequency", "overtrad", "trades per"} {
+		if strings.Contains(p, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================================
@@ -291,15 +310,15 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// 预计算(结构位+方向性缓冲,夹带),rr_scan/checkRR/模型采用三者同口径。
 		if floorMult := rc.SLMinATRMult; floorMult > 0 {
 			params.WriteString(fmt.Sprintf("- 止损(程序预计算,逐字采用): stop_plan_price 已按对侧结构+方向缓冲生成,距离带为≥%.1f×ATR(1h)且≤max(2×ATR(4h),8%%);直接复制,STOP_PLAN_NO_STRUCTURE/STOP_PLAN_OUT_OF_BAND 时 wait\n", floorMult))
-			params.WriteString(fmt.Sprintf("- 止损标尺例外(程序强制,美股股票代币): DELL/AAPL/TSLA 等 bstock 标的跟随正股交易时段且有隔夜跳空,其整条止损带改用天级别 ATR——噪声下限 ≥%.1f×ATR(1d)、方向性缓冲 ×ATR(1d)、带上限 ≤max(2×ATR(1d), 8%%);快照 stop_plan 已按该标尺算好,无需也不得自行换算。移动止损的 2×ATR 跟踪带宽同样对股票代币用 ATR(1d)\n", floorMult))
+			params.WriteString(fmt.Sprintf("- 止损标尺例外(程序强制,美股股票代币): DELL/AAPL/TSLA 等 bstock 使用4h–1d结构位,整条止损带改用天级别 ATR——噪声下限 ≥%.1f×ATR(1d)、方向性缓冲 ×ATR(1d)、带上限 ≤max(2×ATR(1d), 8%%);stop_plan 已按该标尺算好,禁止自行换算。移动止损也用 ATR(1d)\n", floorMult))
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
-		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。止盈:逐字复制 rr_scan.first_rr_ge_target;usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait。stop_plan_price 与 first_rr_ge_target 必须成对采用,最低RR=%.1f\n", rc.MinRiskRewardRatio))
+		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。止盈:逐字复制 rr_scan.first_rr_ge_target;usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait。stop_plan_price 与 first_rr_ge_target 必须成对采用,最低RR=%.1f;后端对 TP 与 SL 使用同一 0.05%% 容差强制吸附到该计划\n", rc.MinRiskRewardRatio))
 		var tpParts []string
 		if armR := BreakevenArmR(&e.config.RiskControl); armR > 0 {
 			beOff := ProfitLockBreakevenOffsetR(&e.config.RiskControl)
-			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.1fR(初始止损距离的 %.0f%%)程序先把止损移至开仓价+%.2fR 提前保本(不涉及减仓,先于 1R 档)", armR, armR*100, beOff))
+			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.1fR 时程序先把止损移至开仓价+%.2fR(不减仓)", armR, beOff))
 		}
 		if lockR := ProfitLockRMult(&e.config.RiskControl); lockR > 0 {
 			// 保本位措辞从配置求值(09-21 实验: +0.2R 锁微利 vs 纯保本)
@@ -308,17 +327,17 @@ func (e *StrategyEngine) strategyParamsText() string {
 				beTxt = fmt.Sprintf("开仓价+%.2fR(锁定一档微利,防噪声扫回平手)", beOff)
 			}
 			if e.config.RiskControl.TrimYieldsToLock() {
-				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序自动市价减仓 50%%,同时止损移至%s;剩余 50%% 奔向结构位止盈", lockR, beTxt))
+				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR 时程序自动市价减仓 50%%,并确保止损至%s;若早期保本档已设到同一价格,此档只执行减仓,不重复移止损", lockR, beTxt))
 			} else {
 				// 分工模式: ROE 减仓档独立生效,锁只管保本(CAPUSDT 09-24)
 				trim := TpTrimProfitPct(&e.config.RiskControl)
 				if trim > 0 {
-					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次)", trim))
+					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次);该兼容档执行前必须先将止损收紧到保本或更好", trim))
 				}
 				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序把止损移至%s——此档只保本不再减仓,剩余仓位奔向结构位止盈", lockR, beTxt))
 			}
 		} else if trim := TpTrimProfitPct(&e.config.RiskControl); trim > 0 {
-			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次)", trim))
+			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次),减仓前先将止损收紧到保本或更好", trim))
 		}
 		// 分批止盈+趋势跑单(09-21 实验): 止盈触发只平一部分,剩余由移动止损
 		// 接管——只在移动止损开启时生效(trader 端 effectiveTPCloseFraction
@@ -345,7 +364,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		params.WriteString("- 保护单看门狗(程序强制): 每周期核对全部持仓的止损/止盈挂单,缺失时按开仓计划价自动补挂(止盈只平部分的剩余趋势跑单、以及止盈距离走完转跟踪止损的仓位除外——它们的出场由移动止损接管)——保护单由程序保障,你只负责按结构规划输出 SL/TP 数值\n")
 		if EarlyCloseHours(&e.config.RiskControl) > 0 {
-			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 需要该币 1h 出现至少 2 根逆持仓方向的已收盘 K 线(1h 节奏出现趋势转变的证据)才会放行,浮盈浮亏一视同仁;止盈/止损触发单与回撤保护平仓由程序自动执行,不受此限。持仓满 %dh 后正常平仓\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
+			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 还必须有至少 2 根逆持仓方向的已收盘 1h K线。该门与浮亏结构位门、最短持仓门串联(AND):所有当前适用的门都通过才放行;任一门拦截就 hold。交易所 SL/TP 与回撤保护不走这些 AI close 门。持仓满 %dh 后不再适用本时间门\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
 		}
 		if e.config.RiskControl.MinHoldMinutes > 0 {
 			params.WriteString(fmt.Sprintf("- 最短持仓限制(程序强制): 持仓不足 %d 分钟时,close/partial_close 会被程序拦截(现价已触及记录止损的硬退出除外)——不要在时间未到且无 1h 逆势证据时输出平仓动作\n", e.config.RiskControl.MinHoldMinutes))
@@ -358,6 +377,9 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		if v := e.config.RiskControl.EffectiveMaxAccountRiskPct(); v > 0 {
 			params.WriteString(fmt.Sprintf("- 账户风险敞口上限(程序强制): 全部持仓的止损风险(数量×|开仓价−止损|,无保护单的仓位按止损带上限 %.0f%% 最坏估计)加上本单风险,合计不得超过权益的 %.1f%%——仓位数量上限看不见相关性,五个同向山寨止损等于一个大仓;超限时 open 被拒,优先平掉浮亏单腾出敞口额度\n", UnprotectedStopWorstCasePct, v))
+		}
+		if v := e.config.RiskControl.EffectiveMaxNetDirectionalRiskPct(); v > 0 {
+			params.WriteString(fmt.Sprintf("- 净方向风险上限(程序强制): |多头止损风险−空头止损风险|不得超过权益的 %.1f%%,包含持仓、挂单和本周期已放行决策\n", v))
 		}
 		if v := e.config.RiskControl.EffectiveDailyMaxLossPct(); v > 0 {
 			params.WriteString(fmt.Sprintf("- 日内亏损熔断(程序强制): 净值较今日开盘基线回撤 ≥ %.1f%% 时,当日所有新开仓被拦截至下一个 UTC 日,平仓/止损不受影响——连亏日强制降频,不是可选建议\n", v))
@@ -870,10 +892,14 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f %s %.4f | Qty %.4f | Position Value %.2f USDT | Margin ROI %+.2f%% | Price Return %+.2f%% | Unrealized PnL %+.2f USDT | Peak PnL %.2f%% (margin basis) | Leverage %dx | MarginUsed %.2f | Liq Price %.4f%s%s\n\n",
+	automationStage := pos.AutomationStage
+	if automationStage == "" {
+		automationStage = "UNKNOWN"
+	}
+	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f %s %.4f | Qty %.4f | Position Value %.2f USDT | Margin ROI %+.2f%% | Price Return %+.2f%% | Unrealized PnL %+.2f USDT | Peak PnL %.2f%% (margin basis) | Leverage %dx | MarginUsed %.2f | Liq Price %.4f | AutoMgmt %s | Reduced %.1f%% of original%s%s\n\n",
 		index, pos.Symbol, strings.ToUpper(pos.Side),
 		pos.EntryPrice, priceLabel, displayPrice, pos.Quantity, positionValue, marginROI, priceReturn, uPnL, pos.PeakPnLPct,
-		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration, ownership))
+		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, automationStage, pos.CumulativeReducedPct, holdingDuration, ownership))
 
 	// Manual position (user review 2026-09-27 #3): automation skips it —
 	// close/partial/adjust are all rejected executor-side. The close-lock

@@ -169,6 +169,19 @@ func TestApplyHardRiskGates(t *testing.T) {
 	}
 }
 
+func TestApplyHardRiskGatesBlocksLowConfidenceOpen(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{MinConfidence: 70, MaxNetDirectionalRiskPct: -1})
+	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, MarketDataMap: map[string]*market.Data{}}
+	got := at.applyHardRiskGates([]kernel.Decision{
+		{Action: "open_long", Symbol: "LOWUSDT", Confidence: 69},
+		{Action: "open_short", Symbol: "OKUSDT", Confidence: 70},
+		{Action: "wait", Symbol: "LOWUSDT", Confidence: 0},
+	}, ctx)
+	if len(got) != 2 || got[0].Symbol != "OKUSDT" || got[1].Action != "wait" {
+		t.Fatalf("confidence gate kept %+v, want threshold open + non-open only", got)
+	}
+}
+
 // Outlier wide stops are capped at max(2×ATR(1h), 8%): volatile coins get
 // proportionally more room, but never unbounded (an 8.9% stop at 3x leverage
 // is -27% margin on one trade).

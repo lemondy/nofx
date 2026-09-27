@@ -292,6 +292,8 @@ func (at *AutoTrader) runCycle() error {
 	// Hard risk gates the AI cannot override: 1d-uptrend short block and the
 	// minimum holding period lock on closes (both strategy risk_control driven).
 	at.cycleRiskReservedUSD = 0 // fresh batch — the reservation accumulates as opens pass the gate
+	at.cycleLongRiskReservedUSD = 0
+	at.cycleShortRiskReservedUSD = 0
 	at.cycleSymbolRiskReservedUSD = make(map[string]float64)
 	at.seedAIManagedOnce() // one-time migration: pre-registry positions presumed AI-managed
 	sortedDecisions = at.applyHardRiskGates(sortedDecisions, ctx)
@@ -576,9 +578,11 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		currentPositionKeys[posKey] = true
 
 		var updateTime int64
+		entryQuantity := 0.0
 		// Priority 1: Get from database (trader_positions table) - most accurate
 		if at.store != nil {
 			if dbPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, side); err == nil && dbPos != nil {
+				entryQuantity = dbPos.EntryQuantity
 				if dbPos.EntryTime > 0 {
 					updateTime = dbPos.EntryTime
 				}
@@ -640,7 +644,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		}
 		posSideUpper := strings.ToUpper(side) // "LONG"/"SHORT"
 		for _, o := range orders {
-			if o.PositionSide != "" && o.PositionSide != posSideUpper {
+			if o.PositionSide != "" && o.PositionSide != posSideUpper && o.PositionSide != "BOTH" {
 				continue
 			}
 			switch o.Type {
@@ -656,24 +660,47 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		}
 
 		managed := at.isAIManaged(symbol, side)
+		cumulativeReducedPct := 0.0
+		if entryQuantity > 0 && quantity >= 0 && quantity < entryQuantity {
+			cumulativeReducedPct = (1 - quantity/entryQuantity) * 100
+		}
+		breakevenArmed := entryPrice > 0 && stopLossPrice > 0 &&
+			((side == "long" && stopLossPrice >= entryPrice) || (side == "short" && stopLossPrice <= entryPrice))
+		at.tpTrimMutex.Lock()
+		r1Done := at.r1TrimDone[posKey]
+		trimDone := at.tpTrimDone[posKey]
+		at.tpTrimMutex.Unlock()
+		automationStage := "NONE"
+		switch {
+		case r1Done:
+			automationStage = "R_LOCK_TRIMMED"
+		case trimDone:
+			automationStage = "ROE_TRIMMED"
+		case breakevenArmed:
+			automationStage = "BREAKEVEN_ARMED"
+		case cumulativeReducedPct > 0:
+			automationStage = "REDUCED_PRIOR_OR_EXTERNAL"
+		}
 
 		positionInfos = append(positionInfos, kernel.PositionInfo{
-			Symbol:           symbol,
-			Side:             side,
-			EntryPrice:       entryPrice,
-			MarkPrice:        markPrice,
-			Quantity:         quantity,
-			Leverage:         leverage,
-			UnrealizedPnL:    unrealizedPnl,
-			UnrealizedPnLPct: pnlPct,
-			PriceReturnPct:   priceReturnPct,
-			PeakPnLPct:       peakPnlPct,
-			LiquidationPrice: liquidationPrice,
-			MarginUsed:       marginUsed,
-			UpdateTime:       updateTime,
-			StopLossPrice:    stopLossPrice,
-			TakeProfitPrice:  takeProfitPrice,
-			Managed:          managed,
+			Symbol:               symbol,
+			Side:                 side,
+			EntryPrice:           entryPrice,
+			MarkPrice:            markPrice,
+			Quantity:             quantity,
+			Leverage:             leverage,
+			UnrealizedPnL:        unrealizedPnl,
+			UnrealizedPnLPct:     pnlPct,
+			PriceReturnPct:       priceReturnPct,
+			PeakPnLPct:           peakPnlPct,
+			LiquidationPrice:     liquidationPrice,
+			MarginUsed:           marginUsed,
+			UpdateTime:           updateTime,
+			StopLossPrice:        stopLossPrice,
+			TakeProfitPrice:      takeProfitPrice,
+			Managed:              managed,
+			AutomationStage:      automationStage,
+			CumulativeReducedPct: cumulativeReducedPct,
 		})
 	}
 

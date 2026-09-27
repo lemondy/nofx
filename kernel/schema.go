@@ -181,6 +181,22 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			DescZH: "价格触及此值时可能被强制平仓。0 表示未知或不适用，不得解释为没有强平风险",
 			DescEN: "Price at which the position may be force-closed. Zero means unknown or not applicable, not risk-free",
 		},
+		"AutomationStage": {
+			NameZH: "自动管理阶段",
+			NameEN: "Automation Stage",
+			Unit:   "enum",
+			DescZH: "程序当前已执行的仓位管理阶段：NONE、BREAKEVEN_ARMED、R_LOCK_TRIMMED、ROE_TRIMMED 或 REDUCED_PRIOR_OR_EXTERNAL；避免重复保本或减仓",
+			DescEN: "Program-owned management stage: NONE, BREAKEVEN_ARMED, R_LOCK_TRIMMED, ROE_TRIMMED, or REDUCED_PRIOR_OR_EXTERNAL; prevents duplicate management actions",
+		},
+		"CumulativeReducedPct": {
+			NameZH:    "累计减仓比例",
+			NameEN:    "Cumulative Reduction",
+			Unit:      "%",
+			FormulaZH: "(初始数量 - 当前数量) / 初始数量 × 100",
+			FormulaEN: "(Initial Quantity - Current Quantity) / Initial Quantity × 100",
+			DescZH:    "相对初始仓位已经平掉的总比例，包含程序阶梯、结构止盈、LLM 部分平仓及外部减仓",
+			DescEN:    "Total share of original size already closed, including program ladders, structural TP, LLM partial closes, and external reductions",
+		},
 	},
 
 	"MarketData": {
@@ -276,7 +292,7 @@ func getSchemaPromptZH() string {
 
 	// Position metrics
 	prompt += "\n### 持仓指标\n"
-	for _, key := range []string{"UnrealizedPnL%", "PeakPnL%", "Leverage", "MarginUsed", "LiqPrice"} {
+	for _, key := range []string{"UnrealizedPnL%", "PeakPnL%", "Leverage", "MarginUsed", "LiqPrice", "AutomationStage", "CumulativeReducedPct"} {
 		prompt += formatFieldDefZH(key, DataDictionary["PositionMetrics"][key])
 	}
 
@@ -315,7 +331,7 @@ func getSchemaPromptEN() string {
 
 	// Position Metrics
 	prompt += "\n### Position Metrics\n"
-	for _, key := range []string{"UnrealizedPnL%", "PeakPnL%", "Leverage", "MarginUsed", "LiqPrice"} {
+	for _, key := range []string{"UnrealizedPnL%", "PeakPnL%", "Leverage", "MarginUsed", "LiqPrice", "AutomationStage", "CumulativeReducedPct"} {
 		prompt += formatFieldDefEN(key, DataDictionary["PositionMetrics"][key])
 	}
 

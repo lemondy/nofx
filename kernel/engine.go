@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
-	"nofx/provider/openbb"
 	"nofx/market/breakout"
 	"nofx/provider/hyperliquid"
 	"nofx/provider/nofxos"
+	"nofx/provider/openbb"
 	"nofx/provider/vergex"
 	"nofx/security"
 	"nofx/store"
@@ -40,14 +40,18 @@ type PositionInfo struct {
 	PeakPnLPct       float64 `json:"peak_pnl_pct"`       // Historical peak profit percentage
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
-	UpdateTime       int64   `json:"update_time"`       // Position update timestamp (milliseconds)
+	UpdateTime       int64   `json:"update_time"` // Position update timestamp (milliseconds)
 	// AIManaged: opened by this system's AI (2026-09-25 hands-off rule).
 	// false = manually opened — the program never closes/adjusts it and the
 	// automation loop leaves it alone; close/adjust decisions on it are
 	// rejected at execution.
-	Managed       bool `json:"ai_managed"`
-	StopLossPrice float64 `json:"stop_loss_price"` // Trigger price of the protective SL order currently on the exchange (0 = none found)
-	TakeProfitPrice  float64 `json:"take_profit_price"` // Trigger price of the protective TP order currently on the exchange (0 = none found)
+	Managed         bool    `json:"ai_managed"`
+	StopLossPrice   float64 `json:"stop_loss_price"`   // Trigger price of the protective SL order currently on the exchange (0 = none found)
+	TakeProfitPrice float64 `json:"take_profit_price"` // Trigger price of the protective TP order currently on the exchange (0 = none found)
+	// AutomationStage synchronizes program-owned management with the LLM so
+	// it does not repeat an already executed breakeven/trim action.
+	AutomationStage      string  `json:"automation_stage"`
+	CumulativeReducedPct float64 `json:"cumulative_reduced_pct"` // fraction of original entry quantity already closed, 0..100
 }
 
 // AccountInfo account information
@@ -210,7 +214,7 @@ type GateState struct {
 	// direction-matched market-order exception holds with program evidence.
 	// The trader's open dispatch degrades a market open to the anchor limit
 	// (or drops it) unless this is true for its direction.
-	LongMarketException bool
+	LongMarketException  bool
 	ShortMarketException bool
 	// LimitAllowed per direction: a live limit anchor exists (limit path
 	// executable). Drives the degrade-vs-drop choice in the same gate.
@@ -530,13 +534,13 @@ type FullDecision struct {
 
 // QuantData quantitative data structure (fund flow, position changes, price changes)
 type QuantData struct {
-	Symbol      string             `json:"symbol"`
-	Price       float64            `json:"price"`
-	Netflow     *NetflowData       `json:"netflow,omitempty"`
-	OI          map[string]*OIData `json:"oi,omitempty"`
-	PriceChange map[string]float64 `json:"price_change,omitempty"`
+	Symbol      string                    `json:"symbol"`
+	Price       float64                   `json:"price"`
+	Netflow     *NetflowData              `json:"netflow,omitempty"`
+	OI          map[string]*OIData        `json:"oi,omitempty"`
+	PriceChange map[string]float64        `json:"price_change,omitempty"`
 	Liquidation *market.LiquidationWindow `json:"liquidation,omitempty"`
-	News        []openbb.NewsItem          `json:"news,omitempty"`
+	News        []openbb.NewsItem         `json:"news,omitempty"`
 }
 
 type NetflowData struct {

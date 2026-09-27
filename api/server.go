@@ -194,8 +194,8 @@ Body: {"show_in_competition":<bool>}`,
 				s.handleGetGridRiskInfo)
 
 			// AI cost tracking
-					s.route(protected, "POST", "/trending/relay", "Cache a vergex payload fetched by the browser (?path=<upstream path>) — auth required", s.handleTrendingRelay)
-s.route(protected, "GET", "/ai-costs", "Get AI call costs for a trader (?trader_id=xxx&period=today)", s.handleGetAICosts)
+			s.route(protected, "POST", "/trending/relay", "Cache a vergex payload fetched by the browser (?path=<upstream path>) — auth required", s.handleTrendingRelay)
+			s.route(protected, "GET", "/ai-costs", "Get AI call costs for a trader (?trader_id=xxx&period=today)", s.handleGetAICosts)
 			s.route(protected, "GET", "/ai-costs/summary", "Get AI cost summary (?period=today)", s.handleGetAICostsSummary)
 
 			// AI model configuration
@@ -302,14 +302,16 @@ StrategyConfig fields:
   indicators.enable_netflow_ranking: ALWAYS true, netflow_ranking_duration:"1h", netflow_ranking_limit:10
   indicators.enable_price_ranking: ALWAYS true, price_ranking_duration:"1h,4h,24h", price_ranking_limit:10
   risk_control.max_positions: max simultaneous positions (1=single coin, 3=diversified, 5=wide)
-  risk_control.btc_eth_max_leverage: BTC/ETH leverage (conservative:3-5, moderate:5-10, aggressive:10-20)
-  risk_control.altcoin_max_leverage: altcoin leverage (usually lower than BTC leverage)
+  risk_control.btc_eth_max_leverage: BTC/ETH hard leverage ceiling; the executor clamps higher model output
+  risk_control.altcoin_max_leverage: altcoin hard leverage ceiling; the executor clamps higher model output
   risk_control.btc_eth_max_position_value_ratio: max position size as multiple of equity (default 5)
   risk_control.altcoin_max_position_value_ratio: default 1
   risk_control.max_margin_usage: 0.5-0.95 (default 0.9 = use up to 90% margin)
   risk_control.min_position_size: minimum USDT per trade (default 12)
   risk_control.min_risk_reward_ratio: minimum profit/loss ratio required (default 3 = 3:1)
-  risk_control.min_confidence: minimum AI confidence to open position (default 75, range 60-90)
+  risk_control.min_confidence: hard minimum AI confidence; lower-confidence opens are rejected (default 75, range 60-90)
+  risk_control.max_account_risk_pct: gross stop-risk cap across positions and entries (0=default 10, negative=disabled)
+  risk_control.max_net_directional_risk_pct: |long stop-risk-short stop-risk| cap as equity % (0=default 6, negative=disabled)
   prompt_sections.role_definition: describe the AI's trading persona and goal
   prompt_sections.trading_frequency: guidelines on how often to trade
   prompt_sections.entry_standards: conditions that must align before entering a position

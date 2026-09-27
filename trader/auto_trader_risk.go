@@ -212,6 +212,28 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			}
 			continue
 		case "trim":
+			// The legacy ROE-percent tier can coexist with the R-based lock when
+			// tp_trim_yields_to_lock=false. Their units are different, so impose
+			// an explicit order: protection reaches breakeven before any trim.
+			if err := at.ensureBreakevenBeforeAutomatedTrim(symbol, side, entryPrice, markPrice); err != nil {
+				logger.Infof("❌ TP trim deferred (%s %s): breakeven stop not secured: %v", symbol, side, err)
+				continue
+			}
+			minSize := at.config.StrategyConfig.RiskControl.MinPositionSize
+			if minSize <= 0 {
+				minSize = kernel.MinPositionSizeDefaultUSDT
+			}
+			if remainder := quantity * (2.0 / 3.0) * markPrice; remainder < minSize {
+				logger.Infof("🎯 TP ladder TRIM: %s %s remainder %.2f below min %.2f — closing fully instead of leaving dust", symbol, side, remainder, minSize)
+				if err := at.emergencyClosePosition(symbol, side); err != nil {
+					logger.Infof("❌ TP dust-safe full close failed (%s %s): %v — retries next cycle", symbol, side, err)
+				} else {
+					at.tpTrimMutex.Lock()
+					at.tpTrimDone[posKey] = true
+					at.tpTrimMutex.Unlock()
+				}
+				continue
+			}
 			trimQty := quantity / 3
 			logger.Infof("🎯 TP ladder TRIM: %s %s | PnL %.2f%% ≥ %.0f%% — trimming 1/3 (%.6g)", symbol, side, currentPnLPct, kernel.TpTrimProfitPct(&at.config.StrategyConfig.RiskControl), trimQty)
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 止盈减仓 1/3 %s (%s)</b>\n浮盈 <code>%.2f%%</code> ≥ %.0f%%,程序市价减仓 1/3。",
@@ -229,7 +251,6 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				logger.Infof("❌ TP trim failed (%s %s): %v — retries next cycle", symbol, side, err)
 			} else {
 				at.tpTrimMutex.Lock()
-				at.r1TrimDone[posKey] = true
 				at.tpTrimDone[posKey] = true
 				at.tpTrimMutex.Unlock()
 				logger.Infof("✅ TP trim succeeded: %s %s qty=%.6g (protective orders kept)", symbol, side, trimQty)
@@ -263,6 +284,28 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				symbol, side, currentPnLPct, peakPnLPct, drawdownPct)
 		}
 	}
+}
+
+// ensureBreakevenBeforeAutomatedTrim serializes mixed-unit profit tiers: an
+// ROE-percent trim may fire before an R tier, but it may never reduce the
+// position while the remainder still carries loss-side stop risk.
+func (at *AutoTrader) ensureBreakevenBeforeAutomatedTrim(symbol, side string, entryPrice, markPrice float64) error {
+	if entryPrice <= 0 || markPrice <= 0 {
+		return fmt.Errorf("entry/mark unavailable")
+	}
+	currentSL := at.GetRecordedStopLoss(symbol, side)
+	if (side == "long" && currentSL >= entryPrice) || (side == "short" && currentSL > 0 && currentSL <= entryPrice) {
+		return nil
+	}
+	if (side == "long" && markPrice <= entryPrice) || (side == "short" && markPrice >= entryPrice) {
+		return fmt.Errorf("position is not profitable at mark %.6g", markPrice)
+	}
+	if err := at.moveStopExchange(symbol, side, entryPrice); err != nil {
+		return err
+	}
+	at.SetRecordedStopLoss(symbol, side, entryPrice)
+	logger.Infof("🔒 [%s] Pre-trim breakeven secured: %s %s SL → %.6g", at.name, symbol, side, entryPrice)
+	return nil
 }
 
 // emergencyClosePosition emergency close position function
@@ -1164,10 +1207,11 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 	if err != nil {
 		return err
 	}
-	var qty float64
+	var qty, markPrice float64
 	for _, pos := range positions {
 		if pos["symbol"] == decision.Symbol && pos["side"] == side {
 			qty, _ = pos["positionAmt"].(float64)
+			markPrice, _ = pos["markPrice"].(float64)
 			break
 		}
 	}
@@ -1185,21 +1229,47 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 	}
 	already := at.partialTrimmed[posKey]
 	at.tpTrimMutex.Unlock()
-	if already+decision.CloseFraction > 0.75 {
-		return fmt.Errorf("❌ [RISK CONTROL] partial_close %s rejected: cumulative partial %.0f%% + %.0f%% would exceed 75%% — use close_* for a full exit",
-			decision.Symbol, already*100, decision.CloseFraction*100)
+	// EntryQuantity persists across restarts and includes every reduction
+	// source (R-lock, ROE ladder, structure TP, and AI partial close). It is
+	// authoritative over the in-memory fallback counter.
+	if at.store != nil {
+		if p, err := at.store.Position().GetOpenPositionBySymbol(at.id, decision.Symbol, strings.ToUpper(side)); err == nil && p != nil && p.EntryQuantity > 0 {
+			if derived := 1 - qty/p.EntryQuantity; derived > already {
+				already = derived
+			}
+		}
+	}
+	projected := cumulativeReductionAfter(already, decision.CloseFraction)
+	if projected > 0.75+1e-9 {
+		return fmt.Errorf("❌ [RISK CONTROL] partial_close %s rejected: total reduction would rise from %.0f%% to %.0f%% of original size (>75%%) — use close_* for a full exit",
+			decision.Symbol, already*100, projected*100)
 	}
 	trimQty := qty * decision.CloseFraction
+	minSize := at.config.StrategyConfig.RiskControl.MinPositionSize
+	if minSize <= 0 {
+		minSize = kernel.MinPositionSizeDefaultUSDT
+	}
+	if markPrice > 0 && (qty-trimQty)*markPrice < minSize {
+		return fmt.Errorf("❌ [RISK CONTROL] partial_close %s rejected: remainder %.2f USDT would be below min position size %.2f USDT; use close_*",
+			decision.Symbol, (qty-trimQty)*markPrice, minSize)
+	}
 	if _, err := at.reducePosition(decision.Symbol, side, trimQty); err != nil {
 		return err
 	}
 	at.tpTrimMutex.Lock()
-	at.partialTrimmed[posKey] = already + decision.CloseFraction
+	at.partialTrimmed[posKey] = projected
 	at.tpTrimMutex.Unlock()
 	actionRecord.Quantity = trimQty
-	logger.Infof("🎯 [%s] AI partial close: %s %s %.0f%% (%.6g) — cumulative %.0f%%", at.name, decision.Symbol, side, decision.CloseFraction*100, trimQty, (already+decision.CloseFraction)*100)
-	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 部分平仓 %s</b>\n<i>%s 平 %.0f%%(累计 %.0f%%),剩余仓位继续持有</i>", notify.Escape(decision.Symbol), side, decision.CloseFraction*100, (already+decision.CloseFraction)*100))
+	logger.Infof("🎯 [%s] AI partial close: %s %s %.0f%% of remainder (%.6g) — %.0f%% of original reduced", at.name, decision.Symbol, side, decision.CloseFraction*100, trimQty, projected*100)
+	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 部分平仓 %s</b>\n<i>%s 平当前仓位 %.0f%%(初始仓位累计已减 %.0f%%),剩余仓位继续持有</i>", notify.Escape(decision.Symbol), side, decision.CloseFraction*100, projected*100))
 	return nil
+}
+
+// cumulativeReductionAfter converts a fraction of the CURRENT remainder into
+// a fraction of the ORIGINAL entry quantity. Example: 50% already reduced,
+// then closing 50% of the remainder reaches 75%, not 100%.
+func cumulativeReductionAfter(alreadyReduced, fractionOfRemainder float64) float64 {
+	return alreadyReduced + (1-alreadyReduced)*fractionOfRemainder
 }
 
 // ============================================================================
@@ -1696,6 +1766,8 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 	}
 	totalRisk := 0.0
 	symbolRisk := 0.0
+	longRisk := 0.0
+	shortRisk := 0.0
 	unprotected := 0
 	for _, p := range ctx.Positions {
 		if p.Quantity <= 0 || p.EntryPrice <= 0 {
@@ -1709,6 +1781,11 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		}
 		risk := p.Quantity * p.EntryPrice * stopDistPct / 100
 		totalRisk += risk
+		if strings.EqualFold(p.Side, "short") {
+			shortRisk += risk
+		} else {
+			longRisk += risk
+		}
 		if market.Normalize(p.Symbol) == market.Normalize(d.Symbol) {
 			symbolRisk += risk
 		}
@@ -1728,6 +1805,11 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		remaining := math.Max(0, pe.Quantity-pe.ProtectedQty)
 		risk := remaining * math.Abs(pe.Price-pe.StopLoss)
 		totalRisk += risk
+		if strings.EqualFold(pe.Side, "short") {
+			shortRisk += risk
+		} else {
+			longRisk += risk
+		}
 		if market.Normalize(pe.Symbol) == market.Normalize(d.Symbol) {
 			symbolRisk += risk
 		}
@@ -1760,6 +1842,23 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 	if capPct > 0 && existingPct+candidatePct+reservedPct > capPct {
 		return true, fmt.Sprintf("open stop-risk would exceed max_account_risk_pct %.1f%% of equity %.2f: existing %.2f%% + candidate %.2f%% + reserved-this-cycle %.2f%%%s",
 			capPct, equity, existingPct, candidatePct, reservedPct, unprotectedSuffix(unprotected)), candidateRisk
+	}
+	// Gross risk limits the size of a full stop-out; net directional risk
+	// separately limits correlated one-way concentration. Opposite sides are
+	// allowed to reduce NET concentration, but never reduce the gross cap.
+	projectedLong := longRisk + at.cycleLongRiskReservedUSD
+	projectedShort := shortRisk + at.cycleShortRiskReservedUSD
+	if side == "short" {
+		projectedShort += candidateRisk
+	} else {
+		projectedLong += candidateRisk
+	}
+	if netCapPct := rc.EffectiveMaxNetDirectionalRiskPct(); netCapPct > 0 {
+		netPct := math.Abs(projectedLong-projectedShort) / equity * 100
+		if netPct > netCapPct+1e-9 {
+			return true, fmt.Sprintf("open would exceed max_net_directional_risk_pct %.1f%% of equity %.2f: projected long %.2f USDT - short %.2f USDT = %.2f%% net",
+				netCapPct, equity, projectedLong, projectedShort, netPct), candidateRisk
+		}
 	}
 	if at.exchange == "binance" && (symbolRisk+candidateRisk+symbolReserved)/equity*100 > symbolCapPct+1e-9 {
 		return true, fmt.Sprintf("%s gross long+short stop-risk would exceed %.2f%% of equity %.2f: existing %.2f + candidate %.2f + reserved-this-cycle %.2f USDT",
@@ -1808,6 +1907,7 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 //  3. Early-close lock (early_close_min_hours, 1h reversal evidence)
 //  4. Loss-streak circuit breaker + entry timing gate + regime-line guard
 //  5. Stock weekend open block + breakout-hold close gate
+//  6. Minimum model confidence for every open
 //
 // Blocked decisions are dropped with a logged reason, mirroring preTradeRuleCheck.
 func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kernel.Context) []kernel.Decision {
@@ -1817,6 +1917,11 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 	rc := at.config.StrategyConfig.RiskControl
 	filtered := make([]kernel.Decision, 0, len(decisions))
 	for _, d := range decisions {
+		if strings.HasPrefix(d.Action, "open_") && rc.MinConfidence > 0 && d.Confidence < rc.MinConfidence {
+			logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: confidence %d < configured minimum %d",
+				at.name, d.Action, d.Symbol, d.Confidence, rc.MinConfidence)
+			continue
+		}
 		// Account-level circuit breaker (user directive, prompt 09-13): once
 		// equity has retraced ≥ account_max_drawdown_pct from the initial
 		// balance, ALL new opens are blocked — reduce-only mode. The prompt
@@ -2022,6 +2127,11 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		// later decisions in this batch see it.
 		at.cycleRiskReservedUSD += d.CycleReservedRiskUSD
 		if d.CycleReservedRiskUSD > 0 {
+			if strings.Contains(d.Action, "short") {
+				at.cycleShortRiskReservedUSD += d.CycleReservedRiskUSD
+			} else if strings.Contains(d.Action, "long") {
+				at.cycleLongRiskReservedUSD += d.CycleReservedRiskUSD
+			}
 			if at.cycleSymbolRiskReservedUSD == nil {
 				at.cycleSymbolRiskReservedUSD = make(map[string]float64)
 			}

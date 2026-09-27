@@ -30,6 +30,7 @@ func TestSchemaPromptUsesSideAwareRiskDefinitions(t *testing.T) {
 		"总权益 - 已用保证金",
 		"0 表示未知或不适用",
 		"不能单独证明多空方向",
+		"**AutomationStage**", "**CumulativeReducedPct**",
 	} {
 		if !strings.Contains(zh, want) {
 			t.Errorf("corrected schema definition missing %q", want)

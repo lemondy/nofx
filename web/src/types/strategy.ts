@@ -190,7 +190,7 @@ export interface RiskControlConfig {
   // Max number of coins held simultaneously (CODE ENFORCED)
   max_positions: number;
 
-  // Trading Leverage - exchange leverage for opening positions (AI guided)
+  // Trading Leverage - exchange leverage ceilings (CODE ENFORCED)
   btc_eth_max_leverage: number;    // BTC/ETH max exchange leverage
   altcoin_max_leverage: number;    // Altcoin max exchange leverage
 
@@ -203,7 +203,7 @@ export interface RiskControlConfig {
   max_margin_usage: number;        // Max margin utilization, e.g. 0.9 = 90% (CODE ENFORCED)
   min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
   min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (CODE ENFORCED at open)
-  min_confidence: number;          // Min AI confidence to open position (AI guided)
+  min_confidence: number;          // Min AI confidence to open position (CODE ENFORCED)
 
   // Min holding period in minutes before AI-initiated closes are allowed (CODE ENFORCED)
   min_hold_minutes?: number;
@@ -221,6 +221,10 @@ export interface RiskControlConfig {
   entry_timing_gate?: boolean;
   // Position value capped at equity × this % ÷ stop-distance% (default 1.5)
   risk_per_trade_pct?: number;
+  // Gross stop-risk across all positions and resting entries (0 = default 10%, negative = off)
+  max_account_risk_pct?: number;
+  // Absolute long-vs-short stop-risk imbalance (0 = default 6%, negative = off)
+  max_net_directional_risk_pct?: number;
   // Stop-distance noise floor: reject stops closer than N × ATR(1h) (0 = off)
   sl_min_atr_mult?: number;
   // Limit-entry state machine: AI can emit open_*_limit trigger orders (CODE ENFORCED)

@@ -1216,13 +1216,16 @@ const (
 // highs/lows); STOP_PLAN_OUT_OF_BAND = no structure lands inside the band
 // (nearest too tight, rest too wide — 放弃该设置 per methodology).
 func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (price, distPct float64, code string) {
-	// Buffer yardstick: ATR(1h) for crypto, ATR(1d) for equity tokens
-	// (session-gap rationale — see stopFloorPct). Structures still come from
-	// the ≥15m pivots; only the buffer's scale changes.
+	// Buffer yardstick and structure horizon must use the same market rhythm:
+	// crypto uses 15m–4h structures with ATR(1h), while equity tokens with
+	// daily data use 4h–1d structures with ATR(1d). Mixing 15m pivots with a
+	// daily buffer produced structurally meaningless, over-wide bstock stops.
 	bufTF := "1h"
+	minStructureTF, maxStructureTF := 15*time.Minute, 4*time.Hour
 	if market.IsBStockSymbol(sig.Symbol) {
 		if td, ok := sig.Timeframes["1d"]; ok && td != nil && td.ATRPct > 0 {
 			bufTF = "1d"
+			minStructureTF, maxStructureTF = 4*time.Hour, 24*time.Hour
 		}
 	}
 	t1h := sig.Timeframes[bufTF]
@@ -1239,10 +1242,8 @@ func methodStopPlan(sig *SymbolSignal, entry, floorPct float64, isLong bool) (pr
 	// deduped at the same 0.05% tolerance as the S/R arrays.
 	var levels []float64
 	for name, tf := range sig.Timeframes {
-		// 15m–4h only: sub-15m is noise (see above), >4h (1d) pivots are a
-		// scale mismatch on an execution-TF trade (WLFI: a 0.90% "resistance"
-		// on a 5.25%-ATR daily bar nearly gated a 15m short).
-		if tf == nil || tfDuration(name) < 15*time.Minute || tfDuration(name) > 4*time.Hour {
+		d := tfDuration(name)
+		if tf == nil || d < minStructureTF || d > maxStructureTF {
 			continue
 		}
 		src := tf.StructuralSupport

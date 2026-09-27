@@ -18,8 +18,8 @@ import (
 	"nofx/trader/kucoin"
 	"nofx/trader/lighter"
 	"nofx/trader/okx"
-	"strings"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -120,65 +120,67 @@ type AutoTraderConfig struct {
 
 // AutoTrader automatic trader
 type AutoTrader struct {
-	id                      string // Trader unique identifier
-	name                    string // Trader display name
-	aiModel                 string // AI model name
-	exchange                string // Trading platform type (binance/bybit/etc)
-	exchangeID              string // Exchange account UUID
-	showInCompetition       bool   // Whether to show in competition page
-	config                  AutoTraderConfig
-	trader                  Trader                       // Use Trader interface (supports multiple platforms)
-	cycleGateStates         map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
-	mcpClient               mcp.AIClient
-	store                   *store.Store           // Data storage (decision records, etc.)
-	strategyEngine          *kernel.StrategyEngine // Strategy engine (uses strategy configuration)
-	strategyID              string                 // Strategy row ID — drives the per-cycle config-drift self-check
-	loadedConfigHash        string                 // risk_control hash this process LOADED at start (compare against the DB row each cycle)
-	cycleNumber             int                    // Current cycle number
-	initialBalance          float64
-	dailyPnL                float64
-	dayStartDay             string  // UTC day anchor for the daily-loss halt (D2, QUANT_REVIEW 09-22)
-	dayStartEquity          float64 // first equity seen on dayStartDay — the halt's baseline
-	cycleRiskReservedUSD    float64 // stop-risk booked by opens that PASSED the exposure gate this cycle (D2 reservation, 09-25 P1)
+	id                         string // Trader unique identifier
+	name                       string // Trader display name
+	aiModel                    string // AI model name
+	exchange                   string // Trading platform type (binance/bybit/etc)
+	exchangeID                 string // Exchange account UUID
+	showInCompetition          bool   // Whether to show in competition page
+	config                     AutoTraderConfig
+	trader                     Trader                       // Use Trader interface (supports multiple platforms)
+	cycleGateStates            map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
+	mcpClient                  mcp.AIClient
+	store                      *store.Store           // Data storage (decision records, etc.)
+	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)
+	strategyID                 string                 // Strategy row ID — drives the per-cycle config-drift self-check
+	loadedConfigHash           string                 // risk_control hash this process LOADED at start (compare against the DB row each cycle)
+	cycleNumber                int                    // Current cycle number
+	initialBalance             float64
+	dailyPnL                   float64
+	dayStartDay                string             // UTC day anchor for the daily-loss halt (D2, QUANT_REVIEW 09-22)
+	dayStartEquity             float64            // first equity seen on dayStartDay — the halt's baseline
+	cycleRiskReservedUSD       float64            // stop-risk booked by opens that PASSED the exposure gate this cycle (D2 reservation, 09-25 P1)
+	cycleLongRiskReservedUSD   float64            // admitted long stop-risk in this cycle; used by net-direction concentration gate
+	cycleShortRiskReservedUSD  float64            // admitted short stop-risk in this cycle; used by net-direction concentration gate
 	cycleSymbolRiskReservedUSD map[string]float64 // same-cycle stop-risk reserved per symbol
-	aiMarksSeededOnce       sync.Once
-	customPrompt            string // Custom trading strategy prompt
-	overrideBasePrompt      bool   // Whether to override base prompt
-	lastResetTime           time.Time
-	stopUntil               time.Time
-	isRunning               bool
-	isRunningMutex          sync.RWMutex       // Mutex to protect isRunning flag
-	startTime               time.Time          // System start time
-	callCount               int                // AI call count
-	positionFirstSeenTime   map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
-	positionStopLoss        map[string]float64 // Recorded stop-loss per open position (symbol_side -> price), set at open, drives the min-hold hard-exit bypass
-	positionStopLossMutex   sync.RWMutex       // Mutex protecting positionStopLoss
-	positionInitialStopLoss map[string]float64 // Opening-risk stop per open position (symbol_side -> price) — write-once 1R anchor; stop adjustments move only positionStopLoss
-	stopMonitorCh           chan struct{}      // Used to stop monitoring goroutine
-	monitorWg               sync.WaitGroup     // Used to wait for monitoring goroutine to finish
-	peakPnLCache            map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
-	peakPnLCacheMutex       sync.RWMutex       // Cache read-write lock
-	tpTrimDone              map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
-	r1TrimDone              map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
-	partialTrimmed          map[string]float64 // AI partial_close: cumulative fraction (GUARDED BY tpTrimMutex — cycle goroutine writes, drawdown monitor deletes)
-	tpTrimMutex             sync.Mutex
-	lastBalanceSyncTime     time.Time                   // Last balance sync time
-	userID                  string                      // User ID
-	gridState               *GridState                  // Grid trading state (only used when StrategyType == "grid_trading")
-	consecutiveAIFailures   int                         // Consecutive AI call failures
-	safeMode                bool                        // Safe mode: no new positions, protect existing ones
-	safeModeReason          string                      // Why safe mode was activated
-	authBlocked             bool                        // Binance auth/IP rejection (-2015/-2014): trading paused until operator fixes config
-	authBlockedReason       string                      // Why auth blocking was activated
-	gateNotify              map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
-	gateNotifyMu            sync.Mutex
-	pendingEntries          map[string]*pendingEntry // limit-entry state machine (symbol|side → order)
-	pendingEntriesMu        sync.RWMutex
-	volResizeLast           map[string]time.Time // per-position vol-resize cooldown
-	volResizeMu             sync.Mutex
-	tpRunnerDoneMap         map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
-	openTP                  map[string]float64 // recorded decision TP per open position (symbol_side)
-	openTPMu                sync.RWMutex
+	aiMarksSeededOnce          sync.Once
+	customPrompt               string // Custom trading strategy prompt
+	overrideBasePrompt         bool   // Whether to override base prompt
+	lastResetTime              time.Time
+	stopUntil                  time.Time
+	isRunning                  bool
+	isRunningMutex             sync.RWMutex       // Mutex to protect isRunning flag
+	startTime                  time.Time          // System start time
+	callCount                  int                // AI call count
+	positionFirstSeenTime      map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
+	positionStopLoss           map[string]float64 // Recorded stop-loss per open position (symbol_side -> price), set at open, drives the min-hold hard-exit bypass
+	positionStopLossMutex      sync.RWMutex       // Mutex protecting positionStopLoss
+	positionInitialStopLoss    map[string]float64 // Opening-risk stop per open position (symbol_side -> price) — write-once 1R anchor; stop adjustments move only positionStopLoss
+	stopMonitorCh              chan struct{}      // Used to stop monitoring goroutine
+	monitorWg                  sync.WaitGroup     // Used to wait for monitoring goroutine to finish
+	peakPnLCache               map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
+	peakPnLCacheMutex          sync.RWMutex       // Cache read-write lock
+	tpTrimDone                 map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
+	r1TrimDone                 map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
+	partialTrimmed             map[string]float64 // fallback cumulative fraction of ORIGINAL size reduced by AI/automation (DB EntryQuantity is authoritative when available)
+	tpTrimMutex                sync.Mutex
+	lastBalanceSyncTime        time.Time                   // Last balance sync time
+	userID                     string                      // User ID
+	gridState                  *GridState                  // Grid trading state (only used when StrategyType == "grid_trading")
+	consecutiveAIFailures      int                         // Consecutive AI call failures
+	safeMode                   bool                        // Safe mode: no new positions, protect existing ones
+	safeModeReason             string                      // Why safe mode was activated
+	authBlocked                bool                        // Binance auth/IP rejection (-2015/-2014): trading paused until operator fixes config
+	authBlockedReason          string                      // Why auth blocking was activated
+	gateNotify                 map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
+	gateNotifyMu               sync.Mutex
+	pendingEntries             map[string]*pendingEntry // limit-entry state machine (symbol|side → order)
+	pendingEntriesMu           sync.RWMutex
+	volResizeLast              map[string]time.Time // per-position vol-resize cooldown
+	volResizeMu                sync.Mutex
+	tpRunnerDoneMap            map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
+	openTP                     map[string]float64 // recorded decision TP per open position (symbol_side)
+	openTPMu                   sync.RWMutex
 }
 
 // Binance hedge legs must use isolated margin for this strategy. Other

@@ -253,18 +253,14 @@ func TestStopMoveLocksProfit(t *testing.T) {
 }
 
 func TestPartialCumulativeCap(t *testing.T) {
-	// The cap lives in executePartialCloseWithRecord via partialTrimmed —
-	// assert the arithmetic contract: cumulative 0.5 + 0.25 allowed (0.75),
-	// 0.75 + 0.25 rejected (would exceed).
-	already, frac := 0.5, 0.25
-	if already+frac > 0.75 {
-		t.Fatal("0.5+0.25 must be allowed at the boundary")
+	// close_fraction is a fraction of the CURRENT remainder, while the cap is
+	// measured against ORIGINAL size and includes automatic reductions.
+	if got := cumulativeReductionAfter(0.5, 0.5); got != 0.75 {
+		t.Fatalf("50%% already + 50%% of remainder = %.2f, want 75%%", got)
 	}
-	already, frac = 0.75, 0.25
-	if already+frac <= 0.75 {
-		t.Fatal("0.75+0.25 must be rejected")
+	if got := cumulativeReductionAfter(0.75, 0.25); got <= 0.75 {
+		t.Fatalf("75%% already + 25%% of remainder = %.2f, must exceed cap", got)
 	}
-	_ = frac
 }
 
 // Margin-budget gate math (audit 09-13 #2): used-margin sum skips positions

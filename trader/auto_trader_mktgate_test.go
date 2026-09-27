@@ -149,6 +149,31 @@ func TestAccountRiskExposureBlocks(t *testing.T) {
 	}
 }
 
+func TestNetDirectionalRiskExposureBlocks(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{
+		MaxAccountRiskPct:        20,
+		MaxNetDirectionalRiskPct: 3,
+		RiskPerTradePct:          2,
+	})
+	ctx := &kernel.Context{
+		Account: kernel.AccountInfo{TotalEquity: 1000},
+		Positions: []kernel.PositionInfo{
+			{Symbol: "AUSDT", Side: "long", EntryPrice: 100, Quantity: 5, StopLossPrice: 95}, // 25U long risk
+		},
+	}
+	long := &kernel.Decision{Action: "open_long", Symbol: "BUSDT", PositionSizeUSD: 500, StopLoss: 98}
+	if blocked, reason, _ := at.accountRiskExposureBlocks(long, 100, ctx); !blocked || !strings.Contains(reason, "max_net_directional_risk_pct") {
+		t.Fatalf("projected 3.5%% net long risk must block: blocked=%v reason=%s", blocked, reason)
+	}
+	short := &kernel.Decision{Action: "open_short", Symbol: "BUSDT", PositionSizeUSD: 500, StopLoss: 102}
+	if blocked, reason, _ := at.accountRiskExposureBlocks(short, 100, ctx); blocked {
+		t.Fatalf("opposite-side candidate lowers net concentration and must pass: %s", reason)
+	}
+	if got := (store.RiskControlConfig{}).EffectiveMaxNetDirectionalRiskPct(); got != 6 {
+		t.Fatalf("default net directional risk cap = %.1f, want 6", got)
+	}
+}
+
 func TestBinanceSymbolGrossStopRiskIncludesBothSidesAndPending(t *testing.T) {
 	at := riskTestTrader(store.RiskControlConfig{MaxAccountRiskPct: 10, RiskPerTradePct: 1.5})
 	at.exchange = "binance"

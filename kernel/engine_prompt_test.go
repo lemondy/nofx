@@ -294,7 +294,7 @@ func TestTpTierAction(t *testing.T) {
 	// the stop parks at 开仓价+0.20R, not plain entry.
 	engine := NewStrategyEngine(&store.StrategyConfig{})
 	prompt := engine.BuildSystemPrompt(100, "")
-	for _, want := range []string{"程序自动市价减仓 50%", "止损移至开仓价+0.20R", "程序自动全部平仓"} {
+	for _, want := range []string{"程序自动市价减仓 50%", "确保止损至开仓价+0.20R", "程序自动全部平仓"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("TP ladder missing %q", want)
 		}
@@ -581,12 +581,19 @@ func TestSystemPromptOutputContractIsCompactAndUnambiguous(t *testing.T) {
 	cfg.RiskControl.LimitEntryEnabled = true
 	cfg.RiskControl.SLMinATRMult = 1.5
 	cfg.RiskControl.MinRiskRewardRatio = 1.5
+	cfg.RiskControl.MinConfidence = 70
+	cfg.RiskControl.AltcoinMaxLeverage = 3
+	cfg.RiskControl.BTCETHMaxLeverage = 3
 	prompt := NewStrategyEngine(cfg).BuildSystemPrompt(123.45, "")
 
 	for _, want := range []string{
 		"Output exactly two XML blocks and nothing else",
 		"<reasoning>", "</reasoning>", "<decision>", "</decision>",
 		"strict JSON array without Markdown fences",
+		"Min Confidence: ≥70 (低于门槛的开仓由后端拒绝)",
+		"Max Leverage: Altcoins 3x | BTC/ETH 3x",
+		"后端对 TP 与 SL 使用同一 0.05% 容差强制吸附",
+		"串联(AND)", "净方向风险上限(程序强制)",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("canonical output contract missing %q", want)
@@ -602,5 +609,34 @@ func TestSystemPromptOutputContractIsCompactAndUnambiguous(t *testing.T) {
 	}
 	if len(prompt) > 26000 {
 		t.Errorf("system prompt grew to %d bytes; compact contract budget is 26000", len(prompt))
+	}
+}
+
+func TestPersonalizedFrequencyPolicyReplacesGenericPolicy(t *testing.T) {
+	cfg := &store.StrategyConfig{CustomPrompt: "# 个性化节奏\n不要频繁交易,只做最强设置。"}
+	cfg.PromptSections.TradingFrequency = "# 通用频率\n高信心时频率不设上限。"
+	prompt := NewStrategyEngine(cfg).BuildSystemPrompt(100, "")
+	if strings.Contains(prompt, "高信心时频率不设上限") {
+		t.Fatal("generic frequency policy must be omitted when personalized prompt defines one")
+	}
+	for _, want := range []string{"不要频繁交易", "唯一交易频率/仓位节奏规则"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("resolved personalized frequency contract missing %q", want)
+		}
+	}
+}
+
+func TestPositionPromptExposesAutomationState(t *testing.T) {
+	engine := NewStrategyEngine(&store.StrategyConfig{})
+	ctx := &Context{MarketDataMap: map[string]*market.Data{}}
+	out := engine.formatPositionInfo(1, PositionInfo{
+		Symbol: "BTCUSDT", Side: "long", EntryPrice: 100, MarkPrice: 110,
+		Quantity: 0.25, Leverage: 3, Managed: true,
+		AutomationStage: "R_LOCK_TRIMMED", CumulativeReducedPct: 50,
+	}, ctx)
+	for _, want := range []string{"AutoMgmt R_LOCK_TRIMMED", "Reduced 50.0% of original"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("position automation state missing %q: %s", want, out)
+		}
 	}
 }
