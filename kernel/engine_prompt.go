@@ -440,6 +440,18 @@ func (e *StrategyEngine) strategyParamsText() string {
 func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	var sb strings.Builder
 
+	// Market sentiment composite (user directive 2026-09-27): three
+	// independent sources at the HEAD of the user prompt, with an explicit
+	// combine-don't-overindex rule. Rendered empty when every source failed —
+	// the block disappears rather than showing an empty shell.
+	if sentiment := market.GetMarketSentiment(); sentiment != nil {
+		if body := sentiment.Render(); body != "" {
+			sb.WriteString("## 大盘情绪(组合解读,不要只看单一数字)\n")
+			sb.WriteString(body + "\n")
+			sb.WriteString("组合解读规则: ①三源同向极端(加密贪婪>80+美股>75+多空账户比>2+资金费年化>50%)=拥挤区,逆向风险最高,新开仓一律保守并在 reasoning 说明;②源间背离时以价格结构与硬门判定为准,情绪只作择时背景;③情绪是慢变量,本身不构成开/平仓理由,也不覆盖任何程序硬门。缺数来源按剩余来源判断。\n\n")
+		}
+	}
+
 	// System status
 	sb.WriteString(fmt.Sprintf("Time: %s | Period: #%d | Runtime: %d minutes\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
