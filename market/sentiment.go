@@ -260,6 +260,9 @@ func (m *MarketSentiment) Render() string {
 	if len(failed) > 0 {
 		body += "\n(缺数来源: " + strings.Join(failed, "、") + " — 按剩余来源与价格结构判断)"
 	}
+	// As-of stamp: funding drifts per settlement interval — the model must
+	// know the snapshot age when comparing against live prices.
+	body += "\n数据截至: " + time.Now().UTC().Format("2006-01-02 15:04 UTC")
 	return body
 }
 
