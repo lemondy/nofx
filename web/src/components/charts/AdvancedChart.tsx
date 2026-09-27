@@ -110,6 +110,18 @@ const formatLegendPrice = (value: number | undefined): string => {
  return value.toFixed(6)
 }
 
+// Axis precision mirrors the legend: small-price symbols (0.0737) show
+// meaningful decimals on the price scale instead of everything collapsing
+// to "0.07" (2026-09-27 user report).
+const priceAxisPrecision = (value: number | undefined): number => {
+ const abs = Math.abs(value ?? 0)
+ if (abs >= 1000) return 2
+ if (abs >= 1) return 4
+ if (abs >= 0.01) return 5
+ return 6
+}
+
+
 export function AdvancedChart({
  symbol = 'BTCUSDT',
  interval = '5m',
@@ -521,7 +533,7 @@ export function AdvancedChart({
  borderColor: '#C0B9A2',
  scaleMargins: {
  top: 0.1,
- bottom: 0.25,
+ bottom: 0.08,
  },
  borderVisible: true,
  entireTextOnly: false,
@@ -572,17 +584,23 @@ export function AdvancedChart({
  })
  candlestickSeriesRef.current = candlestickSeries as any
 
- // Create volume series
+ // Create volume series — overlay pane with scaleMargins top:0.8 keeps the
+ // histogram in the BOTTOM 20% of the chart (TradingView standard). The old
+ // config let volume occupy the full height and overlap the candles
+ // (2026-09-27 user report).
  const volumeSeries = chart.addSeries(HistogramSeries, {
  color: '#2E7D4F',
  priceFormat: {
  type: 'volume',
  },
- priceScaleId: '',
+ priceScaleId: 'vol-overlay',
  lastValueVisible: false,
  priceLineVisible: false,
  })
  volumeSeriesRef.current = volumeSeries as any
+ volumeSeries.priceScale().applyOptions({
+ scaleMargins: { top: 0.8, bottom: 0 },
+ })
 
  // Responsive resize (ResizeObserver)
  const resizeObserver = new ResizeObserver((entries) => {
@@ -674,6 +692,17 @@ export function AdvancedChart({
  // 1. Fetch kline data
  const klineData = await fetchKlineData(symbol, interval)
  console.log('[AdvancedChart] Loaded', klineData.length, 'klines')
+ if (klineData.length > 0) {
+ const lastClose = klineData[klineData.length - 1].close
+ const prec = priceAxisPrecision(lastClose)
+ candlestickSeriesRef.current.applyOptions({
+ priceFormat: {
+ type: 'price',
+ precision: prec,
+ minMove: Number('0.' + '0'.repeat(Math.max(0, prec - 1)) + '1'),
+ },
+ })
+ }
  candlestickSeriesRef.current.setData(klineData)
 
  // Store volume/quoteVolume data for tooltip
