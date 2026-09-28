@@ -273,6 +273,7 @@ function JournalTab({ traderId, language }: { traderId: string; language: Langua
  <thead>
  <tr style={{ color: C.muted, borderBottom: `1px solid ${C.border}` }}>
  <th className="text-left font-medium px-4 py-3">{rv('colSymbol')}</th>
+ <th className="text-left font-medium px-4 py-3">{rv('colSource')}</th>
  <th className="text-left font-medium px-4 py-3">{rv('colDirection')}</th>
  <th className="text-right font-medium px-4 py-3">{rv('colEntry')}</th>
  <th className="text-right font-medium px-4 py-3">{rv('colExit')}</th>
@@ -342,6 +343,15 @@ function JournalRow({
  return (
  <tr style={{ borderBottom: `1px solid ${C.rowBorder}` }} className="hover:bg-[#1E1E1A]/[0.03]">
  <td className="px-4 py-3 font-semibold">{entry.symbol}</td>
+ <td className="px-4 py-3">
+ {entry.ai_managed === null || entry.ai_managed === undefined ? (
+ <span className="px-2 py-0.5 rounded text-[10px]" style={{ color: C.faint }}>{rv('sourceUnknown')}</span>
+ ) : entry.ai_managed ? (
+ <span className="px-2 py-0.5 rounded text-[10px]" title={rv('sourceAITitle')} style={{ background: 'rgba(184,145,42,0.12)', color: C.gold }}>{rv('sourceAI')}</span>
+ ) : (
+ <span className="px-2 py-0.5 rounded text-[10px]" title={rv('sourceManualTitle')} style={{ color: C.faint }}>{rv('sourceManual')}</span>
+ )}
+ </td>
  <td className="px-4 py-3">
  <span style={{ color: entry.side === 'LONG' ? C.up : C.down }}>
  {entry.side === 'LONG' ? rv('long') : rv('short')}

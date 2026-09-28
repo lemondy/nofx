@@ -47,6 +47,13 @@ type TradeJournalDB struct {
 	ReviewStatus    string `gorm:"column:review_status;default:'pending'" json:"review_status"` // pending|reviewed
 	ReviewedAt      int64  `gorm:"column:reviewed_at;default:0" json:"reviewed_at"`
 
+	// AIManaged: the trade was opened by the AI (user request 09-27 — the
+	// journal must distinguish AI trades from manual ones). Determined by
+	// matchOpenDecision (a SUCCESSFUL open/open_*_limit decision for this
+	// symbol+side inside the ownership window); NULL = not yet classified
+	// (legacy rows awaiting the backfill, renders as 未标注).
+	AIManaged *bool `gorm:"column:ai_managed" json:"ai_managed"`
+
 	CreatedAt int64 `gorm:"column:created_at;default:0" json:"created_at"`
 	UpdatedAt int64 `gorm:"column:updated_at;default:0" json:"updated_at"`
 }
@@ -156,6 +163,12 @@ func (s *TradeJournalStore) SyncFromPositions(traderID string) (int, error) {
 		// Enrich with the original AI decision basis (planned SL/TP, reasoning)
 		s.enrichFromDecisions(traderID, entry)
 
+		// Ownership stamp (user request 09-27): AI trade vs manual — a
+		// SUCCESSFUL open/open_*_limit decision for this symbol+side inside
+		// the ownership window.
+		ai := s.matchOpenDecision(traderID, pos.Symbol, pos.Side, pos.EntryTime)
+		entry.AIManaged = &ai
+
 		if err := s.db.Create(entry).Error; err != nil {
 			// Unique index race (concurrent sync): skip silently
 			if err.Error() == "UNIQUE constraint failed: trade_journal.trader_id, trade_journal.position_id" {
@@ -166,6 +179,96 @@ func (s *TradeJournalStore) SyncFromPositions(traderID string) (int, error) {
 		created++
 	}
 	return created, nil
+}
+
+// ownershipWindowMinutes: AI decides, then the order fills — the decision
+// precedes the entry by up to the limit-order lifetime (30 min) plus
+// placement latency, so the ownership/enrichment window starts 40 minutes
+// before the position entry (30 would miss slow limit fills).
+const ownershipWindowMinutes = 40
+
+// matchOpenDecision reports whether a SUCCESSFUL AI open decision exists for
+// (symbol, side) within the ownership window before entryTimeMs. Matches both
+// market (open_long/open_short) and limit (open_long_limit/open_short_limit)
+// actions — since the limit-entry default every AI open ships as *_limit, and
+// the plain-name match alone classified nearly everything as manual (09-27
+// validation: 63/218 matched before the fix, 174 after). Requires
+// success=true: a REJECTED open proposal (e.g. HANDS-OFF on a manual
+// position) must not attribute the trade to the AI.
+func (s *TradeJournalStore) matchOpenDecision(traderID, symbol, side string, entryTimeMs int64) bool {
+	if entryTimeMs <= 0 {
+		return false
+	}
+	base := "open_long"
+	if side == "SHORT" {
+		base = "open_short"
+	}
+	windowStart := time.UnixMilli(entryTimeMs).UTC().Add(-ownershipWindowMinutes * time.Minute)
+	windowEnd := time.UnixMilli(entryTimeMs).UTC().Add(2 * time.Minute)
+
+	var records []DecisionRecordDB
+	if err := s.db.Where("trader_id = ? AND timestamp BETWEEN ? AND ?",
+		traderID, windowStart, windowEnd).
+		Order("timestamp ASC").Limit(20).Find(&records).Error; err != nil {
+		return false
+	}
+	for _, rec := range records {
+		var actions []DecisionAction
+		if json.Unmarshal([]byte(rec.Decisions), &actions) != nil {
+			continue
+		}
+		for _, act := range actions {
+			if act.Symbol == symbol && (act.Action == base || act.Action == base+"_limit") && act.Success {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// BackfillOwnership classifies legacy journal rows that predate the
+// ai_managed column (user request 09-27): NULL rows get the matchOpenDecision
+// verdict, and rows synced before the limit-action fix get their planned
+// SL/TP/reasoning re-enriched (additive only — never touches filled fields or
+// review payloads). Idempotent; cheap when there is nothing to do.
+func (s *TradeJournalStore) BackfillOwnership(traderID string) (int64, error) {
+	var pending []TradeJournalDB
+	if err := s.db.Where("trader_id = ? AND ai_managed IS NULL", traderID).
+		Order("id DESC").Limit(1000).Find(&pending).Error; err != nil {
+		return 0, fmt.Errorf("failed to query unclassified journal rows: %w", err)
+	}
+	if len(pending) == 0 {
+		return 0, nil
+	}
+	stamped := int64(0)
+	for _, e := range pending {
+		ai := s.matchOpenDecision(traderID, e.Symbol, e.Side, e.EntryTime)
+		updates := map[string]interface{}{"ai_managed": ai}
+		// Rows synced before the *_limit fix carry empty decision basis even
+		// though a matching AI decision exists — re-run the enrichment
+		// (enrichFromDecisions writes only zero-valued fields).
+		if e.PlannedStopLoss == 0 && e.PlannedTakeProfit == 0 && e.Confidence == 0 {
+			entry := e // copy — enrich writes pointer fields
+			s.enrichFromDecisions(traderID, &entry)
+			if entry.PlannedStopLoss != 0 {
+				updates["planned_stop_loss"] = entry.PlannedStopLoss
+			}
+			if entry.PlannedTakeProfit != 0 {
+				updates["planned_take_profit"] = entry.PlannedTakeProfit
+			}
+			if entry.EntryReasoning != "" {
+				updates["entry_reasoning"] = entry.EntryReasoning
+			}
+			if entry.Confidence != 0 {
+				updates["confidence"] = entry.Confidence
+			}
+		}
+		if err := s.db.Model(&TradeJournalDB{}).Where("id = ?", e.ID).Updates(updates).Error; err != nil {
+			return stamped, fmt.Errorf("failed to stamp journal row %d: %w", e.ID, err)
+		}
+		stamped++
+	}
+	return stamped, nil
 }
 
 // calculateJournalPnLPct computes leverage-adjusted PnL percentage relative to margin
@@ -196,8 +299,13 @@ func (s *TradeJournalStore) enrichFromDecisions(traderID string, entry *TradeJou
 		openAction = "open_short"
 	}
 
-	// Decision records within a window before position entry (AI decides, then order fills)
-	windowStart := time.UnixMilli(entry.EntryTime).UTC().Add(-30 * time.Minute)
+	// Decision records within a window before position entry (AI decides,
+	// then the order fills — limit fills can lag the decision by the full
+	// order lifetime, hence the 40-min window shared with matchOpenDecision).
+	// Both market and *_limit actions match: since limit-entry became the
+	// default every AI open ships as *_limit and the plain-name match alone
+	// left the whole 计划止损/止盈 column empty (09-27).
+	windowStart := time.UnixMilli(entry.EntryTime).UTC().Add(-ownershipWindowMinutes * time.Minute)
 	windowEnd := time.UnixMilli(entry.EntryTime).UTC().Add(2 * time.Minute)
 
 	var records []DecisionRecordDB
@@ -213,7 +321,7 @@ func (s *TradeJournalStore) enrichFromDecisions(traderID string, entry *TradeJou
 			continue
 		}
 		for _, act := range actions {
-			if act.Symbol == entry.Symbol && act.Action == openAction {
+			if act.Symbol == entry.Symbol && (act.Action == openAction || act.Action == openAction+"_limit") {
 				// Prefer a successful action record
 				if entry.PlannedStopLoss == 0 && act.StopLoss != 0 {
 					entry.PlannedStopLoss = act.StopLoss

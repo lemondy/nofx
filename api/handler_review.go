@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"nofx/kernel"
+	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
@@ -31,6 +32,13 @@ func (s *Server) handleJournalList(c *gin.Context) {
 	traderID, ok := s.getJournalTrader(c)
 	if !ok {
 		return
+	}
+	// Classify legacy rows on first read after deploy (NULL ai_managed) —
+	// idempotent, no-op when everything is stamped (user request 09-27).
+	if n, err := s.store.TradeJournal().BackfillOwnership(traderID); err != nil {
+		logger.Warnf("⚠️ journal ownership backfill failed (rendering continues without badges): %v", err)
+	} else if n > 0 {
+		logger.Infof("🤖 journal ownership backfilled: %d rows classified (AI vs manual)", n)
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))

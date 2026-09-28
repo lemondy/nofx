@@ -32,6 +32,8 @@ export interface JournalEntry {
   lesson: string
   review_status: 'pending' | 'reviewed' | string
   reviewed_at: number
+  // AI 开仓 vs 手动(user request 09-27): null = 尚未分类的旧行
+  ai_managed: boolean | null
   created_at: number
   updated_at: number
 }
