@@ -269,7 +269,7 @@ function JournalTab({ traderId, language }: { traderId: string; language: Langua
  {rv('emptyJournal')}
  </div>
  ) : (
- <table className="w-full text-xs">
+ <table className="w-full text-xs whitespace-nowrap">
  <thead>
  <tr style={{ color: C.muted, borderBottom: `1px solid ${C.border}` }}>
  <th className="text-left font-medium px-4 py-3">{rv('colSymbol')}</th>
