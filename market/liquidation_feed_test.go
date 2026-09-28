@@ -1,6 +1,7 @@
 package market
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -51,5 +52,58 @@ func TestLiquidationStats(t *testing.T) {
 	liqMu.Unlock()
 	if _, ok := LiquidationStats("XYZUSDT"); ok {
 		t.Fatal("empty window must report absent (cold start ≠ zero liquidations)")
+	}
+}
+
+func TestDecodeLiquidationOrdersAcceptsRawAndCombinedStreams(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantN   int
+	}{
+		{
+			name:    "raw stream",
+			payload: `{"e":"forceOrder","o":{"s":"BTCUSDT","S":"SELL","ap":"61234.50","z":"0.025","T":1700000000000}}`,
+			wantN:   1,
+		},
+		{
+			name:    "combined stream",
+			payload: `{"stream":"!forceOrder@arr","data":{"e":"forceOrder","o":{"s":"ETHUSDT","S":"BUY","ap":"2450.25","z":"1.5","T":1700000000001}}}`,
+			wantN:   1,
+		},
+		{
+			name: "batched raw stream",
+			payload: `[{"o":{"s":"BTCUSDT","S":"SELL","ap":"1","z":"2"}},` +
+				`{"o":{"s":"ETHUSDT","S":"BUY","ap":"3","z":"4"}}]`,
+			wantN: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			orders, err := decodeLiquidationOrders([]byte(tc.payload))
+			if err != nil {
+				t.Fatalf("decodeLiquidationOrders() error = %v", err)
+			}
+			if len(orders) != tc.wantN {
+				t.Fatalf("decoded %d orders, want %d", len(orders), tc.wantN)
+			}
+			if orders[0].Symbol == "" {
+				t.Fatal("decoded order has an empty symbol")
+			}
+		})
+	}
+}
+
+func TestParseFloatSafePreservesDecimalScale(t *testing.T) {
+	for input, want := range map[string]float64{
+		"61234.50": 61234.5,
+		"0.025":    0.025,
+		" -1.25 ":  -1.25,
+		"bad":      0,
+	} {
+		if got := parseFloatSafe(input); math.Abs(got-want) > 1e-9 {
+			t.Errorf("parseFloatSafe(%q) = %v, want %v", input, got, want)
+		}
 	}
 }

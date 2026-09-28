@@ -92,7 +92,7 @@ func (at *AutoTrader) startDrawdownMonitor() {
 func (at *AutoTrader) safeCheckPositionDrawdown() {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Infof("❌ Drawdown monitoring: recovered from panic: %v", r)
+			logger.Errorf("❌ Drawdown monitoring: recovered from panic: %v", r)
 		}
 	}()
 	at.checkPositionDrawdown()
@@ -103,7 +103,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 	// Get current positions
 	positions, err := at.trader.GetPositions()
 	if err != nil {
-		logger.Infof("❌ Drawdown monitoring: failed to get positions: %v", err)
+		logger.Warnf("❌ Drawdown monitoring: failed to get positions: %v", err)
 		return
 	}
 

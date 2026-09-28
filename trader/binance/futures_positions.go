@@ -3,6 +3,7 @@ package binance
 import (
 	"context"
 	"fmt"
+	"math"
 	"nofx/logger"
 	"strconv"
 	"strings"
@@ -221,39 +222,88 @@ func (t *FuturesTrader) CheckMinNotional(symbol string, quantity float64) error 
 
 // GetSymbolPrecision gets the quantity precision for a trading pair
 func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
-	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	rules, err := t.getSymbolOrderRules(symbol)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get trading rules: %w", err)
+		return 0, err
 	}
-
-	for _, s := range exchangeInfo.Symbols {
-		if s.Symbol == symbol {
-			// Get precision from LOT_SIZE filter
-			for _, filter := range s.Filters {
-				if filter["filterType"] == "LOT_SIZE" {
-					stepSize := filter["stepSize"].(string)
-					precision := calculatePrecision(stepSize)
-					logger.Infof("  %s quantity precision: %d (stepSize: %s)", symbol, precision, stepSize)
-					return precision, nil
-				}
-			}
-		}
-	}
-
-	logger.Infof("  ⚠ %s precision information not found, using default precision 3", symbol)
-	return 3, nil // Default precision is 3
+	precision := calculatePrecision(rules.StepSizeText)
+	logger.Infof("  %s quantity precision: %d (stepSize: %s)", symbol, precision, rules.StepSizeText)
+	return precision, nil
 }
 
 // FormatQuantity formats quantity to correct precision
 func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
-	precision, err := t.GetSymbolPrecision(symbol)
+	rules, err := t.getSymbolOrderRules(symbol)
 	if err != nil {
-		// If retrieval fails, use default format
-		return fmt.Sprintf("%.3f", quantity), nil
+		return "", err
 	}
+	return formatQuantityWithRules(symbol, quantity, rules)
+}
 
-	format := fmt.Sprintf("%%.%df", precision)
-	return fmt.Sprintf(format, quantity), nil
+type symbolOrderRules struct {
+	StepSizeText string
+	StepSize     float64
+	MinQty       float64
+	MaxQty       float64
+	MinNotional  float64
+}
+
+func (t *FuturesTrader) getSymbolOrderRules(symbol string) (symbolOrderRules, error) {
+	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	if err != nil {
+		return symbolOrderRules{}, fmt.Errorf("failed to get trading rules: %w", err)
+	}
+	for _, s := range exchangeInfo.Symbols {
+		if s.Symbol != symbol {
+			continue
+		}
+		rules := symbolOrderRules{MinNotional: 10}
+		for _, filter := range s.Filters {
+			filterType, _ := filter["filterType"].(string)
+			switch filterType {
+			case "LOT_SIZE":
+				rules.StepSizeText, _ = filter["stepSize"].(string)
+				rules.StepSize, _ = strconv.ParseFloat(rules.StepSizeText, 64)
+				if v, ok := filter["minQty"].(string); ok {
+					rules.MinQty, _ = strconv.ParseFloat(v, 64)
+				}
+				if v, ok := filter["maxQty"].(string); ok {
+					rules.MaxQty, _ = strconv.ParseFloat(v, 64)
+				}
+			case "MIN_NOTIONAL", "NOTIONAL":
+				if v, ok := filter["notional"].(string); ok {
+					if parsed, parseErr := strconv.ParseFloat(v, 64); parseErr == nil && parsed > 0 {
+						rules.MinNotional = parsed
+					}
+				}
+			}
+		}
+		if rules.StepSize <= 0 || rules.StepSizeText == "" {
+			return symbolOrderRules{}, fmt.Errorf("%s LOT_SIZE trading rule is missing", symbol)
+		}
+		return rules, nil
+	}
+	return symbolOrderRules{}, fmt.Errorf("%s trading rules not found", symbol)
+}
+
+func formatQuantityWithRules(symbol string, quantity float64, rules symbolOrderRules) (string, error) {
+	if quantity <= 0 || math.IsNaN(quantity) || math.IsInf(quantity, 0) {
+		return "", fmt.Errorf("%s quantity must be positive, got %.8f", symbol, quantity)
+	}
+	// Always round DOWN so exchange precision handling can never increase the
+	// program-owned risk budget.
+	steps := math.Floor(quantity/rules.StepSize + 1e-9)
+	formattedValue := steps * rules.StepSize
+	precision := calculatePrecision(rules.StepSizeText)
+	formatted := fmt.Sprintf("%.*f", precision, formattedValue)
+	if formattedValue <= 0 || (rules.MinQty > 0 && formattedValue+rules.StepSize*1e-9 < rules.MinQty) {
+		return "", fmt.Errorf("MIN_QTY: %s quantity %.8f rounds down to %s (stepSize=%s, minQty=%.*f)",
+			symbol, quantity, formatted, rules.StepSizeText, precision, rules.MinQty)
+	}
+	if rules.MaxQty > 0 && formattedValue > rules.MaxQty+rules.StepSize*1e-9 {
+		return "", fmt.Errorf("MAX_QTY: %s quantity %s exceeds maxQty %.*f", symbol, formatted, precision, rules.MaxQty)
+	}
+	return formatted, nil
 }
 
 // GetSymbolPricePrecision gets the price precision for a trading pair

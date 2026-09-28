@@ -2,6 +2,7 @@ package market
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -36,38 +37,44 @@ type liqEvent struct {
 
 type LiquidationWindow struct {
 	// LongUSD/ShortUSD: notional liquidated per side over the window.
-	Long1hUSD, Short1hUSD     float64
-	Long24hUSD, Short24hUSD   float64
-	Count1h, Count24h         int
-	WindowHours               float64 // actual covered window (starts at 0 on cold start)
-	Sample                    string  // largest single liquidation in 24h ("LONG 1.2M @ BTCUSDT")
+	Long1hUSD, Short1hUSD   float64
+	Long24hUSD, Short24hUSD float64
+	Count1h, Count24h       int
+	WindowHours             float64 // actual covered window (starts at 0 on cold start)
+	Sample                  string  // largest single liquidation in 24h ("LONG 1.2M @ BTCUSDT")
 }
 
 const (
-	liqFeedURL      = "wss://fstream.binance.com/ws/!forceOrder@arr"
-	liqWindow       = 24 * time.Hour
-	liqMaxEvents    = 200_000 // hard memory bound; prune drops oldest first
+	liqFeedURL   = "wss://fstream.binance.com/ws/!forceOrder@arr"
+	liqWindow    = 24 * time.Hour
+	liqMaxEvents = 200_000 // hard memory bound; prune drops oldest first
 )
 
 var (
-	liqMu        sync.Mutex
-	liqEvents    []liqEvent
-	liqStarted   time.Time
-	liqRunning   bool
-	liqBySymbol  = map[string][]liqEvent{}
+	liqMu       sync.Mutex
+	liqEvents   []liqEvent
+	liqStarted  time.Time
+	liqRunning  bool
+	liqBySymbol = map[string][]liqEvent{}
 )
 
+type liqOrder struct {
+	Symbol    string `json:"s"`
+	Side      string `json:"S"` // SELL = long liquidated
+	AvgPrice  string `json:"ap"`
+	FilledQty string `json:"z"`
+	TradeTime int64  `json:"T"`
+}
+
+// Binance /ws endpoints emit raw payloads ({"o": ...}); /stream endpoints
+// wrap the same payload under {"stream": ..., "data": ...}. Accept both so
+// changing the endpoint cannot silently turn liquidation data into an empty
+// feed again.
 type liqStreamMsg struct {
-	Stream string `json:"stream"`
-	Data   struct {
-		Order struct {
-			Symbol       string `json:"s"`
-			Side         string `json:"S"` // SELL = long liquidated
-			AvgPrice     string `json:"ap"`
-			FilledQty    string `json:"z"`
-			TradeTime    int64  `json:"T"`
-		} `json:"o"`
-	} `json:"data"`
+	Order liqOrder `json:"o"`
+	Data  *struct {
+		Order liqOrder `json:"o"`
+	} `json:"data,omitempty"`
 }
 
 // StartLiquidationFeed launches the all-market force-order stream with
@@ -116,16 +123,34 @@ func liqConsumeOnce() error {
 	}
 	logger.Infof("📡 liquidation feed connected (!forceOrder@arr)")
 	defer conn.Close()
-	// Binance requires a ping frame every ~3 min; gorilla answers pongs but
-	// we must SEND pings. Also set a read deadline slightly beyond that so a
-	// dead connection is detected.
-	conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
+	// Refresh the deadline for both data and control traffic. A one-shot
+	// deadline disconnected every healthy stream after exactly ten minutes.
+	const idleTimeout = 10 * time.Minute
+	refreshDeadline := func() error { return conn.SetReadDeadline(time.Now().Add(idleTimeout)) }
+	if err := refreshDeadline(); err != nil {
+		return err
+	}
+	defaultPingHandler := conn.PingHandler()
+	conn.SetPingHandler(func(data string) error {
+		if err := refreshDeadline(); err != nil {
+			return err
+		}
+		return defaultPingHandler(data)
+	})
+	conn.SetPongHandler(func(string) error { return refreshDeadline() })
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		t := time.NewTicker(3 * time.Minute)
 		defer t.Stop()
-		for range t.C {
-			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+		for {
+			select {
+			case <-done:
 				return
+			case <-t.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -134,25 +159,68 @@ func liqConsumeOnce() error {
 		if err != nil {
 			return err
 		}
-		var m liqStreamMsg
-		if json.Unmarshal(msg, &m) != nil || m.Data.Order.Symbol == "" {
+		if err := refreshDeadline(); err != nil {
+			return err
+		}
+		orders, err := decodeLiquidationOrders(msg)
+		if err != nil {
+			logger.Debugf("liquidation feed ignored malformed payload: %v", err)
 			continue
 		}
-		px := parseFloatSafe(m.Data.Order.AvgPrice)
-		qty := parseFloatSafe(m.Data.Order.FilledQty)
-		if px <= 0 || qty <= 0 {
-			continue
+		for _, order := range orders {
+			px := parseFloatSafe(order.AvgPrice)
+			qty := parseFloatSafe(order.FilledQty)
+			if px <= 0 || qty <= 0 {
+				continue
+			}
+			ts := time.Now()
+			if order.TradeTime > 0 {
+				ts = time.UnixMilli(order.TradeTime)
+			}
+			recordLiquidation(order.Symbol, liqEvent{
+				ts:       ts,
+				longLiq:  order.Side == "SELL",
+				notional: px * qty,
+			})
 		}
-		ts := time.Now()
-		if m.Data.Order.TradeTime > 0 {
-			ts = time.UnixMilli(m.Data.Order.TradeTime)
-		}
-		recordLiquidation(m.Data.Order.Symbol, liqEvent{
-			ts:       ts,
-			longLiq:  m.Data.Order.Side == "SELL",
-			notional: px * qty,
-		})
 	}
+}
+
+func decodeLiquidationOrders(msg []byte) ([]liqOrder, error) {
+	decode := func(m liqStreamMsg) liqOrder {
+		if m.Order.Symbol != "" {
+			return m.Order
+		}
+		if m.Data != nil {
+			return m.Data.Order
+		}
+		return liqOrder{}
+	}
+
+	var one liqStreamMsg
+	if err := json.Unmarshal(msg, &one); err == nil {
+		if order := decode(one); order.Symbol != "" {
+			return []liqOrder{order}, nil
+		}
+	}
+
+	// Be tolerant of providers/proxies that batch all-market events as an
+	// array even though Binance currently emits one force-order event at a
+	// time.
+	var batch []liqStreamMsg
+	if err := json.Unmarshal(msg, &batch); err != nil {
+		return nil, err
+	}
+	orders := make([]liqOrder, 0, len(batch))
+	for _, m := range batch {
+		if order := decode(m); order.Symbol != "" {
+			orders = append(orders, order)
+		}
+	}
+	if len(orders) == 0 {
+		return nil, fmt.Errorf("payload contains no liquidation orders")
+	}
+	return orders, nil
 }
 
 var proxyFromEnv = proxyFromEnvironment()
@@ -162,25 +230,9 @@ func proxyFromEnvironment() func(*http.Request) (*url.URL, error) {
 }
 
 func parseFloatSafe(s string) float64 {
-	var f float64
-	var neg bool
-	i := 0
-	if i < len(s) && (s[i] == '-' || s[i] == '+') {
-		neg = s[i] == '-'
-		i++
-	}
-	for ; i < len(s); i++ {
-		c := s[i]
-		if c < '0' || c > '9' {
-			if c == '.' {
-				continue // crude: scale below
-			}
-			break
-		}
-		f = f*10 + float64(c-'0')
-	}
-	if neg {
-		f = -f
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0
 	}
 	return f
 }

@@ -1,12 +1,12 @@
 package binance
 
 import (
-	"strings"
 	"context"
 	"fmt"
 	"nofx/logger"
 	"nofx/trader/types"
 	"strconv"
+	"strings"
 
 	"github.com/adshao/go-binance/v2/futures"
 )
@@ -521,8 +521,14 @@ func (t *FuturesTrader) CancelAllOrders(symbol string) error {
 // PlaceLimitOrder places a limit order for grid trading
 // This implements the GridTrader interface for FuturesTrader
 func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.LimitOrderResult, error) {
-	// Format quantity to correct precision
-	quantityStr, err := t.FormatQuantity(req.Symbol, req.Quantity)
+	// Quantize against the symbol's actual LOT_SIZE and validate before the
+	// request reaches Binance. Previously QNT 0.03 became "0.0" and was sent
+	// repeatedly, producing -4003 on every otherwise-valid signal.
+	rules, err := t.getSymbolOrderRules(req.Symbol)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get quantity rules: %w", err)
+	}
+	quantityStr, err := formatQuantityWithRules(req.Symbol, req.Quantity, rules)
 	if err != nil {
 		return nil, fmt.Errorf("failed to format quantity: %w", err)
 	}
@@ -531,6 +537,13 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 	priceStr, err := t.FormatPrice(req.Symbol, req.Price)
 	if err != nil {
 		return nil, fmt.Errorf("failed to format price: %w", err)
+	}
+	quantityValue, _ := strconv.ParseFloat(quantityStr, 64)
+	priceValue, _ := strconv.ParseFloat(priceStr, 64)
+	if !req.ReduceOnly {
+		if err := validateOrderNotional(req.Symbol, quantityValue, priceValue, rules.MinNotional); err != nil {
+			return nil, err
+		}
 	}
 
 	// Set leverage if specified
@@ -593,9 +606,18 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 		Side:         string(order.Side),
 		PositionSide: string(order.PositionSide),
 		Price:        req.Price,
-		Quantity:     req.Quantity,
+		Quantity:     quantityValue,
 		Status:       string(order.Status),
 	}, nil
+}
+
+func validateOrderNotional(symbol string, quantity, price, minNotional float64) error {
+	notional := quantity * price
+	if notional < minNotional {
+		return fmt.Errorf("MIN_NOTIONAL: %s order amount %.2f USDT is below minimum %.2f USDT (quantity=%.8f, price=%.8f)",
+			symbol, notional, minNotional, quantity, price)
+	}
+	return nil
 }
 
 // CancelOrder cancels a specific order by ID

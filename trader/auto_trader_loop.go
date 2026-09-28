@@ -341,7 +341,7 @@ func (at *AutoTrader) runCycle() error {
 					at.cycleRiskReservedUSD = 0
 				}
 			}
-			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
+			logger.Warnf("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			// Alert dedup (CAPUSDT 09-15): the AI retrying an illegal
 			// adjust_stop_loss every cycle must not page six times — one alert
 			// per (action, symbol) within the gateNotifyRecord window, follow-ups

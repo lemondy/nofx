@@ -368,15 +368,22 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	if err != nil {
 		return fmt.Errorf("failed to place limit entry: %w", err)
 	}
+	placedQuantity := res.Quantity
+	if placedQuantity <= 0 {
+		// Some exchange adapters predate the normalized result quantity. Keep
+		// their prior behavior while Binance returns its actual quantized size.
+		placedQuantity = quantity
+	}
+	actionRecord.Quantity = placedQuantity
 
 	at.setPendingEntry(&pendingEntry{
 		Symbol: decision.Symbol, Side: side, Price: decision.Price,
-		Quantity: quantity, StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
+		Quantity: placedQuantity, StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
 		Leverage: decision.Leverage, OrderID: res.OrderID, PlacedAt: time.Now(),
 	})
 	actionRecord.OrderID = 0 // string order id lives in the pending state
 	logger.Infof("  ✓ Limit entry placed: %s %s %.6g @ %.6g (order %s), SL %.6g / TP %.6g",
-		decision.Symbol, side, quantity, decision.Price, res.OrderID, decision.StopLoss, decision.TakeProfit)
+		decision.Symbol, side, placedQuantity, decision.Price, res.OrderID, decision.StopLoss, decision.TakeProfit)
 	return nil
 }
 

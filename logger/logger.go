@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -15,9 +17,74 @@ import (
 var (
 	// Log is the global logger instance
 	Log *logrus.Logger
-	// logFile holds the current log file handle
-	logFile *os.File
+	// logWriter rotates the file at the local calendar-day boundary.
+	logWriter *dailyFileWriter
 )
+
+var (
+	telegramTokenPattern = regexp.MustCompile(`(?i)(/bot)[0-9]+:[A-Za-z0-9_-]+`)
+	signaturePattern     = regexp.MustCompile(`(?i)([?&]signature=)[^&\s"']+`)
+)
+
+func sanitizeLogMessage(message string) string {
+	message = telegramTokenPattern.ReplaceAllString(message, `${1}<redacted>`)
+	return signaturePattern.ReplaceAllString(message, `${1}<redacted>`)
+}
+
+type dailyFileWriter struct {
+	mu          sync.Mutex
+	dir         string
+	currentDate string
+	file        *os.File
+	now         func() time.Time
+}
+
+func newDailyFileWriter(dir string) (*dailyFileWriter, error) {
+	w := &dailyFileWriter{dir: dir, now: time.Now}
+	if err := w.rotateLocked(); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func (w *dailyFileWriter) rotateLocked() error {
+	date := w.now().Format("2006-01-02")
+	if w.file != nil && date == w.currentDate {
+		return nil
+	}
+	path := filepath.Join(w.dir, fmt.Sprintf("nofx_%s.log", date))
+	next, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	previous := w.file
+	w.file = next
+	w.currentDate = date
+	if previous != nil {
+		_ = previous.Close()
+	}
+	return nil
+}
+
+func (w *dailyFileWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.rotateLocked(); err != nil && w.file == nil {
+		return 0, err
+	}
+	return w.file.Write(p)
+}
+
+func (w *dailyFileWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		return nil
+	}
+	err := w.file.Close()
+	w.file = nil
+	return err
+}
 
 // compactFormatter is a custom formatter for cleaner log output
 type compactFormatter struct {
@@ -45,7 +112,7 @@ func (f *compactFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		}
 	}
 
-	msg := fmt.Sprintf("%s [%s] %s %s\n", timestamp, level, caller, entry.Message)
+	msg := fmt.Sprintf("%s [%s] %s %s\n", timestamp, level, caller, sanitizeLogMessage(entry.Message))
 	return []byte(msg), nil
 }
 
@@ -64,6 +131,10 @@ func init() {
 // Init initializes the global logger
 // If config is nil, uses default configuration (console output, info level)
 func Init(cfg *Config) error {
+	if logWriter != nil {
+		_ = logWriter.Close()
+		logWriter = nil
+	}
 	Log = logrus.New()
 
 	// Use default values if no config provided
@@ -87,12 +158,11 @@ func Init(cfg *Config) error {
 	// Setup log file output (write to both stdout and file)
 	logDir := "data"
 	if err := os.MkdirAll(logDir, 0755); err == nil {
-		logFileName := filepath.Join(logDir, fmt.Sprintf("nofx_%s.log", time.Now().Format("2006-01-02")))
-		f, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		w, err := newDailyFileWriter(logDir)
 		if err == nil {
-			logFile = f
+			logWriter = w
 			// Write to both stdout and file
-			Log.SetOutput(io.MultiWriter(os.Stdout, f))
+			Log.SetOutput(io.MultiWriter(os.Stdout, w))
 		} else {
 			Log.SetOutput(os.Stdout)
 		}
@@ -113,9 +183,9 @@ func InitWithSimpleConfig(level string) error {
 
 // Shutdown gracefully shuts down the logger
 func Shutdown() {
-	if logFile != nil {
-		logFile.Close()
-		logFile = nil
+	if logWriter != nil {
+		_ = logWriter.Close()
+		logWriter = nil
 	}
 }
 

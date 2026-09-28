@@ -179,10 +179,14 @@ func TestRegimeSkipKeepsCallWhenPositionsOpen(t *testing.T) {
 	ctx2.Positions = []PositionInfo{{
 		Symbol: "MANUALUSDT", Side: "long", EntryPrice: 1, MarkPrice: 1, Quantity: 1, Leverage: 1,
 	}}
-	if _, err := GetFullDecisionWithStrategy(ctx2, mock2, engine, "balanced"); err != nil {
+	fd, err := GetFullDecisionWithStrategy(ctx2, mock2, engine, "balanced")
+	if err != nil {
 		t.Logf("parse error tolerated: %v", err)
 	}
 	if mock2.calls != 0 {
 		t.Fatal("manual-only positions must not force the LLM call (hold-only, automation skipped)")
+	}
+	if fd == nil || len(fd.Decisions) == 0 || !strings.Contains(fd.Decisions[0].Reasoning, "1 个现有持仓") || strings.Contains(fd.Decisions[0].Reasoning, "且无持仓") {
+		t.Fatalf("manual position must be reported as present but non-actionable: %+v", fd)
 	}
 }

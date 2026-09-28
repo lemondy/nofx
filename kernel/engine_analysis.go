@@ -188,13 +188,17 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		}
 		allBlocked = allBlocked && allLocked
 		if allBlocked {
-			logger.Infof("⏭️  [Regime Skip] 全部 %d 个候选双向硬门拦截且无持仓 — 跳过本次 LLM 调用,程序合成 wait(下一周期快照自动重评)", len(ctx.CandidateCoins))
+			positionState := "且无持仓"
+			if len(ctx.Positions) > 0 {
+				positionState = fmt.Sprintf("且 %d 个现有持仓均不可由本轮模型操作(手工持仓或平仓门锁定)", len(ctx.Positions))
+			}
+			logger.Infof("⏭️  [Regime Skip] 全部 %d 个候选双向硬门拦截%s — 跳过本次 LLM 调用,程序合成 wait(下一周期快照自动重评)", len(ctx.CandidateCoins), positionState)
 			entryQuality := 0
 			fd := &FullDecision{
 				Decisions: []Decision{{
 					Symbol:       "ALL",
 					Action:       "wait",
-					Reasoning:    fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, map[bool]string{true: "且无持仓", false: "持仓均已处平仓门锁定(本期只能继续持有)"}[len(ctx.Positions) == 0]),
+					Reasoning:    fmt.Sprintf("Regime skip: 全部 %d 个渲染候选的开仓硬门双向均为程序拦截(无 allowed 方向、无市价例外路径),%s — 程序直接合成 wait,本轮未调用 LLM;结构变化后下一周期快照自动重评", renderedCount, positionState),
 					EntryQuality: &entryQuality,
 					// 2026-09-27 data-quality fix: CONFLICT_UNRESOLVED misdescribed
 					// regime-skip cycles (the real blockers are per-coin hard-gate

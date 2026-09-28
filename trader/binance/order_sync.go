@@ -81,7 +81,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		if IsAuthOrIPError(err) {
 			return WrapAuthError(fmt.Sprintf("OrderSync commission probe (exchange %s)", exchangeID), err)
 		}
-		logger.Infof("  ⚠️ [%s] Failed to get commission symbols: %v", exchangeID, err)
+		logger.Warnf("  ⚠️ [%s] Failed to get commission symbols: %v", exchangeID, err)
 	} else {
 		logger.Infof("  📋 COMMISSION symbols found: %d - %v", len(commissionSymbols), commissionSymbols)
 		for _, s := range commissionSymbols {
@@ -95,7 +95,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		if IsAuthOrIPError(err) {
 			return WrapAuthError(fmt.Sprintf("OrderSync position probe (exchange %s)", exchangeID), err)
 		}
-		logger.Infof("  ⚠️ [%s] Failed to get position symbols: %v", exchangeID, err)
+		logger.Warnf("  ⚠️ [%s] Failed to get position symbols: %v", exchangeID, err)
 	} else {
 		logger.Infof("  📋 Position symbols found: %d - %v", len(positionSymbols), positionSymbols)
 	}
@@ -119,7 +119,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		if IsAuthOrIPError(err) {
 			return WrapAuthError(fmt.Sprintf("OrderSync PnL probe (exchange %s)", exchangeID), err)
 		}
-		logger.Infof("  ⚠️ [%s] Failed to get PnL symbols: %v", exchangeID, err)
+		logger.Warnf("  ⚠️ [%s] Failed to get PnL symbols: %v", exchangeID, err)
 	} else {
 		logger.Infof("  📋 REALIZED_PNL symbols found: %d - %v", len(pnlSymbols), pnlSymbols)
 		for _, s := range pnlSymbols {
