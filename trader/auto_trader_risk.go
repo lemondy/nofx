@@ -192,6 +192,16 @@ func (at *AutoTrader) checkPositionDrawdown() {
 		at.tpTrimMutex.Lock()
 		trimDone := at.tpTrimDone[posKey]
 		at.tpTrimMutex.Unlock()
+		// Restart-persistent marker (09-28 review P1): the in-memory flag dies
+		// with the process, and a position still above the ROE trim threshold
+		// would re-fire the 1/3 reduction after a restart.
+		if !trimDone {
+			if at.store != nil {
+				if p, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, strings.ToUpper(side)); err == nil && p != nil {
+					trimDone = p.TPTrimDone
+				}
+			}
+		}
 		switch kernel.TpTierAction(currentPnLPct, trimDone, &at.config.StrategyConfig.RiskControl) {
 		case "full":
 			logger.Infof("🎯 TP ladder FULL close: %s %s | PnL %.2f%% ≥ %.0f%%", symbol, side, currentPnLPct, kernel.TpFullProfitPct(&at.config.StrategyConfig.RiskControl))
@@ -208,6 +218,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				at.r1TrimDone[posKey] = true
 				at.tpTrimDone[posKey] = true
 				at.tpTrimMutex.Unlock()
+				at.persistTrimFlags(symbol, side)
 				logger.Infof("✅ TP full close succeeded: %s %s", symbol, side)
 			}
 			continue
@@ -231,6 +242,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 					at.tpTrimMutex.Lock()
 					at.tpTrimDone[posKey] = true
 					at.tpTrimMutex.Unlock()
+					at.persistTPTrimDone(symbol, side)
 				}
 				continue
 			}
@@ -253,6 +265,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				at.tpTrimMutex.Lock()
 				at.tpTrimDone[posKey] = true
 				at.tpTrimMutex.Unlock()
+				at.persistTPTrimDone(symbol, side)
 				logger.Infof("✅ TP trim succeeded: %s %s qty=%.6g (protective orders kept)", symbol, side, trimQty)
 			}
 			continue
@@ -739,11 +752,20 @@ func fourHourATRPct(data *market.Data) float64 {
 }
 
 // atrPercentFromSeries computes Wilder ATR(14) as a percent of the last
-// close from a timeframe's kline series.
+// close from a timeframe's kline series. CLOSED bars only (09-28 review P2):
+// the series tail is the live-patched forming candle and biasing Wilder ATR
+// low by ~1.5-3.5% steady-state made the executor's stop-band floor/cap and
+// protection levels diverge from the kernel's closed-bars-only ATR — the
+// same gate/executor parity class as the 09-19 BTCUSDT loop.
 func atrPercentFromSeries(tf *market.TimeframeSeriesData) float64 {
-	kb := make([]market.Kline, len(tf.Klines))
-	for i, b := range tf.Klines {
-		kb[i] = market.Kline{OpenTime: b.Time, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume}
+	dur := market.TimeframeDuration(tf.Timeframe)
+	now := time.Now().UnixMilli()
+	kb := make([]market.Kline, 0, len(tf.Klines))
+	for _, b := range tf.Klines {
+		if dur > 0 && b.Time+dur.Milliseconds() > now {
+			continue // forming candle
+		}
+		kb = append(kb, market.Kline{OpenTime: b.Time, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume})
 	}
 	// Wilder ATR(14), percent of the last close.
 	n := len(kb)
@@ -1886,10 +1908,28 @@ func unprotectedSuffix(n int) string {
 	return fmt.Sprintf(" (%d unprotected position(s) worst-cased at %.0f%% stop)", n, kernel.UnprotectedStopWorstCasePct)
 }
 
+// anchorDailyBaseline pins the daily-loss-halt baseline ONCE per UTC day,
+// called every cycle right after the equity snapshot (09-28 review P2: the
+// anchor used to be captured lazily inside dailyLossHaltBlocks, whose only
+// call site is the open_ branch — losses accrued between midnight and the
+// day's first open DECISION never made it into the baseline, letting the
+// account lose ~1.6× the configured daily cap before the halt fired).
+func (at *AutoTrader) anchorDailyBaseline(equity float64) {
+	if equity <= 0 {
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if at.dayStartDay != today {
+		at.dayStartDay = today
+		at.dayStartEquity = equity
+	}
+}
+
 // dailyLossHaltBlocks reports the halt reason when equity has retraced ≥
 // daily_max_loss_pct from the first equity seen this UTC day. Empty string =
-// no halt. The anchor is captured lazily on the first gated cycle of the
-// day (the loop's daily reset runs before any equity is available).
+// no halt. The baseline is anchored per-cycle via anchorDailyBaseline; the
+// lazy re-anchor here survives only as a fallback for a gate call before the
+// first snapshot of the day (fail-open, identical to the old behavior).
 func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity float64) string {
 	capPct := rc.EffectiveDailyMaxLossPct()
 	if capPct <= 0 || equity <= 0 {
@@ -1966,6 +2006,38 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					IsStockSymbol(symbol string) bool
 				}); ok && bt.IsStockSymbol(d.Symbol) && binance.IsUSMarketWeekend(time.Now()) {
 					logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: bstock weekend — US market closed, no new stock positions", at.name, d.Action, d.Symbol)
+					continue
+				}
+			}
+		}
+		// Vendor-divergence executor enforcement (09-28 review P2): the kernel
+		// writes VENDOR_DIVERGENCE_* into GateState.Failed, but until now the
+		// only consumers were the prompt and the shadow dataset — a market
+		// order with market-exception evidence (marketExceptionEvidence does
+		// not check divergence) or a resting limit executed anyway, on
+		// entry/stop/RR geometry priced off vendor candles diverged beyond
+		// the gate. The prompt's contract: this code has NO exception path.
+		if strings.HasPrefix(d.Action, "open_") {
+			if gs := at.cycleGateStates[market.Normalize(d.Symbol)]; gs != nil {
+				failed := gs.LongFailed
+				if strings.HasPrefix(d.Action, "open_short") {
+					failed = gs.ShortFailed
+				}
+				vendorBlocked := false
+				for _, code := range failed {
+					if strings.HasPrefix(code, "VENDOR_DIVERGENCE") {
+						vendorBlocked = true
+						_, push := at.gateNotifyRecord("vendordiv:"+d.Symbol, time.Now())
+						logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: hard-gate code %s — vendor/live divergence has no exception path", at.name, d.Action, d.Symbol, code)
+						if push {
+							notify.Notify("ALERT", at.name, fmt.Sprintf(
+								"<b>🛡️ 数据源偏差拦截 %s</b>\n%s 被程序硬门阻断(<code>%s</code>):K线数据源与实时价偏差超限,入场/止损/RR 全部失真——本码无例外路径,改挂限价与市价均不放行",
+								notify.Escape(d.Symbol), d.Action, notify.Escape(code)))
+						}
+						break
+					}
+				}
+				if vendorBlocked {
 					continue
 				}
 			}

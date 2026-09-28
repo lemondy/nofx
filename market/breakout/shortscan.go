@@ -203,8 +203,11 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 	// ── 2. Overbought: RSI exhaustion band on both timeframes ──
 	rsi1h := rsiLast(c1h, 14)
 	rsi4h := rsiLast(c4h, 14)
-	ob1h := clamp100(sigmoidScore(rsi1h, 82, -7)) * bandFade(rsi1h, 65, 95)
-	ob4h := clamp100(sigmoidScore(rsi4h, 78, -8)) * bandFade(rsi4h, 60, 95)
+	// 09-28 review P2: the negative widths were silently coerced to 1 by
+	// sigmoidScore — a near-step ramp (RSI 80→12, 85→95) instead of the
+	// intended smooth ±7/±8 slope (85→61), over-punishing the 80-90 band.
+	ob1h := clamp100(sigmoidScore(rsi1h, 82, 7)) * bandFade(rsi1h, 65, 95)
+	ob4h := clamp100(sigmoidScore(rsi4h, 78, 8)) * bandFade(rsi4h, 60, 95)
 	sig.Components.Overbought = 0.6*ob1h + 0.4*ob4h
 
 	// ── 3. Rejection: upper wick share on the last 3 closed 1h candles ──
@@ -237,7 +240,13 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 		}
 		if peak > 0 {
 			ratio := recent / peak
-			sig.Components.VolumeFade = clamp100(sigmoidScore(ratio, 0.45, -0.2))
+			// 09-28 review P1: width was passed negative (-0.2), which
+			// sigmoidScore coerces to 1 — an INCREASING curve that scored
+			// volume PERSISTENCE (ratio→1) higher than a heavy fade
+			// (ratio→0), inverting the dimension and deadening the ×0.8
+			// momentum-trap discount. Decreasing in ratio via input
+			// negation (the package's convention, cf. breakdownscan.go).
+			sig.Components.VolumeFade = clamp100(sigmoidScore(-ratio, -0.45, 0.2))
 			// Price printing new 24-bar highs while volume runs well below its
 			// peak = classic price/volume divergence on the pump.
 			if c1h[len(c1h)-1] >= maxOf(c1h[len(c1h)-24:]) && ratio < 0.7 {

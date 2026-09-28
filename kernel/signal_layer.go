@@ -1941,8 +1941,15 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 		}
 	}
 
-	if rsi := market.ExportCalculateRSI(kb, 14); rsi > 0 {
-		sig.RSI14 = &rsi
+	// 09-28 review P2: the `rsi > 0` sentinel conflated "insufficient data"
+	// (calculateRSI returns 0 for len ≤ period) with the max-oversold
+	// extreme — a pure monotonic decline drives Wilder avgGain to exactly 0
+	// and RSI to exactly 0, silently dropping the most directional reading
+	// from the signal block. Filter on data length, accept rsi >= 0.
+	if len(kb) > 14 {
+		if rsi := market.ExportCalculateRSI(kb, 14); rsi >= 0 {
+			sig.RSI14 = &rsi
+		}
 	}
 	// StochRSI (14,14,3,3) on the closed bars: stochastic of the Wilder RSI
 	// series, %K smoothed 3, %D = 3-SMA of %K. >80 overbought / <20 oversold.

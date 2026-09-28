@@ -120,8 +120,17 @@ type TraderPosition struct {
 	// It anchors the 1R profit lock — later stop moves (AI tighten, trailing,
 	// breakeven) rewrite only the live stop and must not pull the R bar along.
 	InitialStopLoss float64 `gorm:"column:initial_stop_loss;default:0" json:"initial_stop_loss"`
-	CreatedAt       int64   `gorm:"column:created_at" json:"created_at"` // Unix milliseconds UTC
-	UpdatedAt       int64   `gorm:"column:updated_at" json:"updated_at"` // Unix milliseconds UTC
+	// R1TrimDone / TPTrimDone: restart-persistent one-shot markers for the
+	// exit ladder (09-28 review P1). The in-memory maps (r1TrimDone /
+	// tpTrimDone) die with the process — a restart while a position still
+	// sits ≥1R (or ≥ the ROE trim threshold) re-fired the reductions on the
+	// remainder with no plan change. Written on successful trim, read as OR
+	// alongside the in-memory flags (memory stays the fast path, the row is
+	// the authority across restarts).
+	R1TrimDone bool `gorm:"column:r1_trim_done;default:false" json:"r1_trim_done"`
+	TPTrimDone bool `gorm:"column:tp_trim_done;default:false" json:"tp_trim_done"`
+	CreatedAt  int64 `gorm:"column:created_at" json:"created_at"` // Unix milliseconds UTC
+	UpdatedAt  int64 `gorm:"column:updated_at" json:"updated_at"` // Unix milliseconds UTC
 }
 
 // TableName returns the table name
@@ -538,6 +547,26 @@ func (s *PositionStore) SetInitialStopLossIfEmpty(traderID, symbol, side string,
 			traderID, symbol, strings.ToUpper(side), "OPEN").
 		Update("initial_stop_loss", sl)
 	return res.RowsAffected > 0, res.Error
+}
+
+// MarkR1TrimDone persists the 1R profit-lock trim marker on the trader's OPEN
+// row for (symbol, side) — the in-memory r1TrimDone map dies with the process,
+// and without this a restart while the position still sits ≥1R re-fired the
+// 50% reduction on the remainder (09-28 review P1). Idempotent.
+func (s *PositionStore) MarkR1TrimDone(traderID, symbol, side string) error {
+	return s.db.Model(&TraderPosition{}).
+		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
+			traderID, symbol, strings.ToUpper(side), "OPEN").
+		Update("r1_trim_done", true).Error
+}
+
+// MarkTPTrimDone persists the ROE-ladder 1/3 trim marker (same restart
+// re-fire class as MarkR1TrimDone — tpTrimDone is memory-only).
+func (s *PositionStore) MarkTPTrimDone(traderID, symbol, side string) error {
+	return s.db.Model(&TraderPosition{}).
+		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
+			traderID, symbol, strings.ToUpper(side), "OPEN").
+		Update("tp_trim_done", true).Error
 }
 
 // ClosePositionWithAccurateData closes a position with accurate data from exchange

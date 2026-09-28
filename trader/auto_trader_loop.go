@@ -98,6 +98,10 @@ func (at *AutoTrader) runCycle() error {
 	// Save equity snapshot independently (decoupled from AI decision, used for drawing profit curve)
 	// NOTE: Must be called BEFORE candidate coins check to ensure equity is always recorded
 	at.saveEquitySnapshot(ctx)
+	// 09-28 review P2: anchor the daily-loss-halt baseline EVERY cycle, not
+	// lazily at the day's first open decision — losses between midnight and
+	// the first open attempt must count toward the daily cap.
+	at.anchorDailyBaseline(ctx.Account.TotalEquity)
 
 	// If no candidate coins available, log but do not error
 	if len(ctx.CandidateCoins) == 0 {
@@ -1053,7 +1057,12 @@ func (at *AutoTrader) loadSymbolStats() map[string]*kernel.TraderHistoryStat {
 	if at.store == nil {
 		return nil
 	}
-	stats, err := at.store.Position().GetSymbolStats(at.id, 200)
+	stats, err := at.store.Position().GetSymbolStats(at.id, 0)
+	// No limit (09-28 review P2): GetSymbolStats truncates by TotalPnL
+	// DESC, so a capped window silently dropped the WORST symbols first —
+	// exactly the population POOR_HISTORY / NEG_EDGE_LOSING_SYMBOL /
+	// recentHistoryNote exist to surface. The map is per-cycle context;
+	// the full closed-trade set is small.
 	if err != nil {
 		logger.Infof("⚠️ [%s] Failed to load symbol stats: %v", at.name, err)
 		return nil

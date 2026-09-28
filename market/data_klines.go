@@ -223,10 +223,35 @@ func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *Time
 		}
 	}
 
-	// Calculate ATR14
-	data.ATR14 = calculateATR(klines, 14)
+	// Calculate ATR14 — CLOSED bars only (09-28 review P2): the series tail
+	// is the live-patched forming candle; including it biases Wilder ATR low
+	// by ~1.5-3.5% steady-state (a just-opened bar's range is a fraction of
+	// one TR spread over 14 smoothing steps), and the executor prices the
+	// stop-band floor/cap and protection levels off this number while the
+	// kernel's prompt-side ATR is closed-bars-only — the two sides must
+	// quote the same band.
+	if closed := closedKlines(klines, timeframe); len(closed) > 14 {
+		data.ATR14 = calculateATR(closed, 14)
+	} else {
+		data.ATR14 = calculateATR(klines, 14)
+	}
 
 	return data
+}
+
+// closedKlines drops the trailing forming candle (its open time + the
+// timeframe duration is still in the future), mirroring kernel.ClosedKlines.
+func closedKlines(klines []Kline, timeframe string) []Kline {
+	dur := TimeframeDuration(timeframe)
+	if dur <= 0 {
+		return klines
+	}
+	now := time.Now().UnixMilli()
+	cut := len(klines)
+	for cut > 0 && klines[cut-1].OpenTime+dur.Milliseconds() > now {
+		cut--
+	}
+	return klines[:cut]
 }
 
 // calculatePriceChangeByBars calculates how many K-lines to look back for price change based on timeframe.

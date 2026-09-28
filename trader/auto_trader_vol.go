@@ -294,6 +294,16 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 				at.tpTrimMutex.Lock()
 				done := at.r1TrimDone[posKey]
 				at.tpTrimMutex.Unlock()
+				// 09-28 review P1: r1TrimDone is memory-only — after a restart
+				// it is empty while the position can still sit ≥1R (the
+				// breakeven stop is re-seeded from the exchange, the R anchor
+				// is restored from the DB row), and ProfitLockTargets would
+				// return trim=true again: a SECOND unrequested 50% reduction.
+				// The persisted flag on the OPEN row is the
+				// restart-persistent idempotency marker.
+				if !done {
+					done = at.storeR1TrimDone(symbol, side)
+				}
 				if !done {
 					minSize := at.config.StrategyConfig.RiskControl.MinPositionSize
 					remainder := qty * 0.5 * markPrice
@@ -304,6 +314,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 							at.r1TrimDone[posKey] = true
 							at.tpTrimDone[posKey] = true
 							at.tpTrimMutex.Unlock()
+							at.persistTrimFlags(symbol, side)
 							logger.Infof("🎯 [%s] 1R lock: %s remainder below min size — closed fully instead of trimming", at.name, symbol)
 							notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 1R 止盈 %s</b>\n浮盈达 %.0fR,剩余仓位低于最小单位,已全部平仓锁定利润", notify.Escape(symbol), lockR))
 						} else {
@@ -316,6 +327,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 						at.r1TrimDone[posKey] = true
 						at.tpTrimDone[posKey] = true // the ROE trim tier is consumed by the 1R lock
 						at.tpTrimMutex.Unlock()
+						at.persistTrimFlags(symbol, side)
 						logger.Infof("🎯 [%s] 1R trim: %s 50%% trimmed @ %.6g (breakeven SL, rest rides to structural TP)", at.name, symbol, markPrice)
 						notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 1R 止盈减仓 %s</b>\n浮盈达 %.0fR,市价减仓 50%% 锁定利润,剩余仓位止损已保本、继续持有", notify.Escape(symbol), lockR))
 					} else {
@@ -478,4 +490,42 @@ func (at *AutoTrader) positionQty(symbol, side string) (float64, bool) {
 		return amt, true
 	}
 	return 0, false
+}
+
+// storeR1TrimDone reads the restart-persistent 1R-lock trim marker from the
+// OPEN trader_positions row (09-28 review P1: the in-memory r1TrimDone map
+// dies with the process, and the watchdog/DB restore lets a still-≥1R
+// position re-qualify for the trim after a restart). Fail-open: a store
+// outage reads as not-trimmed, matching the old behavior.
+func (at *AutoTrader) storeR1TrimDone(symbol, side string) bool {
+	if at.store == nil {
+		return false
+	}
+	p, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, strings.ToUpper(side))
+	return err == nil && p != nil && p.R1TrimDone
+}
+
+// persistTrimFlags write-through for both one-shot exit-ladder markers —
+// called only on SUCCESSFUL reductions (a failed trim must retry next cycle,
+// so the flag is deliberately not consumed then).
+func (at *AutoTrader) persistTrimFlags(symbol, side string) {
+	if at.store == nil {
+		return
+	}
+	if err := at.store.Position().MarkR1TrimDone(at.id, symbol, side); err != nil {
+		logger.Warnf("⚠️ [%s] failed to persist r1_trim_done for %s %s: %v", at.name, symbol, side, err)
+	}
+	if err := at.store.Position().MarkTPTrimDone(at.id, symbol, side); err != nil {
+		logger.Warnf("⚠️ [%s] failed to persist tp_trim_done for %s %s: %v", at.name, symbol, side, err)
+	}
+}
+
+// persistTPTrimDone write-through for the ROE-ladder trim marker only.
+func (at *AutoTrader) persistTPTrimDone(symbol, side string) {
+	if at.store == nil {
+		return
+	}
+	if err := at.store.Position().MarkTPTrimDone(at.id, symbol, side); err != nil {
+		logger.Warnf("⚠️ [%s] failed to persist tp_trim_done for %s %s: %v", at.name, symbol, side, err)
+	}
 }
