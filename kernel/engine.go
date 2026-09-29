@@ -227,6 +227,14 @@ type GateState struct {
 	// ZEC against the plan and the executor rejected the whole output).
 	LongStopPlanPrice  float64
 	ShortStopPlanPrice float64
+	// TP menus per direction (user directive 2026-09-29): the qualifying
+	// structural targets the model picks between (Decision.TPOption,
+	// 1-based). Option 1 IS the legacy first_rr_ge_target;
+	// resolveTakeProfitOptions re-points LongTakeProfit/ShortTakeProfit at
+	// the CHOSEN level before the post-parse TP snap, so an off-menu TP
+	// stays impossible while the regime call (near vs far) is the model's.
+	LongTPMenu  []TPOption
+	ShortTPMenu []TPOption
 	// HardBlocked: BOTH directions carry a no-exception blocker — the coin
 	// can only ever produce a mechanical wait this cycle. Drives the
 	// regime-level skip (09-19 audit: all-candidates-blocked + no positions
@@ -519,6 +527,18 @@ type Decision struct {
 	// never permission to trade.
 	WaitState   string `json:"wait_state,omitempty"`
 	NextTrigger string `json:"next_trigger,omitempty"`
+	// TPOption: 1-based index into rr_scan.tp_options (user directive
+	// 2026-09-29) — the model CHOOSES a program-precomputed take-profit plan
+	// (near/mid/far structural level with its RR); the price itself is never
+	// model-authored. 0/absent = option 1 (the legacy first_rr_ge_target).
+	// resolveTakeProfitOptions applies it before the TP snap.
+	TPOption int `json:"tp_option,omitempty"`
+	// ExitMode selects the exit template the program executes for the
+	// position: "trend" (default — split TP + trailing runner, today's
+	// ladder), "range" (full TP at the chosen target, no runner), "quick"
+	// (full TP + program time stop on dead trades). Qualitative regime
+	// classification is the model's; every parameter behind it is code.
+	ExitMode string `json:"exit_mode,omitempty"`
 }
 
 // FullDecision AI's complete decision (including chain of thought)

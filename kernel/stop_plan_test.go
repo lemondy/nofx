@@ -183,7 +183,11 @@ func TestStopPlanPromptWording(t *testing.T) {
 		"止损(程序预计算,逐字采用)",
 		"stop_plan_price 已按对侧结构+方向缓冲生成",
 		"STOP_PLAN_NO_STRUCTURE", "STOP_PLAN_OUT_OF_BAND",
-		"stop_plan_price 与 first_rr_ge_target 必须成对采用",
+		// 09-29 menu directive: with the menu on (default) the TP contract is
+		// the discrete tp_option pick; the legacy verbatim pair-usage line
+		// only renders with tp_menu_enabled=false.
+		"rr_scan.tp_options",
+		"tp_option",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Errorf("system prompt missing %q", want)

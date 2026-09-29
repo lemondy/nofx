@@ -183,6 +183,7 @@ type AutoTrader struct {
 	openTPMu                   sync.RWMutex
 	closeIntents               map[string]closeIntent // program close intents for exit classification (symbol|side → why)
 	closeIntentsMu             sync.Mutex
+	positionExitMode           map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
 }
 
 // Binance hedge legs must use isolated margin for this strategy. Other
@@ -403,6 +404,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		tpRunnerDoneMap:         make(map[string]bool),
 		openTP:                  make(map[string]float64),
 		closeIntents:            make(map[string]closeIntent),
+		positionExitMode:        make(map[string]string),
 		stopMonitorCh:           make(chan struct{}),
 		monitorWg:               sync.WaitGroup{},
 		peakPnLCache:            make(map[string]float64),

@@ -403,6 +403,7 @@ func (at *AutoTrader) emergencyClosePosition(symbol, side string) error {
 
 	at.ClearRecordedStopLoss(symbol, side)
 	at.ClearInitialStopLoss(symbol, side)
+	at.ClearExitMode(symbol, side)
 	return nil
 }
 
@@ -1779,6 +1780,54 @@ func (at *AutoTrader) ClearInitialStopLoss(symbol, side string) {
 	at.positionStopLossMutex.Lock()
 	defer at.positionStopLossMutex.Unlock()
 	delete(at.positionInitialStopLoss, symbol+"_"+side)
+}
+
+// SetExitMode records the position's exit template (user menu directive
+// 09-29): "trend" | "range" | "quick" — the ladder, the split-TP fraction and
+// the quick-mode time stop all read it. Memory is the fast path; the OPEN
+// position row (write-once stamp) is the restart authority.
+func (at *AutoTrader) SetExitMode(symbol, side, mode string) {
+	if mode == "" {
+		mode = kernel.ExitModeTrend
+	}
+	key := symbol + "_" + side
+	at.positionStopLossMutex.Lock()
+	at.positionExitMode[key] = mode
+	at.positionStopLossMutex.Unlock()
+	if at.store != nil {
+		if err := at.store.Position().SetExitModeIfEmpty(at.id, symbol, side, mode); err != nil {
+			logger.Infof("⚠️ [%s] exit-mode persist failed for %s %s: %v", at.name, symbol, side, err)
+		}
+	}
+}
+
+// ExitModeFor resolves the position's exit template: memory → the persisted
+// row → "trend" (the legacy default, also what pre-menu positions get).
+func (at *AutoTrader) ExitModeFor(symbol, side string) string {
+	key := symbol + "_" + side
+	at.positionStopLossMutex.RLock()
+	if m := at.positionExitMode[key]; m != "" {
+		at.positionStopLossMutex.RUnlock()
+		return m
+	}
+	at.positionStopLossMutex.RUnlock()
+	if at.store != nil {
+		if pos, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, strings.ToUpper(side)); err == nil && pos != nil && pos.ExitMode != "" {
+			at.positionStopLossMutex.Lock()
+			at.positionExitMode[key] = pos.ExitMode
+			at.positionStopLossMutex.Unlock()
+			return pos.ExitMode
+		}
+	}
+	return kernel.ExitModeTrend
+}
+
+// ClearExitMode drops the in-memory exit template after the position closes
+// (the row dies with the position lifecycle).
+func (at *AutoTrader) ClearExitMode(symbol, side string) {
+	at.positionStopLossMutex.Lock()
+	defer at.positionStopLossMutex.Unlock()
+	delete(at.positionExitMode, symbol+"_"+side)
 }
 
 // regimeLineOf returns the SLOW EMA (regime line) of the timing timeframe —

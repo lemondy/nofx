@@ -292,6 +292,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	at.SetRecordedStopLoss(decision.Symbol, "long", decision.StopLoss)
 	at.SetInitialStopLoss(decision.Symbol, "long", decision.StopLoss) // 1R anchor — write-once, immune to later tighten
+	at.SetExitMode(decision.Symbol, "long", decision.ExitMode)        // exit template — write-once, drives split-TP/trailing/time-stop
 	// Peak PnL is per-position state — a re-opened symbol must not inherit
 	// the previous trade's peak (stale peaks poison the drawdown monitors).
 	at.ClearPeakPnLCache(decision.Symbol, "long")
@@ -479,6 +480,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 
 	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
 	at.SetInitialStopLoss(decision.Symbol, "short", decision.StopLoss) // 1R anchor — write-once, immune to later tighten
+	at.SetExitMode(decision.Symbol, "short", decision.ExitMode)        // exit template — write-once, drives split-TP/trailing/time-stop
 	// Peak PnL is per-position state — see the open_long note above.
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 
@@ -561,10 +563,19 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 		// Collapsed to a full close when trailing is disabled — a runner
 		// without a ratchet just gives the move back.
 		//
+		// Exit-mode menu (user directive 09-29): only the TREND template runs
+		// a runner. range/quick chose "the target IS the exit" — their TP
+		// closes the FULL position at the chosen menu level.
+		//
 		// tpQty keeps the legacy contract (full quantity — adapters size
 		// their TP order by it) whenever the split is off.
+		mode := decision.ExitMode
+		if mode == "" {
+			mode = kernel.ExitModeTrend
+		}
 		tpQty := quantity
-		if frac := at.effectiveTPCloseFraction(); frac < 1.0 {
+		frac := tpFractionForMode(mode, at.effectiveTPCloseFraction())
+		if frac < 1.0 {
 			tpQty = quantity * frac
 			// The remainder is now a runner: the protection watchdog must
 			// NOT re-place a full TP over it (the same flag also marks the
@@ -644,6 +655,18 @@ func (at *AutoTrader) effectiveTPCloseFraction() float64 {
 	return kernel.TPCloseFraction(&at.config.StrategyConfig.RiskControl)
 }
 
+// tpFractionForMode resolves the TP-algo close fraction for one position's
+// exit template (user menu directive 09-29): only the TREND template runs a
+// runner, so a trend position keeps the configured split fraction while
+// range/quick close the FULL position at the chosen menu level. base is the
+// trader's effectiveTPCloseFraction (already 1.0 when trailing is off).
+func tpFractionForMode(mode string, base float64) float64 {
+	if mode != "" && mode != kernel.ExitModeTrend && base < 1.0 {
+		return 1.0
+	}
+	return base
+}
+
 // executeCloseLongWithRecord executes close long position and records detailed information
 func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  🔄 Close long: %s", decision.Symbol)
@@ -713,6 +736,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 
 	at.ClearRecordedStopLoss(decision.Symbol, "long")
 	at.ClearInitialStopLoss(decision.Symbol, "long")
+	at.ClearExitMode(decision.Symbol, "long")
 	at.ClearPeakPnLCache(decision.Symbol, "long")
 	at.unmarkAIManaged(decision.Symbol, "long") // lifecycle complete — registry clean
 	logger.Infof("  ✓ Position closed successfully")
@@ -788,6 +812,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 
 	at.ClearRecordedStopLoss(decision.Symbol, "short")
 	at.ClearInitialStopLoss(decision.Symbol, "short")
+	at.ClearExitMode(decision.Symbol, "short")
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 	at.unmarkAIManaged(decision.Symbol, "short") // lifecycle complete — registry clean
 	logger.Infof("  ✓ Position closed successfully")

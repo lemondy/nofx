@@ -197,8 +197,13 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	exEntry := 150.0
 	exSL := exEntry * 1.03  // 154.50 — above entry for a short
 	exTP := exEntry * 0.952 // 142.80 — below entry for a short
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"open_short_limit\", \"price\": %.2f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85},\n",
-		exEntry, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
+	if TPMenuEnabled(&riskControl) {
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"open_short_limit\", \"price\": %.2f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"tp_option\": 2, \"exit_mode\": \"range\", \"confidence\": 85},\n",
+			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
+	} else {
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"open_short_limit\", \"price\": %.2f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85},\n",
+			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
+	}
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"entry_quality\": 55, \"no_trade_reason\": [\"LIMIT_ANCHOR_SUPPRESSED\", \"MICRO_TREND_NOT_SHORT\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
 	sb.WriteString("  {\"symbol\": \"ARUSDT\", \"action\": \"hold\", \"no_trade_reason\": [\"浮亏未达提前平仓条件\", \"15m 结构未破\"], \"management_quality\": 62, \"management_flags\": [\"STRUCTURE_WEAKENING\"]}\n")
 	sb.WriteString("]\n")
@@ -210,6 +215,9 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	}
 	sb.WriteString("- `action`: " + actions + "\n")
 	sb.WriteString(fmt.Sprintf("- 开仓必填: leverage, position_size_usd, stop_loss, take_profit, confidence(0-100且≥%d);限价开仓另需 price。后端会拒绝低 confidence、下调超限 leverage;`risk_usd`、开仓的 `entry_quality` 和硬门 `blocking_factors` 由后端计算/回填,不要输出。\n", riskControl.MinConfidence))
+	if TPMenuEnabled(&riskControl) {
+		sb.WriteString("- 开仓另填 `tp_option`(rr_scan.tp_options 的编号,1起,缺省=①;take_profit 复制所选 level)+ `exit_mode`(trend|range|quick,缺省 trend)。二者只能改变程序预计算方案的取舍,不能自造价格;偏离 tp_option=① 或选非常规 exit_mode 时必须在 reasoning 说明 regime 依据。\n")
+	}
 	sb.WriteString("- 所有数值必须是数字,禁止公式、占位符或单位字符串。\n")
 	if riskControl.LimitEntryEnabled {
 		sb.WriteString("- 开仓路径只看 hard_entry_gate: `allowed=false` 必须 wait;`allowed=true && limit_allowed=true` 默认输出对应 open_*_limit 并逐字复制 entry_price;`allowed=true && limit_allowed=false && market_exception=true` 才可输出市价 open_*,且 confidence≥80。不存在其他例外。\n")
@@ -229,6 +237,11 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// prompt every cycle. The user prompt then carries per-cycle data only.
 	sb.WriteString("# Structured Signal 字段说明（适用于每个 Structured Signal 块）\n")
 	sb.WriteString(signalBlockLegend)
+	if TPMenuEnabled(&e.config.RiskControl) {
+		sb.WriteString("- stop_loss 复制 stop_plan_price;take_profit 从 rr_scan.tp_options 菜单选编号填 tp_option(并把所选 level 复制为 take_profit):level 全部是程序按 stop_plan 同口径算出的结构位,touch_count 只是近30日触及该价位的次数(中性证据,非概率承诺),beyond_structure=超出全部周期结构极值(历史无参考)。usable=false 或菜单为空→引用 MAX_STRUCTURAL_RR=best_rr 并 wait。\n")
+	} else {
+		sb.WriteString("- stop_loss 复制 stop_plan_price;take_profit 复制 rr_scan.first_rr_ge_target。rr_scan.usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait,不得改用更远目标。\n")
+	}
 	sb.WriteString("\n")
 	if paramsText := e.strategyParamsText(); paramsText != "" {
 		sb.WriteString(paramsText)
@@ -314,7 +327,13 @@ func (e *StrategyEngine) strategyParamsText() string {
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
-		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。止盈:逐字复制 rr_scan.first_rr_ge_target;usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait。stop_plan_price 与 first_rr_ge_target 必须成对采用,最低RR=%.1f;后端对 TP 与 SL 使用同一 0.05%% 容差强制吸附到该计划\n", rc.MinRiskRewardRatio))
+		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。最低RR=%.1f;后端对 TP 与 SL 使用同一 0.05%% 容差强制吸附到计划值\n", rc.MinRiskRewardRatio))
+		if TPMenuEnabled(&e.config.RiskControl) {
+			params.WriteString(fmt.Sprintf("- 止盈(菜单选择): rr_scan.tp_options 是程序预计算的止盈方案菜单(近/中/远结构位,各附 rr、touch_count=近30日触及次数、beyond_structure)。开仓时选一个编号填 tp_option(缺省=①最近合格位;偏离默认需在 reasoning 给出依据:趋势 regime、动能、上方结构强度),同时把所选 level 复制为 take_profit。usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait,菜单为空同理\n"))
+			params.WriteString(fmt.Sprintf("- 出场模式(开仓必选,缺省 trend): exit_mode=trend 趋势模式(止盈只平一部分,剩余移动止损跑单,适合顺势延续行情)/exit_mode=range 震荡模式(到目标位全平,不跑单,适合区间震荡)/exit_mode=quick 快进快出(到目标位全平+开仓超过 %.0f 小时仍浮亏则程序时间止损,适合事件驱动/脉冲行情)。regime 定性判断由你做,参数由程序按模式执行;持仓中途不可改模式\n", float64(TimeStopHours(&e.config.RiskControl))))
+		} else {
+			params.WriteString(fmt.Sprintf("- 止盈:逐字复制 rr_scan.first_rr_ge_target;usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait,不得改用更远目标。stop_plan_price 与 first_rr_ge_target 必须成对采用\n"))
+		}
 		var tpParts []string
 		armR := BreakevenArmR(&e.config.RiskControl)
 		if armR > 0 {
@@ -362,7 +381,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// 同条件收拢为全平)。
 		tpFrac := TPCloseFraction(&e.config.RiskControl)
 		if e.config.RiskControl.TrailingStopEnabled && tpFrac < 1.0 {
-			tpParts = append(tpParts, fmt.Sprintf("结构位止盈触发时程序只平当时剩余仓位的 %.0f%%(基数=触发时的仓位,不是初始仓位;若此前已有减仓,按剩余量计),剩余继续由 2×ATR 移动止损接管(趋势跑单,利润奔跑;强趋势冲破止盈位后的延续行情由它捕捉)", tpFrac*100))
+			tpParts = append(tpParts, fmt.Sprintf("exit_mode=trend(趋势模式,默认)时:结构位止盈触发程序只平当时剩余仓位的 %.0f%%(基数=触发时的仓位,不是初始仓位;若此前已有减仓,按剩余量计),剩余继续由 2×ATR 移动止损接管(趋势跑单,利润奔跑;强趋势冲破止盈位后的延续行情由它捕捉);exit_mode=range/quick 时目标位全平,无跑单", tpFrac*100))
 		}
 		// R 档优先: >0 按 R 渲染, <0 = 档关闭(不再渲染), 0 = legacy ROE 字段
 		if tpFullR := TpFullAtR(&e.config.RiskControl); tpFullR > 0 {
@@ -1704,6 +1723,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					gs.LongLimitAllowed = sig.HardGate.Long.LimitAllowed
 					if sig.HardGate.Long.RR != nil {
 						gs.LongTakeProfit = sig.HardGate.Long.RR.FirstRRGeTarget
+						gs.LongTPMenu = sig.HardGate.Long.RR.Options
 					}
 				}
 				if sig.HardGate.Short != nil {
@@ -1714,6 +1734,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					gs.ShortLimitAllowed = sig.HardGate.Short.LimitAllowed
 					if sig.HardGate.Short.RR != nil {
 						gs.ShortTakeProfit = sig.HardGate.Short.RR.FirstRRGeTarget
+						gs.ShortTPMenu = sig.HardGate.Short.RR.Options
 					}
 				}
 			}
@@ -1895,7 +1916,6 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 const signalBlockLegend = `时间口径: timeframe 名称是K线粒度;trend_window_return_pct 的窗口看 return_window_hours;price_change_60m/24h_live_pct 使用实时价;prev_hour_close_change_pct 只看最近完整1h收盘。macd_hist 实际为 MACD line(EMA12-EMA26)/price,不是传统 histogram。
 程序字段是唯一权威,禁止重算:
 - hard_entry_gate.long/short.allowed 是最终方向权限。false→wait并逐项引用 failed;true 且 limit_allowed→限价复制 entry_price;true 且 !limit_allowed 且 market_exception→可走市价例外。不存在其他路径。
-- stop_loss 复制 stop_plan_price;take_profit 复制 rr_scan.first_rr_ge_target。rr_scan.usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait,不得改用更远目标。
 - market_regime、execution_filter、pump_guard、data_quality、data_freshness、liquidity、funding_rollover、bb_ride(布林上轨骑行)/short_ride(布林下轨骑行) 和 breakout 均为程序结果。funding_rate 是原始小数;funding_annualized_pct 才是年化百分比。pump_guard.return_4h_pct = 最近 5 根已闭合 4h K 线(约 20 小时)的趋势窗口累计涨幅——4h 周期指标,不是最近 4 小时的涨幅。
 - bias.scanner 只是候选来源姿态;方向依据 structure/execution/directional_score。仅在 hard_entry_gate.allowed=true 且准备开仓时处理 signal_conflict;已被硬门阻断时直接 wait,不展开冲突分析。
 - support/resistance 与距离均按实时价生成;空数组表示对应方向没有结构参考。trend 与窗口收益方向不同可以是合法反弹/回撤,不自动构成冲突。

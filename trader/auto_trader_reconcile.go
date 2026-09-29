@@ -128,6 +128,7 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 				Symbol: row.Symbol, Side: row.Side, Price: row.Price,
 				Quantity: row.Quantity, StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,
 				Leverage: row.Leverage, OrderID: row.OrderID, PlacedAt: row.PlacedAt,
+				ExitMode: row.ExitMode,
 			}
 			at.setPendingEntry(pe)
 			owned[row.Symbol+"|"+row.OrderID] = true
@@ -209,6 +210,7 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	at.SetRecordedStopLoss(row.Symbol, row.Side, row.StopLoss)
 	at.SetInitialStopLoss(row.Symbol, row.Side, row.StopLoss) // 1R anchor — write-once
+	at.SetExitMode(row.Symbol, row.Side, row.ExitMode)        // exit template — write-once
 	at.ClearPeakPnLCache(row.Symbol, row.Side)
 	positionSide := "LONG"
 	if row.Side == "short" {
@@ -216,7 +218,7 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
 	}
 	at.placeProtectiveOrders(&kernel.Decision{
 		Symbol: row.Symbol, Action: "open_" + row.Side,
-		StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,
+		StopLoss: row.StopLoss, TakeProfit: row.TakeProfit, ExitMode: row.ExitMode,
 	}, positionSide, row.Quantity, row.Price, row.Price)
 	logger.Infof("✅ [%s] Pending-entry %s FILLED while offline: protective orders placed at limit price %.6g (SL %.6g / TP %.6g)",
 		at.name, row.Symbol, row.Price, row.StopLoss, row.TakeProfit)

@@ -223,10 +223,13 @@ func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 	engine := NewStrategyEngine(cfg)
 	prompt := engine.BuildSystemPrompt(100, "")
 	for _, want := range []string{
-		"rr_scan.first_rr_ge_target",
+		// 09-29 menu directive: the TP contract is the discrete menu pick;
+		// the levels themselves stay program-precomputed.
+		"rr_scan.tp_options",
 		"MAX_STRUCTURAL_RR=best_rr",
 		"usable=false",
-		"stop_plan_price 与 first_rr_ge_target 必须成对采用",
+		"tp_option",
+		"exit_mode",
 		"最低RR=1.5",
 	} {
 		if !strings.Contains(prompt, want) {

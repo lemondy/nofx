@@ -504,6 +504,18 @@ type RiskControlConfig struct {
 	// and the drawdown-protect close bypass it by construction (neither is an
 	// AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
 	EarlyCloseMinHours int `json:"early_close_min_hours"`
+	// TPMenuEnabled: nil/true = the tp_options menu + exit_mode contract is
+	// active — the model picks a program-precomputed TP plan (tp_option) and
+	// classifies the regime (exit_mode trend/range/quick); false = the legacy
+	// verbatim first_rr_ge_target contract. The menu can only move the TP
+	// BETWEEN precomputed levels; missing/invalid choices degrade to option 1
+	// + trend, i.e. exactly the old behavior.
+	TPMenuEnabled *bool `json:"tp_menu_enabled,omitempty"`
+	// TimeStopHours: the quick exit-mode's time stop — a position still at a
+	// loss (price basis) after this many hours is closed by the program (a
+	// program path: early-close/min-hold gates don't apply). 0 = default 4h;
+	// negative = disabled (quick degrades to range). (CODE ENFORCED when >0)
+	TimeStopHours int `json:"time_stop_hours"`
 	// Block open_short when the 1d trend is up (counter-trend protection). (CODE ENFORCED)
 	BlockShort1dUptrend bool `json:"block_short_1d_uptrend"`
 	// Entry timing gate: the finest sub-hour timeframe (15m/30m) trend must

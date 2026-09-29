@@ -138,6 +138,13 @@ type TraderPosition struct {
 	// the authority across restarts).
 	R1TrimDone bool `gorm:"column:r1_trim_done;default:false" json:"r1_trim_done"`
 	TPTrimDone bool `gorm:"column:tp_trim_done;default:false" json:"tp_trim_done"`
+	// ExitMode is the exit template the program executes for this position
+	// (user menu directive 09-29): "trend" = split TP + trailing runner,
+	// "range" = full TP at the chosen target, "quick" = full TP + program
+	// time stop. Chosen by the model at open (Decision.ExitMode), stamped
+	// write-once here so the exit ladder survives restarts. ''/'trend' both
+	// mean the legacy ladder.
+	ExitMode string `gorm:"column:exit_mode;default:''" json:"exit_mode,omitempty"`
 	// Exit excursion replay over 1m klines (entry_time → exit_time): the max
 	// ADVERSE / max FAVORABLE excursion as % of entry, and the same in R
 	// (÷|entry − initial_stop_loss|) when the write-once anchor exists. The
@@ -201,6 +208,7 @@ func (s *PositionStore) InitTables() error {
 			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION DEFAULT 0`)
 			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_r DOUBLE PRECISION DEFAULT 0`)
 			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_r DOUBLE PRECISION DEFAULT 0`)
+			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS exit_mode TEXT DEFAULT ''`)
 			return nil
 		}
 	}
@@ -643,6 +651,19 @@ func (s *PositionStore) MarkTPTrimDone(traderID, symbol, side string) error {
 		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
 			traderID, symbol, strings.ToUpper(side), "OPEN").
 		Update("tp_trim_done", true).Error
+}
+
+// SetExitModeIfEmpty stamps the position's exit template on the trader's OPEN
+// row (write-once at open) — the exit ladder and the quick-mode time stop read
+// it back after restarts. Empty mode is a no-op ('trend' is the default).
+func (s *PositionStore) SetExitModeIfEmpty(traderID, symbol, side, mode string) error {
+	if mode == "" {
+		return nil
+	}
+	return s.db.Model(&TraderPosition{}).
+		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ? AND (exit_mode = '' OR exit_mode IS NULL)",
+			traderID, symbol, strings.ToUpper(side), "OPEN").
+		Update("exit_mode", mode).Error
 }
 
 // SetAIManaged stamps the AI-book attribution on one row by id (close-time

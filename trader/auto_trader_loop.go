@@ -720,6 +720,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			at.positionStopLossMutex.Lock()
 			delete(at.positionStopLoss, key)
 			delete(at.positionInitialStopLoss, key)
+			delete(at.positionExitMode, key)
 			at.positionStopLossMutex.Unlock()
 			// And the peak-PnL cache — otherwise the next position on the
 			// same symbol_side inherits a dead trade's peak.

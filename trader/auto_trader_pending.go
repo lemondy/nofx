@@ -29,6 +29,7 @@ type pendingEntry struct {
 	PlacedAt     time.Time
 	Cycles       int
 	ProtectedQty float64 // executed size already carrying SL/TP (partial-fill watermark)
+	ExitMode     string  // exit template carried to the position on fill (trend|range|quick; '' = trend)
 }
 
 func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
@@ -75,6 +76,7 @@ func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) {
 		Leverage:   pe.Leverage,
 		OrderID:    pe.OrderID,
 		PlacedAt:   pe.PlacedAt,
+		ExitMode:   pe.ExitMode,
 	})
 	if err != nil {
 		logger.Infof("⚠️ [%s] persist pending entry %s (order %s) failed: %v — restart would orphan it until the tag-scan drops it",
@@ -380,6 +382,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		Symbol: decision.Symbol, Side: side, Price: decision.Price,
 		Quantity: placedQuantity, StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
 		Leverage: decision.Leverage, OrderID: res.OrderID, PlacedAt: time.Now(),
+		ExitMode: decision.ExitMode,
 	})
 	actionRecord.OrderID = 0 // string order id lives in the pending state
 	logger.Infof("  ✓ Limit entry placed: %s %s %.6g @ %.6g (order %s), SL %.6g / TP %.6g",
@@ -650,6 +653,7 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 		// the REAL opening risk (actual fill), not the plan's limit price.
 		at.SetRecordedStopLoss(pe.Symbol, pe.Side, newSL)
 		at.SetInitialStopLoss(pe.Symbol, pe.Side, newSL)
+		at.SetExitMode(pe.Symbol, pe.Side, pe.ExitMode)
 		at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 		at.ClearPeakPnLCache(pe.Symbol, pe.Side)
 	}
@@ -663,7 +667,7 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 	// would be skipped forever).
 	if err := at.placeProtectiveOrders(&kernel.Decision{
 		Symbol: pe.Symbol, Action: "open_" + pe.Side,
-		StopLoss: newSL, TakeProfit: newTP,
+		StopLoss: newSL, TakeProfit: newTP, ExitMode: pe.ExitMode,
 	}, positionSide, slice, pe.Price, avg); err != nil {
 		logger.Infof("⚠️ [%s] partial-fill protection FAILED for %s %s: %v — watermark NOT advanced, retried next cycle", at.name, pe.Symbol, pe.Side, err)
 		return 0

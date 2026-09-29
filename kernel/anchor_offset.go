@@ -418,6 +418,32 @@ func TPCloseFraction(rc *store.RiskControlConfig) float64 {
 	return f
 }
 
+// TPMenuEnabled reports whether the tp_options menu + exit_mode contract is
+// active: nil/true = active (the model picks a program-precomputed TP plan
+// and classifies the regime); false = the legacy verbatim
+// first_rr_ge_target contract. Shared by the prompt builder only — the
+// validation side always tolerates the fields so an old prompt/decision mix
+// degrades to option 1 + trend instead of failing the batch.
+func TPMenuEnabled(rc *store.RiskControlConfig) bool {
+	return rc == nil || rc.TPMenuEnabled == nil || *rc.TPMenuEnabled
+}
+
+// TimeStopHours resolves the quick exit-mode's time stop in hours: a
+// position still at a loss after this long is closed by the program.
+// 0/unset = 4h default (mirrors EarlyCloseHours), negative = disabled.
+func TimeStopHours(rc *store.RiskControlConfig) int {
+	if rc == nil {
+		return 4
+	}
+	if rc.TimeStopHours < 0 {
+		return 0
+	}
+	if rc.TimeStopHours == 0 {
+		return 4
+	}
+	return rc.TimeStopHours
+}
+
 // MaxSpreadPct resolves the order-book spread gate threshold (percent of
 // mid): 0/unset = 0.5% default; negative = gate disabled. Shared by the
 // trader's spread gate and the prompt builder.

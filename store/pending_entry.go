@@ -31,6 +31,9 @@ type PendingEntryDB struct {
 	Leverage   int       `gorm:"column:leverage" json:"leverage"`
 	OrderID    string    `gorm:"column:order_id;size:64" json:"order_id"`
 	PlacedAt   time.Time `gorm:"column:placed_at" json:"placed_at"`
+	// ExitMode rides the pending entry so the fill stamps the position's
+	// exit template (trend|range|quick) even when the fill lands offline.
+	ExitMode string `gorm:"column:exit_mode;default:''" json:"exit_mode,omitempty"`
 }
 
 func (PendingEntryDB) TableName() string { return "trader_pending_entries" }

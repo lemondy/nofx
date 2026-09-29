@@ -199,8 +199,7 @@ type SymbolSignal struct {
 	// Present ONLY when the symbol is currently banned; the model may cite
 	// LOSS_STREAK_BAN for this symbol and no other.
 	LossStreak *LossStreakState `json:"loss_streak,omitempty"`
-	// MinSize is the precomputed minimum-notional feasibility for this
-	// symbol at the current equity (see MinSizeCheck).
+	// MinSize is the precomputed minimum-notional feasibility for this	// symbol at the current equity (see MinSizeCheck).
 	MinSize *MinSizeCheck `json:"min_size,omitempty"`
 
 	// HardGate is the program's per-direction open verdict: entry basis,
@@ -232,6 +231,12 @@ type SymbolSignal struct {
 	// review: with 20 shipped bars the model must know WHEN the newest
 	// closed bar is without counting back from Time).
 	OHLCVLastClosed map[string]string `json:"ohlcv_last_closed_utc,omitempty"`
+
+	// TP-menu touch-stat source (user directive 2026-09-29, NOT serialized):
+	// closed 1h bar extremes for crypto / 1d for equity tokens, capped at
+	// ~30 days. scanRRForSymbol counts per-option reaches against these.
+	touchHighs, touchLows []float64
+	touchWindowDays       int
 }
 
 // RoleTimeframes names the job of each timeframe (⑨): execution TF times the
@@ -374,6 +379,24 @@ type RRScan struct {
 	// there (the prompt requires the model to note the uncertainty).
 	FirstTargetBeyondStructure bool `json:"first_target_beyond_structure,omitempty"`
 	Usable                     bool `json:"usable"` // a qualifying target exists
+	// TPOptions is the menu the model picks from (user directive 2026-09-29):
+	// up to three QUALIFYING (RR ≥ min_rr, non-BOLL) structural targets —
+	// near/mid/far — so the regime call ("trend keeps running" vs "range
+	// fades at the edge") is the model's, while every price stays 100%
+	// program-computed. Option 1 IS first_rr_ge_target (the legacy verbatim
+	// TP); farther options only RAISE the RR. Empty when unusable.
+	Options []TPOption `json:"tp_options,omitempty"`
+}
+
+// TPOption is one precomputed take-profit plan. The model answers with a
+// 1-based index (Decision.TPOption); it never authors the price.
+type TPOption struct {
+	Level           float64 `json:"level"`                     // the structural target price
+	RR              float64 `json:"rr"`                        // RR at the gated stop_plan
+	TouchCount      int     `json:"touch_count,omitempty"`     // closed 1h (bstock 1d) bars in the window whose range reached the level — neutral "price has been here" evidence, NOT a probability
+	TouchWindowDays int     `json:"touch_window_days,omitempty"`
+	BeyondStructure bool    `json:"beyond_structure,omitempty"` // beyond every timeframe's structure extreme
+	Default         bool    `json:"default,omitempty"`          // option 1 (nearest qualifying) — the legacy first_rr_ge_target
 }
 
 // DirectionGate is the program's per-direction open verdict for one symbol —
@@ -676,6 +699,32 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 				kl := ClosedKlines(tfData, now, tfDuration(tf))
 				lastClose := kl[len(kl)-1].Time + tfDuration(tf).Milliseconds()
 				primarySettlementAge = now.Sub(time.UnixMilli(lastClose)).Seconds()
+			}
+		}
+	}
+
+	// TP-menu touch source (user directive 2026-09-29): the closed 1h series
+	// for crypto, 1d for equity tokens — the same rhythm class the structure
+	// scan prices stops and targets on. Capped at ~30 days.
+	{
+		touchTF := "1h"
+		maxBars := 720
+		if market.IsBStockSymbol(symbol) {
+			touchTF, maxBars = "1d", 30
+		}
+		if td := data.TimeframeData[touchTF]; td != nil {
+			kl := ClosedKlines(td, now, tfDuration(touchTF))
+			if len(kl) > maxBars {
+				kl = kl[len(kl)-maxBars:]
+			}
+			if len(kl) > 0 {
+				sig.touchHighs = make([]float64, len(kl))
+				sig.touchLows = make([]float64, len(kl))
+				for i, k := range kl {
+					sig.touchHighs[i] = k.High
+					sig.touchLows[i] = k.Low
+				}
+				sig.touchWindowDays = int(float64(len(kl))*tfDuration(touchTF).Hours()/24 + 0.5)
 			}
 		}
 	}
@@ -1504,7 +1553,7 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 				g.StopPlanPrice = price
 				g.StopPlanPct = round2(dist)
 				g.StopPlanSource = "structure"
-				g.RR = scanRRForSymbol(sig.Symbol, g.EntryPrice, g.EntryBasis, dist, price, sig.Timeframes, isLong, opt.MinRR)
+				g.RR = scanRRForSymbol(sig, g.EntryPrice, g.EntryBasis, dist, price, isLong, opt.MinRR)
 			}
 		}
 		if opt.EntryTimingGate && sig.ExecutionFilter != nil {
@@ -1619,11 +1668,44 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 	return scanRRWindow(entry, basis, stopPct, stopPrice, tfs, isLong, minRR, 15*time.Minute, 4*time.Hour)
 }
 
-func scanRRForSymbol(symbol string, entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64) *RRScan {
-	if market.IsBStockSymbol(symbol) {
-		return scanRRWindow(entry, basis, stopPct, stopPrice, tfs, isLong, minRR, 4*time.Hour, 24*time.Hour)
+func scanRRForSymbol(sig *SymbolSignal, entry float64, basis string, stopPct float64, stopPrice float64, isLong bool, minRR float64) *RRScan {
+	var out *RRScan
+	if market.IsBStockSymbol(sig.Symbol) {
+		out = scanRRWindow(entry, basis, stopPct, stopPrice, sig.Timeframes, isLong, minRR, 4*time.Hour, 24*time.Hour)
+	} else {
+		out = scanRR(entry, basis, stopPct, stopPrice, sig.Timeframes, isLong, minRR)
 	}
-	return scanRR(entry, basis, stopPct, stopPrice, tfs, isLong, minRR)
+	// Touch counts (user directive 09-29): neutral "price has been here"
+	// evidence per menu option — closed bars whose range reached the level
+	// inside the window. Absent series simply leave the fields at zero.
+	if len(out.Options) > 0 && len(sig.touchHighs) > 0 {
+		for i := range out.Options {
+			out.Options[i].TouchCount = touchCount(sig.touchHighs, sig.touchLows, out.Options[i].Level, isLong)
+			out.Options[i].TouchWindowDays = sig.touchWindowDays
+		}
+	}
+	return out
+}
+
+// touchCount counts the closed bars whose range reached the target level —
+// for a long target any bar high at/above it, for a short target any bar low
+// at/below it. Evidence of reachability, deliberately NOT labeled a
+// probability: a well-touched level is reachable AND contested.
+func touchCount(highs, lows []float64, level float64, isLongTarget bool) int {
+	if level <= 0 {
+		return 0
+	}
+	n := 0
+	for i := range highs {
+		if isLongTarget {
+			if highs[i] >= level {
+				n++
+			}
+		} else if lows[i] > 0 && lows[i] <= level {
+			n++
+		}
+	}
+	return n
 }
 
 // scanRRWindow walks EVERY structural target on the take-profit side inside
@@ -1750,6 +1832,11 @@ func scanRRWindow(entry float64, basis string, stopPct float64, stopPrice float6
 		}
 	}
 	best, bestT := 0.0, 0.0
+	type qualTarget struct {
+		level float64
+		rr    float64
+	}
+	var qualifying []qualTarget
 	for _, t := range uniq {
 		dist := (t - entry) / entry * 100
 		if !isLong {
@@ -1770,10 +1857,45 @@ func scanRRWindow(entry float64, basis string, stopPct float64, stopPrice float6
 				out.FirstTargetBeyondStructure = true
 			}
 		}
+		if minRR > 0 && v >= minRR-1e-9 && !bollT[t] {
+			qualifying = append(qualifying, qualTarget{level: t, rr: v})
+		}
 	}
 	if len(uniq) > 0 {
 		out.BestTarget = bestT
 		out.BestRR = round2(best)
+	}
+	// Menu: near / mid / far among the qualifying (non-BOLL) targets. The
+	// model picks an index; the default stays option 1 = the nearest
+	// qualifying level (the legacy first_rr_ge_target), so absent or invalid
+	// choices degrade to exactly the old behavior.
+	if len(qualifying) > 0 {
+		idx := []int{0}
+		if len(qualifying) >= 3 {
+			idx = append(idx, len(qualifying)/2)
+		}
+		if len(qualifying) >= 2 {
+			idx = append(idx, len(qualifying)-1)
+		}
+		seen := map[int]bool{}
+		for _, i := range idx {
+			if seen[i] {
+				continue
+			}
+			seen[i] = true
+			q := qualifying[i]
+			opt := TPOption{Level: q.level, RR: round2(q.rr)}
+			if isLong && maxSH > 0 && q.level > maxSH {
+				opt.BeyondStructure = true
+			}
+			if !isLong && minSL > 0 && q.level < minSL {
+				opt.BeyondStructure = true
+			}
+			if len(out.Options) == 0 {
+				opt.Default = true
+			}
+			out.Options = append(out.Options, opt)
+		}
 	}
 	return out
 }

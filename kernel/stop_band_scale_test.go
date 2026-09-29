@@ -105,7 +105,7 @@ func TestBStockRRUsesFourHourToDailyTargets(t *testing.T) {
 		"4h":  {StructuralResistance: []float64{112}},
 		"1d":  {StructuralResistance: []float64{120}},
 	}
-	scan := scanRRForSymbol("AAPLUSDT", 100, "limit_anchor", 10, 90, tfs, true, 1)
+	scan := scanRRForSymbol(&SymbolSignal{Symbol: "AAPLUSDT", Timeframes: tfs}, 100, "limit_anchor", 10, 90, true, 1)
 	if scan.TargetsScanned != 2 {
 		t.Fatalf("bstock targets_scanned = %d, want 2 (4h + 1d only)", scan.TargetsScanned)
 	}

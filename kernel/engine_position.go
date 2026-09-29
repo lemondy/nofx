@@ -73,6 +73,20 @@ func correctLimitAnchors(decisions []Decision, anchors map[string]*LimitAnchor, 
 	}
 }
 
+// Exit templates (user menu directive 09-29): the model classifies the
+// regime per open; the program executes the template behind each label.
+// trend = today's ladder (split TP + trailing runner); range = the target IS
+// the exit (full TP, no runner); quick = full TP + a program time stop on
+// dead trades.
+const (
+	ExitModeTrend = "trend"
+	ExitModeRange = "range"
+	ExitModeQuick = "quick"
+)
+
+// ValidExitModes is the closed exit_mode vocabulary.
+var ValidExitModes = []string{ExitModeTrend, ExitModeRange, ExitModeQuick}
+
 func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool, gateStates map[string]*GateState) error {
 	for i := range decisions {
 		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols[market.Normalize(decisions[i].Symbol)], gateStates[market.Normalize(decisions[i].Symbol)]); err != nil {
@@ -118,6 +132,40 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	// the bias it entered with implicitly; open/close carry no bias).
 	if d.WaitBias != "" && d.WaitBias != "long" && d.WaitBias != "short" {
 		return fmt.Errorf("invalid wait_bias %q (must be long/short or empty)", d.WaitBias)
+	}
+
+	// Exit mode (user menu directive 09-29): the template the program
+	// executes for the position. Unknown tags strip to the default instead
+	// of batch-fataling — same hygiene class as wait_state. Non-open actions
+	// never carry the fields (the exit template is stamped at open only).
+	isOpenAction := strings.HasPrefix(d.Action, "open_long") || strings.HasPrefix(d.Action, "open_short")
+	if !isOpenAction {
+		d.ExitMode, d.TPOption = "", 0
+	} else {
+		switch d.ExitMode {
+		case "":
+			d.ExitMode = ExitModeTrend
+		case ExitModeTrend, ExitModeRange, ExitModeQuick:
+		default:
+			logger.Infof("🧹 invalid exit_mode %q on %s stripped → %s", d.ExitMode, d.Symbol, ExitModeTrend)
+			d.ExitMode = ExitModeTrend
+		}
+		// tp_option hygiene: out-of-menu choices reset to 0 (= option 1, the
+		// default). resolveTakeProfitOptions only ever moves the TP BETWEEN
+		// program-precomputed levels.
+		if d.TPOption < 0 {
+			d.TPOption = 0
+		}
+		if d.TPOption > 1 && gs != nil {
+			menu := gs.LongTPMenu
+			if !strings.HasPrefix(d.Action, "open_long") {
+				menu = gs.ShortTPMenu
+			}
+			if d.TPOption > len(menu) {
+				logger.Infof("🧹 [%s] tp_option %d beyond the %d-option menu → default 1", d.Symbol, d.TPOption, len(menu))
+				d.TPOption = 0
+			}
+		}
 	}
 
 	// wait_state / next_trigger hygiene (review 2026-09-15 points 11/12):
@@ -497,5 +545,45 @@ func correctTakeProfitToPlan(decisions []Decision, gates map[string]*GateState, 
 		logger.Infof("📐 [%s] %s take_profit %.6g → first_rr_ge_target %.6g (%+.2f%% drift — the gated target is the trade)",
 			d.Symbol, d.Action, d.TakeProfit, plan, dev)
 		d.TakeProfit = plan
+	}
+}
+
+// resolveTakeProfitOptions applies each open decision's tp_option choice to
+// the gate state BEFORE the TP snap (user menu directive 09-29): the snap
+// target becomes the CHOSEN menu level instead of always option 1. A missing
+// or out-of-range option (validateDecision already resets those) keeps
+// option 1 — the legacy first_rr_ge_target. The model can only move the TP
+// BETWEEN program-precomputed levels; an off-menu TP stays impossible.
+func resolveTakeProfitOptions(decisions []Decision, gates map[string]*GateState) {
+	for i := range decisions {
+		d := &decisions[i]
+		if d.TPOption <= 1 {
+			continue // absent or explicitly option 1 — gate state already carries it
+		}
+		if !strings.HasPrefix(d.Action, "open_long") && !strings.HasPrefix(d.Action, "open_short") {
+			continue
+		}
+		gs, ok := gates[market.Normalize(d.Symbol)]
+		if !ok || gs == nil {
+			continue
+		}
+		menu := gs.LongTPMenu
+		if !strings.HasPrefix(d.Action, "open_long") {
+			menu = gs.ShortTPMenu
+		}
+		if d.TPOption > len(menu) {
+			continue // defensive — validateDecision resets this earlier
+		}
+		opt := menu[d.TPOption-1]
+		if opt.Level <= 0 {
+			continue
+		}
+		if strings.HasPrefix(d.Action, "open_long") {
+			gs.LongTakeProfit = opt.Level
+		} else {
+			gs.ShortTakeProfit = opt.Level
+		}
+		logger.Infof("📋 [%s] %s tp_option=%d → TP %.6g (RR %.2f, beyond_structure=%v)",
+			d.Symbol, d.Action, d.TPOption, opt.Level, opt.RR, opt.BeyondStructure)
 	}
 }

@@ -140,11 +140,23 @@ func tpRunnerDue(side string, entry, takeProfit, markPrice float64) bool {
 	return (entry-markPrice)/entry*100 >= tpDist
 }
 
+// timeStopDue: the quick exit-template's time stop (user menu directive
+// 09-29). A position older than stopHours whose price-basis PnL is still ≤0
+// is a dead trade — the program closes it. stopHours ≤ 0 = disabled; a
+// position already in profit is never touched (the breakeven arm / 1R lock
+// own the profitable branch).
+func timeStopDue(held time.Duration, pricePnLPct, stopHours float64) bool {
+	if stopHours <= 0 {
+		return false
+	}
+	return held >= time.Duration(stopHours*float64(time.Hour)) && pricePnLPct <= 0
+}
+
 // processVolTargetAndTrailing runs once per decision cycle over all open
 // positions: volatility rescale (reduce-only) and trailing stop management.
 func (at *AutoTrader) processVolTargetAndTrailing() {
 	if at.config.StrategyConfig == nil ||
-		(!at.config.StrategyConfig.RiskControl.VolTargetEnabled && !at.config.StrategyConfig.RiskControl.TrailingStopEnabled && kernel.ProfitLockRMult(&at.config.StrategyConfig.RiskControl) <= 0) {
+		(!at.config.StrategyConfig.RiskControl.VolTargetEnabled && !at.config.StrategyConfig.RiskControl.TrailingStopEnabled && kernel.ProfitLockRMult(&at.config.StrategyConfig.RiskControl) <= 0 && kernel.TimeStopHours(&at.config.StrategyConfig.RiskControl) <= 0) {
 		return
 	}
 	positions, err := at.trader.GetPositions()
@@ -182,6 +194,35 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		// the AI get no vol-target, no trailing, no 1R lock, no breakeven arm.
 		if !at.isAIManaged(symbol, side) {
 			continue
+		}
+		mode := at.ExitModeFor(symbol, side)
+		// ── quick 模式时间止损 (user menu directive 09-29) ──
+		// A dead trade is a dead trade: after timeStopHours the position
+		// still sits at/below entry (price basis) — the thesis had its
+		// window and nothing came of it. This is a PROGRAM path, not an AI
+		// close: the early-close/min-hold gates don't apply, and the intent
+		// registry marks it 'time_stop' for exit attribution. A position
+		// already in profit is left alone — the breakeven arm / 1R lock own
+		// it from there.
+		if mode == kernel.ExitModeQuick {
+			if entry := posEntryPrice(pos); entry > 0 {
+				pnlPct := (markPrice - entry) / entry * 100
+				if side == "short" {
+					pnlPct = (entry - markPrice) / entry * 100
+				}
+				stopHours := float64(kernel.TimeStopHours(&at.config.StrategyConfig.RiskControl))
+				if openMs, ok := at.positionFirstSeenTime[posKey]; ok && openMs > 0 &&
+					timeStopDue(time.Since(time.UnixMilli(openMs)), pnlPct, stopHours) {
+					held := time.Since(time.UnixMilli(openMs))
+					if err := at.closePositionReasoned(symbol, side, "time_stop"); err == nil {
+						logger.Infof("⏱️ [%s] Time stop: %s %s held %.1fh still %.2f%% — closed (exit_mode=quick)", at.name, symbol, side, held.Hours(), pnlPct)
+						notify.Notify("ORDER", at.name, fmt.Sprintf("<b>⏱️ 时间止损 %s</b>\n<i>exit_mode=quick:持仓 %.1f 小时仍浮亏(%.2f%%),程序市价平仓</i>", notify.Escape(symbol), held.Hours(), pnlPct))
+					} else {
+						logger.Infof("⚠️ [%s] Time stop close failed for %s: %v — retried next cycle", at.name, symbol, err)
+					}
+					continue
+				}
+			}
 		}
 		initialSL := at.GetRecordedStopLoss(symbol, side)
 		if initialSL <= 0 {
@@ -341,7 +382,11 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		}
 
 		// ── 规则3/4: rule-based trailing stop + TP runner ──
-		if trailEnabled {
+		// Trend-template only (user menu directive 09-29): range/quick chose
+		// "the target IS the exit" — their full-size TP algo owns the exit
+		// and no runner conversion ever fires (the watchdog's TP repair uses
+		// the same recorded level for them).
+		if trailEnabled && mode == kernel.ExitModeTrend {
 			currentSL := initialSL
 			newSL, move, armed := trailingDecision(side, posEntryPrice(pos), initialSL, markPrice, atrPct, currentSL)
 			if armed {

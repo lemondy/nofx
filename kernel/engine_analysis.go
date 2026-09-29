@@ -255,6 +255,10 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 			// model stop re-hits the noise-floor rejection (the ZEC/AVAX
 			// wasted-cycle loop this was written to end).
 			correctStopLossToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
+			// TP menu (user directive 09-29): point the gate state at the
+			// CHOSEN option before the snap, so the model's discrete menu
+			// pick (never a price) selects which precomputed target executes.
+			resolveTakeProfitOptions(decision.Decisions, ctx.GateStates)
 			// Reward-side symmetry (2026-09-27 external review P0): the stop
 			// is hard-snapped to the gated plan; the TP must be too, or the
 			// model's elastic TP silently degrades the gated R:R math.
