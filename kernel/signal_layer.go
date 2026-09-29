@@ -1104,21 +1104,37 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// (SLMinATRMult×ATR(1h)) — if even that floor overshoots, no permitted
 	// stop can produce a tradable notional (structural dead zone). Mirrors
 	// the sizing formula and the executor's enforceMinPositionSize rejection.
+	//
+	// 09-29 user report (QNTUSDT "MIN_QTY: quantity 0.0534 rounds down to
+	// 0.0, stepSize=0.1"): the strategy minimum is not the only floor — the
+	// EXCHANGE's lot structure is. A 0.1-step symbol at price 260 cannot
+	// trade below ≈26U notional; sizing under that dies at placement with
+	// the quantity rounded to zero. The binding minimum is therefore
+	// max(strategy min, exchange min-tradable notional).
 	if opt.EquityUSDT > 0 && opt.RiskPct > 0 && opt.MinPositionSizeUSDT > 0 {
 		riskUSD := opt.EquityUSDT * opt.RiskPct / 100
-		// Stop distance d (in %) at which notional exactly equals the minimum.
-		maxStopPct := riskUSD / opt.MinPositionSizeUSDT * 100
 		floorPct := stopFloorPct(sig, opt.SLMinATRMult)
+		minSize := opt.MinPositionSizeUSDT
+		lotNote := ""
+		if f := market.GetSymbolLotFilter(sig.Symbol); f.MinQty > 0 || f.MinNotional > 0 {
+			if exch := f.MinTradableNotional(sig.Price); exch > minSize {
+				minSize = exch
+				lotNote = fmt.Sprintf(" (exchange lot floor: step %.4g minQty %.4g → ≥%.0fU at price %.6g)",
+					f.StepSize, f.MinQty, exch, sig.Price)
+			}
+		}
+		// Stop distance d (in %) at which notional exactly equals the minimum.
+		maxStopPct := riskUSD / minSize * 100
 		ms := &MinSizeCheck{
 			Feasible:           floorPct <= maxStopPct,
-			MinPositionSizeUsd: opt.MinPositionSizeUSDT,
+			MinPositionSizeUsd: math.Round(minSize*100) / 100,
 			MaxStopPct:         math.Round(maxStopPct*100) / 100,
 			StopFloorPct:       math.Round(floorPct*100) / 100,
 		}
 		if !ms.Feasible {
 			ms.Reason = fmt.Sprintf(
-				"stop floor %.2f%% (SLMinATR %.1f×ATR(1h)) exceeds %.2f%% max for the %.0fU minimum position size at equity %.1fU — no allowed stop can meet the strategy minimum, wait+MIN_SIZE",
-				floorPct, opt.SLMinATRMult, maxStopPct, opt.MinPositionSizeUSDT, opt.EquityUSDT)
+				"stop floor %.2f%% (SLMinATR %.1f×ATR(1h)) exceeds %.2f%% max for the %.0fU minimum position size at equity %.1fU%s — no allowed stop can meet the binding minimum, wait+MIN_SIZE",
+				floorPct, opt.SLMinATRMult, maxStopPct, minSize, opt.EquityUSDT, lotNote)
 		}
 		sig.MinSize = ms
 	}

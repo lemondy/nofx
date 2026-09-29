@@ -26,6 +26,7 @@ func gateTestMarket(now time.Time, price float64) *market.Data {
 
 func TestMinSizeCheckFeasibleAndDeadZone(t *testing.T) {
 	now := time.Date(2026, 9, 15, 4, 0, 0, 0, time.UTC)
+	market.SetSymbolLotFilterForTesting("CAPUSDT", market.SymbolLotFilter{StepSize: 0.001, MinQty: 0.001, MinNotional: 5})
 	price := 0.0632
 	opts := SignalOptions{
 		Now:                 now,
