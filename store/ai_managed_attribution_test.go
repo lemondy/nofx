@@ -1,8 +1,10 @@
 package store
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // 09-28 review P3: order sync ingests the WHOLE exchange account, so manual
@@ -98,5 +100,71 @@ func TestPositionBuilderStampsAIManagedAtClose(t *testing.T) {
 	}
 	if !closed[0].AIManaged {
 		t.Fatal("close-time registry mark must stamp the closing row as AI-managed")
+	}
+}
+
+// 09-29 user report (BTWUSDT): the orphan-reconcile pass closed rows with 0
+// PnL while their fills were still in flight. The backfill must
+// re-attribute late fills to a just-reconciled row — and must NOT touch
+// rows closed normally ('sync') or outside the 30-minute window.
+func TestBackfillReconciledPnL(t *testing.T) {
+	st, err := NewWithConfig(DBConfig{Type: DBTypeSQLite, Path: filepath.Join(t.TempDir(), "bfl.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC().UnixMilli()
+	if err := st.gdb.Create(&TraderPosition{
+		TraderID: "t1", Symbol: "AAAUSDT", Side: "LONG",
+		Quantity: 1, EntryPrice: 100, ExitPrice: 110,
+		RealizedPnL: 0, Fee: 0.01, Status: "CLOSED", CloseReason: "netting_reconcile",
+		EntryTime: now - 3600_000, ExitTime: now - 60_000, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// A normally-synced row must never be backfilled.
+	if err := st.gdb.Create(&TraderPosition{
+		TraderID: "t1", Symbol: "BBBUSDT", Side: "LONG",
+		Quantity: 1, EntryPrice: 50, ExitPrice: 55,
+		RealizedPnL: 5, Fee: 0.02, Status: "CLOSED", CloseReason: "sync",
+		EntryTime: now - 3600_000, ExitTime: now - 60_000, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if !st.Position().BackfillReconciledPnL("t1", "AAAUSDT", "LONG", 13.66, 0.05, 111.9, now-30_000) {
+		t.Fatal("late fill must re-attribute to the reconciled row")
+	}
+	row, _ := st.Position().GetClosedPositions("t1", 10)
+	var got *TraderPosition
+	for _, r := range row {
+		if r.Symbol == "AAAUSDT" {
+			got = r
+		}
+	}
+	if got == nil {
+		t.Fatal("row vanished")
+	}
+	if math.Abs(got.RealizedPnL-13.66) > 1e-9 || math.Abs(got.Fee-0.06) > 1e-9 || math.Abs(got.ExitPrice-111.9) > 1e-9 || got.CloseReason != "sync" {
+		t.Fatalf("backfill wrong: pnl %.4f fee %.4f exit %.4f reason %s", got.RealizedPnL, got.Fee, got.ExitPrice, got.CloseReason)
+	}
+
+	// A second late fill re-attributes on top (accumulates), same row.
+	if !st.Position().BackfillReconciledPnL("t1", "AAAUSDT", "LONG", 1.0, 0.01, 111.9, now-20_000) {
+		t.Fatal("second late fill must also re-attribute")
+	}
+	row2, _ := st.Position().GetClosedPositions("t1", 10)
+	for _, r := range row2 {
+		if r.Symbol == "AAAUSDT" && math.Abs(r.RealizedPnL-14.66) > 1e-9 {
+			t.Fatalf("PnL must accumulate, got %.4f", r.RealizedPnL)
+		}
+	}
+
+	// A late fill on a normally-synced row (closed <30min ago) also
+	// re-attributes — a fill reaching the no-OPEN-row branch was never
+	// booked anywhere, so accumulation is safe there too.
+	if !st.Position().BackfillReconciledPnL("t1", "BBBUSDT", "LONG", 9, 0, 60, now) {
+		t.Fatal("late fill on a recently synced row must re-attribute to it")
 	}
 }

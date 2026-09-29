@@ -115,8 +115,15 @@ func (pb *PositionBuilder) handleClose(
 	}
 
 	if position == nil {
-		// No open position found - just skip
-		// This can happen if trades are processed out of order or database was cleared
+		// No OPEN row — but if the orphan-reconcile pass just closed one for
+		// this (trader, symbol, side) with 0 PnL (the race the pass now
+		// pre-flushes against, user report 09-29: BTWUSDT +13.66U vanished),
+		// re-attribute this fill's exchange-reported PnL to that row instead
+		// of dropping it forever.
+		if pb.positionStore.BackfillReconciledPnL(traderID, symbol, side, realizedPnL, fee, price, tradeTimeMs) {
+			return nil
+		}
+		// Otherwise: trades out of order or database cleared — skip.
 		logger.Infof("  ⚠️  No matching open position for %s %s (orderID: %s), skipping", symbol, side, orderID)
 		return nil
 	}
@@ -201,4 +208,42 @@ func (pb *PositionBuilder) handleClose(
 func quantitiesMatch(a, b float64) bool {
 	const QUANTITY_TOLERANCE = 0.0001
 	return math.Abs(a-b) < QUANTITY_TOLERANCE
+}
+
+// BackfillReconciledPnL re-attributes a close fill's exchange-reported PnL
+// to the most recent row of the same (trader, symbol, side) that the orphan
+// reconcile pass closed with 0 PnL within the last 30 minutes (the
+// fill-sync race: the pass stamped a live exit price and 0 realized PnL,
+// then the real fills landed). Accumulates PnL and fee, moves the exit to
+// the actual fill price/time, and marks the row 'sync' — the reconciliation
+// stamp has served its purpose. Returns whether a row was backfilled.
+func (s *PositionStore) BackfillReconciledPnL(traderID, symbol, side string, realizedPnL, fee, price float64, tradeTimeMs int64) bool {
+	var row TraderPosition
+	// No close_reason filter: the FIRST backfill re-stamps the row 'sync',
+	// and later fills of the same close (multi-leg exits) must keep landing
+	// on it. A fill reaching this path was never booked anywhere (the only
+	// caller is the no-OPEN-row branch), so accumulation cannot double-count.
+	err := s.db.Where(
+		"trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ? AND exit_time >= ?",
+		traderID, symbol, strings.ToUpper(side), "CLOSED",
+		time.Now().UTC().UnixMilli()-30*60*1000,
+	).Order("exit_time DESC").First(&row).Error
+	if err != nil {
+		return false
+	}
+	updates := map[string]interface{}{
+		"realized_pnl": row.RealizedPnL + realizedPnL,
+		"fee":          row.Fee + fee,
+		"exit_price":   price,
+		"exit_time":    tradeTimeMs,
+		"close_reason": "sync",
+		"updated_at":   time.Now().UTC().UnixMilli(),
+	}
+	if err := s.db.Model(&TraderPosition{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+		logger.Infof("  ⚠️  BackfillReconciledPnL failed for row #%d (%s %s): %v", row.ID, symbol, side, err)
+		return false
+	}
+	logger.Infof("  🔧 Backfilled reconciled row #%d (%s %s): realized PnL %+.4f at fill %.6g (was stamped 0 by netting_reconcile)",
+		row.ID, symbol, side, realizedPnL, price)
+	return true
 }

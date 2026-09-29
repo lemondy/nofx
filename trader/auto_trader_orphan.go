@@ -72,6 +72,24 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 	if err != nil || len(rows) == 0 {
 		return
 	}
+	// User report 09-29 (BTWUSDT +13.66U vanished): this pass can RACE the
+	// fill sync — a position closed on the exchange seconds ago still shows
+	// as a DB OPEN row, gets closed here with 0 realized PnL, and its fills
+	// arriving one sync tick later hit "No matching open position" and are
+	// dropped forever. Flush the fill sync FIRST so legitimate closes land
+	// with their exchange-reported PnL before the pass decides anything;
+	// then re-read the rows (the flush may have closed some of them).
+	if syncer, ok := at.trader.(interface {
+		SyncOrdersFromBinance(traderID, exchangeID, exchangeType string, st *store.Store) error
+	}); ok && at.exchangeID != "" {
+		if err := syncer.SyncOrdersFromBinance(at.id, at.exchangeID, at.exchange, at.store); err != nil {
+			logger.Infof("🧹 [%s] orphan reconcile: pre-flush fill sync failed (fail-open): %v", at.name, err)
+		}
+		rows, err = at.store.Position().GetOpenPositions(at.id)
+		if err != nil || len(rows) == 0 {
+			return
+		}
+	}
 	exchangePositions, err := at.trader.GetPositions()
 	if err != nil {
 		return // can't see the exchange — close nothing this cycle
