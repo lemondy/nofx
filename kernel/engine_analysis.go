@@ -394,8 +394,14 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 				oiValue := data.OpenInterest.Latest * data.CurrentPrice
 				oiValueInMillions := oiValue / 1_000_000
 				if oiValueInMillions < minOIThresholdMillions {
-					logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin",
-						coin.Symbol, oiValueInMillions, minOIThresholdMillions)
+					logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin", coin.Symbol, oiValueInMillions, minOIThresholdMillions)
+					// Drop it from the candidate pool too (09-29 user report:
+					// IOTA/AZTEC showed in the UI's 16-coin pool but never in
+					// the prompt's 14-coin render — piggy-dash selects without
+					// an OI floor, the fetch pass filters with one). Keeping
+					// un-fetched coins in ctx.CandidateCoins desyncs the UI
+					// pool, the prompt header count and the regime-skip census.
+					removeCandidate(ctx, coin.Symbol)
 					continue
 				}
 			}
@@ -407,6 +413,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		// missed them; stop them here instead.
 		if strings.Contains(strings.ToUpper(data.Symbol), ":") {
 			logger.Infof("🚫 Excluded XYZ (tokenized) symbol from market data: %s (candidate %s)", data.Symbol, coin.Symbol)
+			removeCandidate(ctx, coin.Symbol)
 			continue
 		}
 		ctx.MarketDataMap[coin.Symbol] = data
@@ -700,4 +707,17 @@ func positionSymbolsFromContext(ctx *Context) map[string]bool {
 		}
 	}
 	return set
+}
+
+// removeCandidate drops one symbol from the cycle's candidate pool (in
+// place) — used when the market-data pass skips a coin (low OI) so the
+// persisted pool matches what the prompt actually renders (09-29 user
+// report: IOTA/AZTEC appeared in the UI pool but not in the prompt).
+func removeCandidate(ctx *Context, symbol string) {
+	for i, c := range ctx.CandidateCoins {
+		if market.Normalize(c.Symbol) == market.Normalize(symbol) {
+			ctx.CandidateCoins = append(ctx.CandidateCoins[:i], ctx.CandidateCoins[i+1:]...)
+			return
+		}
+	}
 }
