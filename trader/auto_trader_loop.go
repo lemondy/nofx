@@ -43,6 +43,10 @@ func (at *AutoTrader) runCycle() error {
 	// recorded plan prices (manual cancels, exchange hiccups, missed legs).
 	at.processProtectionWatchdog()
 
+	// Exit metadata: narrow recent 'sync' close reasons + MAE/MFE replay
+	// backfill (bounded per cycle).
+	at.classifyAndEnrichExits()
+
 	// Close DB OPEN rows the exchange no longer holds (one-way netting or
 	// manual closes orphan them — BTWUSDT 09-21). Reporting-only rows:
 	// decisions read the exchange live, this just keeps the books honest.

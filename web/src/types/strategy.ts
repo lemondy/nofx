@@ -215,6 +215,13 @@ export interface RiskControlConfig {
   tp_trim_profit_pct?: number;
   // At ≥ this PnL% the program closes the rest (0 = default 25, negative = off) (CODE ENFORCED)
   tp_full_profit_pct?: number;
+  // R-based trim tier: trim 1/3 at ≥ N× the opening risk (>0 overrides the ROE
+  // tier — leverage-independent; negative = trim off; 0 = legacy ROE field)
+  tp_trim_at_r?: number;
+  // R-based full-close tier: close all at ≥ N× the opening risk (>0 overrides
+  // the ROE tier; negative = tier off — exits owned by the structure TP algo +
+  // trailing stop + drawdown protect; 0 = legacy ROE field)
+  tp_full_at_r?: number;
   // Block open_short when the 1d trend is up (CODE ENFORCED)
   block_short_1d_uptrend?: boolean;
   // Entry timing gate: finest sub-hour TF trend must align with direction (CODE ENFORCED)
@@ -245,6 +252,13 @@ export interface RiskControlConfig {
   peak_drawdown_min_profit_pct?: number;
   // Giveback (of peak) that triggers the protective close (default 55)
   peak_drawdown_max_dd_pct?: number;
+  // R-based drawdown protect: arm when the peak reaches N× the opening risk
+  // (>0 switches the monitor to R units — leverage-independent; 0 = the ROE
+  // fields above)
+  peak_drawdown_arm_r?: number;
+  // R-mode giveback: fraction of the peak surrendered that triggers the close
+  // (0 = default 0.5)
+  peak_drawdown_giveback_r?: number;
   // 1R profit lock: at N× the opening risk the SL moves to entry and 50%
   // is trimmed (0 = default 1R, negative = disabled). While ON it
   // supersedes the ROE trim tier (tp_trim_profit_pct).

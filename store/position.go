@@ -138,8 +138,20 @@ type TraderPosition struct {
 	// the authority across restarts).
 	R1TrimDone bool `gorm:"column:r1_trim_done;default:false" json:"r1_trim_done"`
 	TPTrimDone bool `gorm:"column:tp_trim_done;default:false" json:"tp_trim_done"`
-	CreatedAt  int64 `gorm:"column:created_at" json:"created_at"` // Unix milliseconds UTC
-	UpdatedAt  int64 `gorm:"column:updated_at" json:"updated_at"` // Unix milliseconds UTC
+	// Exit excursion replay over 1m klines (entry_time → exit_time): the max
+	// ADVERSE / max FAVORABLE excursion as % of entry, and the same in R
+	// (÷|entry − initial_stop_loss|) when the write-once anchor exists. The
+	// price-pct form is the durable one — R under any HYPOTHETICAL stop is
+	// pct ÷ that stop's distance% — which is what makes offline exit-ladder
+	// ablation possible without re-replaying. 0 = not replayed yet (the
+	// per-cycle backfill trickles newest-first); -1 = replay attempted and
+	// the window was unreplayable (sentinel, never a physical excursion).
+	MAEPct    float64 `gorm:"column:mae_pct;default:0" json:"mae_pct"`
+	MFEPct    float64 `gorm:"column:mfe_pct;default:0" json:"mfe_pct"`
+	MAER      float64 `gorm:"column:mae_r;default:0" json:"mae_r"`
+	MFER      float64 `gorm:"column:mfe_r;default:0" json:"mfe_r"`
+	CreatedAt int64   `gorm:"column:created_at" json:"created_at"` // Unix milliseconds UTC
+	UpdatedAt int64   `gorm:"column:updated_at" json:"updated_at"` // Unix milliseconds UTC
 }
 
 // TableName returns the table name
@@ -185,6 +197,10 @@ func (s *PositionStore) InitTables() error {
 			s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_exchange_pos_unique ON trader_positions(exchange_id, exchange_position_id) WHERE exchange_position_id != ''`)
 			// New columns on the existing table — AutoMigrate is skipped above.
 			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS initial_stop_loss DOUBLE PRECISION DEFAULT 0`)
+			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION DEFAULT 0`)
+			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION DEFAULT 0`)
+			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_r DOUBLE PRECISION DEFAULT 0`)
+			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_r DOUBLE PRECISION DEFAULT 0`)
 			return nil
 		}
 	}
@@ -336,6 +352,57 @@ func (s *PositionStore) UpdatePositionLeverage(id int64, leverage int) error {
 		"leverage":   leverage,
 		"updated_at": nowMs,
 	}).Error
+}
+
+// UpdateCloseReason re-labels a closed row's exit path. The fill sync stamps
+// every close 'sync' (SL/TP triggers, AI closes and manual closes all land in
+// the same fills); the trader's per-cycle classifier narrows it afterwards
+// using state only it holds (recorded SL/TP, close intents).
+func (s *PositionStore) UpdateCloseReason(id int64, reason string) error {
+	if reason == "" {
+		return nil
+	}
+	nowMs := time.Now().UTC().UnixMilli()
+	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"close_reason": reason,
+		"updated_at":   nowMs,
+	}).Error
+}
+
+// UpdateExitExcursions persists the MAE/MFE replay outcome for one closed row.
+func (s *PositionStore) UpdateExitExcursions(id int64, maePct, mfePct, maeR, mfeR float64) error {
+	nowMs := time.Now().UTC().UnixMilli()
+	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"mae_pct":    maePct,
+		"mfe_pct":    mfePct,
+		"mae_r":      maeR,
+		"mfe_r":      mfeR,
+		"updated_at": nowMs,
+	}).Error
+}
+
+// GetRecentSyncClosed returns this trader's rows closed within the window that
+// still carry the raw 'sync' stamp — the classifier's work queue.
+func (s *PositionStore) GetRecentSyncClosed(traderID string, sinceMs int64, limit int) ([]TraderPosition, error) {
+	var rows []TraderPosition
+	err := s.db.Where(
+		"trader_id = ? AND status = ? AND close_reason = ? AND exit_time >= ?",
+		traderID, "CLOSED", "sync", sinceMs,
+	).Order("exit_time DESC").Limit(limit).Find(&rows).Error
+	return rows, err
+}
+
+// GetClosedMissingExcursions returns closed rows (newest first) that have no
+// excursion replay yet — the MAE/MFE backfill's work queue. Rows where the
+// replay already ran but both excursions are genuinely 0 re-qualify; the
+// replay is idempotent, the cost is an occasional duplicate API call.
+func (s *PositionStore) GetClosedMissingExcursions(traderID string, limit int) ([]TraderPosition, error) {
+	var rows []TraderPosition
+	err := s.db.Where(
+		"trader_id = ? AND status = ? AND exit_time > 0 AND exit_time > entry_time AND mae_pct = 0",
+		traderID, "CLOSED",
+	).Order("exit_time DESC").Limit(limit).Find(&rows).Error
+	return rows, err
 }
 
 // ClosePositionFully marks position as fully closed

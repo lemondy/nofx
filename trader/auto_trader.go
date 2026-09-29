@@ -181,6 +181,8 @@ type AutoTrader struct {
 	tpRunnerDoneMap            map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
 	openTP                     map[string]float64 // recorded decision TP per open position (symbol_side)
 	openTPMu                   sync.RWMutex
+	closeIntents               map[string]closeIntent // program close intents for exit classification (symbol|side → why)
+	closeIntentsMu             sync.Mutex
 }
 
 // Binance hedge legs must use isolated margin for this strategy. Other
@@ -400,6 +402,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		pendingEntries:          make(map[string]*pendingEntry),
 		tpRunnerDoneMap:         make(map[string]bool),
 		openTP:                  make(map[string]float64),
+		closeIntents:            make(map[string]closeIntent),
 		stopMonitorCh:           make(chan struct{}),
 		monitorWg:               sync.WaitGroup{},
 		peakPnLCache:            make(map[string]float64),

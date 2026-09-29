@@ -206,6 +206,75 @@ export function RiskControlEditor({
  style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
  >
  <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+ {'止盈阶梯 R 档(R 单位,优先于上面的 ROE 档)'}
+ </label>
+ <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+ {'ROE 档随杠杆漂移(15% ROE ≈ 0.5R@10x / 1.67R@3x),R 档与杠杆无关。>0 = 该 R 值生效并覆盖 ROE 档;负数 = 该档关闭;0 = 用上面的 ROE 兼容档'}
+ </p>
+ <div className="flex gap-4">
+ <div>
+ <label className="block text-xs mb-1" style={{ color: '#6E6E60' }}>
+ {'减仓 1/3 触发 (R)'}
+ </label>
+ <input
+ type="number"
+ step={0.1}
+ value={config.tp_trim_at_r ?? 0}
+ onChange={(e) =>
+ updateField(
+ 'tp_trim_at_r',
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
+ )
+ }
+ disabled={disabled}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ </div>
+ <div>
+ <label className="block text-xs mb-1" style={{ color: '#6E6E60' }}>
+ {'全部平仓触发 (R;负数=关闭)'}
+ </label>
+ <input
+ type="number"
+ step={0.1}
+ value={config.tp_full_at_r ?? 0}
+ onChange={(e) =>
+ updateField(
+ 'tp_full_at_r',
+ e.target.value === '' ? 0 : parseFloat(e.target.value)
+ )
+ }
+ disabled={disabled}
+ className="w-32 px-3 py-2 rounded"
+ style={{
+ background: '#E9E4D6',
+ border: '1px solid #C0B9A2',
+ color: '#1E1E1A',
+ }}
+ />
+ </div>
+ </div>
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+ {(() => {
+ const trimR = config.tp_trim_at_r ?? 0
+ const fullR = config.tp_full_at_r ?? 0
+ const trimTxt = trimR > 0 ? `${trimR}R 减仓 1/3` : trimR < 0 ? '减仓档关' : '减仓走 ROE 档'
+ const fullTxt = fullR > 0 ? `${fullR}R 全平` : fullR < 0 ? '全平档关(归结构位TP+移动止损+回撤保护)' : '全平走 ROE 档'
+ return `当前生效: ${trimTxt};${fullTxt}`
+ })()}
+ </p>
+ </div>
+
+ <div
+ className="p-4 rounded-lg"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
  {ts(riskControl.profitLockAtR, language)}
  </label>
  <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
@@ -863,6 +932,58 @@ export function RiskControlEditor({
    />
   </div>
  </div>
+ <div className="grid grid-cols-2 gap-3 mt-3">
+  <div>
+   <label className="block text-xs mb-1" style={{ color: '#6E6E60' }}>
+    R 档起征 (×初始止损距离;>0 启用,替代上面的 ROE 档)
+   </label>
+   <input
+    type="number"
+    step={0.1}
+    value={config.peak_drawdown_arm_r ?? 0}
+    onChange={(e) =>
+     updateField('peak_drawdown_arm_r', e.target.value === '' ? 0 : parseFloat(e.target.value))
+    }
+    disabled={disabled}
+    className="w-24 px-3 py-2 rounded"
+    style={{
+     background: '#E9E4D6',
+     border: '1px solid #C0B9A2',
+     color: '#1E1E1A',
+    }}
+   />
+  </div>
+  <div>
+   <label className="block text-xs mb-1" style={{ color: '#6E6E60' }}>
+    R 档回吐比例 (0-1,0=默认 0.5)
+   </label>
+   <input
+    type="number"
+    step={0.05}
+    value={config.peak_drawdown_giveback_r ?? 0}
+    onChange={(e) =>
+     updateField('peak_drawdown_giveback_r', e.target.value === '' ? 0 : parseFloat(e.target.value))
+    }
+    disabled={disabled}
+    className="w-24 px-3 py-2 rounded"
+    style={{
+     background: '#E9E4D6',
+     border: '1px solid #C0B9A2',
+     color: '#1E1E1A',
+    }}
+   />
+  </div>
+ </div>
+ <p className="text-xs mt-2 font-medium" style={{ color: '#2E7D4F' }}>
+  {(() => {
+   const armR = config.peak_drawdown_arm_r ?? 0
+   if (armR > 0) {
+    const gb = (config.peak_drawdown_giveback_r ?? 0) > 0 ? (config.peak_drawdown_giveback_r ?? 0) : 0.5
+    return `当前生效: R 档 — 峰值 ≥ ${armR}R 后回吐 ≥ ${gb * 100}% 平仓(与杠杆无关)`
+   }
+   return '当前生效: ROE 档(随杠杆漂移)'
+  })()}
+ </p>
  </div>
  </div>
  </div>

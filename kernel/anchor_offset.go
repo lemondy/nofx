@@ -326,6 +326,73 @@ func BreakevenArmR(rc *store.RiskControlConfig) float64 {
 	return rc.BreakevenArmR
 }
 
+// TpTrimAtR resolves the R-based trim tier: >0 = active at that R (overrides
+// the legacy ROE tier), <0 = trim tier off, 0 = fall back to TpTrimProfitPct.
+func TpTrimAtR(rc *store.RiskControlConfig) float64 {
+	if rc == nil {
+		return 0
+	}
+	return rc.TPTrimAtR
+}
+
+// TpFullAtR resolves the R-based full-close tier: >0 = active at that R,
+// <0 = the full tier is OFF (exits owned by the structure TP algo, the
+// trailing stop and drawdown-protect), 0 = fall back to TpFullProfitPct.
+func TpFullAtR(rc *store.RiskControlConfig) float64 {
+	if rc == nil {
+		return 0
+	}
+	return rc.TPFullAtR
+}
+
+// TpLadderUsesR reports whether the TP ladder runs on R units (either R tier
+// configured ≠0). When true the drawdown monitor prices the ladder with
+// TpTierActionR and the legacy ROE fields are dead text.
+func TpLadderUsesR(rc *store.RiskControlConfig) bool {
+	return rc != nil && (rc.TPTrimAtR != 0 || rc.TPFullAtR != 0)
+}
+
+// PeakDrawdownArmR resolves the R-based drawdown-protect arm: >0 = the
+// monitor runs on R units, 0 = legacy leveraged-ROE fields.
+func PeakDrawdownArmR(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.PeakDrawdownArmR <= 0 {
+		return 0
+	}
+	return rc.PeakDrawdownArmR
+}
+
+// PeakDrawdownGivebackR resolves the giveback fraction of the peak (0-1)
+// that triggers the R-mode protective close: 0/unset = 0.5 default.
+func PeakDrawdownGivebackR(rc *store.RiskControlConfig) float64 {
+	if rc == nil || rc.PeakDrawdownGivebackR <= 0 {
+		return 0.5
+	}
+	if rc.PeakDrawdownGivebackR >= 1 {
+		return 0.99 // a giveback of the WHOLE peak (or more) never fires
+	}
+	return rc.PeakDrawdownGivebackR
+}
+
+// TpTierActionR is the R-unit form of TpTierAction: pnlR is the position's
+// favorable excursion in R (÷ the OPENING stop distance), same ladder shape
+// (full → trim), same yields-to-lock flags. The R tiers exist because the
+// ROE tiers moved with the model-chosen leverage — see RiskControlConfig.
+func TpTierActionR(pnlR float64, trimDone bool, rc *store.RiskControlConfig) string {
+	lockActive := ProfitLockRMult(rc) > 0
+	if full := TpFullAtR(rc); full > 0 && pnlR >= full {
+		if !(lockActive && rc != nil && rc.TpFullYieldsToLock) {
+			return "full"
+		}
+	}
+	if lockActive && rc != nil && rc.TrimYieldsToLock() {
+		return "" // the 1R lock supersedes the trim tier (same rule as TpTierAction)
+	}
+	if trim := TpTrimAtR(rc); trim > 0 && !trimDone && pnlR >= trim {
+		return "trim"
+	}
+	return ""
+}
+
 // TPCloseFraction resolves the fraction of the position the take-profit algo
 // closes at the planned structure level: 0/unset = 0.5 default (09-21 user
 // experiment — a resting full-size TP structurally sold every spike top:

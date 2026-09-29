@@ -697,6 +697,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	}
 
 	// Close position
+	at.markCloseIntent(decision.Symbol, "long", "ai_close")
 	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = close all
 	if err != nil {
 		return err
@@ -771,6 +772,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	}
 
 	// Close position
+	at.markCloseIntent(decision.Symbol, "short", "ai_close")
 	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = close all
 	if err != nil {
 		return err

@@ -462,6 +462,32 @@ type RiskControlConfig struct {
 	// actual with zero winners scratched. (CODE ENFORCED when >0)
 	BreakevenArmR float64 `json:"breakeven_arm_r"`
 
+	// TpTrimAtR / TPFullAtR: R-based TP-ladder tiers — 2026-09-29 unit
+	// unification. The legacy tp_trim_profit_pct / tp_full_profit_pct price
+	// their tiers in leveraged ROE, so the SAME signal exits at different
+	// points depending on the leverage the model happens to report (15% ROE
+	// ≈ 0.5R at 10× but 1.67R at 3× on a 3.5% stop), and the live 120%-ROE
+	// full tier is unreachable at 3× (a 40% price move). R units make the
+	// ladder a function of the trade's risk structure, not of leverage.
+	//   >0  — the R tier overrides the legacy ROE field;
+	//   <0  — that tier is OFF (the full tier's job is owned by the structure
+	//         TP algo + trailing stop + drawdown-protect);
+	//    0  — fall back to the legacy ROE field (back-compat).
+	// Exchange SL/TP and drawdown-protect unaffected. (CODE ENFORCED when ≠0)
+	TPTrimAtR float64 `json:"tp_trim_at_r"`
+	TPFullAtR float64 `json:"tp_full_at_r"`
+	// PeakDrawdownArmR / PeakDrawdownGivebackR: R-based drawdown protect —
+	// when the peak favorable excursion reaches ArmR × initial risk and then
+	// gives back ≥ GivebackR of that peak, the program closes. The legacy
+	// peak_drawdown_min_profit_pct/max_dd_pct pair (5%/55% leveraged ROE)
+	// arms at 0.42R on a typical 3×/4%-stop position — the same price zone
+	// as the 0.5R breakeven arm, i.e. it closes winners in pure noise.
+	// ArmR > 0 switches the drawdown monitor to R units (GivebackR is a
+	// fraction of the peak, 0 = default 0.5); 0 = legacy ROE fields.
+	// (CODE ENFORCED when ArmR > 0)
+	PeakDrawdownArmR      float64 `json:"peak_drawdown_arm_r"`
+	PeakDrawdownGivebackR float64 `json:"peak_drawdown_giveback_r"`
+
 	// TpTrimYieldsToLock: whether the ROE trim tier (tp_trim_profit_pct)
 	// yields to an active 1R lock. nil/true = 09-21 default — the lock
 	// supersedes the trim tier entirely, so tp_trim_profit_pct is DEAD TEXT

@@ -164,6 +164,34 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			currentPnLPct = ((entryPrice - markPrice) / entryPrice) * float64(leverage) * 100
 		}
 
+		// R-mode yardstick (2026-09-29 unit unification): the favorable
+		// excursion in R against the WRITE-ONCE opening stop — the same anchor
+		// the 1R lock prices. Unlike the ROE number above it does not move
+		// with the leverage the model happened to report for this trade.
+		rcRef := &at.config.StrategyConfig.RiskControl
+		ladderR := kernel.TpLadderUsesR(rcRef)
+		ddArmR := kernel.PeakDrawdownArmR(rcRef)
+		var pnlR float64
+		if ladderR || ddArmR > 0 {
+			anchor := at.initialStopAnchor(symbol, side, at.GetRecordedStopLoss(symbol, side))
+			if anchor > 0 && entryPrice > 0 {
+				if riskDist := math.Abs(entryPrice - anchor); riskDist > 0 {
+					fav := markPrice - entryPrice
+					if side != "long" {
+						fav = entryPrice - markPrice
+					}
+					pnlR = fav / riskDist
+				}
+			}
+		}
+		// The value the shared peak cache tracks: R when the drawdown protect
+		// runs on R units, leveraged ROE otherwise. The mode is fixed per
+		// process (config loads at start), so a cache never mixes units.
+		protectValue := currentPnLPct
+		if ddArmR > 0 {
+			protectValue = pnlR
+		}
+
 		// Construct unique position identifier (distinguish long/short)
 		posKey := symbol + "_" + side
 
@@ -174,11 +202,11 @@ func (at *AutoTrader) checkPositionDrawdown() {
 
 		if !exists {
 			// If no historical peak record, use current P&L as initial value
-			peakPnLPct = currentPnLPct
-			at.UpdatePeakPnL(symbol, side, currentPnLPct)
+			peakPnLPct = protectValue
+			at.UpdatePeakPnL(symbol, side, protectValue)
 		} else {
 			// Update peak cache
-			at.UpdatePeakPnL(symbol, side, currentPnLPct)
+			at.UpdatePeakPnL(symbol, side, protectValue)
 		}
 
 		// Calculate drawdown (magnitude of decline from peak)
@@ -202,12 +230,25 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				}
 			}
 		}
-		switch kernel.TpTierAction(currentPnLPct, trimDone, &at.config.StrategyConfig.RiskControl) {
+		// Ladder verdict: R units when the R tiers are configured, legacy
+		// leveraged ROE otherwise (TpLadderUsesR). Both share the same tier
+		// shape and yields-to-lock flags.
+		var ladderAction string
+		if ladderR {
+			ladderAction = kernel.TpTierActionR(pnlR, trimDone, rcRef)
+		} else {
+			ladderAction = kernel.TpTierAction(currentPnLPct, trimDone, rcRef)
+		}
+		switch ladderAction {
 		case "full":
-			logger.Infof("🎯 TP ladder FULL close: %s %s | PnL %.2f%% ≥ %.0f%%", symbol, side, currentPnLPct, kernel.TpFullProfitPct(&at.config.StrategyConfig.RiskControl))
-			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 止盈全平 %s (%s)</b>\n浮盈 <code>%.2f%%</code> ≥ %.0f%%,程序全部平仓锁定利润。",
-				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], currentPnLPct, kernel.TpFullProfitPct(&at.config.StrategyConfig.RiskControl)))
-			if err := at.emergencyClosePosition(symbol, side); err != nil {
+			fullTxt := fmt.Sprintf("PnL %.2f%% ≥ %.0f%%", currentPnLPct, kernel.TpFullProfitPct(rcRef))
+			if ladderR {
+				fullTxt = fmt.Sprintf("PnL %.2fR ≥ %.1fR", pnlR, kernel.TpFullAtR(rcRef))
+			}
+			logger.Infof("🎯 TP ladder FULL close: %s %s | %s", symbol, side, fullTxt)
+			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 止盈全平 %s (%s)</b>\n浮盈 <code>%s</code>,程序全部平仓锁定利润。",
+				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], fullTxt))
+			if err := at.closePositionReasoned(symbol, side, "tp_full"); err != nil {
 				logger.Infof("❌ TP full close failed (%s %s): %v — retries next cycle", symbol, side, err)
 			} else {
 				// Consume the one-shot flags on SUCCESS only: the full tier
@@ -236,7 +277,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			}
 			if remainder := quantity * (2.0 / 3.0) * markPrice; remainder < minSize {
 				logger.Infof("🎯 TP ladder TRIM: %s %s remainder %.2f below min %.2f — closing fully instead of leaving dust", symbol, side, remainder, minSize)
-				if err := at.emergencyClosePosition(symbol, side); err != nil {
+				if err := at.closePositionReasoned(symbol, side, "tp_trim"); err != nil {
 					logger.Infof("❌ TP dust-safe full close failed (%s %s): %v — retries next cycle", symbol, side, err)
 				} else {
 					at.tpTrimMutex.Lock()
@@ -247,10 +288,15 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				continue
 			}
 			trimQty := quantity / 3
-			logger.Infof("🎯 TP ladder TRIM: %s %s | PnL %.2f%% ≥ %.0f%% — trimming 1/3 (%.6g)", symbol, side, currentPnLPct, kernel.TpTrimProfitPct(&at.config.StrategyConfig.RiskControl), trimQty)
-			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 止盈减仓 1/3 %s (%s)</b>\n浮盈 <code>%.2f%%</code> ≥ %.0f%%,程序市价减仓 1/3。",
-				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], currentPnLPct, kernel.TpTrimProfitPct(&at.config.StrategyConfig.RiskControl)))
+			trimTxt := fmt.Sprintf("PnL %.2f%% ≥ %.0f%%", currentPnLPct, kernel.TpTrimProfitPct(rcRef))
+			if ladderR {
+				trimTxt = fmt.Sprintf("PnL %.2fR ≥ %.1fR", pnlR, kernel.TpTrimAtR(rcRef))
+			}
+			logger.Infof("🎯 TP ladder TRIM: %s %s | %s — trimming 1/3 (%.6g)", symbol, side, trimTxt, trimQty)
+			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 止盈减仓 1/3 %s (%s)</b>\n浮盈 <code>%s</code>,程序市价减仓 1/3。",
+				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], trimTxt))
 			var err error
+			at.markCloseIntent(symbol, side, "tp_trim")
 			if side == "long" {
 				_, err = at.trader.CloseLong(symbol, trimQty)
 			} else {
@@ -271,17 +317,32 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			continue
 		}
 
-		// Check close condition — thresholds from strategy risk_control
-		// (peak_drawdown_min_profit_pct / peak_drawdown_max_dd_pct, defaults 5/55).
+		// Check close condition. R mode (peak_drawdown_arm_r > 0): the peak
+		// (in R) reached the arm and ≥ giveback_r of it was surrendered —
+		// leverage-independent, unlike the legacy leveraged-ROE pair
+		// (peak_drawdown_min_profit_pct / peak_drawdown_max_dd_pct, 5/55).
 		minProfit, maxDD := at.drawdownProtectThresholds()
-		if currentPnLPct > minProfit && drawdownPct >= maxDD {
-			logger.Infof("🚨 Drawdown close position condition triggered: %s %s | Current profit: %.2f%% | Peak profit: %.2f%% | Drawdown: %.2f%% (thresholds: >%.1f%% & ≥%.1f%%)",
-				symbol, side, currentPnLPct, peakPnLPct, drawdownPct, minProfit, maxDD)
-			notify.Notify("RISK", at.name, fmt.Sprintf("<b>🚨 回撤保护平仓 %s (%s)</b>\n浮盈峰值 <code>%.2f%%</code> → 当前 <code>%.2f%%</code>(回撤 %.1f%% ≥ %.1f%%)\n触发保护性平仓锁定利润。",
-				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], peakPnLPct, currentPnLPct, drawdownPct, maxDD))
+		var protectClose bool
+		var closeDesc string
+		if ddArmR > 0 {
+			giveback := kernel.PeakDrawdownGivebackR(rcRef)
+			gb := 0.0
+			if peakPnLPct > 0 {
+				gb = (peakPnLPct - protectValue) / peakPnLPct
+			}
+			protectClose = peakPnLPct >= ddArmR && gb >= giveback
+			closeDesc = fmt.Sprintf("峰值 %.2fR → 当前 %.2fR(回吐 %.0f%% ≥ %.0f%%,arm %.1fR)", peakPnLPct, protectValue, gb*100, giveback*100, ddArmR)
+		} else {
+			protectClose = currentPnLPct > minProfit && drawdownPct >= maxDD
+			closeDesc = fmt.Sprintf("Current profit: %.2f%% | Peak profit: %.2f%% | Drawdown: %.2f%% (thresholds: >%.1f%% & ≥%.1f%%)", currentPnLPct, peakPnLPct, drawdownPct, minProfit, maxDD)
+		}
+		if protectClose {
+			logger.Infof("🚨 Drawdown close position condition triggered: %s %s | %s", symbol, side, closeDesc)
+			notify.Notify("RISK", at.name, fmt.Sprintf("<b>🚨 回撤保护平仓 %s (%s)</b>\n<i>%s</i>\n触发保护性平仓锁定利润。",
+				notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], closeDesc))
 
 			// Execute close position
-			if err := at.emergencyClosePosition(symbol, side); err != nil {
+			if err := at.closePositionReasoned(symbol, side, "drawdown_protect"); err != nil {
 				logger.Infof("❌ Drawdown close position failed (%s %s): %v", symbol, side, err)
 				notify.Notify("ALERT", at.name, fmt.Sprintf("<b>❌ 回撤保护平仓失败 %s (%s)</b>\n<code>%s</code>\n请人工检查持仓！",
 					notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], notify.Escape(err.Error())))
@@ -291,7 +352,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				// Clear cache for this position after closing
 				at.ClearPeakPnLCache(symbol, side)
 			}
-		} else if currentPnLPct > minProfit {
+		} else if ddArmR == 0 && currentPnLPct > minProfit {
 			// Record situations close to close position condition (for debugging)
 			logger.Infof("📊 Drawdown monitoring: %s %s | Profit: %.2f%% | Peak: %.2f%% | Drawdown: %.2f%%",
 				symbol, side, currentPnLPct, peakPnLPct, drawdownPct)
@@ -1287,6 +1348,9 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 		return fmt.Errorf("❌ [RISK CONTROL] partial_close %s rejected: remainder %.2f USDT would be below min position size %.2f USDT; use close_*",
 			decision.Symbol, (qty-trimQty)*markPrice, minSize)
 	}
+	// The final slice auto-closes the row in the fill sync ('sync' stamp) —
+	// mark the intent so the classifier attributes it to the AI, not "external".
+	at.markCloseIntent(decision.Symbol, side, "ai_close")
 	if _, err := at.reducePosition(decision.Symbol, side, trimQty); err != nil {
 		return err
 	}

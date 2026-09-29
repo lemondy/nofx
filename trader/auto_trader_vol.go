@@ -207,6 +207,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			actual := qty * markPrice
 			if minSize := at.config.StrategyConfig.RiskControl.MinPositionSize; target < minSize {
 				// target below tradable size — close the position entirely
+				at.markCloseIntent(symbol, side, "vol_target_reduce")
 				if _, err := at.reducePosition(symbol, side, qty); err == nil {
 					logger.Infof("📉 [%s] Vol-target: %s notional %.2f below min size (target %.2f) — closed", at.name, symbol, actual, target)
 					notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📉 波动率调仓 %s</b>\\n目标仓位 %.2f 低于最小交易单位,已清仓", notify.Escape(symbol), target))
@@ -216,6 +217,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			switch resizeAction(actual, target) {
 			case "reduce":
 				if at.volResizeAllowed(posKey) {
+					at.markCloseIntent(symbol, side, "vol_target_reduce")
 					reduceQty := qty - target/markPrice
 					if _, err := at.reducePosition(symbol, side, reduceQty); err == nil {
 						at.markVolResize(posKey)
@@ -309,7 +311,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 					remainder := qty * 0.5 * markPrice
 					if minSize > 0 && remainder < minSize {
 						// remainder would be dust — lock the whole thing instead
-						if err := at.emergencyClosePosition(symbol, side); err == nil {
+						if err := at.closePositionReasoned(symbol, side, "profit_lock_trim"); err == nil {
 							at.tpTrimMutex.Lock()
 							at.r1TrimDone[posKey] = true
 							at.tpTrimDone[posKey] = true
@@ -322,6 +324,7 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 						}
 						continue
 					}
+					at.markCloseIntent(symbol, side, "profit_lock_trim")
 					if _, err := at.reducePosition(symbol, side, qty*0.5); err == nil {
 						at.tpTrimMutex.Lock()
 						at.r1TrimDone[posKey] = true

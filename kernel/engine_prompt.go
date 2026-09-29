@@ -330,10 +330,14 @@ func (e *StrategyEngine) strategyParamsText() string {
 			if e.config.RiskControl.TrimYieldsToLock() {
 				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR 时程序自动市价减仓 50%%,并确保止损至%s;若早期保本档已设到同一价格,此档只执行减仓,不重复移止损", lockR, beTxt))
 			} else {
-				// 分工模式: ROE 减仓档独立生效,锁只管保本(CAPUSDT 09-24)
-				trim := TpTrimProfitPct(&e.config.RiskControl)
-				if trim > 0 {
-					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后 ROE;价格涨幅=该值÷杠杆,折 R=价格涨幅÷初始止损距离,随止损宽度浮动)程序自动市价减仓 1/3(一次);该兼容档执行前必须先将止损收紧到保本或更好", trim))
+				// 分工模式: 减仓档独立生效,锁只管保本(CAPUSDT 09-24)
+				// R 档(tp_trim_at_r>0)优先——ROE 档随杠杆漂移,已弃用
+				if trimR := TpTrimAtR(&e.config.RiskControl); trimR > 0 {
+					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.1fR(=初始止损距离的 %.1f 倍,与杠杆无关)程序自动市价减仓 1/3(一次);该档执行前必须先将止损收紧到保本或更好", trimR, trimR))
+				} else if trimR == 0 {
+					if trim := TpTrimProfitPct(&e.config.RiskControl); trim > 0 {
+						tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后 ROE;价格涨幅=该值÷杠杆,折 R=价格涨幅÷初始止损距离,随止损宽度浮动)程序自动市价减仓 1/3(一次);该兼容档执行前必须先将止损收紧到保本或更好", trim))
+					}
 				}
 				// 09-29 review #1a: with the early breakeven arm enabled the
 				// stop already sits at the lock's breakeven price, so the 1R
@@ -346,8 +350,12 @@ func (e *StrategyEngine) strategyParamsText() string {
 					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序把止损移至%s——此档只保本不再减仓,剩余仓位奔向结构位止盈", lockR, beTxt))
 				}
 			}
-		} else if trim := TpTrimProfitPct(&e.config.RiskControl); trim > 0 {
-			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次),减仓前先将止损收紧到保本或更好", trim))
+		} else if trimR := TpTrimAtR(&e.config.RiskControl); trimR > 0 {
+			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.1fR(与杠杆无关)程序自动市价减仓 1/3(一次),减仓前先将止损收紧到保本或更好", trimR))
+		} else if trimR == 0 {
+			if trim := TpTrimProfitPct(&e.config.RiskControl); trim > 0 {
+				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次),减仓前先将止损收紧到保本或更好", trim))
+			}
 		}
 		// 分批止盈+趋势跑单(09-21 实验): 止盈触发只平一部分,剩余由移动止损
 		// 接管——只在移动止损开启时生效(trader 端 effectiveTPCloseFraction
@@ -356,7 +364,12 @@ func (e *StrategyEngine) strategyParamsText() string {
 		if e.config.RiskControl.TrailingStopEnabled && tpFrac < 1.0 {
 			tpParts = append(tpParts, fmt.Sprintf("结构位止盈触发时程序只平当时剩余仓位的 %.0f%%(基数=触发时的仓位,不是初始仓位;若此前已有减仓,按剩余量计),剩余继续由 2×ATR 移动止损接管(趋势跑单,利润奔跑;强趋势冲破止盈位后的延续行情由它捕捉)", tpFrac*100))
 		}
-		if tpFull := TpFullProfitPct(&e.config.RiskControl); tpFull > 0 {
+		// R 档优先: >0 按 R 渲染, <0 = 档关闭(不再渲染), 0 = legacy ROE 字段
+		if tpFullR := TpFullAtR(&e.config.RiskControl); tpFullR > 0 {
+			tpParts = append(tpParts, fmt.Sprintf("≥%.1fR(与杠杆无关)程序自动全部平仓", tpFullR))
+		} else if tpFullR < 0 {
+			// full 档显式关闭: 全平职责归结构位 TP 算法单 + 移动止损 + 回撤保护
+		} else if tpFull := TpFullProfitPct(&e.config.RiskControl); tpFull > 0 {
 			tpParts = append(tpParts, fmt.Sprintf("≥%.0f%%(杠杆后 ROE;价格涨幅=该值÷杠杆)程序自动全部平仓", tpFull))
 		}
 		if len(tpParts) > 0 {
