@@ -233,6 +233,18 @@ func envProxyHosts() map[string]bool {
 		if raw == "" {
 			continue
 		}
+		// Schemeless values ("127.0.0.1:7890") are accepted by the httpproxy
+		// parser behind http.ProxyFromEnvironment — the transport dials the
+		// proxy — but url.Parse REJECTS them ("first path segment cannot
+		// contain colon"), which left this exemption list empty and the SSRF
+		// guard blocking the operator's own proxy as a private IP (09-30:
+		// every direct-Binance fetch failed, the candidate pool collapsed to
+		// the single universe source that bypasses fapi). Normalize before
+		// parsing so the exemption list always matches what the transport
+		// actually dials.
+		if !strings.Contains(raw, "://") {
+			raw = "http://" + raw
+		}
 		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
 			hosts[u.Hostname()] = true
 		}
