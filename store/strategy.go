@@ -785,7 +785,7 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 如果你发现自己每个周期都在交易 → 标准太低；如果持仓不到30分钟就平仓 → 太冲动。`,
 			EntryStandards: `# 🎯 入场标准（严格）
 
-只在多个信号共振时入场。自由使用任何有效的分析方法，避免单一指标、信号矛盾、横盘震荡、或平仓后立即重新开仓等低质量行为。`,
+只入场程序硬门放行的设置——hard_entry_gate.allowed 及其 failed 阻断码是唯一权威,禁止用原始指标自行重算推翻。放行的设置里按结构与风险回报择优,避免信号矛盾、横盘震荡、或平仓后立即重新开仓等低质量行为。`,
 			DecisionProcess: `# 📋 决策流程
 
 1. 检查持仓 → 是否止盈/止损
@@ -805,7 +805,7 @@ Your task is to make trading decisions based on the provided market data. You ar
 If you find yourself trading every cycle → standards are too low; if closing positions in <30 minutes → too impulsive.`,
 			EntryStandards: `# 🎯 Entry Standards (Strict)
 
-Only enter positions when multiple signals resonate. Freely use any effective analysis methods, avoid low-quality behaviors such as single indicators, contradictory signals, sideways oscillation, or immediately restarting after closing positions.`,
+Only enter setups the program's hard entry gate allows — hard_entry_gate.allowed and its failed codes are the single source of truth; never re-derive or overturn them from raw indicators. Among allowed setups, pick by structure and risk-reward; avoid contradictory signals, sideways oscillation, or immediately restarting after closing positions.`,
 			DecisionProcess: `# 📋 Decision Process
 
 1. Check positions → whether to take profit/stop loss

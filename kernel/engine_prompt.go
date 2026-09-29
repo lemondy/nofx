@@ -214,7 +214,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	if riskControl.LimitEntryEnabled {
 		sb.WriteString("- 开仓路径只看 hard_entry_gate: `allowed=false` 必须 wait;`allowed=true && limit_allowed=true` 默认输出对应 open_*_limit 并逐字复制 entry_price;`allowed=true && limit_allowed=false && market_exception=true` 才可输出市价 open_*,且 confidence≥80。不存在其他例外。\n")
 	}
-	sb.WriteString("- wait: 无方向优势时 wait_bias 省略;方向明确但暂不可执行时填 long/short。hard_entry_gate.failed 存在时 no_trade_reason 逐项复制阻断码,不要改写成反向观点;程序会映射 blocking_factors。方向性 wait 的 next_trigger 必须是`触发事件 + RECHECK_ALL_HARD_GATES`;每周期自动重评,禁止按天/周搁置。\n")
+	sb.WriteString("- wait: 无方向优势时 wait_bias 省略;方向明确但暂不可执行时填 long/short。hard_entry_gate.failed 存在时 no_trade_reason 逐项复制阻断码(去重后最多 4 项,按风险优先级取最重者),不要改写成反向观点;程序会映射 blocking_factors。方向性 wait 的 next_trigger 必须是`触发事件 + RECHECK_ALL_HARD_GATES`;每周期自动重评,禁止按天/周搁置。\n")
 	sb.WriteString("- **持仓管理动作(浮盈/结构变化时用,优先于全平)**:\n")
 	sb.WriteString("  - `adjust_stop_loss`: 只允许收紧到保本或更好;做多新 SL 必须高于旧 SL、低于现价且≥开仓价,做空镜像。\n")
 	sb.WriteString("  - `partial_close_long` / `partial_close_short`(部分平仓): 输出 `close_fraction`(0<frac≤0.5)平掉当前剩余仓位的对应比例。后端按初始数量统计程序自动减仓+LLM减仓,总减仓不得超过75%;若剩余名义价值低于 min size 则拒绝部分平仓,全平用 close_*。\n")
@@ -316,7 +316,8 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。止盈:逐字复制 rr_scan.first_rr_ge_target;usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait。stop_plan_price 与 first_rr_ge_target 必须成对采用,最低RR=%.1f;后端对 TP 与 SL 使用同一 0.05%% 容差强制吸附到该计划\n", rc.MinRiskRewardRatio))
 		var tpParts []string
-		if armR := BreakevenArmR(&e.config.RiskControl); armR > 0 {
+		armR := BreakevenArmR(&e.config.RiskControl)
+		if armR > 0 {
 			beOff := ProfitLockBreakevenOffsetR(&e.config.RiskControl)
 			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.1fR 时程序先把止损移至开仓价+%.2fR(不减仓)", armR, beOff))
 		}
@@ -332,9 +333,18 @@ func (e *StrategyEngine) strategyParamsText() string {
 				// 分工模式: ROE 减仓档独立生效,锁只管保本(CAPUSDT 09-24)
 				trim := TpTrimProfitPct(&e.config.RiskControl)
 				if trim > 0 {
-					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次);该兼容档执行前必须先将止损收紧到保本或更好", trim))
+					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后 ROE;价格涨幅=该值÷杠杆,折 R=价格涨幅÷初始止损距离,随止损宽度浮动)程序自动市价减仓 1/3(一次);该兼容档执行前必须先将止损收紧到保本或更好", trim))
 				}
-				tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序把止损移至%s——此档只保本不再减仓,剩余仓位奔向结构位止盈", lockR, beTxt))
+				// 09-29 review #1a: with the early breakeven arm enabled the
+				// stop already sits at the lock's breakeven price, so the 1R
+				// tier in division-of-labor mode has NO new action — the old
+				// "程序把止损移至…" wording described a no-op as if it moved
+				// something.
+				if armR > 0 {
+					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR:此档无新增动作——止损已由 %.1fR 档移至%s,本模式不减仓(减仓由 ROE 档负责)", lockR, armR, beTxt))
+				} else {
+					tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0fR(1×初始止损距离)程序把止损移至%s——此档只保本不再减仓,剩余仓位奔向结构位止盈", lockR, beTxt))
+				}
 			}
 		} else if trim := TpTrimProfitPct(&e.config.RiskControl); trim > 0 {
 			tpParts = append(tpParts, fmt.Sprintf("浮盈达 %.0f%%(杠杆后)程序自动市价减仓 1/3(一次),减仓前先将止损收紧到保本或更好", trim))
@@ -344,13 +354,13 @@ func (e *StrategyEngine) strategyParamsText() string {
 		// 同条件收拢为全平)。
 		tpFrac := TPCloseFraction(&e.config.RiskControl)
 		if e.config.RiskControl.TrailingStopEnabled && tpFrac < 1.0 {
-			tpParts = append(tpParts, fmt.Sprintf("结构位止盈触发时程序只平 %.0f%% 仓位,剩余继续由 2×ATR 移动止损接管(趋势跑单,利润奔跑;强趋势冲破止盈位后的延续行情由它捕捉)", tpFrac*100))
+			tpParts = append(tpParts, fmt.Sprintf("结构位止盈触发时程序只平当时剩余仓位的 %.0f%%(基数=触发时的仓位,不是初始仓位;若此前已有减仓,按剩余量计),剩余继续由 2×ATR 移动止损接管(趋势跑单,利润奔跑;强趋势冲破止盈位后的延续行情由它捕捉)", tpFrac*100))
 		}
 		if tpFull := TpFullProfitPct(&e.config.RiskControl); tpFull > 0 {
-			tpParts = append(tpParts, fmt.Sprintf("≥%.0f%%(杠杆后)程序自动全部平仓", tpFull))
+			tpParts = append(tpParts, fmt.Sprintf("≥%.0f%%(杠杆后 ROE;价格涨幅=该值÷杠杆)程序自动全部平仓", tpFull))
 		}
 		if len(tpParts) > 0 {
-			params.WriteString("- 程序自动止盈阶梯(强制,独立于你的 TP 规划): " + strings.Join(tpParts, ";") + "。这些由程序按周期自动执行,你无需输出 close 来实现;你的止盈规划仍按结构位给出\n")
+			params.WriteString("- 程序自动止盈阶梯(强制,独立于你的 TP 规划): " + strings.Join(tpParts, ";") + "。这些由程序按周期自动执行,你无需输出 close 来实现;你的止盈规划仍按结构位给出。**75% 累计减仓上限只约束你发起的 partial_close,程序阶梯(TP 算法单/1R/ROE 档)不受其限**\n")
 		}
 		if sp := MaxSpreadPct(&e.config.RiskControl); sp > 0 {
 			params.WriteString(fmt.Sprintf("- 点差门(程序强制): 盘口买卖价差 > %.2f%%(占中间价)的币种,任何 open_*/open_*_limit 都会被程序拒单——薄盘口的点差会吃掉限价优势并抬高市价成本,这类币直接放弃\n", sp))
@@ -1938,7 +1948,7 @@ type blockedCoinRow struct {
 func renderBlockedCoinTable(coins []blockedCoinRow, firstNum int) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("### 双向硬门拦截候选(%d 个,本期一律 wait,细节省略)\n\n", len(coins)))
-	sb.WriteString("统一规则(对本表每一行生效,不再逐行重复): 输出 wait;no_trade_reason 从该行两侧 hard_blockers 去重后按风险优先级选 2-4 项,blocking_factors 使用对应固定枚举;不要展开分析,不要给出表外理由。\n\n")
+	sb.WriteString("统一规则(对本表每一行生效,不再逐行重复): 输出 wait;no_trade_reason 从该行两侧 hard_blockers 去重后按风险优先级选 2-4 项(blocking_factors 由后端映射,无需输出);不要展开分析,不要给出表外理由。\n\n")
 	sb.WriteString("| # | symbol | directional_score | bias(scanner/structure/execution) | hard_blockers.long | hard_blockers.short | history |\n")
 	sb.WriteString("|---|--------|-------------------|-----------------------------------|--------------------|---------------------|---------|\n")
 	for i, bc := range coins {
