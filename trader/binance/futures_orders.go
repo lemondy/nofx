@@ -1043,3 +1043,18 @@ func (t *FuturesTrader) GetOrderStatus(symbol string, orderID string) (map[strin
 
 	return result, nil
 }
+
+// DebugListOpenAlgoOrders returns one summary line per open algo order on
+// the symbol (maintenance-CLI helper, cmd/listalgos).
+func (t *FuturesTrader) DebugListOpenAlgoOrders(symbol string) []string {
+	orders, err := t.client.NewListOpenAlgoOrdersService().Symbol(symbol).Do(context.Background())
+	if err != nil {
+		return []string{fmt.Sprintf("list failed: %v", err)}
+	}
+	out := make([]string, 0, len(orders))
+	for _, a := range orders {
+		out = append(out, fmt.Sprintf("id=%v type=%s side=%s posSide=%s trigger=%s qty=%s status=%s",
+			a.AlgoId, a.OrderType, a.Side, a.PositionSide, a.TriggerPrice, a.Quantity, a.AlgoStatus))
+	}
+	return out
+}
