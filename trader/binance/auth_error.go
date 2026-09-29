@@ -18,6 +18,28 @@ import (
 // configuration is pointless — the operator must act.
 var ErrAuthOrIP = errors.New("binance auth/IP error (-2015/-2014)")
 
+// ErrStaleStopOrder marks Binance -4130 (an open stop/TP with GTE +
+// closePosition already exists in that direction). The old leg carries a
+// STALE trigger price — for the stop-loss this means the position is
+// protected at the wrong level, not unprotected. Retry semantics: cancel
+// the side's stale legs once, then re-place at the new price.
+var ErrStaleProtectiveOrder = errors.New("binance stale protective order (-4130)")
+
+// isStaleProtectiveOrder reports whether err is a Binance -4130.
+func isStaleProtectiveOrder(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrStaleProtectiveOrder) {
+		return true
+	}
+	var apiErr *common.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Code == -4130
+	}
+	return false
+}
+
 // IsAuthOrIPError reports whether err is a Binance -2015/-2014 auth error
 // (directly or wrapped).
 func IsAuthOrIPError(err error) bool {
