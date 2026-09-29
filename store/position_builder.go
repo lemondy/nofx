@@ -56,6 +56,13 @@ func (pb *PositionBuilder) handleOpen(
 
 	nowMs := time.Now().UTC().UnixMilli()
 	if existing == nil {
+		// Ownership stamp at row creation (09-28 review P3): AI open paths
+		// mark the ai_managed registry BEFORE placing the order, so a row
+		// born while the mark exists belongs to the AI's book — manual fills
+		// averaging into it keep the first-open ownership. The loss-streak
+		// circuit breaker consumes this flag to keep manual trades (and
+		// other traders sharing the account) out of the AI's streak.
+		aiOwned := NewAIManagedStore(pb.positionStore.db).IsMarked(traderID, symbol, strings.ToLower(side))
 		// Create new position
 		position := &TraderPosition{
 			TraderID:           traderID,
@@ -72,6 +79,7 @@ func (pb *PositionBuilder) handleOpen(
 			Status:             "OPEN",
 			Source:             "sync",
 			Fee:                fee,
+			AIManaged:          aiOwned,
 			CreatedAt:          nowMs,
 			UpdatedAt:          nowMs,
 		}
@@ -161,6 +169,21 @@ func (pb *PositionBuilder) handleClose(
 
 		logger.Infof("  ✅ Full close: %s %s %.6f @ %.2f (avg exit: %.2f, entry: %.2f, PnL: %.2f)",
 			symbol, side, closeQty, price, finalExitPrice, position.EntryPrice, totalPnL)
+
+		// Close-time ownership re-check (09-28 review P3): the registry mark
+		// can still exist when OrderSync closes a row the open-time stamp
+		// missed (the one-time seedAIManagedOnce migration's pre-existing
+		// positions). ONLY rows created before their mark qualify — a manual
+		// row sharing the symbol+side with an active AI position was created
+		// unmarked because the mark did not exist yet, and must stay manual
+		// (regression caught by TestLossStreakIgnoresManualTrades: a manual
+		// win on the same symbol+side was stamped AI and reset the streak).
+		if !position.AIManaged && NewAIManagedStore(pb.positionStore.db).MarkedAfter(
+			traderID, symbol, strings.ToLower(side), time.UnixMilli(position.CreatedAt)) {
+			if err := pb.positionStore.SetAIManaged(position.ID); err != nil {
+				logger.Infof("  ⚠️  Failed to stamp ai_managed on closing row %d (%s %s): %v", position.ID, symbol, side, err)
+			}
+		}
 
 		return pb.positionStore.ClosePositionFully(
 			position.ID,

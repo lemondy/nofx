@@ -298,44 +298,40 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 
 	at.markAIManaged(decision.Symbol, "long")
 	at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
-	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
+	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
 	return nil
 }
 
-// reportFillSlippageRR (B2-附, QUANT_REVIEW 09-22, observability only): a
-// market open validated RR at the pre-trade ticker, but fills at avgPrice —
+// fillSlippageAlertBps: slippage worth an alert — 1% of the checked price.
+// Below that a fast-market fill is routine and stays out of the alert channel.
+const fillSlippageAlertBps = 100
+
+// reportFillSlippage (B2-附, QUANT_REVIEW 09-22, observability only): a
+// market open validated RR at the pre-trade ticker but fills at avgPrice —
 // in a fast market the fill can be the far side of the move (the
-// crossed-anchor fallback is exactly such a moment). Compute realized RR at
-// the actual fill and alert when it lands below min_rr; SL/TP have already
-// re-anchored to the fill, so the trade remains correctly protected — this
-// makes the slippage cost VISIBLE instead of silently absorbed.
-func (at *AutoTrader) reportFillSlippageRR(decision *kernel.Decision, checkedPrice, fillPrice float64) {
-	if fillPrice <= 0 || fillPrice == checkedPrice || decision.StopLoss <= 0 || decision.TakeProfit <= 0 {
-		return
+// crossed-anchor fallback is exactly such a moment).
+//
+// 09-28 review: the protective reanchor is a distance-preserving
+// translation (newSL = origSL + (fill−ref)), so realized RR at the fill
+// ALWAYS equals the planned RR — the old "realized RR < min_rr" alert was
+// structurally dead and could never fire. What a fill actually degrades is
+// ENTRY QUALITY: this now reports the fill-vs-checked slippage and alerts
+// when it crosses fillSlippageAlertBps. Returns the slippage in basis
+// points and whether it alerted (pure for tests; notify fires on alert).
+func (at *AutoTrader) reportFillSlippage(decision *kernel.Decision, checkedPrice, fillPrice float64) (float64, bool) {
+	if fillPrice <= 0 || checkedPrice <= 0 || fillPrice == checkedPrice {
+		return 0, false
 	}
-	minRR := 1.5
-	if at.config.StrategyConfig != nil {
-		if v := at.config.StrategyConfig.RiskControl.MinRiskRewardRatio; v > 0 {
-			minRR = v
-		}
+	slippageBps := math.Abs((fillPrice - checkedPrice) / checkedPrice * 10000)
+	if slippageBps < fillSlippageAlertBps {
+		return slippageBps, false
 	}
-	risk := math.Abs(fillPrice - decision.StopLoss)
-	reward := math.Abs(decision.TakeProfit - fillPrice)
-	if risk <= 0 {
-		return
-	}
-	rr := reward / risk
-	if rr < minRR {
-		slippageBps := (fillPrice - checkedPrice) / checkedPrice * 10000
-		if slippageBps < 0 {
-			slippageBps = -slippageBps
-		}
-		logger.Warnf("⚠️ [%s] %s %s filled @ %.6g (checked @ %.6g, %.0fbps away): realized RR %.2f < min_rr %.2f — setup degraded by the fill; protection re-anchored at fill",
-			at.name, decision.Action, decision.Symbol, fillPrice, checkedPrice, slippageBps, rr, minRR)
-		notify.Notify("ALERT", at.name, fmt.Sprintf(
-			"<b>⚠️ 市价成交 RR 劣化 %s</b>\n校验价 %.6g → 成交价 <code>%.6g</code>(%.0fbps),成交 RR <code>%.2f</code> &lt; min_rr %.2f\n保护单已按成交价重新锚定,请人工复核",
-			notify.Escape(decision.Symbol), checkedPrice, fillPrice, slippageBps, rr, minRR))
-	}
+	logger.Warnf("⚠️ [%s] %s %s filled @ %.6g (checked @ %.6g, %.0fbps away) — entry degraded by the fill; SL/TP re-anchored at the fill so risk/reward distances are intact",
+		at.name, decision.Action, decision.Symbol, fillPrice, checkedPrice, slippageBps)
+	notify.Notify("ALERT", at.name, fmt.Sprintf(
+		"<b>⚠️ 市价成交滑点 %s</b>\n校验价 %.6g → 成交价 <code>%.6g</code>(滑点 <code>%.0f</code>bps)\nSL/TP 已按成交价重新锚定,风险回报距离不变;入场质量劣化,请知悉",
+		notify.Escape(decision.Symbol), checkedPrice, fillPrice, slippageBps))
+	return slippageBps, true
 }
 
 // executeOpenShortWithRecord executes open short position and records detailed information
@@ -488,7 +484,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 
 	at.markAIManaged(decision.Symbol, "short")
 	at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
-	at.reportFillSlippageRR(decision, marketData.CurrentPrice, fillPrice)
+	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
 	return nil
 }
 

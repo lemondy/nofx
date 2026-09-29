@@ -102,6 +102,13 @@ func (at *AutoTrader) lossStreakBannedMap(maxLosses int) map[string]time.Time {
 		if p.ExitTime <= 0 {
 			continue
 		}
+		// AI-book attribution (09-28 review P3): order sync ingests the
+		// WHOLE exchange account — a manual win on symbol X would reset the
+		// AI's forming 3-loss streak and a manual loss would extend it.
+		// Only AI-attributed closes feed the breaker.
+		if !p.AIManaged {
+			continue
+		}
 		key := market.Normalize(p.Symbol)
 		bySymbol[key] = append(bySymbol[key], p)
 	}
@@ -132,7 +139,9 @@ func (at *AutoTrader) lossStreakBlocks(symbol string, maxLosses int) (bool, stri
 	normalized := market.Normalize(symbol)
 	filtered := make([]store.TraderPosition, 0, len(positions))
 	for _, p := range positions {
-		if market.Normalize(p.Symbol) == normalized && p.ExitTime > 0 {
+		// AI-book attribution only (09-28 review P3) — manual closes on the
+		// shared account must not reset or extend the AI's streak.
+		if market.Normalize(p.Symbol) == normalized && p.ExitTime > 0 && p.AIManaged {
 			filtered = append(filtered, p)
 		}
 	}

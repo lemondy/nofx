@@ -623,6 +623,30 @@ func appendUniqueSource(sources []string, tag string) []string {
 	return append(sources, tag)
 }
 
+// staticCoinCandidates expands the configured static list with per-symbol
+// dedup (09-28 review P3): a repeated entry in custom_coins rendered twice
+// in the prompt's candidate section — duplicated market data, duplicated
+// decision budget. Empty normalized symbols are skipped.
+func (e *StrategyEngine) staticCoinCandidates(coinSource store.CoinSourceConfig) []CandidateCoin {
+	candidates := make([]CandidateCoin, 0, len(coinSource.StaticCoins))
+	seen := make(map[string]bool, len(coinSource.StaticCoins))
+	for _, raw := range coinSource.StaticCoins {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		symbol := market.Normalize(raw)
+		if seen[symbol] {
+			continue
+		}
+		seen[symbol] = true
+		candidates = append(candidates, CandidateCoin{
+			Symbol:  symbol,
+			Sources: []string{"static"},
+		})
+	}
+	return candidates
+}
+
 func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	var candidates []CandidateCoin
 	symbolSources := make(map[string][]string)
@@ -631,13 +655,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 
 	switch coinSource.SourceType {
 	case "static":
-		for _, symbol := range coinSource.StaticCoins {
-			symbol = market.Normalize(symbol)
-			candidates = append(candidates, CandidateCoin{
-				Symbol:  symbol,
-				Sources: []string{"static"},
-			})
-		}
+		candidates = append(candidates, e.staticCoinCandidates(coinSource)...)
 
 		return e.filterExcludedCoins(candidates), nil
 
@@ -645,13 +663,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// Check use_ai500 flag; if false, fall back to static coins
 		if !coinSource.UseAI500 {
 			logger.Infof("⚠️  source_type is 'ai500' but use_ai500 is false, falling back to static coins")
-			for _, symbol := range coinSource.StaticCoins {
-				symbol = market.Normalize(symbol)
-				candidates = append(candidates, CandidateCoin{
-					Symbol:  symbol,
-					Sources: []string{"static"},
-				})
-			}
+			candidates = append(candidates, e.staticCoinCandidates(coinSource)...)
 			return e.filterExcludedCoins(candidates), nil
 		}
 		coins, err := e.getAI500Coins(coinSource.AI500Limit)
@@ -665,13 +677,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// Check use_oi_top flag; if false, fall back to static coins
 		if !coinSource.UseOITop {
 			logger.Infof("⚠️  source_type is 'oi_top' but use_oi_top is false, falling back to static coins")
-			for _, symbol := range coinSource.StaticCoins {
-				symbol = market.Normalize(symbol)
-				candidates = append(candidates, CandidateCoin{
-					Symbol:  symbol,
-					Sources: []string{"static"},
-				})
-			}
+			candidates = append(candidates, e.staticCoinCandidates(coinSource)...)
 			return e.filterExcludedCoins(candidates), nil
 		}
 		coins, err := e.getOITopCoins(coinSource.OITopLimit)
@@ -685,13 +691,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// OI decrease ranking, suitable for short positions
 		if !coinSource.UseOILow {
 			logger.Infof("⚠️  source_type is 'oi_low' but use_oi_low is false, falling back to static coins")
-			for _, symbol := range coinSource.StaticCoins {
-				symbol = market.Normalize(symbol)
-				candidates = append(candidates, CandidateCoin{
-					Symbol:  symbol,
-					Sources: []string{"static"},
-				})
-			}
+			candidates = append(candidates, e.staticCoinCandidates(coinSource)...)
 			return e.filterExcludedCoins(candidates), nil
 		}
 		coins, err := e.getOILowCoins(coinSource.OILowLimit)
@@ -725,13 +725,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// All Hyperliquid perp coins
 		if !coinSource.UseHyperAll {
 			logger.Infof("⚠️  source_type is 'hyper_all' but use_hyper_all is false, falling back to static coins")
-			for _, symbol := range coinSource.StaticCoins {
-				symbol = market.Normalize(symbol)
-				candidates = append(candidates, CandidateCoin{
-					Symbol:  symbol,
-					Sources: []string{"static"},
-				})
-			}
+			candidates = append(candidates, e.staticCoinCandidates(coinSource)...)
 			return e.filterExcludedCoins(candidates), nil
 		}
 		coins, err := e.getHyperAllCoins()
@@ -744,13 +738,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// Top N Hyperliquid coins by 24h volume
 		if !coinSource.UseHyperMain {
 			logger.Infof("⚠️  source_type is 'hyper_main' but use_hyper_main is false, falling back to static coins")
-			for _, symbol := range coinSource.StaticCoins {
-				symbol = market.Normalize(symbol)
-				candidates = append(candidates, CandidateCoin{
-					Symbol:  symbol,
-					Sources: []string{"static"},
-				})
-			}
+			candidates = append(candidates, e.staticCoinCandidates(coinSource)...)
 			return e.filterExcludedCoins(candidates), nil
 		}
 		coins, err := e.getHyperMainCoins(coinSource.HyperMainLimit)

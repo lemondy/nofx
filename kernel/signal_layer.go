@@ -1149,13 +1149,18 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 
 // annualizeFunding converts a raw per-settlement funding rate to an
 // annualized percent on the symbol's real settlement interval (8h×3/day
-// fallback when unknown, per-day clamped at ≥1).
+// fallback when unknown, per-day clamped to [1, 24] — the upper bound caps
+// sub-hourly settlement-hours artifacts, keeping 1h the fastest credited
+// interval, 09-28 review P3).
 func annualizeFunding(rate, settleHours float64) float64 {
 	perDay := 3.0
 	if settleHours > 0 {
 		perDay = 24.0 / settleHours
 		if perDay < 1 {
 			perDay = 1
+		}
+		if perDay > 24 {
+			perDay = 24
 		}
 	}
 	return rate * perDay * 365 * 100
@@ -1928,16 +1933,27 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	sig.Trend = classifyTrend(c, fast, slow, fast > 0 && slow > 0)
 
 	if macdLine := market.ExportCalculateMACD(kb); macdLine != 0 {
-		prevLine := market.ExportCalculateMACD(kb[:len(kb)-1])
-		h := macdLine / last.Close * 100 // price-normalized
-		sig.MACDHist = &h
-		switch {
-		case macdLine > prevLine:
-			sig.MACDTrend = "rising"
-		case macdLine < prevLine:
-			sig.MACDTrend = "falling"
-		default:
-			sig.MACDTrend = "flat"
+		// ④ division guard: a single zero close in the vendor tail (the
+		// CoinAnk path does not filter Close>0) would push h to ±Inf and
+		// fail the ENTIRE signal JSON serialization.
+		if last.Close > 0 {
+			h := macdLine / last.Close * 100 // price-normalized
+			sig.MACDHist = &h
+		}
+		// ③ the trend label needs a VALID previous-bar MACD: with exactly
+		// EMA-slow bars, ExportCalculateMACD on kb[:len-1] returns 0
+		// (insufficient data) and the sign comparison mislabels a rising
+		// line as falling and vice versa. prev==0 stays unlabeled
+		// (macd_trend is omitempty).
+		if prevLine := market.ExportCalculateMACD(kb[:len(kb)-1]); prevLine != 0 {
+			switch {
+			case macdLine > prevLine:
+				sig.MACDTrend = "rising"
+			case macdLine < prevLine:
+				sig.MACDTrend = "falling"
+			default:
+				sig.MACDTrend = "flat"
+			}
 		}
 	}
 

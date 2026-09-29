@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"nofx/logger"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,19 @@ func fundingIntervalHours(symbol string) float64 {
 	if !ok || len(times) < 2 {
 		return 0
 	}
+	hours := medianFundingIntervalHours(times)
+	fundingIntervalMap.Store(symbol, &FundingIntervalCache{Hours: hours, UpdatedAt: time.Now()})
+	return hours
+}
+
+// medianFundingIntervalHours: the MEDIAN settlement gap, not the mean
+// (09-28 review P3) — Binance throttles new listings through 1h→4h→8h
+// intervals, and an interval change inside the fetched window poisons the
+// unweighted mean (gaps [1,4,4,8,8] → mean 5.0h vs the true current 4h or
+// 8h basis), skewing the annualized funding that feeds the crowding math.
+// The median is robust to the change boundary. Gaps must already be
+// filtered to (0, 24].
+func medianFundingIntervalHours(times []int64) float64 {
 	var gaps []float64
 	for i := 1; i < len(times); i++ {
 		h := float64(times[i]-times[i-1]) / 3.6e6
@@ -66,13 +80,12 @@ func fundingIntervalHours(symbol string) float64 {
 	if len(gaps) == 0 {
 		return 0
 	}
-	sum := 0.0
-	for _, g := range gaps {
-		sum += g
+	sort.Float64s(gaps)
+	mid := len(gaps) / 2
+	if len(gaps)%2 == 1 {
+		return gaps[mid]
 	}
-	hours := sum / float64(len(gaps))
-	fundingIntervalMap.Store(symbol, &FundingIntervalCache{Hours: hours, UpdatedAt: time.Now()})
-	return hours
+	return (gaps[mid-1] + gaps[mid]) / 2
 }
 
 // Get retrieves market data for the specified token (uses Binance data by default)

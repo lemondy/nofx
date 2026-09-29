@@ -116,6 +116,15 @@ type TraderPosition struct {
 	Status             string  `gorm:"column:status;default:OPEN;index:idx_positions_status" json:"status"`
 	CloseReason        string  `gorm:"column:close_reason;default:''" json:"close_reason"`
 	Source             string  `gorm:"column:source;default:system" json:"source"`
+	// AIManaged: the position belonged to the AI's book (09-28 review P3).
+	// Order sync ingests the WHOLE exchange account, so manual trades (and
+	// other traders sharing the account) fold into these rows — without the
+	// attribution, a manual win resets the AI's loss-streak circuit breaker
+	// and a manual loss extends it. Stamped from the ai_managed_positions
+	// registry at row creation (AI open paths mark BEFORE placing the order,
+	// so the mark always exists by the time OrderSync sees the fill) and
+	// re-checked at close. The loss-streak breaker consumes this flag.
+	AIManaged bool `gorm:"column:ai_managed;default:false" json:"ai_managed"`
 	// InitialStopLoss is the OPENING-risk stop captured at entry (write-once).
 	// It anchors the 1R profit lock — later stop moves (AI tighten, trailing,
 	// breakeven) rewrite only the live stop and must not pull the R bar along.
@@ -567,6 +576,14 @@ func (s *PositionStore) MarkTPTrimDone(traderID, symbol, side string) error {
 		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
 			traderID, symbol, strings.ToUpper(side), "OPEN").
 		Update("tp_trim_done", true).Error
+}
+
+// SetAIManaged stamps the AI-book attribution on one row by id (close-time
+// re-check in the position builder: the registry mark can still exist when
+// OrderSync closes a row the open-time stamp missed, e.g. the one-time
+// seedAIManagedOnce migration's pre-existing positions).
+func (s *PositionStore) SetAIManaged(id int64) error {
+	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Update("ai_managed", true).Error
 }
 
 // ClosePositionWithAccurateData closes a position with accurate data from exchange

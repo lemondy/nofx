@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -66,4 +67,22 @@ func (s *AIManagedStore) List(traderID string) ([]AIManagedPosition, error) {
 	var out []AIManagedPosition
 	err := s.db.Where("trader_id = ?", traderID).Find(&out).Error
 	return out, err
+}
+
+// MarkedAfter reports whether a mark exists for this (trader, symbol, side)
+// that was created AT OR AFTER the given instant. The position builder's
+// close-time re-check uses it to distinguish the one-time seedAIManagedOnce
+// migration's pre-existing rows (created before their mark — AI's book) from
+// manual rows that merely share the symbol+side with an active AI position
+// (created after any mark — created unmarked because the mark did not exist
+// yet, 09-28 review P3 regression: a manual win on the same symbol+side was
+// being stamped AI by the close-time re-check and reset the loss streak).
+func (s *AIManagedStore) MarkedAfter(traderID, symbol, side string, at time.Time) bool {
+	var mark AIManagedPosition
+	err := s.db.Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, strings.ToLower(side)).
+		First(&mark).Error
+	if err != nil {
+		return false
+	}
+	return !at.After(mark.CreatedAt)
 }
