@@ -44,9 +44,13 @@ func TestMarketSentimentRender(t *testing.T) {
 	}
 }
 
-// Regime classification pins (user review 2026-09-27): extreme needs BOTH
-// macro sources; crowding = |funding ann| ≥50% or L/S >2; effects map to the
-// prompt's three combine rules.
+// Regime classification pins (user review 2026-09-27, tightened 09-29):
+// extreme needs BOTH macro sources; CROWDING = SAME-SIDE CONFLUENCE of
+// expensive funding AND lopsided accounts — a lone L/S >2 with cheap
+// funding is NOT leverage crowded (user 09-29: the old single-signal OR
+// labeled a 73/57, 1.9%/5.7% ann, ETH L/S 2.68 day GREED_LEVERAGE_CROWDED
+// and pushed the model over-conservative). Effects map to the prompt's
+// three combine rules.
 func TestClassifySentimentRegime(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -61,6 +65,37 @@ func TestClassifySentimentRegime(t *testing.T) {
 				Binance: &BinanceCrowd{BTCLS: 1.27, BTCAFunding: 0.0000366, ETHFunding: 0.0001},
 			},
 			regime: "GREED_NOT_LEVERAGE_CROWDED", effect: "CONTEXT_ONLY",
+		},
+		{
+			// The exact 09-29 user report: only ETH L/S >2 holds — funding
+			// far below the 50% line — so the regime must NOT say crowded.
+			name: "lone L/S>2 with cheap funding is not crowded (09-29 live shape)",
+			m: &MarketSentiment{
+				Crypto:  &CryptoFG{Value: 73},
+				Stock:   &StockFG{Score: 57},
+				Binance: &BinanceCrowd{BTCLS: 1.1, ETHLS: 2.68, BTCAFunding: 0.0000175, ETHFunding: 0.0000521},
+			},
+			regime: "GREED_NOT_LEVERAGE_CROWDED", effect: "CONTEXT_ONLY",
+		},
+		{
+			// Short-side confluence: deep negative funding AND accounts net
+			// short (L/S < 0.5). Missing L/S (0) must never trigger it.
+			name: "short crowding requires negative funding AND net-short accounts",
+			m: &MarketSentiment{
+				Crypto:  &CryptoFG{Value: 20},
+				Stock:   &StockFG{Score: 20},
+				Binance: &BinanceCrowd{BTCAFunding: -0.0006, BTCLS: 0.4, ETHLS: 0.45},
+			},
+			regime: "EXTREME_FEAR_LEVERAGE_CROWDED", effect: "CONTEXT_ONLY",
+		},
+		{
+			name: "missing L/S (0) never triggers short crowding on negative funding alone",
+			m: &MarketSentiment{
+				Crypto:  &CryptoFG{Value: 20},
+				Stock:   &StockFG{Score: 20},
+				Binance: &BinanceCrowd{BTCAFunding: -0.0006},
+			},
+			regime: "EXTREME_FEAR_NOT_LEVERAGE_CROWDED", effect: "CONTEXT_ONLY",
 		},
 		{
 			name: "all-three extreme + crowded → conservative opens",
@@ -81,13 +116,14 @@ func TestClassifySentimentRegime(t *testing.T) {
 			regime: "DIVERGENT_NOT_LEVERAGE_CROWDED", effect: "STRUCTURE_WINS",
 		},
 		{
-			name: "fear side with negative funding crowding",
+			// Long crowding: funding ≥50% ann AND L/S >2 on the same side.
+			name: "long crowding needs funding AND accounts together",
 			m: &MarketSentiment{
-				Crypto:  &CryptoFG{Value: 18},
-				Stock:   &StockFG{Score: 22},
-				Binance: &BinanceCrowd{BTCAFunding: -0.0006},
+				Crypto:  &CryptoFG{Value: 80},
+				Stock:   &StockFG{Score: 60},
+				Binance: &BinanceCrowd{BTCLS: 2.2, BTCAFunding: 0.0006, ETHFunding: 0.00002},
 			},
-			regime: "EXTREME_FEAR_LEVERAGE_CROWDED", effect: "CONTEXT_ONLY",
+			regime: "GREED_LEVERAGE_CROWDED", effect: "CONTEXT_ONLY",
 		},
 		{
 			name:   "binance absent → crowding unknown is disclosed",

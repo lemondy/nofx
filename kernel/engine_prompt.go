@@ -297,7 +297,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString("- 入场时点(程序强制): 最细子小时周期(15m/30m)趋势必须与方向一致——做多需 up/pullback,做空需 down/rally(下跌趋势中的反弹=空头入场窗);range 无动能,顺势入场同样会被拦截\n")
 		}
 		if pg := PumpGuard4h(&e.config.RiskControl); pg > 0 {
-			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门:4h窗口涨幅≥%.0f%%且回踩未确认时,hard_entry_gate.failed 给出 EXTENDED_PUMP_UNCONFIRMED;直接采用程序结论\n", pg))
+			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门:4h 周期的趋势窗口(最近 5 根已闭合 4h K 线,约 20 小时)累计涨幅 ≥%.0f%% 且回踩未确认时,hard_entry_gate.failed 给出 EXTENDED_PUMP_UNCONFIRMED;这是 4h 周期指标,不是最近 4 小时的涨幅,直接采用程序结论\n", pg))
 		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
 		params.WriteString("- 开仓硬门(唯一权威,禁止重算): hard_entry_gate.allowed 是该方向最终可执行权限;false 时只能 wait 并逐项引用 failed。true 时按 limit_allowed/market_exception 选择限价或市价路径;不得从原始指标推翻程序结论\n")
@@ -1873,7 +1873,7 @@ const signalBlockLegend = `时间口径: timeframe 名称是K线粒度;trend_win
 程序字段是唯一权威,禁止重算:
 - hard_entry_gate.long/short.allowed 是最终方向权限。false→wait并逐项引用 failed;true 且 limit_allowed→限价复制 entry_price;true 且 !limit_allowed 且 market_exception→可走市价例外。不存在其他路径。
 - stop_loss 复制 stop_plan_price;take_profit 复制 rr_scan.first_rr_ge_target。rr_scan.usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait,不得改用更远目标。
-- market_regime、execution_filter、pump_guard、data_quality、data_freshness、liquidity、funding_rollover、bb_ride(布林上轨骑行)/short_ride(布林下轨骑行) 和 breakout 均为程序结果。funding_rate 是原始小数;funding_annualized_pct 才是年化百分比。
+- market_regime、execution_filter、pump_guard、data_quality、data_freshness、liquidity、funding_rollover、bb_ride(布林上轨骑行)/short_ride(布林下轨骑行) 和 breakout 均为程序结果。funding_rate 是原始小数;funding_annualized_pct 才是年化百分比。pump_guard.return_4h_pct = 最近 5 根已闭合 4h K 线(约 20 小时)的趋势窗口累计涨幅——4h 周期指标,不是最近 4 小时的涨幅。
 - bias.scanner 只是候选来源姿态;方向依据 structure/execution/directional_score。仅在 hard_entry_gate.allowed=true 且准备开仓时处理 signal_conflict;已被硬门阻断时直接 wait,不展开冲突分析。
 - support/resistance 与距离均按实时价生成;空数组表示对应方向没有结构参考。trend 与窗口收益方向不同可以是合法反弹/回撤,不自动构成冲突。
 数据新鲜度优先级: Structured Signal timestamp > derivatives/liquidity > scanner/rankings。hint/榜单旧价格禁止参与 entry/SL/TP/RR 精确计算。ohlcv 只用于软证据,不得覆盖上述程序结论。

@@ -3,6 +3,7 @@ package market
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -253,10 +254,15 @@ func GetMarketSentiment() *MarketSentiment {
 
 // classifySentimentRegime is the program's verdict over the three combine
 // rules the prompt states: side (extreme needs BOTH macro sources), leverage
-// crowding (funding annualized ≥50% or L/S accounts >2 on a major), and the
-// resulting trade effect (crowded extremes → conservative opens; diverging
-// sources → structure wins; otherwise context-only). Pure function of the
-// stored values — never of the wall clock.
+// crowding, and the resulting trade effect (crowded extremes → conservative
+// opens; diverging sources → structure wins; otherwise context-only).
+// Crowding requires SAME-SIDE CONFLUENCE (user review 09-29: a single L/S
+// >2 reading with cheap funding is NOT "leverage crowded" — labeling it so
+// pushed the model toward over-conservatism):
+//   long crowd  = funding annualized ≥ +50% (either major) AND L/S > 2
+//   short crowd = funding annualized ≤ −50% (either major) AND L/S < 0.5
+// Zero values = missing fetches and never trigger (L/S > 0 guarded).
+// Pure function of the stored values — never of the wall clock.
 func classifySentimentRegime(m *MarketSentiment) (regime, effect string) {
 	crypto, stock := 50, 50
 	haveCrypto, haveStock := false, false
@@ -285,18 +291,21 @@ func classifySentimentRegime(m *MarketSentiment) (regime, effect string) {
 
 	crowding := ""
 	if m.Binance != nil {
-		crowded := false
+		maxAnn := 0.0
+		minAnn := 0.0
 		for _, f := range []float64{m.Binance.BTCAFunding, m.Binance.ETHFunding} {
-			if fundingAnnualized(f) >= 50 || fundingAnnualized(f) <= -50 {
-				crowded = true
+			ann := fundingAnnualized(f)
+			if ann > maxAnn {
+				maxAnn = ann
+			}
+			if ann < minAnn {
+				minAnn = ann
 			}
 		}
-		for _, r := range []float64{m.Binance.BTCLS, m.Binance.ETHLS} {
-			if r > 2 {
-				crowded = true
-			}
-		}
-		if crowded {
+		maxLS := math.Max(m.Binance.BTCLS, m.Binance.ETHLS)
+		longCrowd := maxAnn >= 50 && maxLS > 2
+		shortCrowd := minAnn <= -50 && maxLS > 0 && math.Min(lsOr(m.Binance.BTCLS), lsOr(m.Binance.ETHLS)) < 0.5
+		if longCrowd || shortCrowd {
 			crowding = "_LEVERAGE_CROWDED"
 		} else {
 			crowding = "_NOT_LEVERAGE_CROWDED"
@@ -436,3 +445,12 @@ func (m *MarketSentiment) Render() string {
 }
 
 var _ = security.SafeHTTPClient
+
+// lsOr maps a missing (0) L/S reading to +Inf so the short-crowd min()
+// ignores missing fetches instead of treating them as extreme short crowding.
+func lsOr(v float64) float64 {
+	if v <= 0 {
+		return math.Inf(1)
+	}
+	return v
+}
