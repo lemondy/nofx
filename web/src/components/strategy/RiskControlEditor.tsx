@@ -935,7 +935,7 @@ export function RiskControlEditor({
  <div className="grid grid-cols-2 gap-3 mt-3">
   <div>
    <label className="block text-xs mb-1" style={{ color: '#6E6E60' }}>
-    R 档起征 (×初始止损距离;>0 启用,替代上面的 ROE 档)
+     R 档起征 (×初始止损距离;&gt;0 启用,替代上面的 ROE 档)
    </label>
    <input
     type="number"
