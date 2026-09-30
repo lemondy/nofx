@@ -40,6 +40,8 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
  const { language } = useLanguage()
  const { user, token } = useAuth()
  const [displayMode, setDisplayMode] = useState<'dollar' | 'percent'>('dollar')
+ // 时间范围选择（周期数切片，数据仍在内存里 — 纯展示层过滤）
+ const [range, setRange] = useState<number | 'all'>(2000)
 
  const { data: history, error, isLoading } = useSWR<EquityPoint[]>(
  user && token && traderId ? `equity-history-${traderId}` : null,
@@ -125,13 +127,18 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
  )
  }
 
- // 限制显示最近的数据点（性能优化）
- // 如果数据超过2000个点，只显示最近2000个
- const MAX_DISPLAY_POINTS = 2000
+ // 按所选范围切片显示（性能优化）：200/1000/2000 周期或全部
+ const RANGE_OPTIONS: Array<{ label: string; value: number | 'all' }> = [
+  { label: '200', value: 200 },
+  { label: '1K', value: 1000 },
+  { label: '2K', value: 2000 },
+  {
+   label: language === 'zh' ? '全部' : 'All',
+   value: 'all',
+  },
+ ]
  const displayHistory =
- validHistory.length > MAX_DISPLAY_POINTS
- ? validHistory.slice(-MAX_DISPLAY_POINTS)
- : validHistory
+  range === 'all' ? validHistory : validHistory.slice(-range)
 
  // 计算初始余额（优先从 account 获取配置的初始余额，备选从历史数据反推）
  const initialBalance =
@@ -295,17 +302,42 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
  onClick={() => setDisplayMode('percent')}
  className="px-3 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-bold transition-all flex items-center gap-1"
  style={
- displayMode === 'percent'
- ? {
- background: '#B8912A',
- color: '#000',
- boxShadow: '0 2px 8px rgba(184, 145, 42, 0.4)',
- }
- : { background: 'transparent', color: '#6E6E60' }
+  displayMode === 'percent'
+  ? {
+  background: '#B8912A',
+  color: '#000',
+  boxShadow: '0 2px 8px rgba(184, 145, 42, 0.4)',
+  }
+  : { background: 'transparent', color: '#6E6E60' }
  }
  >
  <Percent className="w-4 h-4" />
  </button>
+ </div>
+
+ {/* Time Range Selector */}
+ <div
+ className="flex gap-0.5 sm:gap-1 rounded p-0.5 sm:p-1 self-start sm:self-auto"
+ style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ >
+ {RANGE_OPTIONS.map((opt) => (
+ <button
+ key={String(opt.value)}
+ onClick={() => setRange(opt.value)}
+ className="px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-bold transition-all"
+ style={
+  range === opt.value
+  ? {
+  background: '#B8912A',
+  color: '#000',
+  boxShadow: '0 2px 8px rgba(184, 145, 42, 0.4)',
+  }
+  : { background: 'transparent', color: '#6E6E60' }
+ }
+ >
+ {opt.label}
+ </button>
+ ))}
  </div>
  </div>
 
@@ -467,9 +499,9 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
  className="text-xs sm:text-sm font-bold mono"
  style={{ color: '#1E1E1A' }}
  >
- {validHistory.length > MAX_DISPLAY_POINTS
- ? `${t('recent', language)} ${MAX_DISPLAY_POINTS}`
- : t('allData', language)}
+ {range === 'all'
+ ? t('allData', language)
+ : `${t('recent', language)} ${range}`}
  </div>
  </div>
  </div>
