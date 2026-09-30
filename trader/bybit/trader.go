@@ -3,10 +3,10 @@ package bybit
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"math"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
+	"nofx/trader/types"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,8 +15,11 @@ import (
 	bybit "github.com/bybit-exchange/bybit.go.api"
 )
 
+var bybitHTTP = &http.Client{Timeout: 30 * time.Second}
+
 // BybitTrader Bybit USDT Perpetual Futures Trader
 type BybitTrader struct {
+	orderSync types.SyncLoop
 	client    *bybit.Client
 	apiKey    string
 	secretKey string
@@ -47,6 +50,7 @@ func NewBybitTrader(apiKey, secretKey string) *BybitTrader {
 
 	// Set HTTP transport
 	if client != nil && client.HTTPClient != nil {
+		client.HTTPClient.Timeout = 30 * time.Second
 		defaultTransport := client.HTTPClient.Transport
 		if defaultTransport == nil {
 			defaultTransport = http.DefaultTransport
@@ -83,27 +87,27 @@ func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 // getQtyStep retrieves the quantity step for a trading pair
-func (t *BybitTrader) getQtyStep(symbol string) float64 {
+func (t *BybitTrader) getQtyStep(symbol string) (float64, error) {
 	// Check cache first
 	t.qtyStepCacheMutex.RLock()
 	if step, ok := t.qtyStepCache[symbol]; ok {
 		t.qtyStepCacheMutex.RUnlock()
-		return step
+		return step, nil
 	}
 	t.qtyStepCacheMutex.RUnlock()
 
 	// Call public API directly to get contract information
 	url := fmt.Sprintf("https://api.bybit.com/v5/market/instruments-info?category=linear&symbol=%s", symbol)
-	resp, err := http.Get(url)
+	resp, err := bybitHTTP.Get(url)
 	if err != nil {
 		logger.Infof("⚠️ [Bybit] Failed to get precision info for %s: %v", symbol, err)
-		return 1 // Default to integer
+		return 0, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
-		return 1
+		return 0, fmt.Errorf("failed to load quantity precision for %s", symbol)
 	}
 
 	var result struct {
@@ -118,16 +122,16 @@ func (t *BybitTrader) getQtyStep(symbol string) float64 {
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return 1
+		return 0, fmt.Errorf("failed to load quantity precision for %s", symbol)
 	}
 
 	if result.RetCode != 0 || len(result.Result.List) == 0 {
-		return 1
+		return 0, fmt.Errorf("failed to load quantity precision for %s", symbol)
 	}
 
 	qtyStep, _ := strconv.ParseFloat(result.Result.List[0].LotSizeFilter.QtyStep, 64)
 	if qtyStep <= 0 {
-		qtyStep = 1
+		return 0, fmt.Errorf("invalid quantity step for %s", symbol)
 	}
 
 	// Cache result
@@ -137,16 +141,22 @@ func (t *BybitTrader) getQtyStep(symbol string) float64 {
 
 	logger.Infof("🔵 [Bybit] %s qtyStep: %v", symbol, qtyStep)
 
-	return qtyStep
+	return qtyStep, nil
 }
 
 // FormatQuantity formats quantity
 func (t *BybitTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	// Get qtyStep for this symbol
-	qtyStep := t.getQtyStep(symbol)
+	qtyStep, err := t.getQtyStep(symbol)
+	if err != nil {
+		return "", err
+	}
 
 	// Align quantity according to qtyStep (round down to nearest step)
-	alignedQty := math.Floor(quantity/qtyStep) * qtyStep
+	alignedQty, err := types.FloorQuantity(quantity, qtyStep, 0, 0)
+	if err != nil {
+		return "", err
+	}
 
 	// Calculate required decimal places
 	decimals := 0

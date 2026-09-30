@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"nofx/logger"
@@ -1377,7 +1376,7 @@ func (e *StrategyEngine) fetchSingleExternalSource(source store.ExternalDataSour
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}

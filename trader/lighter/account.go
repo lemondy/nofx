@@ -3,9 +3,11 @@ package lighter
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"math"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
+	tradertypes "nofx/trader/types"
 	"strconv"
 	"strings"
 )
@@ -26,7 +28,7 @@ func (t *LighterTraderV2) getFullAccountInfo() (*AccountInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +307,7 @@ func (t *LighterTraderV2) GetMarketPrice(symbol string) (float64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return 0, err
 	}
@@ -351,9 +353,15 @@ func (t *LighterTraderV2) GetMarketPrice(symbol string) (float64, error) {
 
 // FormatQuantity Format quantity to correct precision (implements Trader interface)
 func (t *LighterTraderV2) FormatQuantity(symbol string, quantity float64) (string, error) {
-	// TODO: Get symbol precision from API
-	// Using default precision for now
-	return fmt.Sprintf("%.4f", quantity), nil
+	info, err := t.getMarketInfo(symbol)
+	if err != nil {
+		return "", err
+	}
+	quantity, err = tradertypes.FloorQuantity(quantity, math.Pow10(-info.SizeDecimals), 0, 0)
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatFloat(quantity, 'f', info.SizeDecimals, 64), nil
 }
 
 // GetOrderBook Get order book (implements GridTrader interface)
@@ -379,7 +387,7 @@ func (t *LighterTraderV2) GetOrderBook(symbol string, depth int) (bids, asks [][
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, nil, err
 	}

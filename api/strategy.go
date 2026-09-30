@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"nofx/kernel"
@@ -183,6 +184,10 @@ func (s *Server) handleCreateStrategy(c *gin.Context) {
 	}
 
 	// Serialize configuration
+	if err := req.Config.Validate(); err != nil {
+		SafeBadRequest(c, err.Error())
+		return
+	}
 	configJSON, err := json.Marshal(req.Config)
 	if err != nil {
 		SafeInternalError(c, "Serialize configuration", err)
@@ -223,6 +228,8 @@ func (s *Server) handleCreateStrategy(c *gin.Context) {
 // request overwrite the corresponding existing sections; absent sections are preserved.
 // This prevents partial updates from zeroing out unmentioned fields.
 func (s *Server) handleUpdateStrategy(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	strategyID := c.Param("id")
 
@@ -293,6 +300,10 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 	}
 
 	// Token overflow check — block save if all models exceed context limits.
+	if err := mergedConfig.Validate(); err != nil {
+		SafeBadRequest(c, err.Error())
+		return
+	}
 	// Runs BEFORE the DB write: the old order persisted + reloaded traders
 	// first and only then returned 400, leaving the over-limit config live
 	// (round-4 review R4-27d).
@@ -352,7 +363,11 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		ConfigVisible: configVisible,
 	}
 
-	if err := s.store.Strategy().Update(strategy); err != nil {
+	if err := s.store.Strategy().Update(strategy, existing.UpdatedAt); err != nil {
+		if errors.Is(err, store.ErrStrategyConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Strategy changed; refresh before saving"})
+			return
+		}
 		SafeInternalError(c, "Failed to update strategy", err)
 		return
 	}
@@ -370,24 +385,14 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 			continue
 		}
 		logger.Infof("🔄 Strategy %s changed — reloading trader %s to apply new config", strategyID, t.ID)
-		s.traderManager.RemoveTrader(t.ID)
+		s.removeTraderForReload(userID, t.ID)
 		reloaded++
 	}
 	if reloaded > 0 {
 		if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
 			logger.Warnf("⚠️ Failed to reload traders after strategy update: %v", err)
 		}
-		// Reload race guard: verify each affected trader's loop is actually
-		// alive — the load path can lose the running loop in a rebuild race.
-		traders, _ := s.store.Trader().List(userID)
-		for _, t := range traders {
-			if t.StrategyID != strategyID || !t.IsRunning {
-				continue
-			}
-			if err := s.traderManager.EnsureTraderStarted(userID, t.ID); err != nil {
-				logger.Warnf("⚠️ EnsureTraderStarted(%s): %v", t.ID, err)
-			}
-		}
+
 	}
 
 	response := gin.H{"message": "Strategy updated successfully"}

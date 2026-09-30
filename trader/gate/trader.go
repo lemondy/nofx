@@ -13,6 +13,7 @@ import (
 
 // GateTrader implements types.Trader interface for Gate.io Futures
 type GateTrader struct {
+	orderSync types.SyncLoop
 	apiKey    string
 	secretKey string
 	client    *gateapi.APIClient

@@ -181,13 +181,11 @@ func deriveAsterOrderAction(side, positionSide string, realizedPnL float64) stri
 
 // StartOrderSync starts background order sync task for Aster
 func (t *AsterTrader) StartOrderSync(traderID string, exchangeID string, exchangeType string, st *store.Store, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	go func() {
-		for range ticker.C {
-			if err := t.SyncOrdersFromAster(traderID, exchangeID, exchangeType, st); err != nil {
-				logger.Infof("⚠️  Aster order sync failed: %v", err)
-			}
+	t.orderSync.Start(interval, func() {
+		if err := t.SyncOrdersFromAster(traderID, exchangeID, exchangeType, st); err != nil {
+			logger.Warnf("aster order sync failed: %v", err)
 		}
-	}()
-	logger.Infof("🔄 Aster order sync started (interval: %v)", interval)
+	})
 }
+
+func (t *AsterTrader) StopOrderSync() { t.orderSync.Stop() }

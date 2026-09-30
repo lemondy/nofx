@@ -18,11 +18,14 @@ func (t *BitgetTrader) OpenLong(symbol string, quantity float64, leverage int) (
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("  ⚠️ Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -72,11 +75,14 @@ func (t *BitgetTrader) OpenShort(symbol string, quantity float64, leverage int) 
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("  ⚠️ Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -139,7 +145,10 @@ func (t *BitgetTrader) CloseLong(symbol string, quantity float64) (map[string]in
 	}
 
 	// Format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -207,7 +216,10 @@ func (t *BitgetTrader) CloseShort(symbol string, quantity float64) (map[string]i
 	}
 
 	// Format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	body := map[string]interface{}{
 		"symbol":      symbol,
@@ -260,7 +272,10 @@ func (t *BitgetTrader) SetStopLoss(symbol string, positionSide string, quantity,
 		holdSide = "short"
 	}
 
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return quantityErr
+	}
 
 	body := map[string]interface{}{
 		"planType":     "loss_plan",
@@ -299,7 +314,10 @@ func (t *BitgetTrader) SetTakeProfit(symbol string, positionSide string, quantit
 		holdSide = "short"
 	}
 
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return quantityErr
+	}
 
 	body := map[string]interface{}{
 		"planType":     "profit_plan",
@@ -633,7 +651,10 @@ func (t *BitgetTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Lim
 	}
 
 	// Format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, req.Quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, req.Quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	// Determine side
 	side := "buy"

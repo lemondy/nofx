@@ -442,11 +442,11 @@ func (t *FuturesTrader) startOrderSyncLoop(interval time.Duration, run func()) b
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		run() // initial sync immediately
+		types.RunSyncSafely(run) // initial sync immediately
 		for {
 			select {
 			case <-ticker.C:
-				run()
+				types.RunSyncSafely(run)
 			case <-stop:
 				return
 			}
@@ -466,11 +466,10 @@ func (t *FuturesTrader) StopOrderSync() {
 		return
 	}
 	close(stop)
+	<-done
 	t.orderSyncStop = nil
 	t.orderSyncDone = nil
 	t.orderSyncMu.Unlock()
-
-	<-done
 	logger.Infof("⏹ Binance order sync stopped")
 }
 

@@ -103,3 +103,12 @@ func (s *Server) handleUpdateTelegramModel(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "model_id": req.ModelID})
 }
+
+func (s *Server) handleTelegramBindCode(c *gin.Context) {
+	code, err := s.store.TelegramConfig().IssueBindCode()
+	if err != nil {
+		SafeBadRequest(c, "Bot must be configured and unbound")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": code, "expires_in": 300})
+}

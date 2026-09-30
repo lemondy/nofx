@@ -61,9 +61,11 @@ func (s *TraderStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'traders'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'traders'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &Trader{})
 		}
 	}
 	// Use GORM AutoMigrate
@@ -110,12 +112,18 @@ func (s *TraderStore) Update(trader *Trader) error {
 		trader.ID, trader.Name, trader.AIModelID, trader.StrategyID)
 
 	updates := map[string]interface{}{
-		"name":                trader.Name,
-		"ai_model_id":         trader.AIModelID,
-		"exchange_id":         trader.ExchangeID,
-		"strategy_id":         trader.StrategyID,
-		"is_cross_margin":     trader.IsCrossMargin,
-		"show_in_competition": trader.ShowInCompetition,
+		"name":                   trader.Name,
+		"ai_model_id":            trader.AIModelID,
+		"exchange_id":            trader.ExchangeID,
+		"strategy_id":            trader.StrategyID,
+		"btc_eth_leverage":       trader.BTCETHLeverage,
+		"altcoin_leverage":       trader.AltcoinLeverage,
+		"trading_symbols":        trader.TradingSymbols,
+		"custom_prompt":          trader.CustomPrompt,
+		"override_base_prompt":   trader.OverrideBasePrompt,
+		"system_prompt_template": trader.SystemPromptTemplate,
+		"is_cross_margin":        trader.IsCrossMargin,
+		"show_in_competition":    trader.ShowInCompetition,
 	}
 
 	// Only update these if > 0
@@ -165,8 +173,22 @@ func (s *TraderStore) Delete(userID, id string) error {
 		return fmt.Errorf("trader not found for this user")
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("trader_id = ?", id).Delete(&EquitySnapshot{}).Error; err != nil {
+		configs := tx.Model(&GridConfigModel{}).Select("id").Where("trader_id = ?", id)
+		instances := tx.Model(&GridInstanceModel{}).Select("id").Where("config_id IN (?)", configs)
+		for _, model := range []interface{}{&GridEventModel{}, &GridRegimeAssessmentModel{}, &GridLevelModel{}} {
+			if err := tx.Where("instance_id IN (?)", instances).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("config_id IN (?)", configs).Delete(&GridInstanceModel{}).Error; err != nil {
 			return err
+		}
+		for _, model := range []interface{}{&EquitySnapshot{}, &DecisionRecordDB{}, &TraderFill{}, &TraderOrder{}, &TraderPosition{}, &PendingEntryDB{}, &GateShadowBlock{}, &EntryAssessment{}, &AICharge{}, &AIManagedPosition{}, &TradeJournalDB{}, &RuleCheckLogDB{}, &TradingRuleDB{}, &GridConfigModel{}} {
+			if tx.Migrator().HasTable(model) {
+				if err := tx.Where("trader_id = ?", id).Delete(model).Error; err != nil {
+					return err
+				}
+			}
 		}
 		return tx.Where("id = ? AND user_id = ?", id, userID).Delete(&Trader{}).Error
 	})

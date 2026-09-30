@@ -288,6 +288,13 @@ func TestCreateStrategyWorkflow(t *testing.T) {
 	}}
 	a := New(port, "tok", "test-user", mockGetLLM(llm), testPrompt)
 	reply := a.Run("帮我配置个btc趋势交易的策略", nil)
+	if !strings.HasPrefix(reply, "Confirmation required") || llm.calls != 1 {
+		t.Fatalf("expected confirmation, got %q", reply)
+	}
+	if result := a.Run("/confirm "+a.apiTool.confirmation, nil); !strings.Contains(result, "s1") {
+		t.Fatalf("confirmation failed: %s", result)
+	}
+	reply = a.Run("verify the created strategy", nil)
 
 	if llm.calls != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", llm.calls)
@@ -330,6 +337,21 @@ func TestFullSetupWorkflow(t *testing.T) {
 	}}
 	a := New(port, "tok", "test-user", mockGetLLM(llm), testPrompt)
 	reply := a.Run("帮我配置个btc趋势交易的策略交易 跑起来", nil)
+	for step := 0; step < 3; step++ {
+		if !strings.HasPrefix(reply, "Confirmation required") {
+			t.Fatalf("step %d did not require confirmation: %s", step, reply)
+		}
+		before := len(calls)
+		_ = a.Run("/confirm wrong", nil)
+		if len(calls) != before {
+			t.Fatal("wrong confirmation executed")
+		}
+		result := a.Run("/confirm "+a.apiTool.confirmation, nil)
+		if strings.Contains(result, "error") {
+			t.Fatalf("confirmation failed: %s", result)
+		}
+		reply = a.Run("continue", nil)
+	}
 
 	if llm.calls != 5 {
 		t.Fatalf("expected 5 LLM calls, got %d", llm.calls)
@@ -374,6 +396,14 @@ func TestStartExistingTrader(t *testing.T) {
 	}}
 	a := New(port, "tok", "test-user", mockGetLLM(llm), testPrompt)
 	reply := a.Run("启动交易员", nil)
+	if !strings.HasPrefix(reply, "Confirmation required") || calls["POST /api/traders/tr1/start"] != 0 {
+		t.Fatalf("started without confirmation: %s", reply)
+	}
+	confirmed := a.Run("/confirm "+a.apiTool.confirmation, nil)
+	if !strings.Contains(confirmed, "ok") {
+		t.Fatalf("confirm failed: %s", confirmed)
+	}
+	reply = a.Run("report the result", nil)
 
 	if calls["POST /api/traders/tr1/start"] != 1 {
 		t.Errorf("expected trader to be started, got %d start calls", calls["POST /api/traders/tr1/start"])

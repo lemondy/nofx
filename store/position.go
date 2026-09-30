@@ -186,30 +186,50 @@ func (s *PositionStore) InitTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.isPostgres() {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_positions'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_positions'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
 			// Migrate timestamp columns to bigint (Unix milliseconds UTC)
 			// Check if column is still timestamp type before migrating
 			timestampColumns := []string{"entry_time", "exit_time", "created_at", "updated_at"}
 			for _, col := range timestampColumns {
 				var dataType string
-				s.db.Raw(`SELECT data_type FROM information_schema.columns WHERE table_name = 'trader_positions' AND column_name = ?`, col).Scan(&dataType)
+				if err := s.db.Raw(`SELECT data_type FROM information_schema.columns WHERE table_name = 'trader_positions' AND column_name = ?`, col).Scan(&dataType).Error; err != nil {
+					return err
+				}
 				if dataType == "timestamp with time zone" || dataType == "timestamp without time zone" {
 					// Convert timestamp to Unix milliseconds (bigint)
-					s.db.Exec(fmt.Sprintf(`ALTER TABLE trader_positions ALTER COLUMN %s TYPE BIGINT USING EXTRACT(EPOCH FROM %s) * 1000`, col, col))
+					if err := s.db.Exec(fmt.Sprintf(`ALTER TABLE trader_positions ALTER COLUMN %s TYPE BIGINT USING EXTRACT(EPOCH FROM %s) * 1000`, col, col)).Error; err != nil {
+						return err
+					}
 				}
 			}
 
 			// Just ensure index exists
-			s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_exchange_pos_unique ON trader_positions(exchange_id, exchange_position_id) WHERE exchange_position_id != ''`)
+			if err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_exchange_pos_unique ON trader_positions(exchange_id, exchange_position_id) WHERE exchange_position_id != ''`).Error; err != nil {
+				return err
+			}
 			// New columns on the existing table — AutoMigrate is skipped above.
-			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS initial_stop_loss DOUBLE PRECISION DEFAULT 0`)
-			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION DEFAULT 0`)
-			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION DEFAULT 0`)
-			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_r DOUBLE PRECISION DEFAULT 0`)
-			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_r DOUBLE PRECISION DEFAULT 0`)
-			s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS exit_mode TEXT DEFAULT ''`)
-			return nil
+			if err := s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS initial_stop_loss DOUBLE PRECISION DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mae_r DOUBLE PRECISION DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS mfe_r DOUBLE PRECISION DEFAULT 0`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN IF NOT EXISTS exit_mode TEXT DEFAULT ''`).Error; err != nil {
+				return err
+			}
+			return ensureColumns(s.db, &TraderPosition{})
 		}
 	}
 

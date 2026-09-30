@@ -7,10 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
+	"nofx/trader/types"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ const (
 
 // KuCoinTrader implements types.Trader interface for KuCoin Futures
 type KuCoinTrader struct {
+	orderSync  types.SyncLoop
 	apiKey     string
 	secretKey  string
 	passphrase string
@@ -127,7 +129,7 @@ func (t *KuCoinTrader) syncServerTime() error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
@@ -232,7 +234,7 @@ func (t *KuCoinTrader) doRequest(method, path string, body interface{}) ([]byte,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -353,11 +355,14 @@ func (t *KuCoinTrader) quantityToLots(symbol string, quantity float64) (int64, e
 		return 0, err
 	}
 
-	// lots = quantity / multiplier
-	lots := quantity / contract.Multiplier
-
-	// Round to integer (KuCoin uses integer lots)
-	lotsInt := int64(math.Round(lots))
+	aligned, err := types.FloorQuantity(quantity, contract.Multiplier, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	lotsInt := int64(math.Floor(aligned/contract.Multiplier + 1e-9))
+	if lotsInt <= 0 {
+		return 0, fmt.Errorf("quantity below one contract")
+	}
 
 	// Check max order quantity
 	if contract.MaxOrderQty > 0 && float64(lotsInt) > contract.MaxOrderQty {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
 	"nofx/trader/types"
 	"strconv"
 	"strings"
@@ -27,11 +27,14 @@ func (t *BybitTrader) OpenLong(symbol string, quantity float64, leverage int) (m
 
 	// Set leverage first
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("⚠️ [Bybit] Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Use FormatQuantity to format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	params := map[string]interface{}{
 		"category":    "linear",
@@ -70,11 +73,14 @@ func (t *BybitTrader) OpenShort(symbol string, quantity float64, leverage int) (
 
 	// Set leverage first
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("⚠️ [Bybit] Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Use FormatQuantity to format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	params := map[string]interface{}{
 		"category":    "linear",
@@ -120,7 +126,10 @@ func (t *BybitTrader) CloseLong(symbol string, quantity float64) (map[string]int
 	}
 
 	// Use FormatQuantity to format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	params := map[string]interface{}{
 		"category":    "linear",
@@ -165,7 +174,10 @@ func (t *BybitTrader) CloseShort(symbol string, quantity float64) (map[string]in
 	}
 
 	// Use FormatQuantity to format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return nil, quantityErr
+	}
 
 	params := map[string]interface{}{
 		"category":    "linear",
@@ -297,7 +309,10 @@ func (t *BybitTrader) SetStopLoss(symbol string, positionSide string, quantity, 
 	}
 
 	// Use FormatQuantity to format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return quantityErr
+	}
 
 	params := map[string]interface{}{
 		"category":         "linear",
@@ -343,7 +358,10 @@ func (t *BybitTrader) SetTakeProfit(symbol string, positionSide string, quantity
 	}
 
 	// Use FormatQuantity to format quantity
-	qtyStr, _ := t.FormatQuantity(symbol, quantity)
+	qtyStr, quantityErr := t.FormatQuantity(symbol, quantity)
+	if quantityErr != nil {
+		return quantityErr
+	}
 
 	params := map[string]interface{}{
 		"category":         "linear",
@@ -690,13 +708,13 @@ func (t *BybitTrader) GetOrderBook(symbol string, depth int) (bids, asks [][]flo
 
 	// Use HTTP request directly since the SDK doesn't expose GetOrderbook
 	url := fmt.Sprintf("https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=%d", symbol, depth)
-	resp, err := http.Get(url)
+	resp, err := bybitHTTP.Get(url)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get order book: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := security.ReadResponseBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}

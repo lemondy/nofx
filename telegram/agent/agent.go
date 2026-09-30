@@ -192,6 +192,9 @@ func (a *Agent) buildAccountContext() string {
 // On the first message of a conversation the live account state is fetched and injected.
 // onChunk is optional; when set it is called once with the complete final reply text.
 func (a *Agent) Run(userMessage string, onChunk func(string)) string {
+	if strings.HasPrefix(userMessage, "/confirm ") {
+		return a.apiTool.confirm(strings.TrimSpace(strings.TrimPrefix(userMessage, "/confirm ")))
+	}
 	llm := a.getLLM()
 	if llm == nil {
 		return "AI assistant unavailable. Please configure an AI model in the Web UI."
@@ -263,6 +266,9 @@ func (a *Agent) Run(userMessage string, onChunk func(string)) string {
 			}
 			logger.Infof("Agent: iter=%d tool=%s %s %s", i+1, tc.ID, apiReq.Method, apiReq.Path)
 			result := a.apiTool.execute(&apiReq)
+			if strings.HasPrefix(result, "Confirmation required") {
+				return result
+			}
 			turnMsgs = append(turnMsgs, mcp.Message{
 				Role:       "tool",
 				ToolCallID: tc.ID,

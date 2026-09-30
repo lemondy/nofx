@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"nofx/security"
 	"strings"
 	"time"
 )
@@ -18,16 +18,16 @@ const (
 
 // Candle represents a single OHLCV candle from Hyperliquid
 type Candle struct {
-	OpenTime   int64   `json:"t"`  // Open time in milliseconds
-	CloseTime  int64   `json:"T"`  // Close time in milliseconds
-	Symbol     string  `json:"s"`  // Coin symbol
-	Interval   string  `json:"i"`  // Interval
-	Open       string  `json:"o"`  // Open price
-	High       string  `json:"h"`  // High price
-	Low        string  `json:"l"`  // Low price
-	Close      string  `json:"c"`  // Close price
-	Volume     string  `json:"v"`  // Volume in base unit
-	TradeCount int     `json:"n"`  // Number of trades
+	OpenTime   int64  `json:"t"` // Open time in milliseconds
+	CloseTime  int64  `json:"T"` // Close time in milliseconds
+	Symbol     string `json:"s"` // Coin symbol
+	Interval   string `json:"i"` // Interval
+	Open       string `json:"o"` // Open price
+	High       string `json:"h"` // High price
+	Low        string `json:"l"` // Low price
+	Close      string `json:"c"` // Close price
+	Volume     string `json:"v"` // Volume in base unit
+	TradeCount int    `json:"n"` // Number of trades
 }
 
 // CandleRequest represents the request for candleSnapshot
@@ -117,7 +117,7 @@ func (c *Client) GetCandles(ctx context.Context, coin string, interval string, l
 	defer resp.Body.Close()
 
 	// Read response
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -169,7 +169,7 @@ func (c *Client) GetAllMidsWithDex(ctx context.Context, dex string) (map[string]
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -206,7 +206,7 @@ func (c *Client) GetMeta(ctx context.Context) (*Meta, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -230,9 +230,9 @@ type Meta struct {
 
 // AssetInfo represents information about a single asset
 type AssetInfo struct {
-	Name       string `json:"name"`
-	SzDecimals int    `json:"szDecimals"`
-	MaxLeverage int   `json:"maxLeverage"`
+	Name        string `json:"name"`
+	SzDecimals  int    `json:"szDecimals"`
+	MaxLeverage int    `json:"maxLeverage"`
 }
 
 // NormalizeCoin normalizes coin name for Hyperliquid API

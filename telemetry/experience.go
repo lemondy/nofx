@@ -127,12 +127,7 @@ func sendTradeEvent(event TradeEvent) error {
 				Params: map[string]interface{}{
 					"exchange":             event.Exchange,
 					"trade_type":           event.TradeType,
-					"symbol":               event.Symbol,
-					"amount_usd":           event.AmountUSD,
-					"leverage":             event.Leverage,
 					"installation_id":      installationID, // For counting active installations
-					"user_id":              event.UserID,   // For counting active users
-					"trader_id":            event.TraderID, // For counting active traders
 					"engagement_time_msec": 1,              // Required by GA4
 				},
 			},
@@ -220,8 +215,6 @@ func TrackAIUsage(event AIUsageEvent) {
 						"output_tokens":        event.OutputTokens,
 						"total_tokens":         event.InputTokens + event.OutputTokens,
 						"installation_id":      installationID,
-						"user_id":              event.UserID,
-						"trader_id":            event.TraderID,
 						"engagement_time_msec": 1,
 					},
 				},

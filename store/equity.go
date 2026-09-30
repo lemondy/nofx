@@ -37,9 +37,11 @@ func (s *EquityStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_equity_snapshots'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_equity_snapshots'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &EquitySnapshot{})
 		}
 	}
 	return s.db.AutoMigrate(&EquitySnapshot{})

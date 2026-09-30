@@ -30,8 +30,14 @@ func idorFixture(t *testing.T) (*Server, *gin.Engine, string, string, string) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
+	auth.JWTSecret = []byte("test-jwt-secret-at-least-32-bytes-long")
 	// Two users, one trader each.
 	userA, userB := "user-aaa", "user-bbb"
+	for _, id := range []string{userA, userB} {
+		if err := st.User().Create(&store.User{ID: id, Email: id + "@test.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	traderA := &store.Trader{ID: "trader-A", UserID: userA, Name: "A", IsRunning: false}
 	if err := st.Trader().Create(traderA); err != nil {
 		t.Fatalf("create trader A: %v", err)

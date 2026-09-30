@@ -225,13 +225,19 @@ func (at *AutoTrader) checkFalseBreakoutRecovery() error {
 
 // GetGridRiskInfo returns current risk information for frontend display
 func (at *AutoTrader) GetGridRiskInfo() *GridRiskInfo {
+	if at.config.StrategyConfig == nil {
+		return &GridRiskInfo{}
+	}
 	gridConfig := at.config.StrategyConfig.GridConfig
-	if gridConfig == nil {
+	at.runtimeMu.RLock()
+	state := at.gridState
+	at.runtimeMu.RUnlock()
+	if gridConfig == nil || state == nil {
 		return &GridRiskInfo{}
 	}
 
-	at.gridState.mu.RLock()
-	defer at.gridState.mu.RUnlock()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 
 	// Get current price
 	currentPrice, _ := at.trader.GetMarketPrice(gridConfig.Symbol)
@@ -260,7 +266,7 @@ func (at *AutoTrader) GetGridRiskInfo() *GridRiskInfo {
 	}
 
 	// Calculate max position based on regime
-	regimeLevel := market.RegimeLevel(at.gridState.CurrentRegimeLevel)
+	regimeLevel := market.RegimeLevel(state.CurrentRegimeLevel)
 	if regimeLevel == "" {
 		regimeLevel = market.RegimeLevelStandard
 	}
@@ -327,19 +333,19 @@ func (at *AutoTrader) GetGridRiskInfo() *GridRiskInfo {
 
 		RegimeLevel: string(regimeLevel),
 
-		ShortBoxUpper: at.gridState.ShortBoxUpper,
-		ShortBoxLower: at.gridState.ShortBoxLower,
-		MidBoxUpper:   at.gridState.MidBoxUpper,
-		MidBoxLower:   at.gridState.MidBoxLower,
-		LongBoxUpper:  at.gridState.LongBoxUpper,
-		LongBoxLower:  at.gridState.LongBoxLower,
+		ShortBoxUpper: state.ShortBoxUpper,
+		ShortBoxLower: state.ShortBoxLower,
+		MidBoxUpper:   state.MidBoxUpper,
+		MidBoxLower:   state.MidBoxLower,
+		LongBoxUpper:  state.LongBoxUpper,
+		LongBoxLower:  state.LongBoxLower,
 		CurrentPrice:  currentPrice,
 
-		BreakoutLevel:     at.gridState.BreakoutLevel,
-		BreakoutDirection: at.gridState.BreakoutDirection,
+		BreakoutLevel:     state.BreakoutLevel,
+		BreakoutDirection: state.BreakoutDirection,
 
-		CurrentGridDirection:  string(at.gridState.CurrentDirection),
-		DirectionChangeCount:  at.gridState.DirectionChangeCount,
+		CurrentGridDirection:  string(state.CurrentDirection),
+		DirectionChangeCount:  state.DirectionChangeCount,
 		EnableDirectionAdjust: gridConfig.EnableDirectionAdjust,
 	}
 }

@@ -41,9 +41,11 @@ func (s *AIModelStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'ai_models'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'ai_models'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &AIModel{})
 		}
 	}
 	return s.db.AutoMigrate(&AIModel{})
@@ -152,7 +154,7 @@ func (s *AIModelStore) GetAnyEnabled() (*AIModel, error) {
 
 // Update updates AI model, creates if not exists
 // IMPORTANT: If apiKey is empty string, the existing API key will be preserved (not overwritten)
-func (s *AIModelStore) Update(userID, id string, enabled bool, apiKey, customAPIURL, customModelName string) error {
+func (s *AIModelStore) Update(userID, id string, enabled bool, apiKey, customAPIURL, customModelName string, clearKey ...bool) error {
 	// Try exact ID match first
 	var existingModel AIModel
 	err := s.db.Where("user_id = ? AND id = ?", userID, id).First(&existingModel).Error
@@ -165,7 +167,7 @@ func (s *AIModelStore) Update(userID, id string, enabled bool, apiKey, customAPI
 			"updated_at":        time.Now().UTC(),
 		}
 		// If apiKey is not empty, update it (encryption handled by crypto.EncryptedString)
-		if apiKey != "" {
+		if apiKey != "" || (len(clearKey) > 0 && clearKey[0]) {
 			updates["api_key"] = crypto.EncryptedString(apiKey)
 		}
 		return s.db.Model(&existingModel).Updates(updates).Error
@@ -182,7 +184,7 @@ func (s *AIModelStore) Update(userID, id string, enabled bool, apiKey, customAPI
 			"custom_model_name": customModelName,
 			"updated_at":        time.Now().UTC(),
 		}
-		if apiKey != "" {
+		if apiKey != "" || (len(clearKey) > 0 && clearKey[0]) {
 			updates["api_key"] = crypto.EncryptedString(apiKey)
 		}
 		return s.db.Model(&existingModel).Updates(updates).Error

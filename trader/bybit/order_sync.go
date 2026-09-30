@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
+	"nofx/security"
 	"nofx/store"
 	"sort"
 	"strconv"
@@ -72,13 +72,13 @@ func (t *BybitTrader) getTradesViaHTTP(startTime time.Time, limit int) ([]BybitT
 	req.Header.Set("Content-Type", "application/json")
 
 	// Use http.DefaultClient for the request
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := bybitHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call Bybit API: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -299,13 +299,11 @@ func (t *BybitTrader) SyncOrdersFromBybit(traderID string, exchangeID string, ex
 
 // StartOrderSync starts background order sync task for Bybit
 func (t *BybitTrader) StartOrderSync(traderID string, exchangeID string, exchangeType string, st *store.Store, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	go func() {
-		for range ticker.C {
-			if err := t.SyncOrdersFromBybit(traderID, exchangeID, exchangeType, st); err != nil {
-				logger.Infof("⚠️  Bybit order sync failed: %v", err)
-			}
+	t.orderSync.Start(interval, func() {
+		if err := t.SyncOrdersFromBybit(traderID, exchangeID, exchangeType, st); err != nil {
+			logger.Warnf("bybit order sync failed: %v", err)
 		}
-	}()
-	logger.Infof("🔄 Bybit order sync started (interval: %v)", interval)
+	})
 }
+
+func (t *BybitTrader) StopOrderSync() { t.orderSync.Stop() }

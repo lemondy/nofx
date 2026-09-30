@@ -17,7 +17,9 @@ import (
 
 // runCycle runs one trading cycle (using AI full decision-making)
 func (at *AutoTrader) runCycle() error {
+	at.runtimeMu.Lock()
 	at.callCount++
+	at.runtimeMu.Unlock()
 
 	logger.Info("\n" + strings.Repeat("=", 70) + "\n")
 	logger.Infof("⏰ %s - AI decision cycle #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
@@ -86,7 +88,9 @@ func (at *AutoTrader) runCycle() error {
 	// 2. Reset daily P&L (reset every day)
 	if time.Since(at.lastResetTime) > 24*time.Hour {
 		at.dailyPnL = 0
+		at.runtimeMu.Lock()
 		at.lastResetTime = time.Now()
+		at.runtimeMu.Unlock()
 		logger.Info("📅 Daily P&L reset")
 	}
 

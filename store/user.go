@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -16,6 +17,7 @@ type User struct {
 	ID           string    `gorm:"primaryKey" json:"id"`
 	Email        string    `gorm:"uniqueIndex:idx_users_email;not null" json:"email"`
 	PasswordHash string    `gorm:"column:password_hash;not null" json:"-"`
+	TokenVersion int       `gorm:"not null;default:0" json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -31,28 +33,40 @@ func (s *UserStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate to avoid index conflicts
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'users'`).Scan(&tableExists)
-
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'users'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
 			// Table exists - manually ensure all columns exist
 			// Core columns (should already exist)
-			s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`)
-			s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT ''`)
-			s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`)
-			s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`)
-
+			if err := s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT ''`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`).Error; err != nil {
+				return err
+			}
 			// Ensure unique index exists on email (don't care about the name)
 			var indexExists int64
-			s.db.Raw(`
+			if err := s.db.Raw(`
 				SELECT COUNT(*) FROM pg_indexes
 				WHERE tablename = 'users' AND indexdef LIKE '%email%' AND indexdef LIKE '%UNIQUE%'
-			`).Scan(&indexExists)
-
-			if indexExists == 0 {
-				s.db.Exec("CREATE UNIQUE INDEX idx_users_email ON users(email)")
+			`).Scan(&indexExists).Error; err != nil {
+				return err
 			}
 
-			return nil
+			if indexExists == 0 {
+				if err := s.db.Exec("CREATE UNIQUE INDEX idx_users_email ON users(email)").Error; err != nil {
+					return err
+				}
+			}
+
+			return ensureColumns(s.db, &User{})
 		}
 	}
 	return s.db.AutoMigrate(&User{})
@@ -108,8 +122,29 @@ func (s *UserStore) GetAll() ([]User, error) {
 func (s *UserStore) UpdatePassword(userID, passwordHash string) error {
 	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"password_hash": passwordHash,
+		"token_version": gorm.Expr("token_version + 1"),
 		"updated_at":    time.Now().UTC(),
 	}).Error
+}
+
+// CreateFirst serializes initial registration across processes and databases.
+func (s *UserStore) CreateFirst(user *User) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("INSERT INTO system_config (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING", "registration_lock", "1").Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("UPDATE system_config SET value = value WHERE key = ?", "registration_lock").Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&User{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("system already initialized")
+		}
+		return tx.Create(user).Error
+	})
 }
 
 // EnsureAdmin ensures admin user exists

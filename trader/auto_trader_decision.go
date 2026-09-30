@@ -58,6 +58,8 @@ func (at *AutoTrader) saveDecision(record *store.DecisionRecord) error {
 
 // GetStatus gets system status (for API)
 func (at *AutoTrader) GetStatus() map[string]interface{} {
+	at.runtimeMu.RLock()
+	defer at.runtimeMu.RUnlock()
 	aiProvider := "DeepSeek"
 	if at.config.UseQwen {
 		aiProvider = "Qwen"

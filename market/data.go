@@ -3,9 +3,9 @@ package market
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"nofx/logger"
+	"nofx/security"
 	"sort"
 	"strconv"
 	"strings"
@@ -649,7 +649,7 @@ func getFundingRate(symbol string) (float64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return 0, err
 	}

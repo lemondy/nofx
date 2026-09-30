@@ -51,7 +51,7 @@ export const configApi = {
     await CryptoService.initialize(publicKey)
 
     // Get user info from localStorage
-    const userId = localStorage.getItem('user_id') || ''
+    const userId = (JSON.parse(localStorage.getItem('auth_user') || 'null')?.id as string) || ''
     const sessionId = sessionStorage.getItem('session_id') || ''
 
     // Encrypt sensitive data
@@ -121,7 +121,7 @@ export const configApi = {
     await CryptoService.initialize(publicKey)
 
     // Get user info
-    const userId = localStorage.getItem('user_id') || ''
+    const userId = (JSON.parse(localStorage.getItem('auth_user') || 'null')?.id as string) || ''
     const sessionId = sessionStorage.getItem('session_id') || ''
 
     // Encrypt sensitive data
@@ -165,7 +165,7 @@ export const configApi = {
     await CryptoService.initialize(publicKey)
 
     // Get user info from localStorage
-    const userId = localStorage.getItem('user_id') || ''
+    const userId = (JSON.parse(localStorage.getItem('auth_user') || 'null')?.id as string) || ''
     const sessionId = sessionStorage.getItem('session_id') || ''
 
     // Encrypt sensitive data

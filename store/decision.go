@@ -120,9 +120,11 @@ func (s *DecisionStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'decision_records'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'decision_records'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &DecisionRecordDB{})
 		}
 	}
 	return s.db.AutoMigrate(&DecisionRecordDB{})

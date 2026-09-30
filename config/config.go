@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"nofx/mcp"
 	"nofx/telemetry"
 	"os"
@@ -17,6 +19,7 @@ var global *Config
 type Config struct {
 	// Service configuration
 	APIServerPort int
+	APIServerHost string
 	JWTSecret     string
 	JWTTTL        time.Duration // login-token lifetime, JWT_TTL_HOURS (default 168h = 7 days)
 
@@ -37,7 +40,7 @@ type Config struct {
 
 	// Experience improvement (anonymous usage statistics)
 	// Helps us understand product usage and improve the experience
-	// Set EXPERIENCE_IMPROVEMENT=false to disable
+	// Set EXPERIENCE_IMPROVEMENT=true to opt in
 	ExperienceImprovement bool
 
 	// Market data provider API keys
@@ -51,7 +54,8 @@ type Config struct {
 func Init() {
 	cfg := &Config{
 		APIServerPort:         8080,
-		ExperienceImprovement: true, // Default: enabled to help improve the product
+		APIServerHost:         "127.0.0.1",
+		ExperienceImprovement: false,
 		// Database defaults
 		DBType:    "sqlite",
 		DBPath:    "data/data.db",
@@ -66,8 +70,17 @@ func Init() {
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		cfg.JWTSecret = strings.TrimSpace(v)
 	}
-	if cfg.JWTSecret == "" {
-		cfg.JWTSecret = "default-jwt-secret-change-in-production"
+	if len(cfg.JWTSecret) < 32 || cfg.JWTSecret == "default-jwt-secret-change-in-production" || cfg.JWTSecret == "your-jwt-secret-change-this-in-production" {
+		// An unconfigured installation gets an unpredictable process-local key.
+		// Configure JWT_SECRET (32+ characters) to preserve sessions across restarts.
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			panic(err)
+		}
+		cfg.JWTSecret = hex.EncodeToString(key)
+	}
+	if v := strings.TrimSpace(os.Getenv("API_SERVER_HOST")); v != "" {
+		cfg.APIServerHost = v
 	}
 
 	// Login-token lifetime: JWT_TTL_HOURS, default 168h (7 days)
@@ -91,9 +104,9 @@ func Init() {
 	}
 
 	// Experience improvement: anonymous usage statistics
-	// Default enabled, set EXPERIENCE_IMPROVEMENT=false to disable
+	// Disabled by default; explicit opt-in required
 	if v := os.Getenv("EXPERIENCE_IMPROVEMENT"); v != "" {
-		cfg.ExperienceImprovement = strings.ToLower(v) != "false"
+		cfg.ExperienceImprovement = strings.EqualFold(v, "true")
 	}
 
 	// Market data provider API keys

@@ -18,12 +18,13 @@ import type { Exchange, AIModel } from '../types'
 type Tab = 'account' | 'models' | 'exchanges' | 'telegram'
 
 export function SettingsPage() {
- const { user } = useAuth()
+ const { user, token, logout } = useAuth()
  const { language } = useLanguage()
  const [activeTab, setActiveTab] = useState<Tab>('account')
  const [userMode, setUserModeState] = useState<UserMode>(() => getUserMode() ?? 'advanced')
 
  // Account state
+ const [currentPassword, setCurrentPassword] = useState('')
  const [newPassword, setNewPassword] = useState('')
  const [showPassword, setShowPassword] = useState(false)
  const [changingPassword, setChangingPassword] = useState(false)
@@ -71,15 +72,17 @@ export function SettingsPage() {
  method: 'PUT',
  headers: {
  'Content-Type': 'application/json',
- Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
+ Authorization: `Bearer ${token || ''}`,
  },
- body: JSON.stringify({ new_password: newPassword }),
+ body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
  })
  if (!res.ok) {
  const data = await res.json().catch(() => ({}))
  throw new Error(data.error || 'Failed to update password')
  }
- toast.success('Password updated successfully')
+ toast.success('Password updated. Please sign in again.')
+ setCurrentPassword('')
+ logout()
  setNewPassword('')
  } catch (err) {
  toast.error(err instanceof Error ? err.message : 'Failed to update password')
@@ -139,7 +142,7 @@ export function SettingsPage() {
 
  const request = {
  models: Object.fromEntries(
- updatedModels.map((m) => [m.provider, {
+ updatedModels.map((m) => [m.id, {
  enabled: m.enabled,
  api_key: m.apiKey || '',
  custom_api_url: m.customApiUrl || '',
@@ -165,9 +168,10 @@ export function SettingsPage() {
  )
  const request = {
  models: Object.fromEntries(
- updatedModels.map((m) => [m.provider, {
+ updatedModels.map((m) => [m.id, {
  enabled: m.enabled,
  api_key: m.apiKey || '',
+ clear_api_key: m.id === modelId,
  custom_api_url: m.customApiUrl || '',
  custom_model_name: m.customModelName || '',
  }])
@@ -371,6 +375,12 @@ export function SettingsPage() {
  <div className="border-t border-[#C0B9A2] pt-6">
  <h3 className="text-sm font-semibold text-[#1E1E1A] mb-4">Change Password</h3>
  <form onSubmit={handleChangePassword} className="space-y-4">
+ <label className="block text-xs font-medium text-[#6E6E60]">
+ Current Password
+ <input type="password" autoComplete="current-password" value={currentPassword}
+ onChange={(e) => setCurrentPassword(e.target.value)} required
+ className="w-full mt-2 bg-[#F2EFE6]/80 border border-[#B3AB92]/80 rounded-xl px-4 py-3 text-sm" />
+ </label>
  <div>
  <label className="block text-xs font-medium text-[#6E6E60] mb-2">New Password</label>
  <div className="relative">
@@ -393,7 +403,7 @@ export function SettingsPage() {
  </div>
  <button
  type="submit"
- disabled={changingPassword || newPassword.length < 8}
+ disabled={changingPassword || !currentPassword || newPassword.length < 8}
  className="w-full bg-nofx-gold hover:bg-yellow-400 active:scale-[0.98] text-black font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
  >
  {changingPassword ? 'Updating...' : 'Update Password'}

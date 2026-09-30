@@ -8,6 +8,7 @@ import (
 	"nofx/config"
 	"nofx/crypto"
 	"nofx/logger"
+	"nofx/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -121,6 +122,8 @@ func (s *Server) handleGetExchangeConfigs(c *gin.Context) {
 
 // handleUpdateExchangeConfigs Update exchange configurations (supports both encrypted and plain text based on config)
 func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	cfg := config.Get()
 
@@ -163,7 +166,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 		}
 
 		// Decrypt data
-		decrypted, err := s.cryptoHandler.cryptoService.DecryptSensitiveData(&encryptedPayload)
+		decrypted, err := s.cryptoHandler.cryptoService.DecryptSensitiveDataForUser(&encryptedPayload, userID)
 		if err != nil {
 			logger.Infof("❌ Failed to decrypt exchange config (UserID: %s): %v", userID, err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to decrypt data"})
@@ -179,16 +182,37 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 		logger.Infof("🔓 Decrypted exchange config data (UserID: %s)", userID)
 	}
 
+	// Validate the entire batch before any write.
+	for exchangeID, data := range req.Exchanges {
+		ex, err := s.store.Exchange().GetByID(userID, exchangeID)
+		if err != nil {
+			SafeNotFound(c, "Exchange")
+			return
+		}
+		if err := store.ValidateExchangeEnvironment(ex.ExchangeType, data.Testnet); err != nil {
+			SafeBadRequest(c, err.Error())
+			return
+		}
+	}
 	// Update each exchange's configuration and track traders that need reload
 	tradersToReload := make(map[string]bool)
 	for exchangeID, exchangeData := range req.Exchanges {
+		ex, err := s.store.Exchange().GetByID(userID, exchangeID)
+		if err != nil {
+			SafeNotFound(c, "Exchange")
+			return
+		}
+		if err := store.ValidateExchangeEnvironment(ex.ExchangeType, exchangeData.Testnet); err != nil {
+			SafeBadRequest(c, err.Error())
+			return
+		}
 		// Find traders using this exchange BEFORE updating
 		traders, _ := s.store.Trader().ListByExchangeID(userID, exchangeID)
 		for _, t := range traders {
 			tradersToReload[t.ID] = true
 		}
 
-		err := s.store.Exchange().Update(userID, exchangeID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Passphrase, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.HyperliquidUnifiedAcct, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey, exchangeData.LighterWalletAddr, exchangeData.LighterPrivateKey, exchangeData.LighterAPIKeyPrivateKey, exchangeData.LighterAPIKeyIndex)
+		err = s.store.Exchange().Update(userID, exchangeID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Passphrase, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.HyperliquidUnifiedAcct, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey, exchangeData.LighterWalletAddr, exchangeData.LighterPrivateKey, exchangeData.LighterAPIKeyPrivateKey, exchangeData.LighterAPIKeyIndex)
 		if err != nil {
 			SafeInternalError(c, fmt.Sprintf("Update exchange %s", exchangeID), err)
 			return
@@ -200,7 +224,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	// Remove affected traders from memory BEFORE reloading to pick up new config
 	for traderID := range tradersToReload {
 		logger.Infof("🔄 Removing trader %s from memory to reload with new exchange config", traderID)
-		s.traderManager.RemoveTrader(traderID)
+		s.removeTraderForReload(userID, traderID)
 	}
 
 	// Reload all traders for this user to make new config take effect immediately
@@ -253,7 +277,7 @@ func (s *Server) handleCreateExchange(c *gin.Context) {
 			return
 		}
 
-		decrypted, err := s.cryptoHandler.cryptoService.DecryptSensitiveData(&encryptedPayload)
+		decrypted, err := s.cryptoHandler.cryptoService.DecryptSensitiveDataForUser(&encryptedPayload, userID)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to decrypt data"})
 			return
@@ -267,7 +291,7 @@ func (s *Server) handleCreateExchange(c *gin.Context) {
 
 	// Validate exchange type
 	validTypes := map[string]bool{
-		"binance": true, "bybit": true, "okx": true, "bitget": true,
+		"binance": true, "binance_stocks": true, "bybit": true, "okx": true, "bitget": true,
 		"hyperliquid": true, "aster": true, "lighter": true, "gate": true, "kucoin": true, "indodax": true,
 	}
 	if !validTypes[req.ExchangeType] {
@@ -276,6 +300,10 @@ func (s *Server) handleCreateExchange(c *gin.Context) {
 	}
 
 	// Create new exchange account
+	if err := store.ValidateExchangeEnvironment(req.ExchangeType, req.Testnet); err != nil {
+		SafeBadRequest(c, err.Error())
+		return
+	}
 	id, err := s.store.Exchange().Create(
 		userID, req.ExchangeType, req.AccountName, req.Enabled,
 		req.APIKey, req.SecretKey, req.Passphrase, req.Testnet,
@@ -300,6 +328,8 @@ func (s *Server) handleCreateExchange(c *gin.Context) {
 
 // handleDeleteExchange Delete an exchange account
 func (s *Server) handleDeleteExchange(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	exchangeID := c.Param("id")
 
@@ -348,15 +378,14 @@ func (s *Server) handleGetSupportedExchanges(c *gin.Context) {
 		{ExchangeType: "binance", Name: "Binance Futures", Type: "cex"},
 		{ExchangeType: "binance_stocks", Name: "Binance Stocks (US Equity)", Type: "stock"},
 		{ExchangeType: "bybit", Name: "Bybit Futures", Type: "cex"},
+		{ExchangeType: "bitget", Name: "Bitget Futures", Type: "cex"},
+		{ExchangeType: "indodax", Name: "Indodax Spot", Type: "cex"},
 		{ExchangeType: "okx", Name: "OKX Futures", Type: "cex"},
 		{ExchangeType: "gate", Name: "Gate.io Futures", Type: "cex"},
 		{ExchangeType: "kucoin", Name: "KuCoin Futures", Type: "cex"},
 		{ExchangeType: "hyperliquid", Name: "Hyperliquid", Type: "dex"},
 		{ExchangeType: "aster", Name: "Aster DEX", Type: "dex"},
 		{ExchangeType: "lighter", Name: "LIGHTER DEX", Type: "dex"},
-		{ExchangeType: "alpaca", Name: "Alpaca (US Stocks)", Type: "stock"},
-		{ExchangeType: "forex", Name: "Forex (TwelveData)", Type: "forex"},
-		{ExchangeType: "metals", Name: "Metals (TwelveData)", Type: "metals"},
 	}
 
 	c.JSON(http.StatusOK, supportedExchanges)

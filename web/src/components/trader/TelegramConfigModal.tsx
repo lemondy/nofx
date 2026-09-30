@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Check, ChevronLeft, ExternalLink, MessageCircle, Unlink, ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
+import { httpClient } from '../../lib/httpClient'
 import { api } from '../../lib/api'
 import type { TelegramConfig, AIModel } from '../../types'
 import { t, type Language } from '../../i18n/translations'
@@ -47,6 +48,7 @@ interface TelegramConfigModalProps {
 }
 
 export function TelegramConfigModal({ onClose, language }: TelegramConfigModalProps) {
+ const [bindCode, setBindCode] = useState('')
  const [step, setStep] = useState(0)
  const [token, setToken] = useState('')
  const [selectedModelId, setSelectedModelId] = useState('')
@@ -56,6 +58,14 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
  const [isLoading, setIsLoading] = useState(true)
  const [isUnbinding, setIsUnbinding] = useState(false)
 
+ useEffect(() => {
+ if (step !== 1) return
+ let active = true
+ httpClient.post<{ code: string }>('/api/telegram/bind-code', {}).then(result => {
+ if (active && result.success && result.data) setBindCode(result.data.code)
+ }).catch(() => toast.error('Failed to generate binding code'))
+ return () => { active = false }
+ }, [step])
  // Load current config and available models
  useEffect(() => {
  Promise.all([
@@ -285,7 +295,8 @@ export function TelegramConfigModal({ onClose, language }: TelegramConfigModalPr
  </div>
  <div className="text-xs space-y-1" style={{ color: '#6E6E60' }}>
  <div>1. {t('telegram.step2Desc1', language)}</div>
- <div>2. {t('telegram.step2Desc2', language)} <code className="text-green-400">/start</code></div>
+ <div>2. {t('telegram.step2Desc2', language)} <code className="text-green-400 break-all">/start {bindCode || "..."}</code>
+ <div>{language === "zh" ? "验证码 5 分钟有效；过期后请重新打开此页面。" : "Code expires in 5 minutes. Reopen this page to refresh."}</div></div>
  <div>3. {t('telegram.step2Desc3', language)}</div>
  </div>
  </div>

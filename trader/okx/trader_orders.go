@@ -16,7 +16,7 @@ func (t *OKXTrader) OpenLong(symbol string, quantity float64, leverage int) (map
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("  ⚠️ Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	instId := t.convertSymbol(symbol)
@@ -31,6 +31,9 @@ func (t *OKXTrader) OpenLong(symbol string, quantity float64, leverage int) (map
 	// sz = quantity / ctVal (number of contracts = asset amount / asset per contract)
 	sz := quantity / inst.CtVal
 	szStr := t.formatSize(sz, inst)
+	if szStr == "0" {
+		return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	logger.Infof("  📊 OKX OpenLong: quantity=%.6f, ctVal=%.6f, contracts=%.2f", quantity, inst.CtVal, sz)
 
@@ -39,6 +42,9 @@ func (t *OKXTrader) OpenLong(symbol string, quantity float64, leverage int) (map
 		logger.Infof("  ⚠️ OKX market order size %.2f exceeds max %.2f, reducing to max", sz, inst.MaxMktSz)
 		sz = inst.MaxMktSz
 		szStr = t.formatSize(sz, inst)
+		if szStr == "0" {
+			return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+		}
 	}
 
 	body := map[string]interface{}{
@@ -93,7 +99,7 @@ func (t *OKXTrader) OpenShort(symbol string, quantity float64, leverage int) (ma
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("  ⚠️ Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	instId := t.convertSymbol(symbol)
@@ -108,6 +114,9 @@ func (t *OKXTrader) OpenShort(symbol string, quantity float64, leverage int) (ma
 	// sz = quantity / ctVal (number of contracts = asset amount / asset per contract)
 	sz := quantity / inst.CtVal
 	szStr := t.formatSize(sz, inst)
+	if szStr == "0" {
+		return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	logger.Infof("  📊 OKX OpenShort: quantity=%.6f, ctVal=%.6f, contracts=%.2f", quantity, inst.CtVal, sz)
 
@@ -116,6 +125,9 @@ func (t *OKXTrader) OpenShort(symbol string, quantity float64, leverage int) (ma
 		logger.Infof("  ⚠️ OKX market order size %.2f exceeds max %.2f, reducing to max", sz, inst.MaxMktSz)
 		sz = inst.MaxMktSz
 		szStr = t.formatSize(sz, inst)
+		if szStr == "0" {
+			return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+		}
 	}
 
 	body := map[string]interface{}{
@@ -220,6 +232,9 @@ func (t *OKXTrader) CloseLong(symbol string, quantity float64) (map[string]inter
 	// contracts = quantity / ctVal
 	contracts := quantity / inst.CtVal
 	szStr := t.formatSize(contracts, inst)
+	if szStr == "0" {
+		return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	logger.Infof("🔻 OKX close long: symbol=%s, instId=%s, quantity=%.6f, ctVal=%.6f, contracts=%.2f, szStr=%s, posMode=%s, mgnMode=%s",
 		symbol, instId, quantity, inst.CtVal, contracts, szStr, t.positionMode, posMgnMode)
@@ -331,6 +346,9 @@ func (t *OKXTrader) CloseShort(symbol string, quantity float64) (map[string]inte
 	// contracts = quantity / ctVal
 	contracts := quantity / inst.CtVal
 	szStr := t.formatSize(contracts, inst)
+	if szStr == "0" {
+		return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	logger.Infof("🔻 OKX close short: symbol=%s, quantity=%.6f, ctVal=%.6f, contracts=%.2f, szStr=%s, posMode=%s, mgnMode=%s",
 		symbol, quantity, inst.CtVal, contracts, szStr, t.positionMode, posMgnMode)
@@ -401,6 +419,9 @@ func (t *OKXTrader) SetStopLoss(symbol string, positionSide string, quantity, st
 	// Calculate contract size: quantity (in base asset) / ctVal (asset per contract)
 	sz := quantity / inst.CtVal
 	szStr := t.formatSize(sz, inst)
+	if szStr == "0" {
+		return fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	// Determine direction
 	side := "sell"
@@ -444,6 +465,9 @@ func (t *OKXTrader) SetTakeProfit(symbol string, positionSide string, quantity, 
 	// Calculate contract size: quantity (in base asset) / ctVal (asset per contract)
 	sz := quantity / inst.CtVal
 	szStr := t.formatSize(sz, inst)
+	if szStr == "0" {
+		return fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	// Determine direction
 	side := "sell"
@@ -806,6 +830,9 @@ func (t *OKXTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.LimitO
 	// Convert quantity to contract size
 	sz := req.Quantity / inst.CtVal
 	szStr := t.formatSize(sz, inst)
+	if szStr == "0" {
+		return nil, fmt.Errorf("quantity below exchange minimum or invalid precision")
+	}
 
 	// Determine side and position side
 	side := "buy"

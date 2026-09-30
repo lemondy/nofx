@@ -39,6 +39,10 @@ func (s *Server) handleLogout(c *gin.Context) {
 	} else {
 		exp = time.Now().Add(24 * time.Hour)
 	}
+	if err := s.store.RevokeToken(tokenString, exp); err != nil {
+		SafeInternalError(c, "Failed to logout", err)
+		return
+	}
 	auth.BlacklistToken(tokenString, exp)
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
 }
@@ -60,7 +64,7 @@ func (s *Server) handleRegister(c *gin.Context) {
 
 	var req struct {
 		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=6"`
+		Password string `json:"password" binding:"required,min=8,max=72"`
 		Lang     string `json:"lang"`
 	}
 
@@ -96,14 +100,14 @@ func (s *Server) handleRegister(c *gin.Context) {
 		PasswordHash: passwordHash,
 	}
 
-	err = s.store.User().Create(user)
+	err = s.store.User().CreateFirst(user)
 	if err != nil {
 		SafeInternalError(c, "Failed to create user", err)
 		return
 	}
 
 	// Generate JWT token
-	token, err := auth.GenerateJWT(user.ID, user.Email)
+	token, err := auth.GenerateJWTWithVersion(user.ID, user.Email, user.TokenVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
@@ -149,7 +153,7 @@ func (s *Server) handleLogin(c *gin.Context) {
 	}
 
 	// Issue token directly after password verification.
-	token, err := auth.GenerateJWT(user.ID, user.Email)
+	token, err := auth.GenerateJWTWithVersion(user.ID, user.Email, user.TokenVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
@@ -167,10 +171,16 @@ func (s *Server) handleLogin(c *gin.Context) {
 func (s *Server) handleChangePassword(c *gin.Context) {
 	userID := c.GetString("user_id")
 	var req struct {
-		NewPassword string `json:"new_password" binding:"required,min=8"`
+		CurrentPassword string `json:"current_password" binding:"required"`
+		NewPassword     string `json:"new_password" binding:"required,min=8,max=72"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		SafeBadRequest(c, "new_password is required (min 8 chars)")
+		return
+	}
+	user, err := s.store.User().GetByID(userID)
+	if err != nil || !auth.CheckPassword(req.CurrentPassword, user.PasswordHash) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Current password incorrect"})
 		return
 	}
 	hash, err := auth.HashPassword(req.NewPassword)
@@ -187,39 +197,7 @@ func (s *Server) handleChangePassword(c *gin.Context) {
 
 // handleResetPassword Reset password via email and new password
 func (s *Server) handleResetPassword(c *gin.Context) {
-	var req struct {
-		Email       string `json:"email" binding:"required,email"`
-		NewPassword string `json:"new_password" binding:"required,min=6"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		SafeBadRequest(c, "Invalid request parameters")
-		return
-	}
-
-	// Query user
-	user, err := s.store.User().GetByEmail(req.Email)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Email does not exist"})
-		return
-	}
-
-	// Generate new password hash
-	newPasswordHash, err := auth.HashPassword(req.NewPassword)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Password processing failed"})
-		return
-	}
-
-	// Update password
-	err = s.store.User().UpdatePassword(user.ID, newPasswordHash)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Password update failed"})
-		return
-	}
-
-	logger.Infof("✓ User %s password has been reset", user.Email)
-	c.JSON(http.StatusOK, gin.H{"message": "Password reset successful, please login with new password"})
+	c.JSON(http.StatusGone, gin.H{"error": "Password recovery is disabled. Sign in and change your password in settings."})
 }
 
 // initUserDefaultConfigs Initialize default configs for new user

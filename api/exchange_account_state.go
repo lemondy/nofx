@@ -13,6 +13,7 @@ import (
 	"nofx/trader"
 	"nofx/trader/aster"
 	"nofx/trader/binance"
+	"nofx/trader/binance_stocks"
 	"nofx/trader/bitget"
 	"nofx/trader/bybit"
 	"nofx/trader/gate"
@@ -223,7 +224,12 @@ func probeExchangeAccountState(exchangeCfg *store.Exchange, userID string) Excha
 }
 
 func buildExchangeProbeTrader(exchangeCfg *store.Exchange, userID string) (trader.Trader, error) {
+	if err := store.ValidateExchangeEnvironment(exchangeCfg.ExchangeType, exchangeCfg.Testnet); err != nil {
+		return nil, err
+	}
 	switch exchangeCfg.ExchangeType {
+	case "binance_stocks":
+		return binance_stocks.NewStocksTrader(string(exchangeCfg.APIKey), string(exchangeCfg.SecretKey)), nil
 	case "binance":
 		return binance.NewFuturesTrader(string(exchangeCfg.APIKey), string(exchangeCfg.SecretKey), userID), nil
 	case "bybit":
@@ -256,7 +262,7 @@ func buildExchangeProbeTrader(exchangeCfg *store.Exchange, userID string) (trade
 			exchangeCfg.LighterWalletAddr,
 			string(exchangeCfg.LighterAPIKeyPrivateKey),
 			exchangeCfg.LighterAPIKeyIndex,
-			false,
+			exchangeCfg.Testnet,
 		)
 	default:
 		return nil, fmt.Errorf("unsupported exchange type: %s", exchangeCfg.ExchangeType)

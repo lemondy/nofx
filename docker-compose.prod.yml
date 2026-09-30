@@ -24,6 +24,7 @@ services:
       - .env
     environment:
       - TZ=${TZ:-Asia/Shanghai}
+      - API_SERVER_HOST=0.0.0.0
       - AI_MAX_TOKENS=8000
     networks:
       - nofx-network

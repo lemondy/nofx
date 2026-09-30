@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
+	"nofx/security"
 	"strings"
 	"time"
 )
@@ -61,7 +61,7 @@ func QueryUSDCBalanceStr(address string) string {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return "0.00"
 	}

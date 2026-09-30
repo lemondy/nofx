@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/url"
 	"nofx/logger"
+	"nofx/security"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +59,7 @@ type AccountResponse struct {
 
 // LighterTraderV2 New implementation using official lighter-go SDK
 type LighterTraderV2 struct {
+	orderSync  tradertypes.SyncLoop
 	ctx        context.Context
 	walletAddr string // Ethereum wallet address
 
@@ -211,7 +212,7 @@ func (t *LighterTraderV2) getAccountByL1Address() (*AccountInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +287,7 @@ func (t *LighterTraderV2) getApiKeyFromServer() (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return "", err
 	}
@@ -484,7 +485,7 @@ func (t *LighterTraderV2) GetTrades(startTime time.Time, limit int) ([]tradertyp
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

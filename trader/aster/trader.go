@@ -6,12 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"math/big"
 	"net/http"
 	"net/url"
 	"nofx/hook"
+	"nofx/security"
+	"nofx/trader/types"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 
 // AsterTrader Aster trading platform implementation
 type AsterTrader struct {
+	orderSync  types.SyncLoop
 	ctx        context.Context
 	user       string            // Main wallet address (ERC20)
 	signer     string            // API wallet address
@@ -100,7 +102,7 @@ func (t *AsterTrader) getPrecision(symbol string) (SymbolPrecision, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := security.ReadResponseBody(resp.Body)
 	var info struct {
 		Symbols []struct {
 			Symbol            string                   `json:"symbol"`
@@ -187,12 +189,11 @@ func (t *AsterTrader) formatQuantity(symbol string, quantity float64) (float64, 
 
 	// Prioritize step size to ensure quantity is a multiple of step size
 	if prec.StepSize > 0 {
-		return roundToTickSize(quantity, prec.StepSize), nil
+		return types.FloorQuantity(quantity, prec.StepSize, 0, 0)
 	}
 
 	// If no step size, round by precision
-	multiplier := math.Pow10(prec.QuantityPrecision)
-	return math.Round(quantity*multiplier) / multiplier, nil
+	return types.FloorQuantity(quantity, math.Pow10(-prec.QuantityPrecision), 0, 0)
 }
 
 // formatFloatWithPrecision Format float to string with specified precision (remove trailing zeros)
@@ -392,7 +393,7 @@ func (t *AsterTrader) doRequest(method, endpoint string, params map[string]inter
 		}
 		defer resp.Body.Close()
 
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := security.ReadResponseBody(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 		}
@@ -418,7 +419,7 @@ func (t *AsterTrader) doRequest(method, endpoint string, params map[string]inter
 		}
 		defer resp.Body.Close()
 
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := security.ReadResponseBody(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 		}

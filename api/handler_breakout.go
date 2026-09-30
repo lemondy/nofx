@@ -1,7 +1,10 @@
 package api
 
 import (
+	"fmt"
+	"golang.org/x/sync/singleflight"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,13 +25,18 @@ type breakoutCacheEntry struct {
 }
 
 var (
+	breakoutAnalyze = func(symbol string) (*breakout.Report, error) {
+		return breakout.Analyze(symbol, breakout.NewBinanceDS(symbol))
+	}
 	breakoutCache   = map[string]*breakoutCacheEntry{}
 	breakoutCacheMu sync.RWMutex
 	scanCache       *struct {
 		results []breakout.ScanResult
 		expires time.Time
 	}
-	breakoutInflight sync.Map // symbol -> *sync.WaitGroup-ish (singleflight-lite)
+	breakoutSlots    = make(chan struct{}, 8)
+	breakoutInflight singleflight.Group
+	scanComputeMu    sync.Mutex
 )
 
 const (
@@ -38,7 +46,16 @@ const (
 )
 
 // getBreakoutReport returns a cached or freshly computed report.
+var breakoutSymbol = regexp.MustCompile("^[A-Z0-9]{2,24}USDT$")
+
 func getBreakoutReport(symbol string) (*breakout.Report, error) {
+	value, err, _ := breakoutInflight.Do(symbol, func() (interface{}, error) { return computeBreakoutReport(symbol) })
+	if value == nil {
+		return nil, err
+	}
+	return value.(*breakout.Report), err
+}
+func computeBreakoutReport(symbol string) (*breakout.Report, error) {
 	breakoutCacheMu.RLock()
 	if e, ok := breakoutCache[symbol]; ok && time.Now().Before(e.expires) {
 		r, err := e.report, e.err
@@ -55,14 +72,34 @@ func getBreakoutReport(symbol string) (*breakout.Report, error) {
 	}
 	breakoutCacheMu.Unlock()
 
-	report, err := breakout.Analyze(symbol, breakout.NewBinanceDS(symbol))
+	select {
+	case breakoutSlots <- struct{}{}:
+	default:
+		return nil, fmt.Errorf("breakout analysis is busy; retry shortly")
+	}
+	report, err := func() (*breakout.Report, error) { defer func() { <-breakoutSlots }(); return breakoutAnalyze(symbol) }()
 
 	breakoutCacheMu.Lock()
+	if len(breakoutCache) >= 256 {
+		oldest := ""
+		var oldestAt time.Time
+		for key, entry := range breakoutCache {
+			if oldest == "" || entry.fetched.Before(oldestAt) {
+				oldest = key
+				oldestAt = entry.fetched
+			}
+		}
+		delete(breakoutCache, oldest)
+	}
+	ttl := breakoutCacheTTL
+	if err != nil {
+		ttl = breakoutCacheBusy
+	}
 	breakoutCache[symbol] = &breakoutCacheEntry{
 		report: report, err: err,
 		fetched: time.Now(),
 		// On error, retry after a short window; success lives for the full TTL.
-		expires: time.Now().Add(breakoutCacheTTL),
+		expires: time.Now().Add(ttl),
 	}
 	breakoutCacheMu.Unlock()
 	return report, err
@@ -71,7 +108,7 @@ func getBreakoutReport(symbol string) (*breakout.Report, error) {
 // handleBreakout GET /api/breakout?symbol=BTCUSDT
 func (s *Server) handleBreakout(c *gin.Context) {
 	symbol := strings.ToUpper(strings.TrimSpace(c.Query("symbol")))
-	if symbol == "" {
+	if !breakoutSymbol.MatchString(symbol) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol parameter is required"})
 		return
 	}
@@ -86,6 +123,12 @@ func (s *Server) handleBreakout(c *gin.Context) {
 
 // handleBreakoutScan GET /api/breakout/scan?limit=10&concurrency=4
 func (s *Server) handleBreakoutScan(c *gin.Context) {
+	if !scanComputeMu.TryLock() {
+		c.Header("Retry-After", "5")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Scan already in progress"})
+		return
+	}
+	defer scanComputeMu.Unlock()
 	limit := 10
 	if v, err := strconv.Atoi(c.DefaultQuery("limit", "10")); err == nil && v > 0 && v <= 30 {
 		limit = v
@@ -98,6 +141,9 @@ func (s *Server) handleBreakoutScan(c *gin.Context) {
 	breakoutCacheMu.RLock()
 	if scanCache != nil && time.Now().Before(scanCache.expires) {
 		res := scanCache.results
+		if len(res) > limit {
+			res = res[:limit]
+		}
 		breakoutCacheMu.RUnlock()
 		c.JSON(http.StatusOK, gin.H{
 			"generated_at": time.Now().UTC(),
@@ -113,9 +159,6 @@ func (s *Server) handleBreakoutScan(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list symbols: " + err.Error()})
 		return
 	}
-	if len(symbols) > limit {
-		symbols = symbols[:limit]
-	}
 
 	results := breakout.AnalyzeMany(symbols, conc)
 
@@ -125,6 +168,9 @@ func (s *Server) handleBreakoutScan(c *gin.Context) {
 		expires time.Time
 	}{results: results, expires: time.Now().Add(scanCacheTTL)}
 	breakoutCacheMu.Unlock()
+	if len(results) > limit {
+		results = results[:limit]
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"generated_at": time.Now().UTC(),

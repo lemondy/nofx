@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,15 +14,17 @@ import (
 
 // TelegramConfig stores the Telegram bot binding (single row, always ID=1)
 type TelegramConfig struct {
-	ID        uint      `gorm:"primaryKey"`
-	BotToken  string    `gorm:"column:bot_token"`
-	ChatID    int64     `gorm:"column:chat_id"`
-	Username  string    `gorm:"column:username"` // @username for display
-	BoundAt   time.Time `gorm:"column:bound_at"`
-	ModelID   string    `gorm:"column:model_id;default:''"` // AI model used for Telegram replies
-	Language  string    `gorm:"column:language;default:''"` // "zh" or "en"; empty = not chosen yet
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	BindCodeHash    string
+	BindCodeExpires time.Time
+	ID              uint      `gorm:"primaryKey"`
+	BotToken        string    `gorm:"column:bot_token"`
+	ChatID          int64     `gorm:"column:chat_id"`
+	Username        string    `gorm:"column:username"` // @username for display
+	BoundAt         time.Time `gorm:"column:bound_at"`
+	ModelID         string    `gorm:"column:model_id;default:''"` // AI model used for Telegram replies
+	Language        string    `gorm:"column:language;default:''"` // "zh" or "en"; empty = not chosen yet
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // String returns a safe string representation of TelegramConfig with the token masked.
@@ -34,15 +39,16 @@ func (tc TelegramConfig) String() string {
 
 // TelegramConfigStore defines the interface for Telegram bot binding operations
 type TelegramConfigStore interface {
-	Get() (*TelegramConfig, error)                // Get current config (may not exist)
-	SaveToken(botToken string) error              // Save bot token only (Web UI sets this)
-	Save(botToken, modelID string) error          // Save bot token + selected AI model
-	BindUser(chatID int64, username string) error // Called on first /start
-	IsBound() (bool, error)                       // Check if any user is bound
-	GetBoundChatID() (int64, error)               // Get bound chat ID (0 if not bound)
-	Unbind() error                                // Remove binding
-	SetLanguage(lang string) error                // Set UI language ("en" or "zh")
-	GetLanguage() string                          // Get UI language; returns "en" if not set
+	IssueBindCode() (string, error)
+	BindWithCode(code string, chatID int64, username string) error
+	Get() (*TelegramConfig, error)       // Get current config (may not exist)
+	SaveToken(botToken string) error     // Save bot token only (Web UI sets this)
+	Save(botToken, modelID string) error // Save bot token + selected AI model
+	IsBound() (bool, error)              // Check if any user is bound
+	GetBoundChatID() (int64, error)      // Get bound chat ID (0 if not bound)
+	Unbind() error                       // Remove binding
+	SetLanguage(lang string) error       // Set UI language ("en" or "zh")
+	GetLanguage() string                 // Get UI language; returns "en" if not set
 }
 
 type telegramConfigStore struct {
@@ -87,21 +93,6 @@ func (s *telegramConfigStore) Save(botToken, modelID string) error {
 	return s.db.Save(&cfg).Error
 }
 
-func (s *telegramConfigStore) BindUser(chatID int64, username string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var cfg TelegramConfig
-	result := s.db.First(&cfg, 1)
-	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return result.Error
-	}
-	cfg.ID = 1
-	cfg.ChatID = chatID
-	cfg.Username = username
-	cfg.BoundAt = time.Now()
-	return s.db.Save(&cfg).Error
-}
-
 func (s *telegramConfigStore) IsBound() (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -132,8 +123,10 @@ func (s *telegramConfigStore) Unbind() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.db.Model(&TelegramConfig{}).Where("id = 1").Updates(map[string]interface{}{
-		"chat_id":  0,
-		"username": "",
+		"chat_id":           0,
+		"username":          "",
+		"bind_code_hash":    "",
+		"bind_code_expires": time.Time{},
 	}).Error
 }
 
@@ -161,4 +154,45 @@ func (s *telegramConfigStore) GetLanguage() string {
 		return "en"
 	}
 	return cfg.Language
+}
+
+func (s *telegramConfigStore) IssueBindCode() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cfg TelegramConfig
+	if err := s.db.First(&cfg, 1).Error; err != nil {
+		return "", err
+	}
+	if cfg.ChatID != 0 {
+		return "", errors.New("already bound")
+	}
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	code := hex.EncodeToString(bytes[:])
+	hash := sha256.Sum256([]byte(code))
+	err := s.db.Model(&TelegramConfig{}).Where("id = 1 AND chat_id = 0").Updates(map[string]interface{}{
+		"bind_code_hash": hex.EncodeToString(hash[:]), "bind_code_expires": time.Now().Add(5 * time.Minute),
+	}).Error
+	return code, err
+}
+
+func (s *telegramConfigStore) BindWithCode(code string, chatID int64, username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if code == "" || chatID == 0 {
+		return errors.New("invalid binding code")
+	}
+	hash := sha256.Sum256([]byte(code))
+	result := s.db.Model(&TelegramConfig{}).Where("id = 1 AND chat_id = 0 AND bind_code_hash = ? AND bind_code_expires > ?", hex.EncodeToString(hash[:]), time.Now()).Updates(map[string]interface{}{
+		"chat_id": chatID, "username": username, "bound_at": time.Now(), "bind_code_hash": "", "bind_code_expires": time.Time{},
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("binding code invalid, used or expired")
+	}
+	return nil
 }

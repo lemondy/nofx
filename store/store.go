@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"nofx/logger"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -124,6 +125,12 @@ func NewFromDB(db *sql.DB) *Store {
 
 // initTables initializes all database tables using GORM AutoMigrate
 func (s *Store) initTables() error {
+	if err := s.gdb.AutoMigrate(&RevokedToken{}); err != nil {
+		return err
+	}
+	if err := s.gdb.Where("expires_at <= ?", time.Now().UTC()).Delete(&RevokedToken{}).Error; err != nil {
+		return err
+	}
 	// Create system_config table (GORM handles this via raw SQL for simplicity)
 	if err := s.gdb.Exec(`
 		CREATE TABLE IF NOT EXISTS system_config (

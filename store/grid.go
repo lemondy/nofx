@@ -223,18 +223,33 @@ func (s *GridStore) InitTables() error {
 	// For PostgreSQL with existing tables, skip AutoMigrate to avoid type conflicts
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'grid_configs'`).Scan(&tableExists)
-
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'grid_configs'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
 			// Tables exist, just ensure indexes
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_configs_user_id ON grid_configs(user_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_configs_trader_id ON grid_configs(trader_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_instances_config_id ON grid_instances(config_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_levels_instance_id ON grid_levels(instance_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_events_instance_id ON grid_events(instance_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_events_level_id ON grid_events(level_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_regime_assessments_instance_id ON grid_regime_assessments(instance_id)`)
-			return nil
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_configs_user_id ON grid_configs(user_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_configs_trader_id ON grid_configs(trader_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_instances_config_id ON grid_instances(config_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_levels_instance_id ON grid_levels(instance_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_events_instance_id ON grid_events(instance_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_events_level_id ON grid_events(level_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_grid_regime_assessments_instance_id ON grid_regime_assessments(instance_id)`).Error; err != nil {
+				return err
+			}
+			return ensureColumns(s.db, &GridConfigModel{}, &GridInstanceModel{}, &GridLevelModel{}, &GridEventModel{}, &GridRegimeAssessmentModel{})
 		}
 	}
 

@@ -861,17 +861,28 @@ func (s *StrategyStore) Create(strategy *Strategy) error {
 }
 
 // Update update a strategy
-func (s *StrategyStore) Update(strategy *Strategy) error {
-	return s.db.Model(&Strategy{}).
-		Where("id = ? AND user_id = ?", strategy.ID, strategy.UserID).
-		Updates(map[string]interface{}{
-			"name":           strategy.Name,
-			"description":    strategy.Description,
-			"config":         strategy.Config,
-			"is_public":      strategy.IsPublic,
-			"config_visible": strategy.ConfigVisible,
-			"updated_at":     time.Now().UTC(),
-		}).Error
+var ErrStrategyConflict = fmt.Errorf("strategy changed since it was loaded")
+
+func (s *StrategyStore) Update(strategy *Strategy, expectedUpdatedAt ...time.Time) error {
+	query := s.db.Model(&Strategy{}).Where("id = ? AND user_id = ?", strategy.ID, strategy.UserID)
+	if len(expectedUpdatedAt) > 0 {
+		query = query.Where("updated_at = ?", expectedUpdatedAt[0])
+	}
+	result := query.Updates(map[string]interface{}{
+		"name":           strategy.Name,
+		"description":    strategy.Description,
+		"config":         strategy.Config,
+		"is_public":      strategy.IsPublic,
+		"config_visible": strategy.ConfigVisible,
+		"updated_at":     time.Now().UTC(),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrStrategyConflict
+	}
+	return nil
 }
 
 // Delete delete a strategy
@@ -957,16 +968,14 @@ func (s *StrategyStore) GetDefault() (*Strategy, error) {
 // SetActive set active strategy (will first deactivate other strategies)
 func (s *StrategyStore) SetActive(userID, strategyID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		// first deactivate all strategies for the user
-		if err := tx.Model(&Strategy{}).Where("user_id = ?", userID).
-			Update("is_active", false).Error; err != nil {
+		var target Strategy
+		if err := tx.Where("id = ? AND user_id = ? AND is_default = ?", strategyID, userID, false).First(&target).Error; err != nil {
 			return err
 		}
-
-		// activate specified strategy
-		return tx.Model(&Strategy{}).
-			Where("id = ? AND (user_id = ? OR is_default = ?)", strategyID, userID, true).
-			Update("is_active", true).Error
+		if err := tx.Model(&Strategy{}).Where("user_id = ? AND is_default = ?", userID, false).Update("is_active", false).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Strategy{}).Where("id = ? AND user_id = ?", strategyID, userID).Update("is_active", true).Error
 	})
 }
 

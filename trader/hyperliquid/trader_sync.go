@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
 	"strings"
 	"time"
 )
@@ -74,7 +74,7 @@ func (t *HyperliquidTrader) fetchXyzMeta() error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}

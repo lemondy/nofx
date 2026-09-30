@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,6 +48,8 @@ type AADData struct {
 }
 
 type CryptoService struct {
+	replayMu   sync.Mutex
+	replay     map[string]time.Time
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 	dataKey    []byte
@@ -283,6 +286,9 @@ func isEncryptedStorageValue(value string) bool {
 
 func (cs *CryptoService) DecryptPayload(payload *EncryptedPayload) ([]byte, error) {
 	// 1. Validate timestamp (prevent replay attacks)
+	if payload == nil || payload.TS == 0 || payload.AAD == "" {
+		return nil, errors.New("timestamp and authenticated context required")
+	}
 	if payload.TS != 0 {
 		elapsed := time.Since(time.Unix(payload.TS, 0))
 		if elapsed > 5*time.Minute || elapsed < -1*time.Minute {
@@ -314,8 +320,12 @@ func (cs *CryptoService) DecryptPayload(payload *EncryptedPayload) ([]byte, erro
 		}
 
 		var aadData AADData
-		if err := json.Unmarshal(aad, &aadData); err == nil {
-			// Additional validation logic can be added here
+		if err := json.Unmarshal(aad, &aadData); err != nil {
+			return nil, errors.New("invalid authenticated context")
+		} else {
+			if aadData.TS != payload.TS || aadData.Purpose != "sensitive_data_encryption" || aadData.UserID == "" {
+				return nil, errors.New("invalid authenticated context")
+			}
 		}
 	}
 
@@ -429,12 +439,14 @@ func (es *EncryptedString) Scan(value interface{}) error {
 		return nil
 	}
 
+	if globalCryptoService == nil && isEncryptedStorageValue(str) {
+		return errors.New("credential encryption service not configured")
+	}
 	// Decrypt if crypto service is set
 	if globalCryptoService != nil && str != "" && globalCryptoService.IsEncryptedStorageValue(str) {
 		decrypted, err := globalCryptoService.DecryptFromStorage(str)
 		if err != nil {
-			// If decryption fails, return the original value
-			*es = EncryptedString(str)
+			return fmt.Errorf("failed to decrypt stored credential: %w", err)
 		} else {
 			*es = EncryptedString(decrypted)
 		}
@@ -455,12 +467,11 @@ func (es EncryptedString) Value() (driver.Value, error) {
 	if globalCryptoService != nil {
 		encrypted, err := globalCryptoService.EncryptForStorage(string(es))
 		if err != nil {
-			// If encryption fails, return the original value
-			return string(es), nil
+			return nil, fmt.Errorf("failed to encrypt credential: %w", err)
 		}
 		return encrypted, nil
 	}
-	return string(es), nil
+	return nil, errors.New("credential encryption service not configured")
 }
 
 // String returns the plaintext string value

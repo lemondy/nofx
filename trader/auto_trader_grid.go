@@ -292,6 +292,11 @@ func (at *AutoTrader) InitializeGrid() error {
 	}
 
 	gridConfig := at.config.StrategyConfig.GridConfig
+	if err := gridConfig.Validate(); err != nil {
+		return err
+	}
+	at.runtimeMu.Lock()
+	defer at.runtimeMu.Unlock()
 	at.gridState = NewGridState(gridConfig)
 
 	// Get current market price
@@ -317,21 +322,22 @@ func (at *AutoTrader) InitializeGrid() error {
 	}
 
 	// Calculate grid spacing
+	if at.gridState.LowerPrice <= 0 || at.gridState.UpperPrice <= at.gridState.LowerPrice {
+		return fmt.Errorf("invalid calculated grid bounds")
+	}
 	at.gridState.GridSpacing = (at.gridState.UpperPrice - at.gridState.LowerPrice) / float64(gridConfig.GridCount-1)
 
 	// Initialize grid levels
 	at.initializeGridLevels(price, gridConfig)
 
-	at.gridState.IsInitialized = true
-
 	// CRITICAL: Set leverage on exchange before trading
 	if err := at.trader.SetLeverage(gridConfig.Symbol, gridConfig.Leverage); err != nil {
-		logger.Warnf("[Grid] Failed to set leverage %dx on exchange: %v", gridConfig.Leverage, err)
-		// Not fatal - continue with default leverage
+		return fmt.Errorf("failed to set grid leverage: %w", err)
 	} else {
 		logger.Infof("[Grid] Leverage set to %dx for %s", gridConfig.Leverage, gridConfig.Symbol)
 	}
 
+	at.gridState.IsInitialized = true
 	logger.Infof("[Grid] Initialized: %d levels, $%.2f - $%.2f, spacing $%.2f",
 		gridConfig.GridCount, at.gridState.LowerPrice, at.gridState.UpperPrice, at.gridState.GridSpacing)
 

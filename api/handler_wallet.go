@@ -1,106 +1,28 @@
 package api
 
 import (
-	"encoding/hex"
-	"fmt"
-	"net/http"
-	"nofx/wallet"
-	"strings"
-
-	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/gin-gonic/gin"
+	"net/http"
 )
 
-type walletValidateRequest struct {
-	PrivateKey string `json:"private_key"`
-}
-
-type walletValidateResponse struct {
-	Valid       bool   `json:"valid"`
-	Address     string `json:"address,omitempty"`
-	BalanceUSDC string `json:"balance_usdc,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
-
+// Private keys never leave the browser. This endpoint validates public addresses only.
 func (s *Server) handleWalletValidate(c *gin.Context) {
-	var req walletValidateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, walletValidateResponse{
-			Valid: false,
-			Error: "invalid request body",
-		})
+	var req struct {
+		Address    string `json:"address"`
+		PrivateKey string `json:"private_key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.PrivateKey != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": "send a public address, never a private key"})
 		return
 	}
-
-	pk := req.PrivateKey
-
-	// Validate format
-	if !strings.HasPrefix(pk, "0x") {
-		c.JSON(http.StatusOK, walletValidateResponse{
-			Valid: false,
-			Error: "missing 0x prefix",
-		})
+	if !common.IsHexAddress(req.Address) {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": "invalid public address"})
 		return
 	}
-
-	if len(pk) != 66 {
-		c.JSON(http.StatusOK, walletValidateResponse{
-			Valid: false,
-			Error: fmt.Sprintf("should be 66 characters, got %d", len(pk)),
-		})
-		return
-	}
-
-	hexPart := pk[2:]
-	if _, err := hex.DecodeString(hexPart); err != nil {
-		c.JSON(http.StatusOK, walletValidateResponse{
-			Valid: false,
-			Error: "contains invalid hex characters",
-		})
-		return
-	}
-
-	// Derive address
-	privateKey, err := crypto.HexToECDSA(hexPart)
-	if err != nil {
-		c.JSON(http.StatusOK, walletValidateResponse{
-			Valid: false,
-			Error: "invalid private key",
-		})
-		return
-	}
-
-	address := crypto.PubkeyToAddress(privateKey.PublicKey)
-	addrHex := address.Hex()
-
-	// Query USDC balance (async-ish, but sequential for simplicity)
-	balanceStr := wallet.QueryUSDCBalanceStr(addrHex)
-
-	c.JSON(http.StatusOK, walletValidateResponse{
-		Valid:       true,
-		Address:     addrHex,
-		BalanceUSDC: balanceStr,
-	})
-}
-
-type walletGenerateResponse struct {
-	Address    string `json:"address"`
-	PrivateKey string `json:"private_key"`
+	c.JSON(http.StatusOK, gin.H{"valid": true, "address": common.HexToAddress(req.Address).Hex()})
 }
 
 func (s *Server) handleWalletGenerate(c *gin.Context) {
-	// Generate new EVM wallet
-	privateKey, err := crypto.GenerateKey()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate wallet"})
-		return
-	}
-
-	address := crypto.PubkeyToAddress(privateKey.PublicKey)
-	privKeyHex := "0x" + hex.EncodeToString(crypto.FromECDSA(privateKey))
-
-	c.JSON(http.StatusOK, walletGenerateResponse{
-		Address:    address.Hex(),
-		PrivateKey: privKeyHex,
-	})
+	c.JSON(http.StatusGone, gin.H{"error": "generate wallets locally; server-side private key generation is disabled"})
 }

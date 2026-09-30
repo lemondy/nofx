@@ -9,15 +9,6 @@ import (
 	"nofx/logger"
 	"nofx/store"
 	"nofx/trader"
-	"nofx/trader/aster"
-	"nofx/trader/binance"
-	"nofx/trader/bitget"
-	"nofx/trader/bybit"
-	"nofx/trader/gate"
-	hyperliquidtrader "nofx/trader/hyperliquid"
-	"nofx/trader/kucoin"
-	"nofx/trader/lighter"
-	"nofx/trader/okx"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,6 +16,10 @@ import (
 // handleGetGridRiskInfo returns current risk information for a grid trader
 func (s *Server) handleGetGridRiskInfo(c *gin.Context) {
 	traderID := c.Param("id")
+	if _, err := s.store.Trader().GetForUser(c.GetString("user_id"), traderID); err != nil {
+		SafeNotFound(c, "Trader")
+		return
+	}
 
 	autoTrader, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
@@ -38,6 +33,8 @@ func (s *Server) handleGetGridRiskInfo(c *gin.Context) {
 
 // handleSyncBalance Sync exchange balance to initial_balance (Option B: Manual Sync + Option C: Smart Detection)
 func (s *Server) handleSyncBalance(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
 
@@ -85,7 +82,10 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	oldBalance := traderConfig.InitialBalance
 
 	// Smart balance change detection
-	changePercent := ((actualBalance - oldBalance) / oldBalance) * 100
+	changePercent := 0.0
+	if oldBalance > 0 {
+		changePercent = ((actualBalance - oldBalance) / oldBalance) * 100
+	}
 	changeType := "increase"
 	if changePercent < 0 {
 		changeType = "decrease"
@@ -103,6 +103,7 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	}
 
 	// Reload traders into memory
+	s.removeTraderForReload(userID, traderID)
 	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
@@ -150,72 +151,7 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 		return
 	}
 
-	// Create temporary trader to execute close position
-	var tempTrader trader.Trader
-	var createErr error
-
-	// Use ExchangeType (e.g., "binance") instead of ExchangeID (which is now UUID)
-	// Convert EncryptedString fields to string
-	switch exchangeCfg.ExchangeType {
-	case "binance":
-		tempTrader = binance.NewFuturesTrader(string(exchangeCfg.APIKey), string(exchangeCfg.SecretKey), userID)
-	case "hyperliquid":
-		tempTrader, createErr = hyperliquidtrader.NewHyperliquidTrader(
-			string(exchangeCfg.APIKey),
-			exchangeCfg.HyperliquidWalletAddr,
-			exchangeCfg.Testnet,
-			exchangeCfg.HyperliquidUnifiedAcct,
-		)
-	case "aster":
-		tempTrader, createErr = aster.NewAsterTrader(
-			exchangeCfg.AsterUser,
-			exchangeCfg.AsterSigner,
-			string(exchangeCfg.AsterPrivateKey),
-		)
-	case "bybit":
-		tempTrader = bybit.NewBybitTrader(
-			string(exchangeCfg.APIKey),
-			string(exchangeCfg.SecretKey),
-		)
-	case "okx":
-		tempTrader = okx.NewOKXTrader(
-			string(exchangeCfg.APIKey),
-			string(exchangeCfg.SecretKey),
-			string(exchangeCfg.Passphrase),
-		)
-	case "bitget":
-		tempTrader = bitget.NewBitgetTrader(
-			string(exchangeCfg.APIKey),
-			string(exchangeCfg.SecretKey),
-			string(exchangeCfg.Passphrase),
-		)
-	case "gate":
-		tempTrader = gate.NewGateTrader(
-			string(exchangeCfg.APIKey),
-			string(exchangeCfg.SecretKey),
-		)
-	case "kucoin":
-		tempTrader = kucoin.NewKuCoinTrader(
-			string(exchangeCfg.APIKey),
-			string(exchangeCfg.SecretKey),
-			string(exchangeCfg.Passphrase),
-		)
-	case "lighter":
-		if exchangeCfg.LighterWalletAddr != "" && string(exchangeCfg.LighterAPIKeyPrivateKey) != "" {
-			// Lighter only supports mainnet
-			tempTrader, createErr = lighter.NewLighterTraderV2(
-				exchangeCfg.LighterWalletAddr,
-				string(exchangeCfg.LighterAPIKeyPrivateKey),
-				exchangeCfg.LighterAPIKeyIndex,
-				false, // Always use mainnet for Lighter
-			)
-		} else {
-			createErr = fmt.Errorf("Lighter requires wallet address and API Key private key")
-		}
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported exchange type"})
-		return
-	}
+	tempTrader, createErr := buildExchangeProbeTrader(exchangeCfg, userID)
 
 	if createErr != nil {
 		logger.Infof("⚠️ Failed to create temporary trader: %v", createErr)

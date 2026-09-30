@@ -3,8 +3,8 @@ package market
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"nofx/security"
 	"time"
 )
 
@@ -51,7 +51,7 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 			return nil, err
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := security.ReadResponseBody(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			return nil, err
@@ -70,28 +70,22 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 
 		batch := make([]Kline, len(raw))
 		for i, item := range raw {
-			openTime := int64(item[0].(float64))
-			open, _ := parseFloat(item[1])
-			high, _ := parseFloat(item[2])
-			low, _ := parseFloat(item[3])
-			close, _ := parseFloat(item[4])
-			volume, _ := parseFloat(item[5])
-			closeTime := int64(item[6].(float64))
-
-			batch[i] = Kline{
-				OpenTime:  openTime,
-				Open:      open,
-				High:      high,
-				Low:       low,
-				Close:     close,
-				Volume:    volume,
-				CloseTime: closeTime,
+			kline, err := parseHistoricalKline(item)
+			if err != nil {
+				return nil, fmt.Errorf("invalid kline %d: %w", i, err)
 			}
+			batch[i] = kline
 		}
 
+		if len(all)+len(batch) > 1000000 {
+			return nil, fmt.Errorf("historical kline range exceeds safety limit")
+		}
 		all = append(all, batch...)
 
 		last := batch[len(batch)-1]
+		if last.CloseTime+1 <= cursor {
+			return nil, fmt.Errorf("upstream kline cursor did not advance")
+		}
 		cursor = last.CloseTime + 1
 
 		// If returned quantity is less than request limit, reached the end, can exit early.

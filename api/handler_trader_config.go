@@ -12,6 +12,10 @@ import (
 func (s *Server) handleUpdateTraderPrompt(c *gin.Context) {
 	traderID := c.Param("id")
 	userID := c.GetString("user_id")
+	if _, err := s.store.Trader().GetForUser(userID, traderID); err != nil {
+		SafeNotFound(c, "Trader")
+		return
+	}
 
 	var req struct {
 		CustomPrompt       string `json:"custom_prompt"`
@@ -45,6 +49,10 @@ func (s *Server) handleUpdateTraderPrompt(c *gin.Context) {
 func (s *Server) handleToggleCompetition(c *gin.Context) {
 	traderID := c.Param("id")
 	userID := c.GetString("user_id")
+	if _, err := s.store.Trader().GetForUser(userID, traderID); err != nil {
+		SafeNotFound(c, "Trader")
+		return
+	}
 
 	var req struct {
 		ShowInCompetition bool `json:"show_in_competition"`

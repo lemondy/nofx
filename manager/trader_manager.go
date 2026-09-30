@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"nofx/logger"
 	"nofx/store"
@@ -20,11 +21,13 @@ type CompetitionCache struct {
 
 // TraderManager manages multiple trader instances
 type TraderManager struct {
-	traders          map[string]*trader.AutoTrader // key: trader ID
-	loadErrors       map[string]error              // key: trader ID, stores last load error
-	competitionCache *CompetitionCache
-	mu               sync.RWMutex
-	store            *store.Store // set via SetStore; used by EnsureTraderStarted
+	traders              map[string]*trader.AutoTrader // key: trader ID
+	loadErrors           map[string]error              // key: trader ID, stores last load error
+	competitionCache     *CompetitionCache
+	mu                   sync.RWMutex
+	loadMu               sync.Mutex
+	competitionRefreshMu sync.Mutex
+	store                *store.Store // set via SetStore; used by EnsureTraderStarted
 }
 
 // SetStore wires the store (needed by EnsureTraderStarted to persist state).
@@ -88,27 +91,16 @@ func (tm *TraderManager) GetTraderIDs() []string {
 
 // StartAll starts all traders
 func (tm *TraderManager) StartAll() {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
-	logger.Info("🚀 Starting all traders...")
-	for id, t := range tm.traders {
-		go func(traderID string, at *trader.AutoTrader) {
-			logger.Infof("▶️  Starting %s...", at.GetName())
-			if err := at.Run(); err != nil {
-				logger.Infof("❌ %s runtime error: %v", at.GetName(), err)
-			}
-		}(id, t)
+	for _, t := range tm.GetAllTraders() {
+		if err := t.Start(); err != nil && !errors.Is(err, trader.ErrAlreadyRunning) {
+			logger.Errorf("Start trader %s: %v", t.GetID(), err)
+		}
 	}
 }
 
 // StopAll stops all traders
 func (tm *TraderManager) StopAll() {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
-	logger.Info("⏹  Stopping all traders...")
-	for _, t := range tm.traders {
+	for _, t := range tm.GetAllTraders() {
 		t.Stop()
 	}
 }
@@ -135,18 +127,15 @@ func (tm *TraderManager) AutoStartRunningTraders(st *store.Store) {
 		return
 	}
 
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
 	startedCount := 0
-	for id, t := range tm.traders {
+	for id, t := range tm.GetAllTraders() {
 		if runningTraderIDs[id] {
-			go func(traderID string, at *trader.AutoTrader) {
-				logger.Infof("▶️  Auto-restoring %s...", at.GetName())
-				if err := at.Run(); err != nil {
-					logger.Infof("❌ %s runtime error: %v", at.GetName(), err)
+			if err := t.Start(); err != nil {
+				if !errors.Is(err, trader.ErrAlreadyRunning) {
+					logger.Errorf("Auto-restore %s: %v", id, err)
 				}
-			}(id, t)
+				continue
+			}
 			startedCount++
 		}
 	}
@@ -195,6 +184,8 @@ func (tm *TraderManager) GetComparisonData() (map[string]interface{}, error) {
 
 // GetCompetitionData retrieves competition data (all traders across platform)
 func (tm *TraderManager) GetCompetitionData() (map[string]interface{}, error) {
+	tm.competitionRefreshMu.Lock()
+	defer tm.competitionRefreshMu.Unlock()
 	// Check if cache is valid (within 30 seconds)
 	tm.competitionCache.mu.RLock()
 	if time.Since(tm.competitionCache.timestamp) < 30*time.Second && len(tm.competitionCache.data) > 0 {
@@ -204,7 +195,6 @@ func (tm *TraderManager) GetCompetitionData() (map[string]interface{}, error) {
 			cachedData[k] = v
 		}
 		tm.competitionCache.mu.RUnlock()
-		logger.Infof("📋 Returning competition data cache (cache age: %.1fs)", time.Since(tm.competitionCache.timestamp).Seconds())
 		return cachedData, nil
 	}
 	tm.competitionCache.mu.RUnlock()
@@ -418,46 +408,46 @@ func (tm *TraderManager) IsTraderRunning(traderID string) bool {
 // EnsureTraderStarted restarts a trader whose in-memory loop died (e.g. lost
 // in a reload race). Persists is_running=true like the manual start flow.
 func (tm *TraderManager) EnsureTraderStarted(userID, traderID string) error {
-	tm.mu.Lock()
-	t, exists := tm.traders[traderID]
-	tm.mu.Unlock()
-	if !exists {
-		return fmt.Errorf("trader %s not in memory", traderID)
+	if tm.store != nil {
+		if _, err := tm.store.Trader().GetForUser(userID, traderID); err != nil {
+			return err
+		}
 	}
-	status := t.GetStatus()
-	if running, ok := status["is_running"].(bool); ok && running {
-		return nil // already alive
-	}
-	logger.Warnf("⚠️ Trader %s loop is not running — starting it explicitly", traderID)
-	if err := t.Run(); err != nil {
+	t, err := tm.GetTrader(traderID)
+	if err != nil {
 		return err
 	}
-	if tm.store != nil {
-		_ = tm.store.Trader().UpdateStatus(userID, traderID, true)
+	if err := t.Start(); err != nil && !errors.Is(err, trader.ErrAlreadyRunning) {
+		return err
 	}
 	return nil
 }
 
 func (tm *TraderManager) RemoveTrader(traderID string) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	_ = tm.RemoveTraderAndThen(traderID, nil)
+}
 
-	if t, exists := tm.traders[traderID]; exists {
-		// Stop the trader if it's running (this ensures the goroutine exits)
-		status := t.GetStatus()
-		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
-			logger.Infof("⏹ Stopping trader %s before removing from memory...", traderID)
-			t.Stop()
-		}
-		delete(tm.traders, traderID)
-		logger.Infof("✓ Trader %s removed from memory", traderID)
+// Keep reloads out until both the running client and its database state are removed.
+func (tm *TraderManager) RemoveTraderAndThen(traderID string, after func() error) error {
+	tm.loadMu.Lock()
+	defer tm.loadMu.Unlock()
+	tm.mu.Lock()
+	t := tm.traders[traderID]
+	delete(tm.traders, traderID)
+	tm.mu.Unlock()
+	if t != nil {
+		t.Stop()
 	}
+	if after != nil {
+		return after()
+	}
+	return nil
 }
 
 // LoadUserTradersFromStore loads traders from store for a specific user to memory
 func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string) error {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	tm.loadMu.Lock()
+	defer tm.loadMu.Unlock()
 
 	// Get all traders for the specified user
 	traders, err := st.Trader().List(userID)
@@ -483,7 +473,7 @@ func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string
 	// Load configuration for each trader
 	for _, traderCfg := range traders {
 		// Check if this trader is already loaded
-		if _, exists := tm.traders[traderCfg.ID]; exists {
+		if _, err := tm.GetTrader(traderCfg.ID); err == nil {
 			// Trader already loaded - this is normal, no need to log
 			continue
 		}
@@ -540,10 +530,14 @@ func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string
 		if err != nil {
 			logger.Infof("❌ Failed to load trader %s: %v", traderCfg.Name, err)
 			// Save error for later retrieval
+			tm.mu.Lock()
 			tm.loadErrors[traderCfg.ID] = err
+			tm.mu.Unlock()
 		} else {
 			// Clear any previous error on success
+			tm.mu.Lock()
 			delete(tm.loadErrors, traderCfg.ID)
+			tm.mu.Unlock()
 		}
 	}
 
@@ -552,8 +546,8 @@ func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string
 
 // LoadTradersFromStore loads all traders from store to memory (new API)
 func (tm *TraderManager) LoadTradersFromStore(st *store.Store) error {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	tm.loadMu.Lock()
+	defer tm.loadMu.Unlock()
 
 	// Get all users
 	userIDs, err := st.User().GetAllIDs()
@@ -648,13 +642,13 @@ func (tm *TraderManager) LoadTradersFromStore(st *store.Store) error {
 		}
 	}
 
-	logger.Infof("✓ Successfully loaded %d traders to memory", len(tm.traders))
+	logger.Infof("✓ Successfully loaded %d traders to memory", len(tm.GetAllTraders()))
 	return nil
 }
 
 // addTraderFromStore internal method: adds trader from store configuration
 func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg *store.AIModel, exchangeCfg *store.Exchange, st *store.Store) error {
-	if _, exists := tm.traders[traderCfg.ID]; exists {
+	if _, err := tm.GetTrader(traderCfg.ID); err == nil {
 		return fmt.Errorf("trader ID '%s' already exists", traderCfg.ID)
 	}
 
@@ -775,23 +769,15 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		}
 	}
 
+	tm.mu.Lock()
 	tm.traders[traderCfg.ID] = at
+	tm.mu.Unlock()
 	logger.Infof("✓ Trader '%s' (%s + %s/%s) loaded to memory", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ExchangeType, exchangeCfg.AccountName)
 
-	// Auto-start if trader was running before shutdown
 	if traderCfg.IsRunning {
-		logger.Infof("🔄 Auto-starting trader '%s' (was running before shutdown)...", traderCfg.Name)
-		go func(trader *trader.AutoTrader, traderName, traderID, userID string) {
-			if err := trader.Run(); err != nil {
-				logger.Warnf("⚠️ Trader '%s' stopped with error: %v", traderName, err)
-				// Update database to reflect stopped state
-				if st != nil {
-					_ = st.Trader().UpdateStatus(userID, traderID, false)
-				}
-			}
-		}(at, traderCfg.Name, traderCfg.ID, traderCfg.UserID)
-		logger.Infof("✅ Trader '%s' auto-started successfully", traderCfg.Name)
+		if err := at.Start(); err != nil {
+			return err
+		}
 	}
-
 	return nil
 }

@@ -3,10 +3,10 @@ package market
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"nofx/hook"
+	"nofx/security"
 	"strconv"
 	"time"
 )
@@ -43,7 +43,7 @@ func (c *APIClient) GetExchangeInfo() (*ExchangeInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (c *APIClient) GetKlines(symbol, interval string, limit int) ([]Kline, erro
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (c *APIClient) GetCurrentPrice(symbol string) (float64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return 0, err
 	}

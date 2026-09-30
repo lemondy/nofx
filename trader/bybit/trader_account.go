@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"nofx/security"
 	"nofx/trader/types"
 	"strconv"
 	"time"
@@ -128,13 +128,13 @@ func (t *BybitTrader) getClosedPnLViaHTTP(startTime time.Time, limit int) ([]typ
 	req.Header.Set("Content-Type", "application/json")
 
 	// Use http.DefaultClient for the request
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := bybitHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call Bybit API: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

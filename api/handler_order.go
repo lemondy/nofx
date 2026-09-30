@@ -307,7 +307,7 @@ func (s *Server) handleTrades(c *gin.Context) {
 	symbol := c.Query("symbol")
 	limitStr := c.DefaultQuery("limit", "100")
 	limit := 100
-	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
 		limit = l
 	}
 

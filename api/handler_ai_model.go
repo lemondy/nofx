@@ -38,6 +38,7 @@ type SafeModelConfig struct {
 type UpdateModelConfigRequest struct {
 	Models map[string]struct {
 		Enabled         bool   `json:"enabled"`
+		ClearAPIKey     bool   `json:"clear_api_key"`
 		APIKey          string `json:"api_key"`
 		CustomAPIURL    string `json:"custom_api_url"`
 		CustomModelName string `json:"custom_model_name"`
@@ -96,6 +97,8 @@ func (s *Server) handleGetModelConfigs(c *gin.Context) {
 
 // handleUpdateModelConfigs Update AI model configurations (supports both encrypted and plain text based on config)
 func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	cfg := config.Get()
 
@@ -138,7 +141,7 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 		}
 
 		// Decrypt data
-		decrypted, err := s.cryptoHandler.cryptoService.DecryptSensitiveData(&encryptedPayload)
+		decrypted, err := s.cryptoHandler.cryptoService.DecryptSensitiveDataForUser(&encryptedPayload, userID)
 		if err != nil {
 			logger.Infof("❌ Failed to decrypt model config (UserID: %s): %v", userID, err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to decrypt data"})
@@ -172,7 +175,7 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 			tradersToReload[t.ID] = true
 		}
 
-		err := s.store.AIModel().Update(userID, modelID, modelData.Enabled, modelData.APIKey, modelData.CustomAPIURL, modelData.CustomModelName)
+		err := s.store.AIModel().Update(userID, modelID, modelData.Enabled, modelData.APIKey, modelData.CustomAPIURL, modelData.CustomModelName, modelData.ClearAPIKey)
 		if err != nil {
 			SafeInternalError(c, fmt.Sprintf("Update model %s", modelID), err)
 			return
@@ -182,7 +185,7 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 	// Remove affected traders from memory BEFORE reloading to pick up new config
 	for traderID := range tradersToReload {
 		logger.Infof("🔄 Removing trader %s from memory to reload with new AI model config", traderID)
-		s.traderManager.RemoveTrader(traderID)
+		s.removeTraderForReload(userID, traderID)
 	}
 
 	// Reload all traders for this user to make new config take effect immediately
@@ -192,7 +195,7 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 		// Don't return error here since model config was successfully updated to database
 	}
 
-	logger.Infof("✓ AI model config updated: %+v", req.Models)
+	logger.Infof("✓ AI model config updated: %d model(s)", len(req.Models))
 	c.JSON(http.StatusOK, gin.H{"message": "Model configuration updated"})
 }
 

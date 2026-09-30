@@ -3,7 +3,6 @@ package kucoin
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"nofx/logger"
 	"nofx/trader/types"
 	"strconv"
@@ -18,7 +17,7 @@ func (t *KuCoinTrader) OpenLong(symbol string, quantity float64, leverage int) (
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("⚠️ Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	kcSymbol := t.convertSymbol(symbol)
@@ -73,7 +72,7 @@ func (t *KuCoinTrader) OpenShort(symbol string, quantity float64, leverage int) 
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Infof("⚠️ Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	kcSymbol := t.convertSymbol(symbol)
@@ -539,18 +538,11 @@ func (t *KuCoinTrader) SetLeverage(symbol string, leverage int) error {
 
 // FormatQuantity formats quantity to correct precision
 func (t *KuCoinTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
-	contract, err := t.getContract(symbol)
+	lots, err := t.quantityToLots(symbol, quantity)
 	if err != nil {
 		return "", err
 	}
-
-	// Calculate lots
-	lots := quantity / contract.Multiplier
-
-	// Round to integer
-	lotsInt := int64(math.Round(lots))
-
-	return strconv.FormatInt(lotsInt, 10), nil
+	return strconv.FormatInt(lots, 10), nil
 }
 
 // GetOrderStatus gets order status

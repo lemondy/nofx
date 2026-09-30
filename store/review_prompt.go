@@ -37,9 +37,11 @@ func (s *ReviewPromptStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'review_prompt_configs'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'review_prompt_configs'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &ReviewPromptConfig{})
 		}
 	}
 	return s.db.AutoMigrate(&ReviewPromptConfig{})

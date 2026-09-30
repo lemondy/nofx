@@ -6,7 +6,6 @@ import (
 	"nofx/logger"
 	"nofx/trader/types"
 	"strconv"
-	"strings"
 )
 
 // OpenLong Open long position
@@ -18,13 +17,7 @@ func (t *AsterTrader) OpenLong(symbol string, quantity float64, leverage int) (m
 
 	// Set leverage first (non-fatal if position already exists)
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		// Error -2030: Cannot adjust leverage when position exists
-		// This is expected when adding to an existing position, continue with current leverage
-		if strings.Contains(err.Error(), "-2030") {
-			logger.Infof("  ⚠ Cannot change leverage (position exists), using current leverage: %v", err)
-		} else {
-			return nil, fmt.Errorf("failed to set leverage: %w", err)
-		}
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Get current price
@@ -91,13 +84,7 @@ func (t *AsterTrader) OpenShort(symbol string, quantity float64, leverage int) (
 
 	// Set leverage first (non-fatal if position already exists)
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		// Error -2030: Cannot adjust leverage when position exists
-		// This is expected when adding to an existing position, continue with current leverage
-		if strings.Contains(err.Error(), "-2030") {
-			logger.Infof("  ⚠ Cannot change leverage (position exists), using current leverage: %v", err)
-		} else {
-			return nil, fmt.Errorf("failed to set leverage: %w", err)
-		}
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Get current price

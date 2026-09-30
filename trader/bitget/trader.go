@@ -7,9 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
+	"math"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
+	"nofx/trader/types"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +36,7 @@ const (
 
 // BitgetTrader Bitget futures trader
 type BitgetTrader struct {
+	orderSync  types.SyncLoop
 	apiKey     string
 	secretKey  string
 	passphrase string
@@ -193,7 +196,7 @@ func (t *BitgetTrader) doRequest(method, path string, body interface{}) ([]byte,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -291,7 +294,15 @@ func (t *BitgetTrader) getContract(symbol string) (*BitgetContract, error) {
 func (t *BitgetTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	contract, err := t.getContract(symbol)
 	if err != nil {
-		return fmt.Sprintf("%.4f", quantity), nil
+		return "", err
+	}
+	step := contract.SizeMultiplier
+	if step <= 0 {
+		step = math.Pow10(-contract.VolumePlace)
+	}
+	quantity, err = types.FloorQuantity(quantity, step, contract.MinTradeNum, contract.MaxTradeNum)
+	if err != nil {
+		return "", err
 	}
 
 	// Format according to volume precision

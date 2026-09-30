@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"nofx/provider/coinank"
 	"nofx/provider/coinank/coinank_enum"
+	"nofx/security"
 	"strconv"
 	"time"
 )
@@ -67,7 +67,7 @@ func get(ctx context.Context, path string, paramsMap map[string]string) (string,
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return "", err
 	}

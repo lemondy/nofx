@@ -52,12 +52,17 @@ func (s *ExchangeStore) initTables() error {
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'exchanges'`).Scan(&tableExists)
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'exchanges'`).Scan(&tableExists).Error; err != nil {
+			return err
+		}
 		if tableExists > 0 {
-			// Still run data migrations
-			s.migrateToMultiAccount()
-			s.db.Model(&Exchange{}).Where("account_name = '' OR account_name IS NULL").Update("account_name", "Default")
-			return nil
+			if err := ensureColumns(s.db, &Exchange{}); err != nil {
+				return err
+			}
+			if err := s.migrateToMultiAccount(); err != nil {
+				return err
+			}
+			return s.db.Model(&Exchange{}).Where("account_name = '' OR account_name IS NULL").Update("account_name", "Default").Error
 		}
 	}
 
@@ -160,7 +165,7 @@ func (s *ExchangeStore) GetByID(userID, id string) (*Exchange, error) {
 // getExchangeNameAndType returns the display name and type for an exchange type
 func getExchangeNameAndType(exchangeType string) (name string, typ string) {
 	switch exchangeType {
-	case "binance":
+	case "binance", "binance_stocks":
 		return "Binance Futures", "cex"
 	case "bybit":
 		return "Bybit Futures", "cex"

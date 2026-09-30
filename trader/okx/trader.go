@@ -9,9 +9,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
+	"math"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
+	"nofx/trader/types"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +40,7 @@ const (
 
 // OKXTrader OKX futures trader
 type OKXTrader struct {
+	orderSync  types.SyncLoop
 	apiKey     string
 	secretKey  string
 	passphrase string
@@ -228,7 +232,7 @@ func (t *OKXTrader) doRequest(method, path string, body interface{}) ([]byte, er
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -269,23 +273,37 @@ func (t *OKXTrader) convertSymbolBack(instId string) string {
 func (t *OKXTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	inst, err := t.getInstrument(symbol)
 	if err != nil {
-		return fmt.Sprintf("%.3f", quantity), nil
+		return "", err
+	}
+	if inst.CtVal <= 0 {
+		return "", fmt.Errorf("invalid contract value")
 	}
 
 	// OKX uses contract count: quantity (in base asset) / ctVal (asset per contract)
-	sz := quantity / inst.CtVal
+	sz, err := types.FloorQuantity(quantity/inst.CtVal, inst.LotSz, inst.MinSz, inst.MaxMktSz)
+	if err != nil {
+		return "", err
+	}
 	return t.formatSize(sz, inst), nil
 }
 
 // formatSize formats contract size
 func (t *OKXTrader) formatSize(sz float64, inst *OKXInstrument) string {
+	if inst.LotSz <= 0 || math.IsNaN(sz) || math.IsInf(sz, 0) {
+		return "0"
+	}
+	aligned, err := types.FloorQuantity(sz, inst.LotSz, inst.MinSz, inst.MaxMktSz)
+	if err != nil {
+		return "0"
+	}
+	sz = aligned
 	// Determine precision based on lotSz
 	if inst.LotSz >= 1 {
 		return fmt.Sprintf("%.0f", sz)
 	}
 
 	// Calculate decimal places
-	lotSzStr := fmt.Sprintf("%f", inst.LotSz)
+	lotSzStr := strconv.FormatFloat(inst.LotSz, 'f', -1, 64)
 	dotIndex := strings.Index(lotSzStr, ".")
 	if dotIndex == -1 {
 		return fmt.Sprintf("%.0f", sz)

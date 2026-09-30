@@ -336,6 +336,15 @@ func (s *Server) handleEquityHistoryBatch(c *gin.Context) {
 // Also appends current real-time data point to ensure chart matches leaderboard
 // hours: filter by last N hours (0 = use default limit of 500 records)
 func (s *Server) getEquityHistoryForTraders(traderIDs []string, hours int) map[string]interface{} {
+	if hours > 720 {
+		hours = 720
+	}
+	if hours < 0 {
+		hours = 0
+	}
+	if len(traderIDs) > 100 {
+		traderIDs = traderIDs[:100]
+	}
 	result := make(map[string]interface{})
 	histories := make(map[string]interface{})
 	errors := make(map[string]string)

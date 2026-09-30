@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"nofx/api"
+	"nofx/auth"
 	"nofx/config"
 	"nofx/logger"
 	"nofx/mcp"
@@ -59,7 +60,7 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 	}
 	logger.Infof("Telegram bot @%s started", bot.Self.UserName)
 
-	// Allowed chat ID: read from DB binding (0 = unbound, first /start will bind).
+	// Allowed chat ID: read from DB binding (0 = unbound, /start CODE is required).
 	allowedChatID := int64(0)
 	if id, err := st.TelegramConfig().GetBoundChatID(); err == nil && id != 0 {
 		allowedChatID = id
@@ -67,10 +68,11 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 
 	// botUserID / botToken / agents are resolved lazily and refresh when user registers.
 	var (
-		botUserID    string
-		botUserEmail string
-		botToken     string
-		agents       *agent.Manager
+		botUserID       string
+		botUserEmail    string
+		botToken        string
+		botTokenVersion int
+		agents          *agent.Manager
 	)
 
 	resolveBotUser := func() bool {
@@ -79,16 +81,17 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 			return false
 		}
 		u := users[0]
-		if u.ID == botUserID {
+		if u.ID == botUserID && u.TokenVersion == botTokenVersion {
 			return true
 		}
-		newToken, err := agent.GenerateBotToken(u.ID)
+		newToken, err := auth.GenerateJWTWithVersion(u.ID, u.Email, u.TokenVersion)
 		if err != nil {
 			logger.Errorf("Failed to generate bot JWT for user %s: %v", u.ID, err)
 			return false
 		}
 		prev := botUserID
 		botUserID = u.ID
+		botTokenVersion = u.TokenVersion
 		botUserEmail = u.Email
 		botToken = newToken
 		agents = agent.NewManager(cfg.APIServerPort, botToken, botUserEmail, botUserID,
@@ -144,6 +147,12 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 			if update.Message == nil {
 				continue
 			}
+			boundID, bindingErr := st.TelegramConfig().GetBoundChatID()
+			if bindingErr != nil {
+				logger.Errorf("Read Telegram binding: %v", bindingErr)
+				continue
+			}
+			allowedChatID = boundID
 			chatID := update.Message.Chat.ID
 			text := strings.TrimSpace(update.Message.Text)
 
@@ -160,7 +169,7 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 			}
 
 			// ── /start ────────────────────────────────────────────────────────────
-			if text == "/start" {
+			if update.Message.IsCommand() && update.Message.Command() == "start" {
 				resolveBotUser()
 				if botUserID == "" {
 					sendMsg(bot, chatID,
@@ -169,9 +178,9 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 				}
 				if allowedChatID == 0 {
 					username := update.Message.From.UserName
-					if err := st.TelegramConfig().BindUser(chatID, "@"+username); err != nil {
+					if err := st.TelegramConfig().BindWithCode(update.Message.CommandArguments(), chatID, "@"+username); err != nil {
 						logger.Errorf("Failed to bind Telegram user: %v", err)
-						sendMsg(bot, chatID, "Binding failed. Please try again.")
+						sendMsg(bot, chatID, "Open Settings → Telegram in the web dashboard and send /start followed by its one-time binding code (valid for 5 minutes).")
 						continue
 					}
 					allowedChatID = chatID
@@ -184,6 +193,11 @@ func runBot(token string, cfg *config.Config, st *store.Store) bool {
 				}
 				lang := st.TelegramConfig().GetLanguage()
 				sendMarkdownMsg(bot, chatID, statusMsg(st, botUserID, cfg.APIServerPort, lang))
+				continue
+			}
+
+			if allowedChatID == 0 || chatID != allowedChatID {
+				sendMsg(bot, chatID, "Unauthorized. Bind through the web dashboard first.")
 				continue
 			}
 

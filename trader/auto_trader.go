@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"errors"
 	"fmt"
 	"nofx/kernel"
 	"nofx/logger"
@@ -149,6 +150,9 @@ type AutoTrader struct {
 	lastResetTime              time.Time
 	stopUntil                  time.Time
 	isRunning                  bool
+	lifecycleMu                sync.Mutex
+	runDone                    chan struct{}
+	runtimeMu                  sync.RWMutex
 	isRunningMutex             sync.RWMutex       // Mutex to protect isRunning flag
 	startTime                  time.Time          // System start time
 	callCount                  int                // AI call count
@@ -195,6 +199,12 @@ func (at *AutoTrader) entryUsesCrossMargin() bool {
 // NewAutoTrader creates an automatic trader
 // st parameter is used to store decision records to database
 func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*AutoTrader, error) {
+	if err := config.StrategyConfig.Validate(); err != nil {
+		return nil, err
+	}
+	if err := store.ValidateExchangeEnvironment(config.Exchange, config.HyperliquidTestnet || config.LighterTestnet); err != nil {
+		return nil, err
+	}
 	// Set default values
 	if config.ID == "" {
 		config.ID = "default_trader"
@@ -312,12 +322,12 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 			return nil, fmt.Errorf("Lighter requires wallet address and API Key private key")
 		}
 
-		// Lighter only supports mainnet (testnet disabled)
+		// Preserve the selected Lighter environment.
 		trader, err = lighter.NewLighterTraderV2(
 			config.LighterWalletAddr,
 			config.LighterAPIKeyPrivateKey,
 			config.LighterAPIKeyIndex,
-			false, // Always use mainnet for Lighter
+			config.LighterTestnet,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize LIGHTER trader: %w", err)
@@ -423,21 +433,86 @@ func (at *AutoTrader) InitialBalance() float64 {
 }
 
 // Run runs the automatic trading main loop
-func (at *AutoTrader) Run() error {
+var ErrAlreadyRunning = errors.New("trader is already running")
+
+func (at *AutoTrader) beginRun() error {
+	at.lifecycleMu.Lock()
+	defer at.lifecycleMu.Unlock()
+	if at.runDone != nil {
+		select {
+		case <-at.runDone:
+		default:
+			return ErrAlreadyRunning
+		}
+	}
+	if at.store != nil {
+		if err := at.store.Trader().UpdateStatus(at.userID, at.id, true); err != nil {
+			return err
+		}
+	}
+	at.runtimeMu.Lock()
+	at.startTime = time.Now()
+	at.runtimeMu.Unlock()
+	at.monitorWg.Add(1)
 	at.isRunningMutex.Lock()
+	at.stopMonitorCh = make(chan struct{})
+	at.runDone = make(chan struct{})
 	at.isRunning = true
 	at.isRunningMutex.Unlock()
+	return nil
+}
 
-	at.stopMonitorCh = make(chan struct{})
-	at.startTime = time.Now()
+// Start reserves the running state synchronously before dispatching the loop.
+func (at *AutoTrader) Start() error {
+	if err := at.beginRun(); err != nil {
+		return err
+	}
+	go func() {
+		if err := at.run(); err != nil {
+			logger.Errorf("Trader %s stopped: %v", at.id, err)
+		}
+	}()
+	return nil
+}
 
+func (at *AutoTrader) Run() error {
+	if err := at.beginRun(); err != nil {
+		return err
+	}
+	return at.run()
+}
+
+func (at *AutoTrader) run() (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("trading loop panic: %v", p)
+		}
+		at.isRunningMutex.Lock()
+		if at.isRunning {
+			at.isRunning = false
+			close(at.stopMonitorCh)
+		}
+		at.isRunningMutex.Unlock()
+		if syncer, ok := at.trader.(interface{ StopOrderSync() }); ok {
+			syncer.StopOrderSync()
+		}
+		at.monitorWg.Done()
+		at.monitorWg.Wait()
+		if at.store != nil {
+			_ = at.store.Trader().UpdateStatus(at.userID, at.id, false)
+		}
+		close(at.runDone)
+	}()
+
+	select {
+	case <-at.stopMonitorCh:
+		return nil
+	default:
+	}
 	logger.Info("🚀 AI-driven automatic trading system started")
 	logger.Infof("💰 Initial balance: %.2f USDT", at.initialBalance)
 	logger.Infof("⚙️  Scan interval: %v", at.config.ScanInterval)
 	logger.Info("🤖 AI will make full decisions on leverage, position size, stop loss/take profit, etc.")
-
-	at.monitorWg.Add(1)
-	defer at.monitorWg.Done()
 
 	// Start drawdown monitoring
 	at.startDrawdownMonitor()
@@ -448,78 +523,15 @@ func (at *AutoTrader) Run() error {
 	// tagged orders get cancelled (see auto_trader_reconcile.go).
 	at.ReconcilePendingEntries()
 
-	// Start Lighter order sync if using Lighter exchange
-	if at.exchange == "lighter" {
-		if lighterTrader, ok := at.trader.(*lighter.LighterTraderV2); ok && at.store != nil {
-			lighterTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Lighter order+position sync enabled (every 30s)", at.name)
+	// All adapters, including wrappers such as Binance Stocks, share one
+	// lifecycle contract instead of a per-exchange start/stop matrix.
+	if syncer, ok := at.trader.(interface {
+		StartOrderSync(string, string, string, *store.Store, time.Duration)
+	}); ok && at.store != nil {
+		if labeler, ok := at.trader.(interface{ SetDisplayName(string) }); ok {
+			labeler.SetDisplayName(fmt.Sprintf("%s · %s", at.name, strings.ToUpper(at.aiModel)))
 		}
-	}
-
-	// Start Hyperliquid order sync if using Hyperliquid exchange
-	if at.exchange == "hyperliquid" {
-		if hyperliquidTrader, ok := at.trader.(*hyperliquid.HyperliquidTrader); ok && at.store != nil {
-			hyperliquidTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Hyperliquid order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start Bybit order sync if using Bybit exchange
-	if at.exchange == "bybit" {
-		if bybitTrader, ok := at.trader.(*bybit.BybitTrader); ok && at.store != nil {
-			bybitTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Bybit order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start OKX order sync if using OKX exchange
-	if at.exchange == "okx" {
-		if okxTrader, ok := at.trader.(*okx.OKXTrader); ok && at.store != nil {
-			okxTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] OKX order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start Bitget order sync if using Bitget exchange
-	if at.exchange == "bitget" {
-		if bitgetTrader, ok := at.trader.(*bitget.BitgetTrader); ok && at.store != nil {
-			bitgetTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Bitget order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start Aster order sync if using Aster exchange
-	if at.exchange == "aster" {
-		if asterTrader, ok := at.trader.(*aster.AsterTrader); ok && at.store != nil {
-			asterTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Aster order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start Binance order sync if using Binance exchange
-	if at.exchange == "binance" {
-		if binanceTrader, ok := at.trader.(*binance.FuturesTrader); ok && at.store != nil {
-			// Label for Telegram notifications: trader name + AI model.
-			binanceTrader.SetDisplayName(fmt.Sprintf("%s · %s", at.name, strings.ToUpper(at.aiModel)))
-			binanceTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Binance order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start Gate order sync if using Gate exchange
-	if at.exchange == "gate" {
-		if gateTrader, ok := at.trader.(*gate.GateTrader); ok && at.store != nil {
-			gateTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] Gate order+position sync enabled (every 30s)", at.name)
-		}
-	}
-
-	// Start KuCoin order sync if using KuCoin exchange
-	if at.exchange == "kucoin" {
-		if kucoinTrader, ok := at.trader.(*kucoin.KuCoinTrader); ok && at.store != nil {
-			kucoinTrader.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
-			logger.Infof("🔄 [%s] KuCoin order+position sync enabled (every 30s)", at.name)
-		}
+		syncer.StartOrderSync(at.id, at.exchangeID, at.exchange, at.store, 30*time.Second)
 	}
 
 	timer := time.NewTimer(nextAlignedWait(at.config.ScanInterval, time.Now()))
@@ -537,6 +549,11 @@ func (at *AutoTrader) Run() error {
 		}
 	}
 
+	select {
+	case <-at.stopMonitorCh:
+		return nil
+	default:
+	}
 	// Execute immediately on first run
 	if isGridStrategy {
 		if err := at.RunGridCycle(); err != nil {
@@ -601,23 +618,24 @@ func nextAlignedWait(interval time.Duration, now time.Time) time.Duration {
 
 // Stop stops the automatic trading
 func (at *AutoTrader) Stop() {
+	at.lifecycleMu.Lock()
+	defer at.lifecycleMu.Unlock()
 	at.isRunningMutex.Lock()
 	wasRunning := at.isRunning
 	at.isRunning = false
+	if wasRunning {
+		close(at.stopMonitorCh)
+	}
 	at.isRunningMutex.Unlock()
 
 	// Exchange-config updates rebuild the AutoTrader with a new SDK client.
 	// Stop the old Binance sync ticker before dropping that client; it embeds
 	// the API key and otherwise survives independently of the main loop.
-	if binanceTrader, ok := at.trader.(*binance.FuturesTrader); ok {
-		binanceTrader.StopOrderSync()
+	if at.runDone != nil {
+		<-at.runDone
+	} else if syncer, ok := at.trader.(interface{ StopOrderSync() }); ok {
+		syncer.StopOrderSync()
 	}
-	if !wasRunning {
-		return
-	}
-
-	close(at.stopMonitorCh) // Notify monitoring goroutine to stop
-	at.monitorWg.Wait()     // Wait for monitoring goroutine to finish
 	logger.Info("⏹ Automatic trading system stopped")
 }
 
@@ -649,21 +667,29 @@ func (at *AutoTrader) GetExchange() string {
 
 // GetShowInCompetition returns whether trader should be shown in competition
 func (at *AutoTrader) GetShowInCompetition() bool {
+	at.runtimeMu.RLock()
+	defer at.runtimeMu.RUnlock()
 	return at.showInCompetition
 }
 
 // SetShowInCompetition sets whether trader should be shown in competition
 func (at *AutoTrader) SetShowInCompetition(show bool) {
+	at.runtimeMu.Lock()
+	defer at.runtimeMu.Unlock()
 	at.showInCompetition = show
 }
 
 // SetCustomPrompt sets custom trading strategy prompt
 func (at *AutoTrader) SetCustomPrompt(prompt string) {
+	at.runtimeMu.Lock()
+	defer at.runtimeMu.Unlock()
 	at.customPrompt = prompt
 }
 
 // SetOverrideBasePrompt sets whether to override base prompt
 func (at *AutoTrader) SetOverrideBasePrompt(override bool) {
+	at.runtimeMu.Lock()
+	defer at.runtimeMu.Unlock()
 	at.overrideBasePrompt = override
 }
 

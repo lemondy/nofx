@@ -400,13 +400,11 @@ func (t *KuCoinTrader) SyncOrdersFromKuCoin(traderID string, exchangeID string, 
 
 // StartOrderSync starts background order sync task for KuCoin
 func (t *KuCoinTrader) StartOrderSync(traderID string, exchangeID string, exchangeType string, st *store.Store, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	go func() {
-		for range ticker.C {
-			if err := t.SyncOrdersFromKuCoin(traderID, exchangeID, exchangeType, st); err != nil {
-				logger.Infof("⚠️  KuCoin order sync failed: %v", err)
-			}
+	t.orderSync.Start(interval, func() {
+		if err := t.SyncOrdersFromKuCoin(traderID, exchangeID, exchangeType, st); err != nil {
+			logger.Warnf("kucoin order sync failed: %v", err)
 		}
-	}()
-	logger.Infof("🔄 KuCoin order sync started (interval: %v)", interval)
+	})
 }
+
+func (t *KuCoinTrader) StopOrderSync() { t.orderSync.Stop() }

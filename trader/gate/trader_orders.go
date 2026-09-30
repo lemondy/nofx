@@ -48,7 +48,7 @@ func (t *GateTrader) OpenLong(symbol string, quantity float64, leverage int) (ma
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Warnf("  [Gate] Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Get contract info for size calculation
@@ -106,7 +106,7 @@ func (t *GateTrader) OpenShort(symbol string, quantity float64, leverage int) (m
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
-		logger.Warnf("  [Gate] Failed to set leverage: %v", err)
+		return nil, fmt.Errorf("failed to set leverage: %w", err)
 	}
 
 	// Get contract info for size calculation

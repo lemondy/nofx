@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"nofx/api"
 	"nofx/auth"
 	"nofx/config"
@@ -148,7 +150,7 @@ func main() {
 	server.SetTelegramReloadCh(telegramReloadCh)
 
 	go func() {
-		if err := server.Start(); err != nil {
+		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatalf("❌ Failed to start API server: %v", err)
 		}
 	}()
@@ -175,6 +177,9 @@ func main() {
 
 	<-quit
 	logger.Info("📴 Shutdown signal received, closing system...")
+	if err := server.Shutdown(); err != nil {
+		logger.Warnf("API shutdown: %v", err)
+	}
 
 	// Second Ctrl+C force-exits: a graceful shutdown can legitimately take a
 	// few seconds (finishing order sync, closing DB), but the operator should

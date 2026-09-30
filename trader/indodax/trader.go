@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"nofx/logger"
+	"nofx/security"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,7 +131,7 @@ func (t *IndodaxTrader) doPublicRequest(path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -168,7 +168,7 @@ func (t *IndodaxTrader) doPrivateRequest(params url.Values) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

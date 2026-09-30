@@ -2,6 +2,7 @@ package auth
 
 import (
 	"fmt"
+	"github.com/google/uuid"
 	"log"
 	"sync"
 	"time"
@@ -75,8 +76,9 @@ func IsTokenBlacklisted(token string) bool {
 
 // Claims represents JWT claims
 type Claims struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
+	UserID       string `json:"user_id"`
+	Email        string `json:"email"`
+	TokenVersion int    `json:"token_version"`
 	jwt.RegisteredClaims
 }
 
@@ -94,14 +96,23 @@ func CheckPassword(password, hash string) bool {
 
 // GenerateJWT generates JWT token
 func GenerateJWT(userID, email string) (string, error) {
+	return GenerateJWTWithVersion(userID, email, 0)
+}
+
+func GenerateJWTWithVersion(userID, email string, version int) (string, error) {
+	if len(JWTSecret) == 0 {
+		return "", fmt.Errorf("JWT secret not configured")
+	}
 	claims := Claims{
-		UserID: userID,
-		Email:  email,
+		UserID:       userID,
+		Email:        email,
+		TokenVersion: version,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "nofxAI",
+			ID:        uuid.NewString(),
 		},
 	}
 
@@ -116,13 +127,13 @@ func ValidateJWT(tokenString string) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return JWTSecret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer("nofxAI"), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 
 	if err != nil {
 		return nil, err
 	}
 
-	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+	if claims, ok := token.Claims.(*Claims); ok && token.Valid && claims.UserID != "" {
 		return claims, nil
 	}
 

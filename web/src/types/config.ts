@@ -108,6 +108,7 @@ export interface UpdateModelConfigRequest {
     [key: string]: {
       enabled: boolean
       api_key: string
+      clear_api_key?: boolean
       custom_api_url?: string
       custom_model_name?: string
     }
@@ -136,5 +137,4 @@ export interface UpdateExchangeConfigRequest {
     }
   }
 }
-
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // TraderOrder order record
@@ -13,7 +14,7 @@ import (
 type TraderOrder struct {
 	ID                int64   `gorm:"primaryKey;autoIncrement" json:"id"`
 	TraderID          string  `gorm:"column:trader_id;not null;index:idx_orders_trader_id" json:"trader_id"`
-	ExchangeID        string  `gorm:"column:exchange_id;not null;default:''" json:"exchange_id"`
+	ExchangeID        string  `gorm:"column:exchange_id;not null;default:'';uniqueIndex:idx_orders_exchange_unique,priority:1" json:"exchange_id"`
 	ExchangeType      string  `gorm:"column:exchange_type;not null;default:''" json:"exchange_type"`
 	ExchangeOrderID   string  `gorm:"column:exchange_order_id;not null;uniqueIndex:idx_orders_exchange_unique,priority:2" json:"exchange_order_id"`
 	ClientOrderID     string  `gorm:"column:client_order_id;default:''" json:"client_order_id"`
@@ -52,7 +53,7 @@ func (TraderOrder) TableName() string {
 type TraderFill struct {
 	ID              int64   `gorm:"primaryKey;autoIncrement" json:"id"`
 	TraderID        string  `gorm:"column:trader_id;not null;index:idx_fills_trader_id" json:"trader_id"`
-	ExchangeID      string  `gorm:"column:exchange_id;not null;default:''" json:"exchange_id"`
+	ExchangeID      string  `gorm:"column:exchange_id;not null;default:'';uniqueIndex:idx_fills_exchange_unique,priority:1" json:"exchange_id"`
 	ExchangeType    string  `gorm:"column:exchange_type;not null;default:''" json:"exchange_type"`
 	OrderID         int64   `gorm:"column:order_id;not null;index:idx_fills_order_id" json:"order_id"`
 	ExchangeOrderID string  `gorm:"column:exchange_order_id;not null" json:"exchange_order_id"`
@@ -86,12 +87,18 @@ func NewOrderStore(db *gorm.DB) *OrderStore {
 
 // InitTables initializes order tables
 func (s *OrderStore) InitTables() error {
+	if err := repairOrderIndexes(s.db); err != nil {
+		return err
+	}
 	// For PostgreSQL, check if tables exist to avoid AutoMigrate index conflicts
 	if s.db.Dialector.Name() == "postgres" {
 		var ordersExist, fillsExist int64
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_orders'`).Scan(&ordersExist)
-		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_fills'`).Scan(&fillsExist)
-
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_orders'`).Scan(&ordersExist).Error; err != nil {
+			return err
+		}
+		if err := s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trader_fills'`).Scan(&fillsExist).Error; err != nil {
+			return err
+		}
 		if ordersExist > 0 && fillsExist > 0 {
 			// Tables exist - fix INTEGER columns to BOOLEAN (from earlier migrations)
 			// Need to: drop default -> change type -> set new default
@@ -102,9 +109,15 @@ func (s *OrderStore) InitTables() error {
 				{"trader_fills", "is_maker"},
 			}
 			for _, c := range boolColumns {
-				s.db.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", c.table, c.col))
-				s.db.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE BOOLEAN USING %s::int::boolean", c.table, c.col, c.col))
-				s.db.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT false", c.table, c.col))
+				if err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", c.table, c.col)).Error; err != nil {
+					return err
+				}
+				if err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE BOOLEAN USING %s::int::boolean", c.table, c.col, c.col)).Error; err != nil {
+					return err
+				}
+				if err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT false", c.table, c.col)).Error; err != nil {
+					return err
+				}
 			}
 
 			// Migrate timestamp columns to bigint (Unix milliseconds UTC)
@@ -117,22 +130,40 @@ func (s *OrderStore) InitTables() error {
 			}
 			for _, c := range timestampColumns {
 				var dataType string
-				s.db.Raw(`SELECT data_type FROM information_schema.columns WHERE table_name = ? AND column_name = ?`, c.table, c.col).Scan(&dataType)
+				if err := s.db.Raw(`SELECT data_type FROM information_schema.columns WHERE table_name = ? AND column_name = ?`, c.table, c.col).Scan(&dataType).Error; err != nil {
+					return err
+				}
 				if dataType == "timestamp with time zone" || dataType == "timestamp without time zone" {
 					// Convert timestamp to Unix milliseconds (bigint)
-					s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE BIGINT USING EXTRACT(EPOCH FROM %s) * 1000`, c.table, c.col, c.col))
+					if err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE BIGINT USING EXTRACT(EPOCH FROM %s) * 1000`, c.table, c.col, c.col)).Error; err != nil {
+						return err
+					}
 				}
 			}
 
 			// Ensure indexes exist
-			s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_exchange_unique ON trader_orders(exchange_id, exchange_order_id)`)
-			s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fills_exchange_unique ON trader_fills(exchange_id, exchange_trade_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_trader_id ON trader_orders(trader_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_symbol ON trader_orders(symbol)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON trader_orders(status)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fills_trader_id ON trader_fills(trader_id)`)
-			s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fills_order_id ON trader_fills(order_id)`)
-			return nil
+			if err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_exchange_unique ON trader_orders(exchange_id, exchange_order_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fills_exchange_unique ON trader_fills(exchange_id, exchange_trade_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_trader_id ON trader_orders(trader_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_symbol ON trader_orders(symbol)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON trader_orders(status)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fills_trader_id ON trader_fills(trader_id)`).Error; err != nil {
+				return err
+			}
+			if err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_fills_order_id ON trader_fills(order_id)`).Error; err != nil {
+				return err
+			}
+			return ensureColumns(s.db, &TraderOrder{}, &TraderFill{})
 		}
 	}
 
@@ -141,28 +172,30 @@ func (s *OrderStore) InitTables() error {
 	}
 
 	// Create unique composite index for exchange_id + exchange_order_id
-	s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_exchange_unique ON trader_orders(exchange_id, exchange_order_id)`)
+	if err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_exchange_unique ON trader_orders(exchange_id, exchange_order_id)`).Error; err != nil {
+		return err
+	}
 	// Create unique composite index for exchange_id + exchange_trade_id
-	s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fills_exchange_unique ON trader_fills(exchange_id, exchange_trade_id)`)
-
+	if err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fills_exchange_unique ON trader_fills(exchange_id, exchange_trade_id)`).Error; err != nil {
+		return err
+	}
 	return nil
 }
 
 // CreateOrder creates order record
 func (s *OrderStore) CreateOrder(order *TraderOrder) error {
-	// Check if order already exists
+	if err := s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "exchange_id"}, {Name: "exchange_order_id"}}, DoNothing: true}).Create(order).Error; err != nil {
+		return err
+	}
 	existing, err := s.GetOrderByExchangeID(order.ExchangeID, order.ExchangeOrderID)
 	if err != nil {
-		return fmt.Errorf("failed to check existing order: %w", err)
+		return err
 	}
-	if existing != nil {
-		order.ID = existing.ID
-		order.CreatedAt = existing.CreatedAt
-		order.UpdatedAt = existing.UpdatedAt
-		return nil
+	if existing == nil {
+		return fmt.Errorf("inserted record missing")
 	}
-
-	return s.db.Create(order).Error
+	*order = *existing
+	return nil
 }
 
 // UpdateOrderStatus updates order status
@@ -184,18 +217,18 @@ func (s *OrderStore) UpdateOrderStatus(id int64, status string, filledQty, avgPr
 
 // CreateFill creates fill record
 func (s *OrderStore) CreateFill(fill *TraderFill) error {
-	// Check if fill already exists
+	if err := s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "exchange_id"}, {Name: "exchange_trade_id"}}, DoNothing: true}).Create(fill).Error; err != nil {
+		return err
+	}
 	existing, err := s.GetFillByExchangeTradeID(fill.ExchangeID, fill.ExchangeTradeID)
 	if err != nil {
-		return fmt.Errorf("failed to check existing fill: %w", err)
+		return err
 	}
-	if existing != nil {
-		fill.ID = existing.ID
-		fill.CreatedAt = existing.CreatedAt
-		return nil
+	if existing == nil {
+		return fmt.Errorf("inserted record missing")
 	}
-
-	return s.db.Create(fill).Error
+	*fill = *existing
+	return nil
 }
 
 // GetFillByExchangeTradeID gets fill by exchange trade ID

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"nofx/logger"
+	"nofx/security"
 	"strings"
 	"time"
 )
@@ -399,7 +400,7 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	defer resp.Body.Close()
 
 	// Step 6: Read response body (fixed logic)
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
@@ -542,7 +543,7 @@ func (client *Client) callWithRequestFull(req *Request) (*LLMResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -580,7 +581,7 @@ func (client *Client) callWithRequest(req *Request) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
@@ -753,7 +754,7 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := security.ReadResponseBody(resp.Body)
 		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 

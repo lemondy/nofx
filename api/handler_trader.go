@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"nofx/logger"
 	"nofx/store"
+	traderpkg "nofx/trader"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -37,21 +38,21 @@ type CreateTraderRequest struct {
 
 // UpdateTraderRequest Update trader request
 type UpdateTraderRequest struct {
-	Name                string  `json:"name" binding:"required"`
-	AIModelID           string  `json:"ai_model_id" binding:"required"`
-	ExchangeID          string  `json:"exchange_id" binding:"required"`
+	Name                string  `json:"name"`
+	AIModelID           string  `json:"ai_model_id"`
+	ExchangeID          string  `json:"exchange_id"`
 	StrategyID          string  `json:"strategy_id"` // Strategy ID (new version)
 	InitialBalance      float64 `json:"initial_balance"`
 	ScanIntervalMinutes int     `json:"scan_interval_minutes"`
 	IsCrossMargin       *bool   `json:"is_cross_margin"`
 	ShowInCompetition   *bool   `json:"show_in_competition"`
 	// The following fields are kept for backward compatibility, new version uses strategy config
-	BTCETHLeverage       int    `json:"btc_eth_leverage"`
-	AltcoinLeverage      int    `json:"altcoin_leverage"`
-	TradingSymbols       string `json:"trading_symbols"`
-	CustomPrompt         string `json:"custom_prompt"`
-	OverrideBasePrompt   bool   `json:"override_base_prompt"`
-	SystemPromptTemplate string `json:"system_prompt_template"`
+	BTCETHLeverage       int     `json:"btc_eth_leverage"`
+	AltcoinLeverage      int     `json:"altcoin_leverage"`
+	TradingSymbols       *string `json:"trading_symbols"`
+	CustomPrompt         *string `json:"custom_prompt"`
+	OverrideBasePrompt   *bool   `json:"override_base_prompt"`
+	SystemPromptTemplate string  `json:"system_prompt_template"`
 }
 
 func formatTraderCreationError(reason, nextStep string) string {
@@ -85,7 +86,7 @@ func missingExchangeFields(exchange *store.Exchange) []string {
 
 	var missing []string
 	switch exchange.ExchangeType {
-	case "binance", "bybit", "gate", "indodax":
+	case "binance", "binance_stocks", "bybit", "gate", "indodax":
 		if exchange.APIKey == "" {
 			missing = append(missing, "API Key")
 		}
@@ -154,29 +155,32 @@ func validateExchangeForTraderCreation(exchange *store.Exchange) (string, string
 			"请前往「设置 > 交易所配置」启用该账户后，再重新创建机器人",
 		), "trader.create.exchange_disabled", mapStringPairs("exchange_name", exchangeDisplayName(exchange))
 	}
+	if err := store.ValidateExchangeEnvironment(exchange.ExchangeType, exchange.Testnet); err != nil {
+		return err.Error(), "trader.create.exchange_unsupported", nil
+	}
 
 	missing := missingExchangeFields(exchange)
 	if len(missing) > 0 {
 		return formatTraderCreationError(
-			fmt.Sprintf("交易所账户「%s」的配置还不完整，缺少 %s", exchangeDisplayName(exchange), strings.Join(missing, "、")),
-			"请前往「设置 > 交易所配置」补全该账户的必填信息后，再重新创建机器人",
-		), "trader.create.exchange_missing_fields", mapStringPairs(
-			"exchange_name", exchangeDisplayName(exchange),
-			"missing_fields", strings.Join(missing, ", "),
-		)
+				fmt.Sprintf("交易所账户「%s」的配置还不完整，缺少 %s", exchangeDisplayName(exchange), strings.Join(missing, "、")),
+				"请前往「设置 > 交易所配置」补全该账户的必填信息后，再重新创建机器人",
+			), "trader.create.exchange_missing_fields", mapStringPairs(
+				"exchange_name", exchangeDisplayName(exchange),
+				"missing_fields", strings.Join(missing, ", "),
+			)
 	}
 
 	switch exchange.ExchangeType {
-	case "binance", "bybit", "okx", "bitget", "gate", "kucoin", "hyperliquid", "aster", "lighter", "indodax":
+	case "binance", "binance_stocks", "bybit", "okx", "bitget", "gate", "kucoin", "hyperliquid", "aster", "lighter", "indodax":
 		return "", "", nil
 	default:
 		return formatTraderCreationError(
-			fmt.Sprintf("交易所账户「%s」使用了当前版本暂不支持的类型 %s", exchangeDisplayName(exchange), exchange.ExchangeType),
-			"请改用当前版本支持的交易所账户后，再重新创建机器人",
-		), "trader.create.exchange_unsupported", mapStringPairs(
-			"exchange_name", exchangeDisplayName(exchange),
-			"exchange_type", exchange.ExchangeType,
-		)
+				fmt.Sprintf("交易所账户「%s」使用了当前版本暂不支持的类型 %s", exchangeDisplayName(exchange), exchange.ExchangeType),
+				"请改用当前版本支持的交易所账户后，再重新创建机器人",
+			), "trader.create.exchange_unsupported", mapStringPairs(
+				"exchange_name", exchangeDisplayName(exchange),
+				"exchange_type", exchange.ExchangeType,
+			)
 	}
 }
 
@@ -299,6 +303,8 @@ func formatTraderStartError(reason, nextStep string) string {
 
 // handleCreateTrader Create new AI trader
 func (s *Server) handleCreateTrader(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	var req CreateTraderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -382,7 +388,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	if len(exchangeIDShort) > 8 {
 		exchangeIDShort = exchangeIDShort[:8]
 	}
-	traderID := fmt.Sprintf("%s_%s_%d", exchangeIDShort, req.AIModelID, time.Now().Unix())
+	traderID := fmt.Sprintf("%s_%s_%s", exchangeIDShort, req.AIModelID, uuid.NewString())
 
 	// Set default values
 	isCrossMargin := true // Default to cross margin mode
@@ -521,14 +527,14 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 	if startupWarning == "" {
 		if loadErr := s.traderManager.GetLoadError(traderID); loadErr != nil {
-		logger.Infof("⚠️ Trader %s failed to load after creation: %v", traderID, loadErr)
+			logger.Infof("⚠️ Trader %s failed to load after creation: %v", traderID, loadErr)
 			startupWarning = describeTraderCreationWarning(req.Name, loadErr)
 		}
 	}
 
 	if startupWarning == "" {
 		if _, getErr := s.traderManager.GetTrader(traderID); getErr != nil {
-		logger.Infof("⚠️ Trader %s not found in memory after creation: %v", traderID, getErr)
+			logger.Infof("⚠️ Trader %s not found in memory after creation: %v", traderID, getErr)
 			startupWarning = describeTraderCreationWarning(req.Name, getErr)
 		}
 	}
@@ -536,16 +542,18 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	logger.Infof("✓ Trader created successfully: %s (model: %s, exchange: %s)", req.Name, req.AIModelID, req.ExchangeID)
 
 	c.JSON(http.StatusCreated, gin.H{
-		"trader_id":        traderID,
-		"trader_name":      req.Name,
-		"ai_model":         req.AIModelID,
-		"is_running":       false,
-		"startup_warning":  startupWarning,
+		"trader_id":       traderID,
+		"trader_name":     req.Name,
+		"ai_model":        req.AIModelID,
+		"is_running":      false,
+		"startup_warning": startupWarning,
 	})
 }
 
 // handleUpdateTrader Update trader configuration
 func (s *Server) handleUpdateTrader(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
 
@@ -576,7 +584,47 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	}
 
 	// Set default values
+	tradingSymbols, customPrompt, overrideBase := existingTrader.TradingSymbols, existingTrader.CustomPrompt, existingTrader.OverrideBasePrompt
+	if req.TradingSymbols != nil {
+		tradingSymbols = *req.TradingSymbols
+	}
+	if req.CustomPrompt != nil {
+		customPrompt = *req.CustomPrompt
+	}
+	if req.OverrideBasePrompt != nil {
+		overrideBase = *req.OverrideBasePrompt
+	}
+	if req.InitialBalance < 0 || req.BTCETHLeverage > 125 || req.AltcoinLeverage > 125 || req.ScanIntervalMinutes > 1440 {
+		SafeBadRequest(c, "Invalid trader limits")
+		return
+	}
 	isCrossMargin := existingTrader.IsCrossMargin // Keep original value
+	if req.Name == "" {
+		req.Name = existingTrader.Name
+	}
+	if req.AIModelID == "" {
+		req.AIModelID = existingTrader.AIModelID
+	}
+	if req.ExchangeID == "" {
+		req.ExchangeID = existingTrader.ExchangeID
+	}
+	if _, err := s.store.AIModel().Get(userID, req.AIModelID); err != nil {
+		SafeBadRequest(c, "AI model not found")
+		return
+	}
+	if ex, err := s.store.Exchange().GetByID(userID, req.ExchangeID); err != nil {
+		SafeBadRequest(c, "Exchange not found")
+		return
+	} else if err := store.ValidateExchangeEnvironment(ex.ExchangeType, ex.Testnet); err != nil {
+		SafeBadRequest(c, err.Error())
+		return
+	}
+	if req.StrategyID != "" {
+		if _, err := s.store.Strategy().Get(userID, req.StrategyID); err != nil {
+			SafeBadRequest(c, "Strategy not found")
+			return
+		}
+	}
 	if req.IsCrossMargin != nil {
 		isCrossMargin = *req.IsCrossMargin
 	}
@@ -640,9 +688,9 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		InitialBalance:       initialBalance,
 		BTCETHLeverage:       btcEthLeverage,
 		AltcoinLeverage:      altcoinLeverage,
-		TradingSymbols:       req.TradingSymbols,
-		CustomPrompt:         req.CustomPrompt,
-		OverrideBasePrompt:   req.OverrideBasePrompt,
+		TradingSymbols:       tradingSymbols,
+		CustomPrompt:         customPrompt,
+		OverrideBasePrompt:   overrideBase,
 		SystemPromptTemplate: systemPromptTemplate,
 		IsCrossMargin:        isCrossMargin,
 		ShowInCompetition:    showInCompetition,
@@ -651,11 +699,9 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	}
 
 	// Check if trader was running before update (we'll restart it after)
-	wasRunning := false
 	if existingMemTrader, memErr := s.traderManager.GetTrader(traderID); memErr == nil {
 		status := existingMemTrader.GetStatus()
 		if running, ok := status["is_running"].(bool); ok && running {
-			wasRunning = true
 			logger.Infof("🔄 Trader %s was running, will restart with new config after update", traderID)
 		}
 	}
@@ -679,24 +725,12 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	}
 
 	// Remove old trader from memory first (this also stops if running)
-	s.traderManager.RemoveTrader(traderID)
+	s.removeTraderForReload(userID, traderID)
 
 	// Reload traders into memory with fresh config
 	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
-	}
-
-	// If trader was running before, restart it with new config
-	if wasRunning {
-		if reloadedTrader, getErr := s.traderManager.GetTrader(traderID); getErr == nil {
-			go func() {
-				logger.Infof("▶️ Restarting trader %s with new config...", traderID)
-				if runErr := reloadedTrader.Run(); runErr != nil {
-					logger.Infof("❌ Trader %s runtime error: %v", traderID, runErr)
-				}
-			}()
-		}
 	}
 
 	logger.Infof("✓ Trader updated successfully: %s (model: %s, exchange: %s, strategy: %s)", req.Name, req.AIModelID, req.ExchangeID, strategyID)
@@ -711,28 +745,22 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 
 // handleDeleteTrader Delete trader
 func (s *Server) handleDeleteTrader(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
 
 	// Delete from database
-	err := s.store.Trader().Delete(userID, traderID)
+	if _, err := s.store.Trader().GetForUser(userID, traderID); err != nil {
+		SafeNotFound(c, "Trader")
+		return
+	}
+	err := s.traderManager.RemoveTraderAndThen(traderID, func() error { return s.store.Trader().Delete(userID, traderID) })
 	if err != nil {
 		SafeInternalError(c, "Failed to delete trader", err)
 		return
 	}
 	s.traderManager.InvalidateCompetitionCache()
-
-	// If trader is running, stop it first
-	if trader, err := s.traderManager.GetTrader(traderID); err == nil {
-		status := trader.GetStatus()
-		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
-			trader.Stop()
-			logger.Infof("⏹  Stopped running trader: %s", traderID)
-		}
-	}
-
-	// Remove trader from memory
-	s.traderManager.RemoveTrader(traderID)
 
 	logger.Infof("✓ Trader deleted: %s", traderID)
 	c.JSON(http.StatusOK, gin.H{"message": "Trader deleted"})
@@ -740,6 +768,8 @@ func (s *Server) handleDeleteTrader(c *gin.Context) {
 
 // handleStartTrader Start trader
 func (s *Server) handleStartTrader(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
 
@@ -764,7 +794,7 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 		}
 		// Trader exists but is stopped - remove from memory to reload fresh config
 		logger.Infof("🔄 Removing stopped trader %s from memory to reload config...", traderID)
-		s.traderManager.RemoveTrader(traderID)
+		s.removeTraderForReload(userID, traderID)
 	}
 
 	// Load trader from database (always reload to get latest config)
@@ -817,26 +847,18 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 		return
 	}
 
-	// Start trader
-	go func() {
-		logger.Infof("▶️  Starting trader %s (%s)", traderID, trader.GetName())
-		if err := trader.Run(); err != nil {
-			logger.Infof("❌ Trader %s runtime error: %v", trader.GetName(), err)
-		}
-	}()
-
-	// Update running status in database
-	err = s.store.Trader().UpdateStatus(userID, traderID, true)
-	if err != nil {
-		logger.Infof("⚠️  Failed to update trader status: %v", err)
+	if err := trader.Start(); err != nil && !errors.Is(err, traderpkg.ErrAlreadyRunning) {
+		SafeBadRequest(c, err.Error())
+		return
 	}
-
 	logger.Infof("✓ Trader %s started", trader.GetName())
 	c.JSON(http.StatusOK, gin.H{"message": "Trader started"})
 }
 
 // handleStopTrader Stop trader
 func (s *Server) handleStopTrader(c *gin.Context) {
+	s.traderOpsMu.Lock()
+	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
 

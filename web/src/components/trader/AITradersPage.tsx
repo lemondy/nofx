@@ -552,10 +552,11 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
  buildRequest: (models) => ({
  models: Object.fromEntries(
  models.map((model) => [
- model.provider,
+ model.id,
  {
  enabled: model.enabled,
  api_key: model.apiKey || '',
+ clear_api_key: model.id === modelId,
  custom_api_url: model.customApiUrl || '',
  custom_model_name: model.customModelName || '',
  },
@@ -619,7 +620,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
  const request = {
  models: Object.fromEntries(
  updatedModels.map((model) => [
- model.provider,
+ model.id,
  {
  enabled: model.enabled,
  api_key: model.apiKey || '',

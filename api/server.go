@@ -6,11 +6,13 @@ import (
 	"net"
 	"net/http"
 	"nofx/auth"
+	"nofx/config"
 	"nofx/crypto"
 	"nofx/logger"
 	"nofx/manager"
 	"nofx/store"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +20,7 @@ import (
 
 // Server HTTP API server
 type Server struct {
+	traderOpsMu               sync.Mutex
 	router                    *gin.Engine
 	traderManager             *manager.TraderManager
 	store                     *store.Store
@@ -34,6 +37,8 @@ func NewServer(traderManager *manager.TraderManager, st *store.Store, cryptoServ
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.Default()
+	_ = router.SetTrustedProxies(nil)
+	router.Use(requestLimits())
 
 	// Enable CORS
 	router.Use(corsMiddleware())
@@ -143,7 +148,7 @@ func (s *Server) setupRoutes() {
 
 			// User account management
 			s.routeWithSchema(protected, "PUT", "/user/password", "Change current user password",
-				`Body: {"new_password":"<string, min 8 chars>"}`,
+				`Body: {"current_password":"<string>","new_password":"<string, min 8 chars>"}. Changing password revokes existing sessions.`,
 				s.handleChangePassword)
 
 			// Server IP query (requires authentication, for whitelist configuration)
@@ -176,14 +181,14 @@ Only include fields you want to change.`,
 				`:id = trader_id from GET /api/my-traders. No request body needed. Gracefully stops the trading loop.`,
 				s.handleStopTrader)
 			s.routeWithSchema(protected, "PUT", "/traders/:id/prompt", "Override the trader's AI system prompt",
-				`Body: {"prompt":"<string — the full custom prompt text>"}`,
+				`Body: {"custom_prompt":"<string — the full custom prompt text>","override_base_prompt":<bool>}`,
 				s.handleUpdateTraderPrompt)
 			s.routeWithSchema(protected, "POST", "/traders/:id/sync-balance", "Sync account balance from exchange",
 				`:id = trader_id from GET /api/my-traders. No request body needed. Refreshes initial_balance from the exchange.`,
 				s.handleSyncBalance)
 			s.routeWithSchema(protected, "POST", "/traders/:id/close-position", "Force-close an open position",
 				`:id = trader_id from GET /api/my-traders.
-Body: {"symbol":"<string, e.g. BTCUSDT — must match an open position symbol from GET /api/positions>"}`,
+Body: {"symbol":"<string, e.g. BTCUSDT — must match an open position symbol from GET /api/positions>","side":"LONG|SHORT"}`,
 				s.handleClosePosition)
 			s.routeWithSchema(protected, "PUT", "/traders/:id/competition", "Toggle competition leaderboard visibility",
 				`:id = trader_id from GET /api/my-traders.
@@ -237,18 +242,19 @@ Use this to enable/disable an exchange or update API credentials. The "id" field
 				s.handleDeleteExchange)
 
 			// Telegram bot configuration
+			protected.POST("/telegram/bind-code", s.handleTelegramBindCode)
 			s.routeWithSchema(protected, "GET", "/telegram", "Get Telegram bot configuration",
 				`Returns: {"bot_token":"<string>","model_id":"<EXACT id of configured AI model>","chat_id":"<bound Telegram chat id, empty if not bound>"}`,
 				s.handleGetTelegramConfig)
 			s.routeWithSchema(protected, "POST", "/telegram", "Set Telegram bot token and AI model",
 				`Body: {"bot_token":"<string — Telegram BotFather token>","model_id":"<EXACT id from GET /api/models>"}
-Both fields are required. After saving, the user must send /start in Telegram to bind their account.`,
+Both fields are required. After saving, the user must obtain a one-time code from POST /api/telegram/bind-code and send /start CODE in Telegram to bind their account.`,
 				s.handleUpdateTelegramConfig)
 			s.routeWithSchema(protected, "POST", "/telegram/model", "Update Telegram bot AI model only",
 				`Body: {"model_id":"<EXACT id from GET /api/models>"}`,
 				s.handleUpdateTelegramModel)
 			s.routeWithSchema(protected, "DELETE", "/telegram/binding", "Unbind Telegram account",
-				`No body needed. Clears the Telegram chat_id binding so the user can re-bind with /start.`,
+				`No body needed. Clears the Telegram chat_id binding so the user can re-bind with a new /start CODE.`,
 				s.handleUnbindTelegram)
 
 			// Strategy management
@@ -677,6 +683,12 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		}
 
 		// Store user information in context
+		user, userErr := s.store.User().GetByID(claims.UserID)
+		revoked, revokeErr := s.store.TokenRevoked(tokenString)
+		if userErr != nil || revokeErr != nil || revoked || user.TokenVersion != claims.TokenVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or revoked session"})
+			return
+		}
 		c.Set("user_id", claims.UserID)
 		c.Set("email", claims.Email)
 		c.Next()
@@ -685,7 +697,7 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 
 // Start Start server
 func (s *Server) Start() error {
-	addr := fmt.Sprintf(":%d", s.port)
+	addr := net.JoinHostPort(config.Get().APIServerHost, fmt.Sprint(s.port))
 	logger.Infof("🌐 API server starting at http://localhost%s", addr)
 	logger.Infof("📊 API Documentation:")
 	logger.Infof("  • GET  /api/health           - Health check")
@@ -713,8 +725,12 @@ func (s *Server) Start() error {
 	logger.Info()
 
 	s.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: s.router,
+		Addr:              addr,
+		Handler:           s.router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 	return s.httpServer.ListenAndServe()
 }

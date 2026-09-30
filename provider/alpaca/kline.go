@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"nofx/config"
+	"nofx/security"
 	"time"
 )
 
@@ -111,7 +111,7 @@ func (c *Client) GetBars(ctx context.Context, symbol string, timeframe string, l
 	defer resp.Body.Close()
 
 	// Read response
-	body, err := io.ReadAll(resp.Body)
+	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

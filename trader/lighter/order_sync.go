@@ -146,16 +146,11 @@ func (t *LighterTraderV2) SyncOrdersFromLighter(traderID string, exchangeID stri
 
 // StartOrderSync starts background order sync task
 func (t *LighterTraderV2) StartOrderSync(traderID string, exchangeID string, exchangeType string, st *store.Store, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	go func() {
-		for range ticker.C {
-			if err := t.SyncOrdersFromLighter(traderID, exchangeID, exchangeType, st); err != nil {
-				// Only log non-404 errors to reduce log spam
-				if !strings.Contains(err.Error(), "status 404") {
-					logger.Infof("⚠️  Order sync failed: %v", err)
-				}
-			}
+	t.orderSync.Start(interval, func() {
+		if err := t.SyncOrdersFromLighter(traderID, exchangeID, exchangeType, st); err != nil {
+			logger.Warnf("lighter order sync failed: %v", err)
 		}
-	}()
-	logger.Infof("🔄 Lighter order+position sync started (interval: %v)", interval)
+	})
 }
+
+func (t *LighterTraderV2) StopOrderSync() { t.orderSync.Stop() }

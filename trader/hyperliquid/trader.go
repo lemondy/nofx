@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"nofx/logger"
+	"nofx/trader/types"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 // HyperliquidTrader Hyperliquid trader
 type HyperliquidTrader struct {
+	orderSync        types.SyncLoop
 	exchange         *hyperliquid.Exchange
 	ctx              context.Context
 	walletAddr       string
