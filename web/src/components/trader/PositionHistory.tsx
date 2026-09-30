@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import useSWR from 'swr'
 import { api } from '../../lib/api'
 import { useLanguage } from '../../contexts/LanguageContext'
 import { t, type Language } from '../../i18n/translations'
@@ -336,12 +337,6 @@ function PositionRow({ position }: { position: HistoricalPosition }) {
 
 export function PositionHistory({ traderId }: PositionHistoryProps) {
  const { language } = useLanguage()
- const [loading, setLoading] = useState(true)
- const [error, setError] = useState<string | null>(null)
- const [positions, setPositions] = useState<HistoricalPosition[]>([])
- const [stats, setStats] = useState<TraderStats | null>(null)
- const [symbolStats, setSymbolStats] = useState<SymbolStats[]>([])
- const [directionStats, setDirectionStats] = useState<DirectionStats[]>([])
 
  // Pagination state
  const [pageSize, setPageSize] = useState<number>(20)
@@ -353,32 +348,33 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
  const [sortBy, setSortBy] = useState<'time' | 'pnl' | 'pnl_pct'>('time')
  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
 
- useEffect(() => {
- const fetchData = async () => {
- try {
- setLoading(true)
- setError(null)
- // Fetch more data than needed to support filtering, but respect pageSize for initial load
- const data = await api.getPositionHistory(
- traderId,
- Math.max(200, pageSize * 5),
- true
+ // Poll like the other dashboard panels (SWR, 30s) — the old fetch-once
+ // useEffect froze the list at mount: trades closed hours ago never showed
+ // up until a manual reload (user report 09-30).
+ const historyLimit = Math.max(200, pageSize * 5)
+ const {
+  data: historyData,
+  error: historyError,
+  isLoading: historyLoading,
+ } = useSWR(
+  traderId ? `position-history-${traderId}-${historyLimit}` : null,
+  () => api.getPositionHistory(traderId!, historyLimit, true),
+  {
+  refreshInterval: 30000,
+  revalidateOnFocus: false,
+  dedupingInterval: 15000,
+  }
  )
- setPositions(data.positions || [])
- setStats(data.stats)
- setSymbolStats(data.symbol_stats || [])
- setDirectionStats(data.direction_stats || [])
- } catch (err) {
- setError(err instanceof Error ? err.message : 'Failed to load history')
- } finally {
- setLoading(false)
- }
- }
-
- if (traderId) {
- fetchData()
- }
- }, [traderId, pageSize])
+ const positions: HistoricalPosition[] = historyData?.positions || []
+ const stats: TraderStats | null = historyData?.stats ?? null
+ const symbolStats: SymbolStats[] = historyData?.symbol_stats || []
+ const directionStats: DirectionStats[] = historyData?.direction_stats || []
+ const loading = historyLoading
+ const error = historyError
+  ? historyError instanceof Error
+   ? historyError.message
+   : 'Failed to load history'
+  : null
 
  // Get unique symbols for filter
  const uniqueSymbols = useMemo(() => {
