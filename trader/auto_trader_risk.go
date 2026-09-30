@@ -528,6 +528,13 @@ func (at *AutoTrader) enforceMinPositionSize(positionSizeUSD float64) error {
 }
 
 // enforceMaxPositions checks maximum positions count (CODE ENFORCED)
+// enforceMaxPositions checks maximum positions count (CODE ENFORCED).
+// Callers pass the POST-OPEN count (nextSlotCount: open + 1 for this entry +
+// resting entries on OTHER symbols), so the cap must compare with > — a
+// count == max IS the cap being exactly reached. The old `>=` (from the
+// pre-slot-accounting era when callers passed the raw open count) made the
+// effective cap max−1: with max=5 and 4 open positions the 5th open was
+// rejected as "Already at max positions (5/5)" (PROMUSDT 2026-09-30).
 func (at *AutoTrader) enforceMaxPositions(currentPositionCount int) error {
 	if at.config.StrategyConfig == nil {
 		return nil
@@ -538,8 +545,8 @@ func (at *AutoTrader) enforceMaxPositions(currentPositionCount int) error {
 		maxPositions = 3 // Default: 3 positions
 	}
 
-	if currentPositionCount >= maxPositions {
-		return fmt.Errorf("❌ [RISK CONTROL] Already at max positions (%d/%d)", currentPositionCount, maxPositions)
+	if currentPositionCount > maxPositions {
+		return fmt.Errorf("❌ [RISK CONTROL] would exceed max positions (%d > %d)", currentPositionCount, maxPositions)
 	}
 	return nil
 }

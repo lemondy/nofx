@@ -1,6 +1,10 @@
 package trader
 
-import "testing"
+import (
+	"testing"
+
+	"nofx/store"
+)
 
 // Slot accounting: the count AFTER a new entry must include open positions,
 // resting entries on OTHER symbols, and the new order itself — the replaced
@@ -30,5 +34,38 @@ func TestPendingMarginReservedKeepsOppositeSide(t *testing.T) {
 	}
 	if got := at.pendingMarginReserved(pendingEntryKey("SOLUSDT", "short")); got != 100 {
 		t.Fatalf("replacing short must reserve the long's 100 USDT margin, got %.2f", got)
+	}
+}
+
+// The position cap compares the POST-OPEN count with > : count == max means
+// the cap is exactly reached and the open proceeds. The old `>=` (a leftover
+// from when callers passed the raw open count) made the effective cap
+// max−1 — with max=5 and 4 open positions the 5th open was rejected as
+// "Already at max positions (5/5)" (PROMUSDT 2026-09-30).
+func TestEnforceMaxPositionsCapBoundary(t *testing.T) {
+	at := &AutoTrader{}
+	cfg := &store.StrategyConfig{}
+	cfg.RiskControl.MaxPositions = 5
+	at.config = AutoTraderConfig{StrategyConfig: cfg}
+
+	if err := at.enforceMaxPositions(4); err != nil {
+		t.Fatalf("4/5 must pass: %v", err)
+	}
+	if err := at.enforceMaxPositions(5); err != nil {
+		t.Fatalf("5/5 (4 open + this entry) must pass — cap exactly reached: %v", err)
+	}
+	if err := at.enforceMaxPositions(6); err == nil {
+		t.Fatal("6 > 5 must be rejected")
+	}
+
+	// MaxPositions unset (0) rides the default 3 — but only when a strategy
+	// config exists at all (nil config short-circuits to allow).
+	cfg0 := &store.StrategyConfig{}
+	at.config = AutoTraderConfig{StrategyConfig: cfg0}
+	if err := at.enforceMaxPositions(3); err != nil {
+		t.Fatalf("3/3 with default cap must pass: %v", err)
+	}
+	if err := at.enforceMaxPositions(4); err == nil {
+		t.Fatal("4 > 3 default cap must be rejected")
 	}
 }
