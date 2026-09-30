@@ -127,13 +127,34 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
  )
  }
 
- // 按所选范围切片显示（性能优化）：200/1000/2000 周期或全部
+ // 按所选范围切片显示（性能优化）：50 周期（约4小时）到全部，下拉选择
  const RANGE_OPTIONS: Array<{ label: string; value: number | 'all' }> = [
-  { label: '200', value: 200 },
-  { label: '1K', value: 1000 },
-  { label: '2K', value: 2000 },
   {
-   label: language === 'zh' ? '全部' : 'All',
+   label: language === 'zh' ? '最近 50 周期' : 'Last 50',
+   value: 50,
+  },
+  {
+   label: language === 'zh' ? '最近 100 周期' : 'Last 100',
+   value: 100,
+  },
+  {
+   label: language === 'zh' ? '最近 200 周期' : 'Last 200',
+   value: 200,
+  },
+  {
+   label: language === 'zh' ? '最近 500 周期' : 'Last 500',
+   value: 500,
+  },
+  {
+   label: language === 'zh' ? '最近 1000 周期' : 'Last 1K',
+   value: 1000,
+  },
+  {
+   label: language === 'zh' ? '最近 2000 周期' : 'Last 2K',
+   value: 2000,
+  },
+  {
+   label: language === 'zh' ? '全部数据' : 'All Data',
    value: 'all',
   },
  ]
@@ -315,30 +336,26 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
  </button>
  </div>
 
- {/* Time Range Selector */}
- <div
- className="flex gap-0.5 sm:gap-1 rounded p-0.5 sm:p-1 self-start sm:self-auto"
- style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+ {/* Time Range Selector（下拉：支持比预设更短的周期范围） */}
+ <select
+ value={String(range)}
+ onChange={(e) =>
+  setRange(e.target.value === 'all' ? 'all' : Number(e.target.value))
+ }
+ className="px-3 py-2 rounded text-xs sm:text-sm font-bold self-start sm:self-auto"
+ style={{
+  background: '#F2EFE6',
+  border: '1px solid #C0B9A2',
+  color: '#1E1E1A',
+ }}
+ title={language === 'zh' ? '显示范围（周期数）' : 'Display range (cycles)'}
  >
  {RANGE_OPTIONS.map((opt) => (
- <button
- key={String(opt.value)}
- onClick={() => setRange(opt.value)}
- className="px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-bold transition-all"
- style={
-  range === opt.value
-  ? {
-  background: '#B8912A',
-  color: '#000',
-  boxShadow: '0 2px 8px rgba(184, 145, 42, 0.4)',
-  }
-  : { background: 'transparent', color: '#6E6E60' }
- }
- >
- {opt.label}
- </button>
+ <option key={String(opt.value)} value={String(opt.value)}>
+  {opt.label}
+ </option>
  ))}
- </div>
+ </select>
  </div>
 
  {/* Chart */}
