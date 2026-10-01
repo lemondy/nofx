@@ -39,6 +39,12 @@ import (
 // be mistaken for an orphan.
 const orphanPositionMinAge = 30 * time.Minute
 
+// orphanStaleRowAge bounds the no-live-price retry: an exchange-absent row
+// older than this is closed stamped at its entry price (PnL attribution
+// unchanged) instead of retrying forever (user report 2026-10-01:
+// xyz:SNDK retried 6 days and its symbol never resolves a price).
+const orphanStaleRowAge = 72 * time.Hour
+
 // orphanedRows returns the DB open rows whose (symbol, side) key is absent
 // from the exchange's live position set and whose age exceeds minAge. Side
 // comparison is case-insensitive; a zero EntryTime falls back to UpdatedAt.
@@ -133,7 +139,29 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 		if exitPrice <= 0 {
 			// No honest exit price this cycle (xyz dex assets, ticker
 			// hiccup, delisting) — retry next cycle rather than stamp 0.
-			logger.Infof("🧹 [%s] orphan reconcile: %s %s row #%d has no live price — retry next cycle", at.name, row.Symbol, row.Side, row.ID)
+			// AGE BOUND (user report 2026-10-01: xyz:SNDK retried for 6
+			// days because its symbol never resolves a price): a row the
+			// exchange has not held for > orphanStaleRowAge cannot carry
+			// live risk forever. Stamp the exit at the ENTRY price (no PnL
+			// is fabricated — accumulated realized_pnl is kept verbatim)
+			// under a dedicated close reason so audits can find them.
+			rowAge := now.Sub(time.UnixMilli(row.EntryTime))
+			if row.EntryTime <= 0 {
+				rowAge = now.Sub(time.UnixMilli(row.CreatedAt))
+			}
+			if rowAge > orphanStaleRowAge {
+				if err := at.store.Position().ClosePositionFully(row.ID, row.EntryPrice, "", now.UnixMilli(), row.RealizedPnL, row.Fee, "netting_reconcile_stale"); err != nil {
+					logger.Infof("⚠️ [%s] orphan reconcile: stale-row close %s %s row #%d failed: %v", at.name, row.Symbol, row.Side, row.ID, err)
+					continue
+				}
+				logger.Infof("🧹 [%s] orphan reconcile: %s %s row #%d closed STALE (no live price for %s, exchange has not held it; exit stamped at entry %.6g, PnL attribution unchanged)",
+					at.name, row.Symbol, row.Side, row.ID, rowAge.Round(time.Hour), row.EntryPrice)
+				notify.Notify("RISK", at.name, fmt.Sprintf(
+					"<b>🧹 幽灵仓位行收口(超时) %s (%s)</b>\n<i>交易所已无此仓位且 %s 无法取得实时价,按开仓价收口(盈亏归因不变);若该仓实际仍在别处存在,请人工核查</i>",
+					notify.Escape(row.Symbol), strings.ToUpper(row.Side[:1])+row.Side[1:], rowAge.Round(24*time.Hour)))
+			} else {
+				logger.Infof("🧹 [%s] orphan reconcile: %s %s row #%d has no live price — retry next cycle (age %s of %s)", at.name, row.Symbol, row.Side, row.ID, rowAge.Round(time.Hour), orphanStaleRowAge)
+			}
 			continue
 		}
 		if err := at.store.Position().ClosePositionFully(row.ID, exitPrice, "", now.UnixMilli(), row.RealizedPnL, row.Fee, "netting_reconcile"); err != nil {
