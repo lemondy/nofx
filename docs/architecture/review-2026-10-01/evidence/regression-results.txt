@@ -1,0 +1,61 @@
+=== RUN   TestReview20261001HardGateBlockersMustRejectOpen
+=== RUN   TestReview20261001HardGateBlockersMustRejectOpen/EXTENDED_PUMP_UNCONFIRMED
+    review_20261001_test.go:39: hard gate EXTENDED_PUMP_UNCONFIRMED blocked long, executor retained 1 opening decisions
+=== RUN   TestReview20261001HardGateBlockersMustRejectOpen/DATA_INSUFFICIENT
+    review_20261001_test.go:39: hard gate DATA_INSUFFICIENT blocked long, executor retained 1 opening decisions
+=== RUN   TestReview20261001HardGateBlockersMustRejectOpen/POOR_HISTORY
+    review_20261001_test.go:39: hard gate POOR_HISTORY blocked long, executor retained 1 opening decisions
+=== RUN   TestReview20261001HardGateBlockersMustRejectOpen/NEG_EDGE_LOSING_SYMBOL
+    review_20261001_test.go:39: hard gate NEG_EDGE_LOSING_SYMBOL blocked long, executor retained 1 opening decisions
+--- FAIL: TestReview20261001HardGateBlockersMustRejectOpen (0.00s)
+    --- FAIL: TestReview20261001HardGateBlockersMustRejectOpen/EXTENDED_PUMP_UNCONFIRMED (0.00s)
+    --- FAIL: TestReview20261001HardGateBlockersMustRejectOpen/DATA_INSUFFICIENT (0.00s)
+    --- FAIL: TestReview20261001HardGateBlockersMustRejectOpen/POOR_HISTORY (0.00s)
+    --- FAIL: TestReview20261001HardGateBlockersMustRejectOpen/NEG_EDGE_LOSING_SYMBOL (0.00s)
+=== RUN   TestReview20261001LimitEntriesMustRespectReviewRules
+10-01 11:05:17 [INFO] store/store.go:72 ✅ Database initialized (GORM, SQLite)
+10-01 11:05:17 [WARN] trader/auto_trader_rules.go:42 🚫 [] RULE BLOCKED open_long XUSDT: Block high leverage (leverage=3x) — leverage > 1
+    review_20261001_test.go:49: open_long_limit bypassed enabled hard leverage rule
+--- FAIL: TestReview20261001LimitEntriesMustRespectReviewRules (0.02s)
+=== RUN   TestReview20261001ProtectionFailureMustNotAdvanceWatermark
+10-01 11:05:17 [INFO] trader/auto_trader_orders.go:588   ⚠ Failed to set take profit for XUSDT: simulated TP rejection
+10-01 11:05:19 [INFO] trader/auto_trader_orders.go:642   🚨 [] protective leg verification FAILED: XUSDT LONG missing TP
+10-01 11:05:19 [INFO] trader/auto_trader_pending.go:676 📌 [] Partial-fill protection: XUSDT long executed 1 @ 100 — SL 95 / TP 110 re-anchored to the actual fill
+    review_20261001_test.go:57: TP rejected yet protected watermark advanced to 1.0
+--- FAIL: TestReview20261001ProtectionFailureMustNotAdvanceWatermark (2.00s)
+=== RUN   TestReview20261001FilledSLFailureMustKeepRecoveryPlan
+10-01 11:05:19 [INFO] trader/auto_trader_orders.go:553   ⚠ Failed to set stop loss for XUSDT: simulated SL rejection
+10-01 11:05:21 [INFO] trader/auto_trader_orders.go:642   🚨 [] protective leg verification FAILED: XUSDT LONG missing SL+TP
+10-01 11:05:21 [INFO] trader/auto_trader_pending.go:672 ⚠️ [] partial-fill protection FAILED for XUSDT long: simulated SL rejection — watermark NOT advanced, retried next cycle
+10-01 11:05:21 [INFO] trader/auto_trader_pending.go:471 ✅ [] Limit entry FILLED: XUSDT long @ 100 — protective orders anchored
+    review_20261001_test.go:63: filled entry's durable recovery plan dropped after SL placement failure
+--- FAIL: TestReview20261001FilledSLFailureMustKeepRecoveryPlan (2.00s)
+=== RUN   TestReview20261001StopReplaceFailureMustKeepOldStop
+    review_20261001_test.go:69: old protective stop canceled before failed replacement; position left unprotected
+--- FAIL: TestReview20261001StopReplaceFailureMustKeepOldStop (0.00s)
+=== RUN   TestReview20261001DailyLossMustSurviveReload
+    review_20261001_test.go:76: reload erased daily loss halt after 6 percent equity loss
+--- FAIL: TestReview20261001DailyLossMustSurviveReload (0.00s)
+=== RUN   TestReview20261001UnknownCandidateMustRejectOpen
+    review_20261001_test.go:83: limit decision outside candidate pool and without gate state survives hard risk gates
+--- FAIL: TestReview20261001UnknownCandidateMustRejectOpen (0.00s)
+=== RUN   TestReview20261001UnsupportedGridMustNotFabricateEntry
+    review_20261001_test.go:91: unsupported native grid entry reported success with synthetic exchange order ID review-client; SL calls=1
+--- FAIL: TestReview20261001UnsupportedGridMustNotFabricateEntry (0.00s)
+=== RUN   TestReview20261001GridDrawdownMustUseActualEquity
+    review_20261001_test.go:96: OKX-shaped balance has true equity 900 / peak 1000 (10% DD), got 20% halted=true
+--- FAIL: TestReview20261001GridDrawdownMustUseActualEquity (0.00s)
+FAIL
+FAIL	nofx/trader	4.626s
+=== RUN   TestReview20261001PublicStrategyMustRemoveCredentials
+10-01 11:05:17 [INFO] store/store.go:107 ✅ Database initialized (GORM, SQLite)
+    review_20261001_test.go:12: unauthenticated public strategy endpoint returns stored API key / Authorization credentials
+--- FAIL: TestReview20261001PublicStrategyMustRemoveCredentials (0.03s)
+FAIL
+FAIL	nofx/api	0.701s
+=== RUN   TestReview20261001NegativeHoldoutMustPreventLiveParameterChange
+    review_20261001_test.go:10: all holdout returns are -10%, verified=[] rejected=[strong_threshold 72: test edge -10.00% (overall -10.00%) failed verification medium_threshold 50: test edge -10.00% (overall -10.00%) failed verification], yet live centers changed: [price_atr_center: 1.000 → 1.300 (train-median 1.600, half-step) vol_center: 2.000 → 2.500 (train-median 3.000, half-step)]
+--- FAIL: TestReview20261001NegativeHoldoutMustPreventLiveParameterChange (0.00s)
+FAIL
+FAIL	nofx/market/breakout	0.381s
+FAIL

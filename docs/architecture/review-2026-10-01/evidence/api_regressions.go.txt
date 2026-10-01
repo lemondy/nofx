@@ -1,0 +1,13 @@
+package api
+import("encoding/json";"net/http/httptest";"strings";"testing";"nofx/store")
+func TestReview20261001PublicStrategyMustRemoveCredentials(t *testing.T){
+ srv,r,_,user,_:=idorFixture(t)
+ cfg:=store.GetDefaultStrategyConfig("zh")
+ cfg.Indicators.NofxOSAPIKey="REVIEW_FAKE_KEY"
+ cfg.Indicators.ExternalDataSources=[]store.ExternalDataSource{{Name:"test",URL:"https://example.com",Headers:map[string]string{"Authorization":"Bearer REVIEW_FAKE_SECRET"}}}
+ b,_:=json.Marshal(cfg)
+ if err:=srv.store.Strategy().Create(&store.Strategy{ID:"review-public",UserID:user,Name:"review",Config:string(b),IsPublic:true,ConfigVisible:true});err!=nil{t.Fatal(err)}
+ r.GET("/review-public",srv.handlePublicStrategies)
+ out:=httptest.NewRecorder();r.ServeHTTP(out,httptest.NewRequest("GET","/review-public",nil))
+ if strings.Contains(out.Body.String(),"REVIEW_FAKE_KEY")||strings.Contains(out.Body.String(),"REVIEW_FAKE_SECRET"){t.Fatal("unauthenticated public strategy endpoint returns stored API key / Authorization credentials")}
+}
