@@ -475,15 +475,20 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 		} else {
 			stats.PendingCount++
 		}
-		stats.TotalPnL += e.RealizedPnL
+		// NET caliber (user audit 2026-10-01): RealizedPnL is the exchange
+		// GROSS figure; Fee rides on the entry since sync. PF/expectancy/win
+		// classification must reflect what the account keeps — the 177-long
+		// book was −8.39 gross / −18.53 net with fees alone at 10.14.
+		net := e.RealizedPnL - e.Fee
+		stats.TotalPnL += net
 
-		win := e.RealizedPnL > 0
+		win := net > 0
 		if win {
 			stats.WinTrades++
-			totalWin += e.RealizedPnL
-		} else if e.RealizedPnL < 0 {
+			totalWin += net
+		} else if net < 0 {
 			stats.LossTrades++
-			totalLoss += -e.RealizedPnL
+			totalLoss += -net
 		}
 
 		// group helpers
@@ -500,7 +505,7 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 			if win {
 				g.Wins++
 			}
-			g.TotalPnL += e.RealizedPnL
+			g.TotalPnL += net
 			return g
 		}
 
@@ -568,15 +573,15 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 	wr := stats.WinRate / 100
 	stats.Expectancy = wr*stats.AvgWin - (1-wr)*stats.AvgLoss
 
-	// plan coverage win rates
+	// plan coverage win rates (NET caliber, same as above)
 	withPlanWin, noPlanWin := 0, 0
 	for _, e := range entries {
 		hasPlan := e.PlannedStopLoss > 0 || e.PlannedTakeProfit > 0
 		if hasPlan {
-			if e.RealizedPnL > 0 {
+			if e.RealizedPnL-e.Fee > 0 {
 				withPlanWin++
 			}
-		} else if e.RealizedPnL > 0 {
+		} else if e.RealizedPnL-e.Fee > 0 {
 			noPlanWin++
 		}
 	}

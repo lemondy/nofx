@@ -309,8 +309,11 @@ func (s *PositionStore) GetSymbolStats(traderID string, limit int) ([]SymbolStat
 		}
 		s := symbolMap[pos.Symbol]
 		s.TotalTrades++
-		s.TotalPnL += pos.RealizedPnL
-		if pos.RealizedPnL > 0 {
+		// NET caliber (same rationale as GetDirectionStats — gross flatters
+		// nothing here, but per-symbol fee drag must be visible).
+		net := pos.RealizedPnL - pos.Fee
+		s.TotalPnL += net
+		if net > 0 {
 			s.WinTrades++
 		}
 
@@ -430,7 +433,11 @@ type DirectionStats struct {
 	AvgPnL     float64 `json:"avg_pnl"`
 }
 
-// GetDirectionStats analyzes long vs short performance
+// GetDirectionStats analyzes long vs short performance.
+// NET caliber (user audit 2026-10-01): realized_pnl is the exchange GROSS
+// figure — the 177-long book showed −8.39 gross while fees alone were
+// 10.14 (net −18.53). Fees decide winners too: a gross winner can be a net
+// loser.
 func (s *PositionStore) GetDirectionStats(traderID string) ([]DirectionStats, error) {
 	var positions []TraderPosition
 	err := s.db.Where("trader_id = ? AND status = ?", traderID, "CLOSED").Find(&positions).Error
@@ -445,8 +452,9 @@ func (s *PositionStore) GetDirectionStats(traderID string) ([]DirectionStats, er
 		}
 		s := sideStats[pos.Side]
 		s.TradeCount++
-		s.TotalPnL += pos.RealizedPnL
-		if pos.RealizedPnL > 0 {
+		net := pos.RealizedPnL - pos.Fee
+		s.TotalPnL += net
+		if net > 0 {
 			s.WinRate++
 		}
 	}

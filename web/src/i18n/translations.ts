@@ -945,7 +945,7 @@ export const translations = {
       noHistory: 'No Position History',
       noHistoryDesc: 'Closed positions will appear here after trading.',
       showingPositions: 'Showing {count} of {total} positions',
-      totalPnL: 'Total P&L',
+      totalPnL: 'Total P&L (net)',
       // Stats
       totalTrades: 'Total Trades',
       winLoss: 'Win: {win} / Loss: {loss}',
@@ -966,7 +966,7 @@ export const translations = {
       fee: 'Fee',
       // Direction Stats
       trades: 'Trades',
-      avgPnL: 'Avg P&L',
+      avgPnL: 'Avg P&L (net)',
       // Symbol Performance
       symbolPerformance: 'Symbol Performance',
       // Filters
@@ -2484,7 +2484,7 @@ export const translations = {
       noHistory: '暂无历史仓位',
       noHistoryDesc: '平仓后的仓位记录将显示在此处',
       showingPositions: '显示 {count} / {total} 条记录',
-      totalPnL: '总盈亏',
+      totalPnL: '总盈亏(净)',
       // Stats
       totalTrades: '总交易次数',
       winLoss: '盈利: {win} / 亏损: {loss}',
@@ -2505,7 +2505,7 @@ export const translations = {
       fee: '手续费',
       // Direction Stats
       trades: '交易次数',
-      avgPnL: '平均盈亏',
+      avgPnL: '平均盈亏(净)',
       // Symbol Performance
       symbolPerformance: '品种表现',
       // Filters
@@ -3830,7 +3830,7 @@ export const translations = {
       noHistory: 'Tidak Ada Riwayat Posisi',
       noHistoryDesc: 'Posisi yang ditutup akan muncul di sini setelah trading.',
       showingPositions: 'Menampilkan {count} dari {total} posisi',
-      totalPnL: 'Total L/R',
+      totalPnL: 'Total L/R (net)',
       totalTrades: 'Total Trading',
       winLoss: 'Menang: {win} / Kalah: {loss}',
       winRate: 'Win Rate',
@@ -3849,7 +3849,7 @@ export const translations = {
       netPnLDesc: 'Setelah Biaya',
       fee: 'Biaya',
       trades: 'Trading',
-      avgPnL: 'Rata-rata L/R',
+      avgPnL: 'Rata-rata L/R (net)',
       symbolPerformance: 'Performa Simbol',
       symbol: 'Simbol',
       allSymbols: 'Semua Simbol',
