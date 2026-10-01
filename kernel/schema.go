@@ -65,8 +65,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "总权益",
 			NameEN:    "Total Equity",
 			Unit:      "USDT",
-			FormulaZH: "可用余额 + 已用保证金 + 未实现盈亏（= 钱包余额 + 未实现盈亏）",
-			FormulaEN: "Available Balance + Used Margin + Unrealized PnL (= Wallet Balance + Unrealized PnL)",
+			FormulaZH: "钱包余额 + 未实现盈亏（= Balance + 已用保证金）",
+			FormulaEN: "Wallet Balance + Unrealized PnL (= Balance + Used Margin)",
 			DescZH:    "账户的实际净值，包含所有持仓的浮动盈亏",
 			DescEN:    "Actual account value including all unrealized P&L from positions",
 		},
@@ -74,10 +74,10 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "可用余额",
 			NameEN:    "Available Balance",
 			Unit:      "USDT",
-			FormulaZH: "总权益 - 已用保证金（本系统的策略可用额口径）",
-			FormulaEN: "Total Equity - Used Margin (this system's strategy-available convention)",
-			DescZH:    "用于策略仓位与保证金校验的可用额，不等于交易所 availableBalance；交易所还可能预留挂单保证金和维持保证金",
-			DescEN:    "Amount used by strategy position and margin checks. It is not the exchange availableBalance, which may also reserve order and maintenance margin",
+			FormulaZH: "总权益 - 已用保证金（含未实现盈亏；本系统策略口径，≠ 交易所 availableBalance）",
+			FormulaEN: "Total Equity - Used Margin (includes unrealized PnL; this system's strategy convention, NOT the exchange availableBalance)",
+			DescZH:    "用于策略仓位与保证金校验的可用额（user prompt 的 Account 行显示为 Balance）。交易所 availableBalance 还预留了挂单保证金与维持保证金，数值不同",
+			DescEN:    "Amount used by strategy position and margin checks (rendered as Balance in the Account line). The exchange availableBalance additionally reserves order and maintenance margin and differs",
 		},
 		"PnL": {
 			NameZH:    "总盈亏百分比",
@@ -118,10 +118,10 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "已实现盈亏",
 			NameEN:    "Realized PnL",
 			Unit:      "USDT",
-			FormulaZH: "方向因子 × (出场价 - 进场价) × 数量 - 手续费 - 资金费（多=+1，空=-1）",
-			FormulaEN: "side_factor × (Exit - Entry) × Quantity - Fees - Funding (long=+1, short=-1)",
-			DescZH:    "已平仓交易的实际盈亏，包含手续费与资金费。正值=盈利，负值=亏损",
-			DescEN:    "Actual profit/loss of closed trades including fees and funding. Positive=profit, Negative=loss",
+			FormulaZH: "方向因子 × (出场价 - 进场价) × 数量 - 手续费（多=+1，空=-1；资金费未摊入单笔）",
+			FormulaEN: "side_factor × (Exit - Entry) × Quantity - Fees (long=+1, short=-1; funding not attributed per trade)",
+			DescZH:    "已平仓交易的净盈亏（已扣手续费；资金费不按单笔归集）。正值=盈利，负值=亏损",
+			DescEN:    "Net profit/loss of closed trades after fees; funding is not attributed per trade. Positive=profit, Negative=loss",
 		},
 		"PnL%": {
 			NameZH:    "盈亏百分比",
@@ -155,8 +155,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH: "峰值盈亏百分比",
 			NameEN: "Peak PnL Percentage",
 			Unit:   "%",
-			DescZH: "该持仓曾经达到的最高未实现盈亏。用于判断是否需要止盈",
-			DescEN: "Historical max unrealized PnL for this position. Used for take-profit decisions",
+			DescZH: "该持仓曾经达到的最高未实现盈亏。口径为保证金（×杠杆），与价格口径的 UnrealizedPnL% 相差杠杆倍数，两者不可直接比较。用于判断是否需要止盈",
+			DescEN: "Historical max unrealized PnL for this position. Margin-basis (leveraged) — differs from the price-basis UnrealizedPnL% by the leverage factor; do not compare directly. Used for take-profit decisions",
 		},
 		"Leverage": {
 			NameZH: "杠杆倍数",
@@ -169,8 +169,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			NameZH:    "占用保证金",
 			NameEN:    "Margin Used",
 			Unit:      "USDT",
-			FormulaZH: "仓位价值 / 杠杆",
-			FormulaEN: "Position Value / Leverage",
+			FormulaZH: "开仓名义价值 / 杠杆（开仓时锁定，不随现价变动）",
+			FormulaEN: "Initial Notional / Leverage (locked at entry, does not track mark price)",
 			DescZH:    "该仓位锁定的保证金金额",
 			DescEN:    "Collateral locked for this position",
 		},
@@ -309,6 +309,15 @@ func getSchemaPromptZH() string {
 	prompt += "- **OI减少 + 价格上涨**: " + OIInterpretation.OIDown_PriceUp.ZH + "\n"
 	prompt += "- **OI减少 + 价格下跌**: " + OIInterpretation.OIDown_PriceDown.ZH + "\n"
 
+	// Ban-code supplement (user audit 2026-10-01: MIN_SIZE_DEAD_ZONE /
+	// STOP_PLAN_OUT_OF_BAND / signed VENDOR_DIVERGENCE had no prompt
+	// definition — the model guessed their meaning)
+	prompt += "\n## 🚫 阻断码补充词表(hard_blockers/failed 中出现,程序预计算,直接引用)\n\n"
+	prompt += "- **MIN_SIZE_DEAD_ZONE**: 按风险公式算出的仓位低于最小下单量,开仓无意义——wait\n"
+	prompt += "- **STOP_PLAN_OUT_OF_BAND**: 程序止损计划距离超出 [1.5×ATR(1h), max(2×ATR(4h),8%)] 允许带(过紧或过宽均算,码不区分方向)——wait,不要自行改止损凑带\n"
+	prompt += "- **STOP_PLAN_NO_STRUCTURE**: 对侧没有可用结构位生成止损计划——wait\n"
+	prompt += "- **VENDOR_DIVERGENCE_x.xx**: x.xx 为带符号偏差,判级取绝对值(|偏差| > 1.0% 即拦)——wait\n"
+
 	return prompt
 }
 
@@ -347,6 +356,13 @@ func getSchemaPromptEN() string {
 	prompt += "- **OI Up + Price Down**: " + OIInterpretation.OIUp_PriceDown.EN + "\n"
 	prompt += "- **OI Down + Price Up**: " + OIInterpretation.OIDown_PriceUp.EN + "\n"
 	prompt += "- **OI Down + Price Down**: " + OIInterpretation.OIDown_PriceDown.EN + "\n"
+
+	// Ban-code supplement — keep in sync with the ZH version above.
+	prompt += "\n## 🚫 Ban-Code Supplement (in hard_blockers/failed; program-computed, cite verbatim)\n\n"
+	prompt += "- **MIN_SIZE_DEAD_ZONE**: the risk-formula position size falls below the minimum order size — wait\n"
+	prompt += "- **STOP_PLAN_OUT_OF_BAND**: the stop-plan distance sits outside [1.5×ATR(1h), max(2×ATR(4h),8%)] (either too tight or too wide; the code does not distinguish) — wait, never move the stop to fit the band\n"
+	prompt += "- **STOP_PLAN_NO_STRUCTURE**: no usable opposite-side structure to build a stop plan — wait\n"
+	prompt += "- **VENDOR_DIVERGENCE_x.xx**: x.xx is a SIGNED deviation; grading uses its absolute value (|deviation| > 1.0% blocks) — wait\n"
 
 	return prompt
 }

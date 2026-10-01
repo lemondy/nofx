@@ -807,6 +807,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		// F10 (2026-10-01 review): analysis/anchor data pinned to the
 		// EXECUTION venue — Binance data must not drive another venue's book.
 		Exchange: at.exchange,
+		// Daily-loss halt baseline (user audit 2026-10-01: the −10% day
+		// anchor was invisible to the model). anchorDailyBaseline ran earlier
+		// this cycle, so the anchor is current.
+		DayStartEquityUSDT: at.dayStartEquity,
 	}
 	// NOTE: cycleGateStates is NOT assigned here — ctx.GateStates is created
 	// lazily during the prompt build (computeCoinSignal); it is wired into
@@ -902,6 +906,12 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			logger.Infof("⚠️ [%s] Trading stats: 0 closed trades in %s (traderID=%s) — strategy_health omitted", at.name, windowLabel, at.id)
 		} else {
 			maxDD := stats.MaxDrawdownPct
+			// Equity-curve provenance (user audit 2026-10-01: the max-DD
+			// number needs its peak/trough dates to be auditable — it can
+			// describe a real crash against a baseline that predates the
+			// manual initial-balance reset).
+			var ddPeak, ddTrough float64
+			var ddPeakAt, ddTroughAt string
 			// Prefer the real equity curve when available: it includes
 			// unrealized swings that closed-trade PnL never shows. The
 			// curve is clipped to the same window so DD and PF describe
@@ -924,32 +934,47 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				}
 				if len(snaps) > 1 {
 					peak := snaps[0].TotalEquity
+					peakAt := snaps[0].Timestamp
 					var dd float64
+					var troughV, peakV float64
+					var peakAtStr, troughAtStr string
 					for _, sn := range snaps {
 						if sn.TotalEquity > peak {
 							peak = sn.TotalEquity
+							peakAt = sn.Timestamp
 						}
 						if peak > 0 {
 							if d := (peak - sn.TotalEquity) / peak * 100; d > dd {
 								dd = d
+								troughV = sn.TotalEquity
+								peakV = peak
+								peakAtStr = peakAt.UTC().Format("01-02")
+								troughAtStr = sn.Timestamp.UTC().Format("01-02")
 							}
 						}
 					}
 					if dd > 0 {
 						maxDD = dd
+						ddPeak, ddTrough = peakV, troughV
+						ddPeakAt, ddTroughAt = peakAtStr, troughAtStr
 					}
 				}
 			}
 			ctx.TradingStats = &kernel.TradingStats{
-				TotalTrades:    stats.TotalTrades,
-				WinRate:        stats.WinRate,
-				ProfitFactor:   stats.ProfitFactor,
-				SharpeRatio:    stats.SharpeRatio,
-				TotalPnL:       stats.TotalPnL,
-				AvgWin:         stats.AvgWin,
-				AvgLoss:        stats.AvgLoss,
-				MaxDrawdownPct: maxDD,
-				WindowDays:     stats.WindowDays,
+				TotalTrades:       stats.TotalTrades,
+				WinRate:           stats.WinRate,
+				ProfitFactor:      stats.ProfitFactor,
+				SharpeRatio:       stats.SharpeRatio,
+				TotalPnL:          stats.TotalPnL,
+				TotalFee:          stats.TotalFee,
+				AvgWin:            stats.AvgWin,
+				AvgLoss:           stats.AvgLoss,
+				MaxDrawdownPct:    maxDD,
+				MaxDDPeakEquity:   ddPeak,
+				MaxDDTroughEquity: ddTrough,
+				MaxDDPeakAt:       ddPeakAt,
+				MaxDDTroughAt:     ddTroughAt,
+				WindowDays:        stats.WindowDays,
 			}
 			// Measured R distribution (E1, QUANT_REVIEW 09-22): expectancy in
 			// R from journal rows with a planned stop, same window — replaces

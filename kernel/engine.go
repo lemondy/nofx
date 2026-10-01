@@ -96,15 +96,25 @@ type OITopData struct {
 
 // TradingStats trading statistics (for AI input)
 type TradingStats struct {
-	TotalTrades    int     `json:"total_trades"`          // Total number of trades (closed)
-	WinRate        float64 `json:"win_rate"`              // Win rate (%)
-	ProfitFactor   float64 `json:"profit_factor"`         // Profit factor
-	SharpeRatio    float64 `json:"sharpe_ratio"`          // Sharpe ratio
-	TotalPnL       float64 `json:"total_pnl"`             // Total profit/loss
-	AvgWin         float64 `json:"avg_win"`               // Average win
-	AvgLoss        float64 `json:"avg_loss"`              // Average loss
-	MaxDrawdownPct float64 `json:"max_drawdown_pct"`      // Maximum drawdown (%)
-	WindowDays     int     `json:"window_days,omitempty"` // Rolling stats window in days; 0 = full history
+	TotalTrades    int     `json:"total_trades"`        // Total number of trades (closed)
+	WinRate        float64 `json:"win_rate"`            // Win rate (%)
+	ProfitFactor   float64 `json:"profit_factor"`       // Profit factor
+	SharpeRatio    float64 `json:"sharpe_ratio"`        // Sharpe ratio
+	TotalPnL       float64 `json:"total_pnl"`           // Total profit/loss
+	TotalFee       float64 `json:"total_fee,omitempty"` // Sum of commissions in the window (net-caliber context)
+	AvgWin         float64 `json:"avg_win"`             // Average win
+	AvgLoss        float64 `json:"avg_loss"`            // Average loss
+	MaxDrawdownPct float64 `json:"max_drawdown_pct"`    // Maximum drawdown (%)
+	// Equity-curve provenance for the max drawdown (user audit 2026-10-01:
+	// "42.7%" looked implausible next to −4.25 USDT total PnL because it
+	// described a REAL earlier crash — peak 90.96 → trough 52.14 on 09-15 —
+	// against a baseline that predates the manual initial-balance reset).
+	// Dates make the number auditable. Empty = fallback cumsum path.
+	MaxDDPeakEquity   float64 `json:"max_dd_peak_equity,omitempty"`
+	MaxDDTroughEquity float64 `json:"max_dd_trough_equity,omitempty"`
+	MaxDDPeakAt       string  `json:"max_dd_peak_at,omitempty"`
+	MaxDDTroughAt     string  `json:"max_dd_trough_at,omitempty"`
+	WindowDays        int     `json:"window_days,omitempty"` // Rolling stats window in days; 0 = full history
 
 	// MEASURED R distribution (journal rows with a planned stop; E1,
 	// QUANT_REVIEW 09-22). Samples >= MinMeasuredRSamples → the prompt's
@@ -149,6 +159,10 @@ type Context struct {
 	// guessing from the stats block's historical max-drawdown (09-18 audit #5:
 	// "最大回撤 80.4%" is a closed-trade-series figure, not equity vs initial).
 	InitialBalanceUSDT float64 `json:"-"`
+	// DayStartEquityUSDT is the daily-loss halt's day-start anchor (user
+	// audit 2026-10-01: the −10% daily baseline was invisible to the model).
+	// 0 = not anchored yet this cycle.
+	DayStartEquityUSDT float64 `json:"-"`
 	// Exchange is the EXECUTION venue of the trader that owns this cycle
 	// (F10, 2026-10-01 review). Analysis/anchor data must come from the same
 	// venue — the generic GetWithTimeframes pins Binance, which priced

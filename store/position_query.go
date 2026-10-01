@@ -187,11 +187,15 @@ func (s *PositionStore) GetRecentTrades(traderID string, limit int) ([]RecentTra
 	var trades []RecentTrade
 	for _, pos := range positions {
 		t := RecentTrade{
-			Symbol:        pos.Symbol,
-			Side:          strings.ToLower(pos.Side),
-			EntryPrice:    pos.EntryPrice,
-			ExitPrice:     pos.ExitPrice,
-			RealizedPnL:   pos.RealizedPnL,
+			Symbol:     pos.Symbol,
+			Side:       strings.ToLower(pos.Side),
+			EntryPrice: pos.EntryPrice,
+			ExitPrice:  pos.ExitPrice,
+			// Net of fee (user audit 2026-10-01): the stored realized_pnl is
+			// the exchange's gross realized PnL — rendering it raw contradicted
+			// the dictionary ("已扣手续费") and overstated every winner. The
+			// aggregate stats have netted per-trade since the 09-19 audit.
+			RealizedPnL:   pos.RealizedPnL - pos.Fee,
 			PositionValue: pos.EntryQuantity * pos.EntryPrice,
 			Fee:           pos.Fee,
 			EntryTime:     pos.EntryTime / 1000, // Convert ms to seconds for API compatibility

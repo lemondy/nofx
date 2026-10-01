@@ -418,7 +418,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString(fmt.Sprintf("- 账户级熔断(程序强制): 账户净值自初始值回撤 ≥ %.1f%% 时进入只减仓模式,一切新开仓被程序拦截;此时优先保护本金,减少交易频率\n", e.config.RiskControl.AccountMaxDrawdownPct))
 		}
 		if v := e.config.RiskControl.EffectiveMaxAccountRiskPct(); v > 0 {
-			params.WriteString(fmt.Sprintf("- 账户风险敞口上限(程序强制): 全部持仓的止损风险(数量×|开仓价−止损|,无保护单的仓位按止损带上限 %.0f%% 最坏估计)加上本单风险,合计不得超过权益的 %.1f%%——仓位数量上限看不见相关性,五个同向山寨止损等于一个大仓;超限时 open 被拒,优先平掉浮亏单腾出敞口额度\n", UnprotectedStopWorstCasePct, v))
+			params.WriteString(fmt.Sprintf("- 账户风险敞口上限(程序强制): 全部持仓的止损风险(数量×|开仓价−止损|,无保护单的仓位按止损带上限 %.0f%% 最坏估计)加上本单风险,合计不得超过权益的 %.1f%%——仓位数量上限看不见相关性,五个同向山寨止损等于一个大仓;超限时 open 被拒,优先平掉浮亏的 AI 仓腾出敞口额度(手动仓程序无法平掉,其风险占用不可腾出)。有效并发上限由敞口决定而非 Max Positions:≈ 敞口上限 ÷ 单笔止损风险,MarginUsage 与仓位价值上限也可能先约束\n", UnprotectedStopWorstCasePct, v))
 		}
 		if v := e.config.RiskControl.EffectiveMaxNetDirectionalRiskPct(); v > 0 {
 			params.WriteString(fmt.Sprintf("- 净方向风险上限(程序强制): |多头止损风险−空头止损风险|不得超过权益的 %.1f%%,包含持仓、挂单和本周期已放行决策\n", v))
@@ -441,6 +441,22 @@ func (e *StrategyEngine) strategyParamsText() string {
 }
 
 // BuildUserPrompt builds User Prompt based on strategy configuration
+// dailyLossState renders the daily-loss halt's remaining buffer (user audit
+// 2026-10-01: the −10% day-start baseline was never shown, so the model
+// could not see how much of the daily budget was already spent). Empty when
+// no day anchor exists yet or the halt is disabled.
+func (e *StrategyEngine) dailyLossState(ctx *Context) string {
+	if ctx.DayStartEquityUSDT <= 0 {
+		return ""
+	}
+	capPct := e.config.RiskControl.EffectiveDailyMaxLossPct()
+	if capPct <= 0 {
+		return ""
+	}
+	dayPct := (ctx.Account.TotalEquity - ctx.DayStartEquityUSDT) / ctx.DayStartEquityUSDT * 100
+	return fmt.Sprintf(" | DailyLoss: day-start %.2f (今日 %+.1f%%, 日内熔断线 −%.0f%%)", ctx.DayStartEquityUSDT, dayPct, capPct)
+}
+
 func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	var sb strings.Builder
 
@@ -501,7 +517,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			}
 		}
 	}
-	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Available (equity−margin) %.2f (%.1f%%) | PnL %+.2f%% (vs initial %.2f USDT) | MarginUsage %.1f%% | Positions %d%s\n\n",
+	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Balance (equity−margin) %.2f (%.1f%%) | PnL %+.2f%% (vs initial %.2f USDT) | MarginUsage %.1f%% | Positions %d%s\n\n",
 		ctx.Account.TotalEquity,
 		available,
 		availablePct,
@@ -509,7 +525,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		ctx.InitialBalanceUSDT,
 		ctx.Account.MarginUsedPct,
 		ctx.Account.PositionCount,
-		breakerState))
+		breakerState+e.dailyLossState(ctx)))
 
 	// Recently completed orders (placed before positions to ensure visibility)
 	if len(ctx.RecentOrders) > 0 {
@@ -570,17 +586,35 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			} else {
 				sb.WriteString("## 历史交易统计(全部历史;账户行 PnL 为自启动以来累计,两者口径不同)\n")
 			}
-			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
+			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 胜率: %.1f%% | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
 				windowLabel,
 				ctx.TradingStats.TotalTrades,
+				ctx.TradingStats.WinRate,
 				ctx.TradingStats.ProfitFactor,
 				ctx.TradingStats.SharpeRatio,
 				winLossRatio))
-			sb.WriteString(fmt.Sprintf("总盈亏: %+.2f USDT | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(窗口内历史序列峰值,非当前净值回撤;当前净值 vs 初始见账户行 AccountBreaker)\n",
-				ctx.TradingStats.TotalPnL,
-				ctx.TradingStats.AvgWin,
-				ctx.TradingStats.AvgLoss,
-				ctx.TradingStats.MaxDrawdownPct))
+			// 净口径(user audit 2026-10-01): 总盈亏/平均盈亏已逐笔扣除手续费;
+			// 最大回撤来自权益曲线快照,峰谷日期让它可对账(可能是早于初始基线
+			// 手动重设的真实历史深回撤)。
+			if ctx.TradingStats.MaxDDPeakAt != "" && ctx.TradingStats.MaxDDTroughAt != "" {
+				sb.WriteString(fmt.Sprintf("总盈亏(净手续费): %+.2f USDT | 手续费合计: %.2f | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(权益曲线峰值 %.2f @ %s → 谷值 %.2f @ %s,窗口内历史;当前净值 vs 初始见账户行 AccountBreaker)\n",
+					ctx.TradingStats.TotalPnL,
+					ctx.TradingStats.TotalFee,
+					ctx.TradingStats.AvgWin,
+					ctx.TradingStats.AvgLoss,
+					ctx.TradingStats.MaxDrawdownPct,
+					ctx.TradingStats.MaxDDPeakEquity,
+					ctx.TradingStats.MaxDDPeakAt,
+					ctx.TradingStats.MaxDDTroughEquity,
+					ctx.TradingStats.MaxDDTroughAt))
+			} else {
+				sb.WriteString(fmt.Sprintf("总盈亏(净手续费): %+.2f USDT | 手续费合计: %.2f | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(窗口内历史序列峰值,非当前净值回撤;当前净值 vs 初始见账户行 AccountBreaker)\n",
+					ctx.TradingStats.TotalPnL,
+					ctx.TradingStats.TotalFee,
+					ctx.TradingStats.AvgWin,
+					ctx.TradingStats.AvgLoss,
+					ctx.TradingStats.MaxDrawdownPct))
+			}
 
 			// expectancy_r: MEASURED from journal R multiples when enough
 			// planned-stop trades exist; the old estimate assumed every loser
@@ -589,6 +623,12 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// The label states which caliber rendered.
 			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
 				edge, ctx.TradingStats.ProfitFactor, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
+			if ctx.TradingStats.MeasuredRSamples > 0 && ctx.TradingStats.MeasuredRSamples < ctx.TradingStats.TotalTrades {
+				// R 样本覆盖率(user audit 2026-10-01: 165 笔 R 对 218 笔 USDT
+				// 统计,差值 = 无计划止损的手动/外部仓等,两套数字不可直接互推)
+				sb.WriteString(fmt.Sprintf("(R 样本口径: 仅 %d/%d 笔有计划止损的交易计入 R 统计,与上方 USDT 统计样本不同,不可直接互推胜率)\n",
+					ctx.TradingStats.MeasuredRSamples, ctx.TradingStats.TotalTrades))
+			}
 			if edge == "NEGATIVE_EDGE" {
 				// The 09-27 review: "证据极强/RR 明显占优" carried no numbers,
 				// so open and wait were both arguable (BRUSDT passed the plain
@@ -811,7 +851,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	}
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("Now output your decision: a SHORT decision_summary + the strict JSON (per Output Format)\n")
+	sb.WriteString("Now output your decision: a SHORT decision_summary + the strict JSON (per Output Contract)\n")
 
 	return sb.String()
 }
@@ -885,7 +925,7 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 	// visually tagged AND the model is told the program won't act on them.
 	ownership := " | AI托管"
 	if !pos.Managed {
-		ownership = " | 手动仓(程序不干预:不可 close/adjust/partial,自动化跳过)"
+		ownership = " | 手动仓(程序不干预:不可 close/adjust/partial,自动化跳过;hold 无需管理字段)"
 	}
 
 	holdingDuration := ""
@@ -952,7 +992,7 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 	// nothing here is actionable, rendering 4 TFs of data only spends tokens
 	// and invites proposals the program will refuse.
 	if !pos.Managed {
-		sb.WriteString(fmt.Sprintf("=== %s — 手动仓,自动化跳过 ===\n只能输出 hold;禁止 close/partial_close/adjust_stop_loss(执行端对手动仓一律拒绝)。本仓不参与本轮分析,无需评估其市场数据。\n\n", pos.Symbol))
+		sb.WriteString(fmt.Sprintf("=== %s — 手动仓,自动化跳过 ===\n只能输出 hold;禁止 close/partial_close/adjust_stop_loss(执行端对手动仓一律拒绝)。本仓不参与本轮分析,无需评估其市场数据。手动仓的 hold 不需要 management_quality/management_flags(程序不采纳)。\n\n", pos.Symbol))
 		return sb.String()
 	}
 

@@ -160,6 +160,15 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	if len(ctx.CandidateCoins) > 0 {
 		allBlocked := true
 		renderedCount := 0
+		// Position symbols render in the POSITIONS section, never as
+		// candidate blocks — the skip message must count what the prompt
+		// table actually renders (user audit 2026-10-01: the skip message
+		// said 14 while the table had 13, because a held symbol with market
+		// data was counted as "rendered").
+		skipPositionSymbols := make(map[string]bool, len(ctx.Positions))
+		for _, p := range ctx.Positions {
+			skipPositionSymbols[market.Normalize(p.Symbol)] = true
+		}
 		for _, coin := range ctx.CandidateCoins {
 			// The skip message cites the RENDERED count (position-overlap and
 			// data-less coins don't render — 09-19 audit: "9 个候选" over 6
@@ -167,6 +176,9 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 			if gs, ok := ctx.GateStates[market.Normalize(coin.Symbol)]; ok && gs != nil && !gs.HardBlocked {
 				allBlocked = false
 				break
+			}
+			if skipPositionSymbols[market.Normalize(coin.Symbol)] {
+				continue
 			}
 			if ctx.MarketDataMap[coin.Symbol] != nil {
 				renderedCount++
