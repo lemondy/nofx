@@ -2090,6 +2090,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 	filtered := make([]kernel.Decision, 0, len(decisions))
 	for _, d := range decisions {
 		if strings.HasPrefix(d.Action, "open_") && rc.MinConfidence > 0 && d.Confidence < rc.MinConfidence {
+			at.setFilterReason(d, fmt.Sprintf("confidence %d < minimum %d", d.Confidence, rc.MinConfidence))
 			logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: confidence %d < configured minimum %d",
 				at.name, d.Action, d.Symbol, d.Confidence, rc.MinConfidence)
 			continue
@@ -2113,6 +2114,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 							"<b>🛑 账户级熔断 — 只减仓模式</b>\n净值回撤 <code>%.2f%%</code> ≥ %.1f%%(equity %.2f / initial %.2f)\n一切新开仓被程序拦截,直至回撤修复\n\n<i>%s</i>",
 							drawdownPct, rc.AccountMaxDrawdownPct, equity, at.initialBalance, notify.Escape(d.Reasoning)))
 					}
+					at.setFilterReason(d, "account drawdown ≥ cap — reduce-only mode")
 					continue
 				}
 			}
@@ -2126,6 +2128,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					IsStockSymbol(symbol string) bool
 				}); ok && bt.IsStockSymbol(d.Symbol) && binance.IsUSMarketWeekend(time.Now()) {
 					logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: bstock weekend — US market closed, no new stock positions", at.name, d.Action, d.Symbol)
+					at.setFilterReason(d, "US-market weekend (tokenized stock)")
 					continue
 				}
 			}
@@ -2158,6 +2161,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					}
 				}
 				if vendorBlocked {
+					at.setFilterReason(d, "vendor divergence beyond gate — no exception path")
 					continue
 				}
 			}
@@ -2175,6 +2179,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					notify.Notify("ALERT", at.name, fmt.Sprintf(
 						"<b>🛑 日内亏损熔断 — 今日停开新仓</b>\n%s\n一切新开仓被程序拦截至次日,平仓/止损不受限", halt))
 				}
+				at.setFilterReason(d, "daily loss halt ("+halt+")")
 				continue
 			}
 		}
@@ -2248,6 +2253,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 							"<b>🛡️ 已拦截 %s %s</b>\n\n原因:%s 周期趋势为 <code>%s</code>,入场时点不佳\n\n<i>做多需 up/pullback,做空需 down/rally(反弹做空);range 无动能不放行</i>",
 							why, notify.Escape(d.Symbol), tf, trend))
 					}
+					at.setFilterReason(d, "entry timing gate (sub-hour trend misaligned)")
 					continue
 				}
 				// Regime-line guard for dip/bounce entries (audit 09-13
@@ -2283,6 +2289,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				if trend == "up" {
 					logger.Warnf("🛡️ [%s] GATE BLOCKED open_short %s: 1d trend is up (counter-trend short protection)", at.name, d.Symbol)
 					notify.Notify("ALERT", at.name, fmt.Sprintf("<b>🛡️ 已拦截做空 %s</b>\n1d 趋势向上，禁止逆势做空\n<i>%s</i>", notify.Escape(d.Symbol), notify.Escape(d.Reasoning)))
+					at.setFilterReason(d, "entry timing gate (sub-hour trend misaligned)")
 					continue
 				}
 			}

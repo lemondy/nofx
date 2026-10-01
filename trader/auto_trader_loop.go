@@ -290,6 +290,9 @@ func (at *AutoTrader) runCycle() error {
 	// plan-equal stops were rejected at the anchor basis all night
 	// (2026-09-20 AVAXUSDT/STRKUSDT/XMRUSDT).
 	at.cycleGateStates = ctx.GateStates
+	// Fresh filter-reason ledger per cycle (consumed by the Telegram CoT
+	// summary; stale reasons from a previous cycle would mislabel).
+	at.filterReasons = make(map[string]string)
 
 	// Shadow-record blocked directions with a complete would-be trade, and
 	// resolve matured ones against the price path (09-21 user directive:
@@ -460,7 +463,7 @@ func (at *AutoTrader) runCycle() error {
 	// all-wait cycles stay silent to keep the chat signal-dense.
 	if cotHasActionable(aiDecision.Decisions) {
 		summaries := make([]notify.DecisionSummary, 0, len(aiDecision.Decisions))
-		for _, s := range buildCoTSummaries(aiDecision.Decisions, record.Decisions) {
+		for _, s := range at.buildCoTSummaries(aiDecision.Decisions, record.Decisions) {
 			s.Detail = cotClamp(s.Detail, 120)
 			s.ErrText = cotClamp(s.ErrText, 200)
 			summaries = append(summaries, s)

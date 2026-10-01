@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"strings"
 	"fmt"
 
 	"nofx/kernel"
@@ -37,8 +38,10 @@ func (at *AutoTrader) preTradeRuleCheck(decisions []kernel.Decision, equity floa
 		violations, warnings := kernel.CheckDecisionAgainstRules(rules, d, equity, d.Price)
 
 		blocked := false
+		blockReasons := []string{}
 		for _, v := range violations {
 			blocked = true
+			blockReasons = append(blockReasons, v.RuleName)
 			logger.Warnf("🚫 [%s] RULE BLOCKED %s %s: %s (%s) — %s",
 				at.name, d.Action, d.Symbol, v.RuleName, v.Detail, v.Message)
 			at.logRuleCheck(v, d, true)
@@ -57,6 +60,7 @@ func (at *AutoTrader) preTradeRuleCheck(decisions []kernel.Decision, equity floa
 		}
 
 		if blocked {
+			at.setFilterReason(d, "trading rule: "+strings.Join(blockReasons, "+"))
 			continue
 		}
 		filtered = append(filtered, d)

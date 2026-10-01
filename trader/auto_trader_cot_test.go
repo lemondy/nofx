@@ -9,6 +9,8 @@ import (
 )
 
 // Only exchange-touching actions justify a CoT push; holds/waits don't.
+func newTestCoT() *AutoTrader { return &AutoTrader{filterReasons: map[string]string{}} }
+
 func TestCotHasActionable(t *testing.T) {
 	if cotHasActionable([]kernel.Decision{{Action: "wait"}, {Action: "hold"}}) {
 		t.Error("wait/hold cycle must not be actionable")
@@ -32,7 +34,7 @@ func TestBuildCoTSummaries(t *testing.T) {
 	executed := []store.DecisionAction{
 		{Symbol: "WLDUSDT", Action: "open_long_limit", Success: true},
 	}
-	summaries := buildCoTSummaries(proposed, executed)
+	summaries := newTestCoT().buildCoTSummaries(proposed, executed)
 	if len(summaries) != 3 {
 		t.Fatalf("want 3 summaries, got %d", len(summaries))
 	}
@@ -51,7 +53,7 @@ func TestBuildCoTSummaries(t *testing.T) {
 func TestBuildCoTSummariesFailure(t *testing.T) {
 	proposed := []kernel.Decision{{Symbol: "XAUUSDT", Action: "close_long"}}
 	executed := []store.DecisionAction{{Symbol: "XAUUSDT", Action: "close_long", Success: false, Error: "binance reject"}}
-	s := buildCoTSummaries(proposed, executed)
+	s := newTestCoT().buildCoTSummaries(proposed, executed)
 	if s[0].OK || !strings.Contains(s[0].ErrText, "binance reject") {
 		t.Errorf("failure must surface the error: %+v", s[0])
 	}

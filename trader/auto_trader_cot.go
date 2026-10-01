@@ -30,7 +30,7 @@ func cotHasActionable(decisions []kernel.Decision) bool {
 // outcomes: executed entries get ✓ (or ✗ with the error), hold/wait stays
 // passive (•), and an actionable decision that never reached execution was
 // filtered by a gate — flagged as such instead of silently vanishing.
-func buildCoTSummaries(proposed []kernel.Decision, executed []store.DecisionAction) []notify.DecisionSummary {
+func (at *AutoTrader) buildCoTSummaries(proposed []kernel.Decision, executed []store.DecisionAction) []notify.DecisionSummary {
 	byKey := make(map[string]*store.DecisionAction, len(executed))
 	for i := range executed {
 		a := &executed[i]
@@ -54,7 +54,14 @@ func buildCoTSummaries(proposed []kernel.Decision, executed []store.DecisionActi
 				s.ErrText = "未执行"
 			}
 		} else if isActionableAction(d.Action) {
-			s.ErrText = "被闸门过滤，未执行"
+			// 10-01: state the WHICH as well as the THAT — the bare
+			// "被闸门过滤" forced a manual log dig every time (LITUSDT
+			// open_long_limit with no visible cause).
+			if reason := at.popFilterReason(d); reason != "" {
+				s.ErrText = "被闸门过滤(" + reason + ")，未执行"
+			} else {
+				s.ErrText = "被闸门过滤，未执行"
+			}
 		}
 		summaries = append(summaries, s)
 	}

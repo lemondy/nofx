@@ -168,6 +168,11 @@ type AutoTrader struct {
 	r1TrimDone                 map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
 	partialTrimmed             map[string]float64 // fallback cumulative fraction of ORIGINAL size reduced by AI/automation (DB EntryQuantity is authoritative when available)
 	tpTrimMutex                sync.Mutex
+	// filterReasons records WHY an actionable proposal was dropped by the
+	// executor gates this cycle (symbol|action -> reason) — the Telegram
+	// CoT summary used to render a bare "被闸门过滤，未执行" with no cause,
+	// forcing a manual log dig every time (LITUSDT 10-01 user report).
+	filterReasons map[string]string
 	lastBalanceSyncTime        time.Time                   // Last balance sync time
 	userID                     string                      // User ID
 	gridState                  *GridState                  // Grid trading state (only used when StrategyType == "grid_trading")
@@ -420,6 +425,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		peakPnLCache:            make(map[string]float64),
 		tpTrimDone:              make(map[string]bool),
 		r1TrimDone:              make(map[string]bool),
+		filterReasons:           make(map[string]string),
 		partialTrimmed:          make(map[string]float64),
 		peakPnLCacheMutex:       sync.RWMutex{},
 		lastBalanceSyncTime:     time.Now(),
@@ -789,4 +795,22 @@ func (at *AutoTrader) seedAIManagedOnce() {
 	if err := os.WriteFile(flag, []byte(time.Now().Format(time.RFC3339)), 0o644); err == nil {
 		logger.Infof("🤖 [%s] AI-managed registry seeded: %d pre-existing positions marked (one-time migration; manual positions opened AFTER this are hands-off)", at.name, n)
 	}
+}
+
+// setFilterReason records why an actionable proposal was dropped by an
+// executor gate this cycle (consumed by the Telegram CoT summary —
+// "被闸门过滤" without a cause forced a manual log dig, LITUSDT 10-01).
+func (at *AutoTrader) setFilterReason(d kernel.Decision, reason string) {
+	if at.filterReasons == nil {
+		at.filterReasons = make(map[string]string)
+	}
+	at.filterReasons[d.Symbol+"|"+d.Action] = reason
+}
+
+// popFilterReason returns and clears the recorded filter reason for one
+// proposal ("" when it was not gated).
+func (at *AutoTrader) popFilterReason(d kernel.Decision) string {
+	r := at.filterReasons[d.Symbol+"|"+d.Action]
+	delete(at.filterReasons, d.Symbol+"|"+d.Action)
+	return r
 }
