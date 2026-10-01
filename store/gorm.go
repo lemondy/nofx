@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -19,8 +20,30 @@ func DB() *gorm.DB {
 }
 
 // InitGorm initializes GORM with SQLite
+//
+// 2026-10-01 (user report "策略保存经常失败、进策略页转圈很久"): the pool was
+// MaxOpenConns(1) with journal_mode=DELETE + synchronous=FULL — every API
+// read, the order-sync writer (30s), the protection monitor (30s), equity
+// snapshots and ~150KB decision rows serialized through ONE connection with
+// whole-file exclusive locks and double fsync per write. Saves hit
+// SQLITE_BUSY after the 5s busy_timeout ("保存失败") and page reads queued
+// behind write bursts (spinner). WAL makes readers and the writer mutually
+// non-blocking; NORMAL sync in WAL is crash-safe for app restarts; a small
+// pool lets reads run in parallel (SQLite still serializes writers, and
+// busy_timeout covers the contention window).
 func InitGorm(dbPath string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+	// Per-connection pragmas ride the DSN so EVERY pooled connection gets
+	// them (pool >1 makes the old one-shot db.Exec pragmas insufficient —
+	// foreign_keys and journal mode are per-connection in SQLite).
+	dsn := dbPath
+	sep := "?"
+	if len(dsn) > 0 && (strings.Contains(dsn, "?") || strings.HasPrefix(dsn, "file:")) {
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+	}
+	dsn = dsn + sep + "_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 		// Use UTC for all auto-generated timestamps (autoCreateTime, autoUpdateTime)
 		NowFunc: func() time.Time {
@@ -31,19 +54,14 @@ func InitGorm(dbPath string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 	}
 
-	// Set connection pool for SQLite
+	// Connection pool for SQLite: a few connections so API reads don't queue
+	// behind background writers. Writers still serialize inside SQLite.
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, err
 	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-
-	// Enable foreign keys for SQLite
-	db.Exec("PRAGMA foreign_keys = ON")
-	db.Exec("PRAGMA journal_mode = DELETE")
-	db.Exec("PRAGMA synchronous = FULL")
-	db.Exec("PRAGMA busy_timeout = 5000")
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
 
 	gormDB = db
 	return db, nil
