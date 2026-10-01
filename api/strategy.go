@@ -383,26 +383,38 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 	// Reload traders that use this strategy so config changes (coin-source
 	// limits, indicators, risk control) take effect without a restart —
 	// same behavior as model/exchange config updates.
+	//
+	// 2026-10-01 (user report "保存时间太久 没成功"): the reload used to run
+	// INLINE in this request — removeTraderForReload's Stop() joins the
+	// in-flight AI decision cycle (GLM calls routinely run 1-10min), so
+	// saving a strategy while a trader was mid-cycle hung the request for
+	// minutes, and the web client's 15s timeout then reported "保存超时"
+	// for a save that actually succeeded. Persist → respond; the stop→
+	// reload chain runs in the background (the manager's loadMu serializes
+	// reloads and keeps old-stopped-before-new-started ordering).
 	traders, _ := s.store.Trader().List(userID)
-	reloaded := 0
+	reloadTargets := make([]string, 0, len(traders))
 	for _, t := range traders {
-		if t.StrategyID != strategyID {
-			continue
+		if t.StrategyID == strategyID {
+			reloadTargets = append(reloadTargets, t.ID)
 		}
-		logger.Infof("🔄 Strategy %s changed — reloading trader %s to apply new config", strategyID, t.ID)
-		s.removeTraderForReload(userID, t.ID)
-		reloaded++
 	}
-	if reloaded > 0 {
-		if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
-			logger.Warnf("⚠️ Failed to reload traders after strategy update: %v", err)
-		}
-
+	if len(reloadTargets) > 0 {
+		targets := reloadTargets
+		go func() {
+			for _, tID := range targets {
+				logger.Infof("🔄 Strategy %s changed — reloading trader %s to apply new config (background)", strategyID, tID)
+				s.removeTraderForReload(userID, tID)
+			}
+			if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
+				logger.Warnf("⚠️ Failed to reload traders after strategy update: %v", err)
+			}
+		}()
 	}
 
-	response := gin.H{"message": "Strategy updated successfully"}
-	if reloaded > 0 {
-		response["reloaded_traders"] = reloaded
+	response := gin.H{"message": "Strategy updated successfully", "reload": "background"}
+	if len(reloadTargets) > 0 {
+		response["reloaded_traders"] = len(reloadTargets)
 	}
 	if len(warnings) > 0 {
 		response["warnings"] = warnings

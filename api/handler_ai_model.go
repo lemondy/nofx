@@ -182,21 +182,32 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 		}
 	}
 
-	// Remove affected traders from memory BEFORE reloading to pick up new config
+	// Remove affected traders from memory BEFORE reloading to pick up new config.
+	// 2026-10-01: the stop→reload chain runs in the background — its Stop()
+	// joins the in-flight AI decision cycle (1-10min on slow models) and used
+	// to hang this save request for minutes. Config is already persisted; the
+	// manager's loadMu serializes reloads and keeps the stop-before-reload
+	// ordering.
+	reloadTargets := make([]string, 0, len(tradersToReload))
 	for traderID := range tradersToReload {
-		logger.Infof("🔄 Removing trader %s from memory to reload with new AI model config", traderID)
-		s.removeTraderForReload(userID, traderID)
+		reloadTargets = append(reloadTargets, traderID)
 	}
-
-	// Reload all traders for this user to make new config take effect immediately
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
-	if err != nil {
-		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
-		// Don't return error here since model config was successfully updated to database
+	if len(reloadTargets) > 0 {
+		targets := reloadTargets
+		go func() {
+			for _, traderID := range targets {
+				logger.Infof("🔄 Removing trader %s from memory to reload with new AI model config (background)", traderID)
+				s.removeTraderForReload(userID, traderID)
+			}
+			if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
+				logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
+				// Don't return error here since model config was successfully updated to database
+			}
+		}()
 	}
 
 	logger.Infof("✓ AI model config updated: %d model(s)", len(req.Models))
-	c.JSON(http.StatusOK, gin.H{"message": "Model configuration updated"})
+	c.JSON(http.StatusOK, gin.H{"message": "Model configuration updated", "reload": "background"})
 }
 
 // handleGetSupportedModels Get list of AI models supported by the system

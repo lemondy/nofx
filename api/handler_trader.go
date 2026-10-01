@@ -742,14 +742,22 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		}
 	}
 
-	// Remove old trader from memory first (this also stops if running)
-	s.removeTraderForReload(userID, traderID)
-
-	// Reload traders into memory with fresh config
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
-	if err != nil {
-		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
-	}
+	// 2026-10-01 (user report "保存时间太久 没成功"): the stop→reload used to
+	// run INLINE in this request — Stop() joins the in-flight AI decision
+	// cycle (GLM calls routinely run 1-10min), so saving a RUNNING trader's
+	// config mid-cycle hung the HTTP request for minutes with the web modal
+	// stuck on "正在保存…". Config persistence and runtime reload are
+	// decoupled: respond once the DB row is committed; the stop→reload chain
+	// runs serialized in the background (the manager's loadMu keeps
+	// old-stopped-before-new-started ordering; a rapid second save just
+	// re-runs the chain against the latest row and converges).
+	go func() {
+		s.removeTraderForReload(userID, traderID)
+		if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
+			logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
+		}
+		logger.Infof("✓ Trader %s reloaded in background with new config", traderID)
+	}()
 
 	logger.Infof("✓ Trader updated successfully: %s (model: %s, exchange: %s, strategy: %s)", req.Name, req.AIModelID, req.ExchangeID, strategyID)
 
@@ -757,7 +765,8 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		"trader_id":   traderID,
 		"trader_name": req.Name,
 		"ai_model":    req.AIModelID,
-		"message":     "Trader updated successfully",
+		"reload":      "background",
+		"message":     "Trader updated successfully (instance reloads in background)",
 	})
 }
 
@@ -900,8 +909,14 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 		return
 	}
 
-	// Stop trader
-	trader.Stop()
+	// Stop trader. 2026-10-01: Stop() JOINS the in-flight AI decision cycle
+	// (1-10min on slow models) before returning — waiting for it here hung
+	// the stop request for minutes. The isRunning flip and channel close
+	// inside Stop() are near-instant; only the join waits, so the join runs
+	// in the background. The in-flight cycle still completes its
+	// already-made decisions — identical trading semantics, the HTTP caller
+	// just no longer waits on it.
+	go trader.Stop()
 
 	// Update running status in database
 	err = s.store.Trader().UpdateStatus(userID, traderID, false)
@@ -909,6 +924,6 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 		logger.Infof("⚠️  Failed to update trader status: %v", err)
 	}
 
-	logger.Infof("⏹  Trader %s stopped", trader.GetName())
-	c.JSON(http.StatusOK, gin.H{"message": "Trader stopped"})
+	logger.Infof("⏹  Trader %s stop signalled", trader.GetName())
+	c.JSON(http.StatusOK, gin.H{"message": "Trader stop signalled"})
 }
