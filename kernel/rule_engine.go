@@ -215,14 +215,23 @@ func toFloat(v interface{}) float64 {
 	return 0
 }
 
+// isOpenDecision reports whether the action OPENS new risk — market AND
+// resting-limit variants (F5, 2026-10-01 review: review-formed hard rules
+// only ever saw open_long/open_short, so in limit-entry strategies — the
+// default — the review → rule → execution feedback loop was silently open).
+func IsOpenDecision(action string) bool {
+	return action == "open_long" || action == "open_short" ||
+		action == "open_long_limit" || action == "open_short_limit"
+}
+
 // CheckDecisionAgainstRules evaluates all enabled rules against one open decision.
 // Returns (violations, warnings). Violations come from hard rules with action=block.
 func CheckDecisionAgainstRules(rules []*store.TradingRuleDB, d Decision, equity float64, price float64) (violations []RuleViolation, warnings []RuleViolation) {
 	violations = []RuleViolation{}
 	warnings = []RuleViolation{}
 
-	// Only check open decisions
-	if d.Action != "open_long" && d.Action != "open_short" {
+	// Only check open decisions (market and limit variants)
+	if !IsOpenDecision(d.Action) {
 		return violations, warnings
 	}
 
@@ -269,7 +278,7 @@ func CheckDecisionAgainstRules(rules []*store.TradingRuleDB, d Decision, equity 
 // MatchSoftRules returns soft lessons relevant to a decision (tag/symbol match)
 func MatchSoftRules(rules []*store.TradingRuleDB, d Decision) []RuleViolation {
 	matched := []RuleViolation{}
-	if d.Action != "open_long" && d.Action != "open_short" {
+	if !IsOpenDecision(d.Action) {
 		return matched
 	}
 	for _, rule := range rules {

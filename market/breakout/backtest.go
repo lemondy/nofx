@@ -24,6 +24,10 @@ const (
 	btForwardBars1h  = 4    // 15m bars ≈ 1h
 	btForwardBars4h  = 16   // 15m bars ≈ 4h
 	btForwardBars24h = 96   // 15m bars ≈ 24h
+	// btReplayScoreFloor: replay collects signals down to this fixed floor
+	// (below the 50..90 cutoff search range) so threshold tuning can see
+	// would-be trades of candidates LOOSER than the current threshold (F15).
+	btReplayScoreFloor = 45.0
 	btWarmupBars     = 260  // bars before the first scored bar (windows + levels)
 	btMinSample      = 40   // TRAIN-set minimum signals for a cutoff to be selectable
 	btVerifySample   = 15   // TEST-set minimum signals for a change to verify
@@ -180,7 +184,14 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			if tf1h := tfs["1h"][dir]; tf1h != nil && tf1h.Pattern == "extended" {
 				score *= extendedPenalty
 			}
-			if score < GetParams().MediumThreshold {
+			if score < btReplayScoreFloor {
+				// F15 (2026-10-01 review): collect down to a FIXED floor
+				// below the whole searchable cutoff range (bestCutoff
+				// starts at 50). The old pre-filter at the CURRENT
+				// MediumThreshold censored every would-be trade of a LOWER
+				// threshold candidate, so loosening could never be
+				// honestly evaluated — the sweep only saw survivors of the
+				// incumbent threshold.
 				continue
 			}
 			tf := tfs["15m"][dir]
@@ -415,6 +426,24 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 		return nil, nil, nil, split, len(sorted) - split
 	}
 	train, test := sorted[:split], sorted[split:]
+	// F15 (2026-10-01 review): PURGE train samples whose 24h label window
+	// crosses the test boundary — a train label computed over test-period
+	// bars leaks test information into parameter selection (no embargo
+	// before).
+	testStart := test[0].Time
+	labelHorizon := time.Duration(btForwardBars24h) * 15 * time.Minute
+	pruned := make([]BTSignal, 0, len(train))
+	for _, s := range train {
+		if s.Time.Add(labelHorizon).After(testStart) {
+			continue
+		}
+		pruned = append(pruned, s)
+	}
+	if len(pruned) < btMinSample || len(test) < btVerifySample {
+		logger.Infof("🐷 Backtest tuning skipped after purge: %d/%d train (≥%d) / %d test (≥%d)", len(pruned), len(train), btMinSample, len(test), btVerifySample)
+		return nil, nil, nil, len(pruned), len(test)
+	}
+	train = pruned
 	trainN, testN = len(train), len(test)
 
 	prev := GetParams()
@@ -477,16 +506,27 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 		// target and current (a guaranteed no-op) and never computed the
 		// medians it collected. Now: target = winner median, half-step toward
 		// it, clamped — the small bounded drift the design intended.
-		half := func(key string, target float64, current *float64) {
-			t := clampParam(key, target)
-			if math.Abs(t-*current) < 0.01 {
-				return
+		//
+		// F15 (2026-10-01 review): the drift is now GATED on the holdout —
+		// it used to move centers off train medians unconditionally, so a
+		// verifiably WORSE parameter set went live whenever thresholds were
+		// rejected (review case: +10% train / −10% holdout still moved both
+		// centers). Drift requires a positive holdout edge with enough
+		// samples; otherwise it is recorded as rejected.
+		if testOverall > 0 && len(test) >= btVerifySample {
+			half := func(key string, target float64, current *float64) {
+				t := clampParam(key, target)
+				if math.Abs(t-*current) < 0.01 {
+					return
+				}
+				*current = clampParam(key, *current+0.5*(t-*current))
+				changes = append(changes, fmt.Sprintf("%s: %.3f → %.3f (train-median %.3f, half-step, holdout-verified)", key, prevValue(key, prev), *current, t))
 			}
-			*current = clampParam(key, *current+0.5*(t-*current))
-			changes = append(changes, fmt.Sprintf("%s: %.3f → %.3f (train-median %.3f, half-step)", key, prevValue(key, prev), *current, t))
+			half("price_atr_center", median(winATR), &next.PriceATRCenter)
+			half("vol_center", median(winVol), &next.VolCenter)
+		} else {
+			rejected = append(rejected, fmt.Sprintf("centers: holdout edge %+.2f%% (n=%d) — parameter drift withheld", testOverall, len(test)))
 		}
-		half("price_atr_center", median(winATR), &next.PriceATRCenter)
-		half("vol_center", median(winVol), &next.VolCenter)
 	}
 
 	if len(changes) == 0 {

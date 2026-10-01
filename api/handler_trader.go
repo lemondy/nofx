@@ -448,6 +448,24 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		return
 	}
 
+	// F11 (2026-10-01 review): multiple traders on ONE exchange account share
+	// no account-level risk reservation — each AutoTrader checks margin /
+	// daily-loss / exposure against its own read of the same account, so two
+	// traders can jointly overshoot the caps. The shared-ledger design needs
+	// a user decision; until then, make the reuse explicit and visible.
+	var sameAccountTraders []string
+	if existing, err := s.store.Trader().List(userID); err == nil {
+		for _, t := range existing {
+			if t.ExchangeID == req.ExchangeID {
+				sameAccountTraders = append(sameAccountTraders, t.Name)
+			}
+		}
+	}
+	if len(sameAccountTraders) > 0 {
+		logger.Warnf("⚠️ [trader] New trader shares exchange account %s with: %s — no account-level risk reservation is shared between them (F11)",
+			exchangeDisplayName(exchangeCfg), strings.Join(sameAccountTraders, ", "))
+	}
+
 	{
 		tempTrader, createErr := buildExchangeProbeTrader(exchangeCfg, userID)
 		if createErr != nil {

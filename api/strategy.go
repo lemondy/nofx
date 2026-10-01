@@ -71,6 +71,11 @@ func (s *Server) handlePublicStrategies(c *gin.Context) {
 		if st.ConfigVisible {
 			var config store.StrategyConfig
 			json.Unmarshal([]byte(st.Config), &config)
+			// F9 (2026-10-01 review): this endpoint is UNAUTHENTICATED —
+			// strip credentials (API keys, source auth headers, tokened
+			// URLs) before serving. Owners keep the real values via their
+			// authenticated endpoints.
+			config.SanitizeCredentials()
 			item["config"] = config
 		}
 

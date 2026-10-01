@@ -348,6 +348,29 @@ type ExternalDataSource struct {
 	RefreshSecs int               `json:"refresh_secs,omitempty"` // refresh interval (seconds)
 }
 
+// SanitizeCredentials strips every credential from a StrategyConfig in place
+// (F9, 2026-10-01 review): the UNAUTHENTICATED public-strategies endpoint
+// served the full deserialized config — nofxos_api_key and external data
+// source headers (Authorization etc.) included — whenever config_visible was
+// on. Public/config-visible output gets: no API key, no auth headers, and no
+// URL query strings (tokens ride in queries too). Owner-scoped authenticated
+// endpoints keep the real values.
+func (c *StrategyConfig) SanitizeCredentials() {
+	if c == nil {
+		return
+	}
+	c.Indicators.NofxOSAPIKey = ""
+	for i := range c.Indicators.ExternalDataSources {
+		src := &c.Indicators.ExternalDataSources[i]
+		src.Headers = nil
+		// Drop everything from the query string on — `?key=...` is a common
+		// token carrier, and public display only needs scheme+host+path.
+		if idx := strings.Index(src.URL, "?"); idx >= 0 {
+			src.URL = src.URL[:idx]
+		}
+	}
+}
+
 // RiskControlConfig risk control configuration
 type RiskControlConfig struct {
 	// Max number of coins held simultaneously (CODE ENFORCED)
@@ -504,6 +527,14 @@ type RiskControlConfig struct {
 	// and the drawdown-protect close bypass it by construction (neither is an
 	// AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
 	EarlyCloseMinHours int `json:"early_close_min_hours"`
+	// MaxEntrySlippageBps: the maximum ADVERSE fill slippage a MARKET open
+	// may realize vs its pre-trade checked price (F21c, 2026-10-01 review:
+	// only a 100bps alert existed). 0/negative = disabled (alert-only). When
+	// armed and breached, the just-opened position is closed immediately
+	// (emergency close) and the open is recorded as FAILED — a fill this far
+	// from the validated price is a different trade than the gates approved.
+	// (CODE ENFORCED)
+	MaxEntrySlippageBps int `json:"max_entry_slippage_bps"`
 	// TPMenuEnabled: nil/true = the tp_options menu + exit_mode contract is
 	// active — the model picks a program-precomputed TP plan (tp_option) and
 	// classifies the regime (exit_mode trend/range/quick); false = the legacy

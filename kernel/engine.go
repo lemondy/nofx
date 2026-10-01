@@ -148,7 +148,12 @@ type Context struct {
 	// account line so the model can see the CURRENT breaker state instead of
 	// guessing from the stats block's historical max-drawdown (09-18 audit #5:
 	// "最大回撤 80.4%" is a closed-trade-series figure, not equity vs initial).
-	InitialBalanceUSDT float64                            `json:"-"`
+	InitialBalanceUSDT float64 `json:"-"`
+	// Exchange is the EXECUTION venue of the trader that owns this cycle
+	// (F10, 2026-10-01 review). Analysis/anchor data must come from the same
+	// venue — the generic GetWithTimeframes pins Binance, which priced
+	// Bybit/OKX/Hyperliquid signals off Binance books. Empty = binance.
+	Exchange           string                             `json:"-"`
 	Account            AccountInfo                        `json:"account"`
 	Positions          []PositionInfo                     `json:"positions"`
 	CandidateCoins     []CandidateCoin                    `json:"candidate_coins"`
@@ -969,24 +974,45 @@ func (e *StrategyEngine) filterExcludedCoins(candidates []CandidateCoin) []Candi
 	return filtered
 }
 
+// piggyDashMaxAge: how long a non-empty piggy-dash snapshot stays eligible
+// to FEED NEW TRADES (F20, 2026-10-01 review). The scan cadence is 5 minutes
+// (scheduler Interval), so anything older than two full scans means the
+// background scanner has been failing — the old list used to be consumed
+// forever, silently decoupling "why these symbols" from reality. Display of
+// an old board (Data page) is unaffected; only candidate selection checks.
+const piggyDashMaxAge = 10 * time.Minute
+
 // getPiggyDashCoins returns the strongest breakout-engine signals (猪猪冲刺).
 // Data comes exclusively from the breakout scheduler, which computes
 // everything from Binance fapi endpoints (klines / OI / depth / funding) —
 // no third-party ranking feeds involved. On a cold start (server just
 // booted, first 5-min scan still running) we trigger a synchronous refresh
-// and re-read instead of falling back to external rankings.
+// and re-read instead of falling back to external rankings. On a STALE
+// snapshot (background scan failing > piggyDashMaxAge) one synchronous
+// refresh is attempted, and its failure HALTS this source for the cycle —
+// an old board must not keep minting entries.
 func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 5
 	}
-	symbols := breakout.DefaultScheduler().TopSymbolsWithDirection(limit, direction)
-	if len(symbols) == 0 {
-		logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")
-		breakout.DefaultScheduler().RefreshNow(60 * time.Second)
-		symbols = breakout.DefaultScheduler().TopSymbolsWithDirection(limit, direction)
+	scheduler := breakout.DefaultScheduler()
+	symbols, age := scheduler.TopSymbolsWithDirectionAge(limit, direction)
+	if len(symbols) == 0 || age > piggyDashMaxAge {
+		if len(symbols) > 0 {
+			logger.Infof("🐷 Piggy-dash snapshot is stale (%s old > %s) — refreshing synchronously", age.Round(time.Second), piggyDashMaxAge)
+		} else {
+			logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")
+		}
+		scheduler.RefreshNow(60 * time.Second)
+		symbols, age = scheduler.TopSymbolsWithDirectionAge(limit, direction)
 	}
 	if len(symbols) == 0 {
 		return nil, fmt.Errorf("piggy-dash scan produced no signals (Binance data unavailable)")
+	}
+	if age > piggyDashMaxAge {
+		// The synchronous refresh failed too — halt this SOURCE for the
+		// cycle rather than minting candidates off a dead board.
+		return nil, fmt.Errorf("piggy-dash snapshot stale (%s old, refresh failed) — source halted this cycle", age.Round(time.Second))
 	}
 	logger.Infof("🐷 Piggy-dash source: %d symbols (direction=%q) %v", len(symbols), direction, symbols)
 	var candidates []CandidateCoin

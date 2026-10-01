@@ -351,10 +351,17 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 
 	logger.Infof("📊 Strategy timeframes: %v, Primary: %s, Kline count: %d", timeframes, primaryTimeframe, klineCount)
 
+	// F10 (2026-10-01 review): analysis data comes from the venue that will
+	// EXECUTE the trade — not always Binance.
+	venue := ctx.Exchange
+	if venue == "" {
+		venue = "binance"
+	}
+
 	// 1. First fetch data for position coins (must fetch)
 	for _, pos := range ctx.Positions {
 		symbolTimeframes := withRequiredSymbolTimeframes(timeframes, pos.Symbol)
-		data, err := market.GetWithTimeframes(pos.Symbol, symbolTimeframes, primaryTimeframe, klineCount)
+		data, err := market.GetWithTimeframesForVenue(pos.Symbol, symbolTimeframes, primaryTimeframe, klineCount, venue)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for position %s: %v", pos.Symbol, err)
 			continue
@@ -371,13 +378,17 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 	// Minimum OI value filter — per-strategy config, 0/unset = built-in 15M USD.
 	minOIThresholdMillions := config.CoinSource.EffectiveMinOIMillions()
 
-	for _, coin := range ctx.CandidateCoins {
+	// F19 (2026-10-01 review): iterate over a snapshot — removeCandidate
+	// mutates ctx.CandidateCoins in place, and `range` over the same slice
+	// walked the shifted array, skipping the element AFTER each removal
+	// (consecutive removals skipped several candidates' fetch entirely).
+	for _, coin := range snapshotCandidateCoins(ctx) {
 		if _, exists := ctx.MarketDataMap[coin.Symbol]; exists {
 			continue
 		}
 
 		symbolTimeframes := withRequiredSymbolTimeframes(timeframes, coin.Symbol)
-		data, err := market.GetWithTimeframes(coin.Symbol, symbolTimeframes, primaryTimeframe, klineCount)
+		data, err := market.GetWithTimeframesForVenue(coin.Symbol, symbolTimeframes, primaryTimeframe, klineCount, venue)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for %s: %v", coin.Symbol, err)
 			continue
@@ -386,7 +397,13 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		// Liquidity filter (skip for xyz dex assets - they don't have OI data from Binance)
 		isExistingPosition := positionSymbols[coin.Symbol]
 		isXyzAsset := market.IsXyzDexAsset(coin.Symbol)
-		if !isExistingPosition && !isXyzAsset && data.CurrentPrice > 0 {
+		// F19 (2026-10-01 review): the near_high universe slot is granted at
+		// scan time with the min-OI floor EXEMPTED (its liquidity guarantee
+		// is the scanner's volume bar, engine.go near_high selection) — the
+		// old post-fetch filter re-applied the floor anyway and silently
+		// evicted exactly those candidates (pool ≠ prompt ≠ execable).
+		isNearHighExempt := coin.ShortUniverse == "near_high"
+		if !isExistingPosition && !isXyzAsset && !isNearHighExempt && data.CurrentPrice > 0 {
 			if !data.OpenInterestOK {
 				// A failed OI fetch used to masquerade as OI=0 here and the
 				// filter silently dropped EVERY candidate for the cycle
@@ -724,4 +741,12 @@ func removeCandidate(ctx *Context, symbol string) {
 			return
 		}
 	}
+}
+
+// snapshotCandidateCoins copies the candidate slice so callers that mutate
+// the pool mid-loop (removeCandidate) can range it safely.
+func snapshotCandidateCoins(ctx *Context) []CandidateCoin {
+	out := make([]CandidateCoin, len(ctx.CandidateCoins))
+	copy(out, ctx.CandidateCoins)
+	return out
 }

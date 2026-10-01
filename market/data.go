@@ -298,6 +298,20 @@ func GetWithTimeframesForExchange(symbol string, timeframes []string, primaryTim
 	return getWithTimeframes(symbol, timeframes, primaryTimeframe, count, exchange, livePrice, true)
 }
 
+// GetWithTimeframesForVenue fetches ANALYSIS candles for a specific venue
+// without requiring an execution live quote (F10, 2026-10-01 review): the
+// venue's own kline series is used (CoinAnk per-venue series, no cross-venue
+// fallback for non-Binance), and the forming candle prices at the venue's
+// last close. The decision layer must analyze the market it will execute on
+// — the generic GetWithTimeframes pins Binance, so a Bybit/OKX trader would
+// take Binance-derived structures/anchors into another venue's book.
+func GetWithTimeframesForVenue(symbol string, timeframes []string, primaryTimeframe string, count int, exchange string) (*Data, error) {
+	if exchange == "" {
+		exchange = "binance"
+	}
+	return getWithTimeframes(symbol, timeframes, primaryTimeframe, count, exchange, 0, false)
+}
+
 func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe string, count int, exchange string, livePrice float64, executionData bool) (*Data, error) {
 	symbol = Normalize(symbol)
 

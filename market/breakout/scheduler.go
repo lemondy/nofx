@@ -437,6 +437,32 @@ func (s *Scheduler) TopSymbolsWithDirection(limit int, direction string) []Symbo
 	return out
 }
 
+// TopSymbolsWithDirectionAge is TopSymbolsWithDirection plus the snapshot's
+// age (time since updatedAt) — candidate selection must be able to refuse a
+// stale board instead of minting trades off a dead scanner (F20, 2026-10-01
+// review). A never-scanned scheduler reports an "ancient" age so the
+// cold-start refresh path triggers.
+func (s *Scheduler) TopSymbolsWithDirectionAge(limit int, direction string) ([]SymbolDirection, time.Duration) {
+	age := 365 * 24 * time.Hour // "ancient" sentinel before the first scan
+	s.mu.RLock()
+	if !s.updatedAt.IsZero() {
+		age = time.Since(s.updatedAt)
+	}
+	defer s.mu.RUnlock()
+
+	out := make([]SymbolDirection, 0, limit)
+	for _, r := range s.snapshot {
+		if direction != "" && r.Direction != direction {
+			continue
+		}
+		out = append(out, SymbolDirection{Symbol: r.Symbol, Direction: r.Direction})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, age
+}
+
 func (s *Scheduler) TopSymbols(limit int, direction string) []string {
 	if limit <= 0 {
 		limit = 5

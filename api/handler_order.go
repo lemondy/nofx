@@ -201,7 +201,13 @@ func (s *Server) handlePositions(c *gin.Context) {
 		}
 		orders, err := trader.GetOpenOrders(symbol)
 		if err != nil {
+			// F17 (2026-10-01 review): a FAILED query used to `continue`,
+			// which renders identically to "no protection orders" — the
+			// frontend cannot distinguish 缺失 from 未知. Mark the position
+			// with protection_error=true so the UI can show an explicit
+			// unknown badge.
 			logger.Warnf("⚠️ [positions] open orders query failed for %s: %v", symbol, err)
+			pos["protection"] = map[string]interface{}{"protection_error": true}
 			continue
 		}
 		protection := map[string]interface{}{}

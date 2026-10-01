@@ -37,6 +37,7 @@ type Store struct {
 	journal        *TradeJournalStore
 	rule           *RuleStore
 	reviewPrompt   *ReviewPromptStore
+	riskState      *RiskStateStore
 	telegramConfig TelegramConfigStore
 
 	mu sync.RWMutex
@@ -198,6 +199,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.ReviewPrompt().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize review prompt tables: %w", err)
+	}
+	if err := s.RiskState().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize risk state tables: %w", err)
 	}
 	return nil
 }
@@ -410,6 +414,16 @@ func (s *Store) Rule() *RuleStore {
 		s.rule = NewRuleStore(s.gdb)
 	}
 	return s.rule
+}
+
+// RiskState gets the durable account risk state (day-start equity baselines).
+func (s *Store) RiskState() *RiskStateStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.riskState == nil {
+		s.riskState = NewRiskStateStore(s.gdb)
+	}
+	return s.riskState
 }
 
 // Close closes database connection
