@@ -1155,6 +1155,27 @@ func (c *StrategyConfig) EstimateTokens() TokenEstimate {
 		klineCount = 20
 	}
 
+	// Raw-kline term must mirror the RENDERER's per-timeframe bar budget —
+	// kernel.ResolvePromptKlineBars (store cannot import kernel; mirrored
+	// here, contract-tested from kernel). Default 20 bars, clamp [10,
+	// primaryCount], negative = legacy full-PrimaryCount escape hatch.
+	// (User report 2026-10-01: the estimate still priced the pre-09-27
+	// 60-120-bar dumps and warned "108k approaching 131k" while real renders
+	// measure ~7-10k tokens.)
+	if c.Indicators.Klines.PromptKlineBars >= 0 {
+		promptBars := c.Indicators.Klines.PromptKlineBars
+		if promptBars == 0 {
+			promptBars = 20 // kernel.DefaultPromptKlineBars
+		}
+		if promptBars < 10 {
+			promptBars = 10
+		}
+		if promptBars > klineCount {
+			promptBars = klineCount
+		}
+		klineCount = promptBars
+	}
+
 	// Per coin per timeframe: structured derived fields are constant-size.
 	// When raw klines are enabled the prompt also carries five numeric values
 	// per closed bar, so include that dominant dynamic cost in the advisory

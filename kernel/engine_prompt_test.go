@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -641,6 +642,50 @@ func TestPositionPromptExposesAutomationState(t *testing.T) {
 	for _, want := range []string{"AutoMgmt R_LOCK_TRIMMED", "Reduced 50.0% of original"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("position automation state missing %q: %s", want, out)
+		}
+	}
+}
+
+// The static token estimate's raw-kline term must mirror the RENDERER's
+// per-timeframe bar budget (ResolvePromptKlineBars). The estimate kept
+// pricing the pre-09-27 60-bar dumps and fired phantom "approaching context
+// limit" advisories (108k vs a real render of ~7-10k tokens — user report
+// 2026-10-01). store cannot import kernel, so the resolution is mirrored in
+// store.EstimateTokens; this test pins the two together via the raw-kline
+// cost delta.
+func TestEstimateTokensMirrorPromptKlineBars(t *testing.T) {
+	// diff(cfg) = coins × TFs × bars × 60chars / 4 — the coins/TFs factors
+	// cancel in ratios against the 20-bar default, so every case asserts an
+	// exact multiple of the base raw-kline cost.
+	base := func(promptBars, primary int) float64 {
+		cfg := store.GetDefaultStrategyConfig("zh")
+		cfg.Indicators.EnableRawKlines = true
+		cfg.Indicators.Klines.PrimaryCount = primary
+		cfg.Indicators.Klines.PromptKlineBars = promptBars
+		cfg.ClampLimits() // the advisory path clamps before estimating
+		off := cfg
+		off.Indicators.EnableRawKlines = false
+		d := float64(cfg.EstimateTokens().Total - off.EstimateTokens().Total)
+		if d <= 0 {
+			t.Fatalf("promptBars=%d primary=%d: raw-kline term must add tokens, got %v", promptBars, primary, d)
+		}
+		return d
+	}
+	cases := []struct {
+		promptBars, primary int
+		wantRatio           float64 // bars / 20
+	}{
+		{0, 120, 1},           // default 20 bars
+		{-1, 120, 120 / 20.0}, // legacy full-PrimaryCount escape hatch
+		{30, 120, 30 / 20.0},  // explicit, below primary
+		{5, 120, 10 / 20.0},   // floor 10
+		{50, 20, 50 / 20.0},   // primary clamps up to 60 first (ClampLimits), so 50 bars
+	}
+	for _, tc := range cases {
+		got := base(tc.promptBars, tc.primary) / base(0, 120)
+		if math.Abs(got-tc.wantRatio) > 0.001 {
+			t.Fatalf("promptBars=%d primary=%d: estimate priced %.3f× the 20-bar base, want %.3f (renderer ships %d bars)",
+				tc.promptBars, tc.primary, got, tc.wantRatio, ResolvePromptKlineBars(tc.promptBars, tc.primary))
 		}
 	}
 }
