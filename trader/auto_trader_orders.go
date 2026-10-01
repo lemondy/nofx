@@ -9,6 +9,7 @@ import (
 	"nofx/store"
 	notify "nofx/telegram/notify"
 	"nofx/trader/types"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -276,11 +277,22 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		// no avgPrice on Binance; without polling, the slippage reanchor
 		// silently no-opped on longs while shorts got it (the 09-26 review's
 		// P0 asymmetry — my earlier edit landed only the short side).
-		if orderID, ok := order["orderId"].(int64); ok {
-			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, fmt.Sprint(orderID), marketData.CurrentPrice); confirmed {
+		// F21d (2026-10-01 review): poll for ANY adapter's orderId shape
+		// (int64/float64/string), not just int64.
+		if id, ok := orderIDString(order); ok {
+			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, id, marketData.CurrentPrice); confirmed {
 				fillPrice = avg
 			}
 		}
+	}
+	// F21c: configurable hard cap on adverse entry slippage (0 = disabled).
+	if err := at.enforceEntrySlippageCap(decision, "long", marketData.CurrentPrice, fillPrice); err != nil {
+		return err
+	}
+	// F21d: the recorded action price is the ACTUAL fill, not the pre-fill
+	// ticker — plan/fill/protection prices must not blur into one number.
+	if fillPrice > 0 {
+		actionRecord.Price = fillPrice
 	}
 	// Reanchor BEFORE recording (2026-09-25 P2): the recorded stop and the
 	// write-once 1R anchor must describe the REAL opening risk at the actual
@@ -298,8 +310,19 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	at.ClearPeakPnLCache(decision.Symbol, "long")
 
 	at.markAIManaged(decision.Symbol, "long")
-	at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
+	slErr, tpErr := at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
+	// F01 (2026-10-01 review): a missing protective leg must never be
+	// reported as a successful entry — surface it as an execution failure
+	// naming the exact leg. The position itself stays open and managed (the
+	// recorded stop/1R anchor are already written); the protection watchdog
+	// re-places from them next cycle.
+	if slErr != nil {
+		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — position currently unprotected, watchdog will retry", decision.Action, decision.Symbol, fillPrice, slErr)
+	}
+	if tpErr != nil {
+		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
+	}
 	return nil
 }
 
@@ -333,6 +356,48 @@ func (at *AutoTrader) reportFillSlippage(decision *kernel.Decision, checkedPrice
 		"<b>⚠️ 市价成交滑点 %s</b>\n校验价 %.6g → 成交价 <code>%.6g</code>(滑点 <code>%.0f</code>bps)\nSL/TP 已按成交价重新锚定,风险回报距离不变;入场质量劣化,请知悉",
 		notify.Escape(decision.Symbol), checkedPrice, fillPrice, slippageBps))
 	return slippageBps, true
+}
+
+// adverseSlippageBps returns the ADVERSE slippage of a fill vs the checked
+// price in basis points (0 when the fill improved or prices are unusable).
+func adverseSlippageBps(checkedPrice, fillPrice float64, side string) float64 {
+	if checkedPrice <= 0 || fillPrice <= 0 {
+		return 0
+	}
+	var adverse float64
+	if side == "long" {
+		adverse = checkedPrice - fillPrice
+	} else {
+		adverse = fillPrice - checkedPrice
+	}
+	if adverse <= 0 {
+		return 0
+	}
+	return adverse / checkedPrice * 10000
+}
+
+// enforceEntrySlippageCap (F21c, 2026-10-01 review): a market open whose
+// adverse fill slippage breaches risk_control.max_entry_slippage_bps is
+// emergency-closed immediately and reported as a FAILED open. Disabled
+// (0/negative) keeps the alert-only behavior. Called BEFORE any recorded
+// state is written, so a capped close leaves no stale recorded stop/anchor.
+func (at *AutoTrader) enforceEntrySlippageCap(decision *kernel.Decision, side string, checkedPrice, fillPrice float64) error {
+	rc := at.config.StrategyConfig.RiskControl
+	if rc.MaxEntrySlippageBps <= 0 {
+		return nil
+	}
+	bps := adverseSlippageBps(checkedPrice, fillPrice, side)
+	if bps < float64(rc.MaxEntrySlippageBps) {
+		return nil
+	}
+	logger.Warnf("🛑 [%s] %s %s adverse slippage %.0fbps ≥ cap %dbps (checked %.6g → filled %.6g) — emergency closing", at.name, decision.Action, decision.Symbol, bps, rc.MaxEntrySlippageBps, checkedPrice, fillPrice)
+	if closeErr := at.emergencyClosePosition(decision.Symbol, side); closeErr != nil {
+		return fmt.Errorf("❌ [SLIPPAGE CAP] %s %s filled @ %.6g (%.0fbps adverse ≥ %dbps cap) and EMERGENCY CLOSE FAILED: %v — manual close required", decision.Action, decision.Symbol, fillPrice, bps, rc.MaxEntrySlippageBps, closeErr)
+	}
+	notify.Notify("ALERT", at.name, fmt.Sprintf(
+		"<b>🛑 滑点熔断 %s</b>\n<i>%s 校验价 %.6g → 成交 %.6g(不利 %.0fbps ≥ %dbps)——仓位已立即平掉,本次开仓记为失败</i>",
+		notify.Escape(decision.Symbol), side, checkedPrice, fillPrice, bps, rc.MaxEntrySlippageBps))
+	return fmt.Errorf("❌ [SLIPPAGE CAP] %s %s filled @ %.6g (%.0fbps adverse ≥ %dbps cap) — position closed immediately", decision.Action, decision.Symbol, fillPrice, bps, rc.MaxEntrySlippageBps)
 }
 
 // executeOpenShortWithRecord executes open short position and records detailed information
@@ -470,11 +535,20 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	fillPrice := orderFloat(order, "avgPrice")
 	if fillPrice <= 0 {
-		if orderID, ok := order["orderId"].(int64); ok {
-			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, fmt.Sprint(orderID), marketData.CurrentPrice); confirmed {
+		// F21d: poll for ANY adapter's orderId shape, not just int64.
+		if id, ok := orderIDString(order); ok {
+			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, id, marketData.CurrentPrice); confirmed {
 				fillPrice = avg
 			}
 		}
+	}
+	// F21c: configurable hard cap on adverse entry slippage (0 = disabled).
+	if err := at.enforceEntrySlippageCap(decision, "short", marketData.CurrentPrice, fillPrice); err != nil {
+		return err
+	}
+	// F21d: record the ACTUAL fill price, not the pre-fill ticker.
+	if fillPrice > 0 {
+		actionRecord.Price = fillPrice
 	}
 	reanchorProtectivePrices(decision, marketData.CurrentPrice, fillPrice)
 
@@ -485,8 +559,15 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 
 	at.markAIManaged(decision.Symbol, "short")
-	at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
+	slErr, tpErr := at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
+	// F01: same no-false-success contract as the long side above.
+	if slErr != nil {
+		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — position currently unprotected, watchdog will retry", decision.Action, decision.Symbol, fillPrice, slErr)
+	}
+	if tpErr != nil {
+		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
+	}
 	return nil
 }
 
@@ -529,6 +610,31 @@ func orderFloat(m map[string]interface{}, key string) float64 {
 	return 0
 }
 
+// orderIDString extracts the order ID from an exchange order response map in
+// ANY adapter shape (F21d, 2026-10-01 review: the fill-confirmation poll used
+// to gate on int64 only, so string- or float64-ID adapters silently skipped
+// the avgPrice poll and the slippage reanchor no-opped).
+func orderIDString(m map[string]interface{}) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	switch v := m["orderId"].(type) {
+	case int64:
+		if v != 0 {
+			return strconv.FormatInt(v, 10), true
+		}
+	case float64:
+		if v > 0 {
+			return strconv.FormatFloat(v, 'f', -1, 64), true
+		}
+	case string:
+		if v != "" {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // placeProtectiveOrders places the exchange-side stop-loss/take-profit algo
 // orders (closePosition mode on Binance) right after a successful open, so the
 // AI's planned SL/TP are enforced by the exchange instead of only living in
@@ -538,17 +644,23 @@ func orderFloat(m map[string]interface{}, key string) float64 {
 // are skipped; placement failures raise an alert because the position would
 // otherwise run unprotected. quantity is used by exchange implementations that
 // place qty-sized trigger orders.
-func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) error {
+//
+// F01 (2026-10-01 review): returns BOTH leg errors — the TP rejection used to
+// vanish into a log line, so callers booked fills as protected with no profit
+// leg. Callers gate their state advancement on ACTUAL success. Retry-safety:
+// a leg already resting at (≈) the intended price is skipped, so a watermark
+// retry after one leg's failure cannot stack duplicate stops on qty-sized
+// adapters (OKX/Bybit); Binance closePosition dedupes via the -4130 self-heal.
+func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) (slErr, tpErr error) {
 	// NOTE: callers pass FINAL (fill-reanchored) SL/TP — the reanchor used to
 	// live here, but it ran AFTER the recorded stop/1R-anchor were written,
 	// leaving memory on the pre-slippage plan while the exchange got the
 	// shifted one (2026-09-25 P2). Market paths reanchor explicitly before
 	// recording; pending/partial paths pre-anchor in protectExecutedSlice.
-	// R2 (2026-09-26 review): returns the SL-leg error so callers can gate
-	// their state advancement on ACTUAL success.
-	var slErr error
 	if decision.StopLoss > 0 {
-		if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
+		if protectiveLegAtPrice(at.trader, decision.Symbol, positionSide, "SL", decision.StopLoss) {
+			logger.Infof("  ℹ️ SL leg already resting at %.6g for %s %s — placement skipped (retry-safe)", decision.StopLoss, decision.Symbol, positionSide)
+		} else if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
 			slErr = err
 			logger.Infof("  ⚠ Failed to set stop loss for %s: %v", decision.Symbol, err)
 			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ %s 止损单设置失败</b>\n<code>%s</code>\n该仓位当前没有交易所止损保护，请人工关注！", notify.Escape(decision.Symbol), notify.Escape(err.Error())))
@@ -575,17 +687,28 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 		}
 		tpQty := quantity
 		frac := tpFractionForMode(mode, at.effectiveTPCloseFraction())
-		if frac < 1.0 {
+		split := frac < 1.0
+		runnerKey := decision.Symbol + "_" + strings.ToLower(positionSide)
+		if split {
 			tpQty = quantity * frac
-			// The remainder is now a runner: the protection watchdog must
-			// NOT re-place a full TP over it (the same flag also marks the
-			// legacy TP-runner conversion). ClearPeakPnLCache already ran
-			// upstream, so this mark survives the open-path reset.
-			at.markTPRunner(decision.Symbol + "_" + strings.ToLower(positionSide))
 			logger.Infof("  🏃 %s split TP: algo closes %.0f%% (%.6g) at %.6g — remainder trails", decision.Symbol, frac*100, tpQty, decision.TakeProfit)
 		}
-		if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, tpQty, decision.TakeProfit); err != nil {
+		if protectiveLegAtPrice(at.trader, decision.Symbol, positionSide, "TP", decision.TakeProfit) {
+			if split {
+				// The remainder is already a runner: the protection watchdog
+				// must NOT re-place a full TP over it (the same flag also
+				// marks the legacy TP-runner conversion).
+				at.markTPRunner(runnerKey)
+			}
+			logger.Infof("  ℹ️ TP leg already resting at %.6g for %s %s — placement skipped (retry-safe)", decision.TakeProfit, decision.Symbol, positionSide)
+		} else if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, tpQty, decision.TakeProfit); err != nil {
+			tpErr = err
 			logger.Infof("  ⚠ Failed to set take profit for %s: %v", decision.Symbol, err)
+		} else if split {
+			// F01d (2026-10-01 review): mark ONLY after the split TP actually
+			// rests — the old pre-success mark made the watchdog's
+			// !tpRunnerDone guard skip the repair of a leg that never placed.
+			at.markTPRunner(runnerKey)
 		}
 		side := strings.ToLower(positionSide)
 		at.recordOpenTakeProfit(decision.Symbol, side, decision.TakeProfit)
@@ -597,7 +720,43 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 	// exchange and confirm each intended leg is actually there — escalate to
 	// ALERT when it is not, so a missing leg can never again be silent.
 	at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, decision.TakeProfit > 0)
-	return slErr
+	return slErr, tpErr
+}
+
+// protectiveLegAtPrice reports whether a protective leg (kind "SL"/"TP") for
+// the position side already rests on the exchange at ≈ the intended price
+// (0.1% band — both sides tick-round the same plan price). The retry-safe
+// skip in placeProtectiveOrders: exact-price retries must not stack duplicate
+// legs on qty-sized adapters, while a STALE leg at a different price (the
+// -4130 case) still routes through placement so Binance's self-heal can
+// replace it.
+func protectiveLegAtPrice(t Trader, symbol, positionSide string, kind string, wantPrice float64) bool {
+	if wantPrice <= 0 {
+		return false
+	}
+	orders, err := t.GetOpenOrders(symbol)
+	if err != nil {
+		return false
+	}
+	for _, o := range orders {
+		oType := strings.ToUpper(o.Type)
+		if kind == "SL" {
+			if !strings.Contains(oType, "STOP") {
+				continue
+			}
+		} else {
+			if !strings.Contains(oType, "TAKE_PROFIT") {
+				continue
+			}
+		}
+		if o.PositionSide != "" && !strings.EqualFold(o.PositionSide, positionSide) {
+			continue
+		}
+		if o.StopPrice > 0 && math.Abs(o.StopPrice-wantPrice)/wantPrice < 0.001 {
+			return true
+		}
+	}
+	return false
 }
 
 // missingLegsReport returns "" when every INTENDED leg (wantSL/wantTP) is

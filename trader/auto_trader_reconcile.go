@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"nofx/kernel"
 	"nofx/logger"
 	"nofx/store"
 	notify "nofx/telegram/notify"
@@ -76,20 +75,24 @@ func entryOrderOwnedBy(clientID, traderID string) bool {
 //  1. shadow rows → re-claim: verify each persisted order on the exchange;
 //     still resting → back into pendingEntries; gone (filled while offline /
 //     cancelled externally / expired) → resolve accordingly (fill = place
-//     protection NOW; cancel = drop row).
-//  2. exchange scan → orphan sweep: open LIMIT orders tagged lim-<this
-//     trader> with no shadow row and no map entry are unowned leftovers
-//     (pre-shadow era or a failed write-through) — cancelled for
+//     protection NOW at the ACTUAL fill; cancel = protect any executed
+//     residue, then drop row).
+//  2. exchange scan → orphan sweep (Binance only — the lim- client-ID format
+//     is verified there): open LIMIT orders tagged lim-<this trader> with no
+//     shadow row and no map entry are unowned leftovers — cancelled for
 //     re-evaluation. Untagged orders are left alone.
+//
+// F7 (2026-10-01 review): step 1 is adapter-generic (GetOrderStatus + the
+// protective-placement interface) and now runs on EVERY exchange, not just
+// Binance — bybit/okx/bitget/hyperliquid/aster/lighter place limit entries
+// too and lost all restart recovery. A failed status check re-claims the row
+// into the live pending map instead of parking the order unmanaged for the
+// session; an offline FILLED resolution places protection from the ACTUAL
+// accumulated fill and only deletes the plan row once protection is
+// confirmed (or re-claims the row for retry); an offline cancel/expiry
+// protects a partial fill's executed slice before dropping the row.
 func (at *AutoTrader) ReconcilePendingEntries() {
-	if at.exchange != "binance" || at.store == nil {
-		return
-	}
-	grid, ok := at.trader.(interface {
-		GetOpenOrders(symbol string) ([]types.OpenOrder, error)
-		CancelOrder(symbol, orderID string) error
-	})
-	if !ok {
+	if at.store == nil {
 		return
 	}
 
@@ -113,37 +116,51 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 	for _, row := range rows {
 		status, err := at.trader.GetOrderStatus(row.Symbol, row.OrderID)
 		if err != nil {
-			// Unknowable state (network/auth). Keep the row AND count the
-			// order as owned — the orphan sweep below would otherwise cancel
-			// an order whose status we merely failed to read.
-			logger.Infof("⚠️ [%s] Pending-entry %s (order %s) status check failed: %v — row kept, order treated as owned",
-				at.name, row.Symbol, row.OrderID, err)
+			// F7b: an unknowable state (network/auth) used to park the order
+			// unmanaged for the whole session — re-claim it into the pending
+			// map so the live lifecycle (per-cycle status poll, expiry,
+			// fill protection) keeps retrying from now on, and count the
+			// order as owned so the sweep never cancels on a blind read.
+			pe := pendingEntryFromRow(row)
+			at.setPendingEntry(&pe)
 			owned[row.Symbol+"|"+row.OrderID] = true
+			logger.Infof("⚠️ [%s] Pending-entry %s (order %s) status check failed: %v — row re-claimed into the live lifecycle for retry",
+				at.name, row.Symbol, row.OrderID, err)
 			continue
 		}
 		st, _ := status["status"].(string)
 		switch strings.ToUpper(st) {
 		case "NEW", "PARTIALLY_FILLED":
-			pe := &pendingEntry{
-				Symbol: row.Symbol, Side: row.Side, Price: row.Price,
-				Quantity: row.Quantity, StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,
-				Leverage: row.Leverage, OrderID: row.OrderID, PlacedAt: row.PlacedAt,
-				ExitMode: row.ExitMode,
-			}
-			at.setPendingEntry(pe)
+			pe := pendingEntryFromRow(row)
+			at.setPendingEntry(&pe)
 			owned[row.Symbol+"|"+row.OrderID] = true
 			logger.Infof("🔧 [%s] Pending-entry re-claimed: %s %s %.6g @ %.6g (order %s)", at.name, pe.Symbol, pe.Side, pe.Quantity, pe.Price, pe.OrderID)
 		case "FILLED":
-			at.finalizePendingFill(row)
+			at.finalizePendingFill(row, status)
 		default: // CANCELED / EXPIRED / REJECTED
+			// F7c: a cancel/expiry after a partial fill must protect the
+			// executed slice BEFORE the plan row goes away — the live
+			// CANCELED branch has always done this; the offline path
+			// silently dropped the residue.
+			at.protectOfflineResidue(row, status)
 			if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 				logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 			}
-			logger.Infof("🔧 [%s] Pending-entry %s (order %s) already %s while offline — row dropped", at.name, row.Symbol, row.OrderID, st)
+			logger.Infof("🔧 [%s] Pending-entry %s (order %s) already %s while offline — row dropped (executed slice protected if any)", at.name, row.Symbol, row.OrderID, st)
 		}
 	}
 
-	// --- Step 2: orphan sweep on the exchange ---------------------------
+	// --- Step 2: orphan sweep on the exchange (Binance tag format) ------
+	if at.exchange != "binance" {
+		return
+	}
+	grid, ok := at.trader.(interface {
+		GetOpenOrders(symbol string) ([]types.OpenOrder, error)
+		CancelOrder(symbol, orderID string) error
+	})
+	if !ok {
+		return
+	}
 	// A tagged open order with no legitimate claim is unowned.
 	open, err := grid.GetOpenOrders("")
 	if err != nil {
@@ -167,28 +184,56 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 	}
 }
 
-// finalizePendingFill resolves a shadow row whose order filled while the
-// process was down: drop the row and place protective orders anchored at the
-// limit price — the exact price the risk gates validated at.
-func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
-	// (R6: the AI-managed mark below is written BEFORE this row delete in
-	// the flow — ownership persists even if the delete fails.)
-	if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
-		logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
+// pendingEntryFromRow rebuilds the in-memory plan from a durable shadow row.
+func pendingEntryFromRow(row *store.PendingEntryDB) pendingEntry {
+	return pendingEntry{
+		Symbol: row.Symbol, Side: row.Side, Price: row.Price,
+		Quantity: row.Quantity, StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,
+		Leverage: row.Leverage, OrderID: row.OrderID, PlacedAt: row.PlacedAt,
+		ExitMode: row.ExitMode,
 	}
+}
+
+// protectOfflineResidue places protection for the executed slice of an order
+// that was cancelled/expired/rejected while the process was down (F7c).
+func (at *AutoTrader) protectOfflineResidue(row *store.PendingEntryDB, status map[string]interface{}) {
+	if statusFloat(status, "executedQty") <= 0 {
+		return
+	}
+	at.markAIManaged(row.Symbol, row.Side)
+	pe := pendingEntryFromRow(row)
+	at.protectExecutedSlice(&pe, status)
+}
+
+// finalizePendingFill resolves a shadow row whose order filled while the
+// process was down: place protective orders anchored at the ACTUAL
+// accumulated fill (F7d — the old path used the PLANNED quantity and the
+// limit price), keep the plan live for retry when protection does not
+// complete, and only then drop the row.
+func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB, status map[string]interface{}) {
+	// R6 (2026-09-26 review): the offline fill IS an AI fill (this is the
+	// AI's own pending entry) — mark ownership BEFORE anything else, so the
+	// hands-off watchdog can never classify it manual later.
+	at.markAIManaged(row.Symbol, row.Side)
+	pe := pendingEntryFromRow(row)
+	executed := statusFloat(status, "executedQty")
+
 	// Position may have been closed externally in the offline window; check
 	// before placing protection, otherwise the protective orders would open a
 	// position out of thin air (reduce-only semantics differ per exchange).
+	// F7c: a FAILED check no longer drops the task — the plan is re-claimed
+	// into the live pending map and retried next cycle.
 	positions, err := at.trader.GetPositions()
 	if err != nil {
-		logger.Infof("⚠️ [%s] Pending-entry %s FILLED while offline: position check failed: %v — protection NOT placed, manual check needed",
+		at.setPendingEntry(&pe)
+		logger.Infof("⚠️ [%s] Pending-entry %s FILLED while offline: position check failed: %v — plan kept live, retried next cycle",
 			at.name, row.Symbol, err)
-		notify.Notify("RISK", at.name, fmt.Sprintf("<b>⚠️ %s 限价单离线期间成交</b>\n<i>持仓校验失败(%v),保护单未挂——请人工核查</i>", notify.Escape(row.Symbol), err))
+		notify.Notify("RISK", at.name, fmt.Sprintf("<b>⚠️ %s 限价单离线期间成交</b>\n<i>持仓校验失败(%v),恢复计划已保留,下周期重试</i>", notify.Escape(row.Symbol), err))
 		return
 	}
-	posSide := "long"
-	if row.Side == "short" {
-		posSide = "short"
+	posSide := row.Side
+	if posSide != "short" {
+		posSide = "long"
 	}
 	found := false
 	for _, pos := range positions {
@@ -198,29 +243,30 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB) {
 		}
 	}
 	if !found {
+		if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
+			logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
+		}
 		logger.Infof("🔧 [%s] Pending-entry %s FILLED while offline but no %s position exists now (closed externally?) — row dropped, no protection placed",
 			at.name, row.Symbol, posSide)
 		return
 	}
-	// R6 (2026-09-26 review): the offline fill IS an AI fill (this is the
-	// AI's own pending entry) — mark ownership BEFORE deleting the pending
-	// row, so the hands-off watchdog can never classify it manual later.
-	at.markAIManaged(row.Symbol, row.Side)
-	posKey := row.Symbol + "_" + row.Side
-	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
-	at.SetRecordedStopLoss(row.Symbol, row.Side, row.StopLoss)
-	at.SetInitialStopLoss(row.Symbol, row.Side, row.StopLoss) // 1R anchor — write-once
-	at.SetExitMode(row.Symbol, row.Side, row.ExitMode)        // exit template — write-once
-	at.ClearPeakPnLCache(row.Symbol, row.Side)
-	positionSide := "LONG"
-	if row.Side == "short" {
-		positionSide = "SHORT"
+
+	at.protectExecutedSlice(&pe, status)
+	if executed > 0 && pe.ProtectedQty+1e-9 < executed {
+		// Protection did not complete — keep the plan live (in-memory map +
+		// durable row) so the pending lifecycle retries the missing legs.
+		at.setPendingEntry(&pe)
+		logger.Infof("⚠️ [%s] Pending-entry %s FILLED while offline: protection incomplete (%.6g/%.6g) — plan kept live for retry",
+			at.name, row.Symbol, pe.ProtectedQty, executed)
+		notify.Notify("ALERT", at.name, fmt.Sprintf(
+			"<b>⚠️ 离线成交保护未完成 %s</b>\n<i>%s 成交 %.6g,已保护 %.6g —— 恢复计划保留,下周期重试;持续失败请人工核查</i>",
+			notify.Escape(row.Symbol), row.Side, executed, pe.ProtectedQty))
+		return
 	}
-	at.placeProtectiveOrders(&kernel.Decision{
-		Symbol: row.Symbol, Action: "open_" + row.Side,
-		StopLoss: row.StopLoss, TakeProfit: row.TakeProfit, ExitMode: row.ExitMode,
-	}, positionSide, row.Quantity, row.Price, row.Price)
-	logger.Infof("✅ [%s] Pending-entry %s FILLED while offline: protective orders placed at limit price %.6g (SL %.6g / TP %.6g)",
-		at.name, row.Symbol, row.Price, row.StopLoss, row.TakeProfit)
-	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场离线成交 %s</b>\n<i>%s @ %.6g,保护单已补挂</i>", notify.Escape(row.Symbol), row.Side, row.Price))
+	if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
+		logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
+	}
+	logger.Infof("✅ [%s] Pending-entry %s FILLED while offline: protective orders placed at actual fill (plan SL %.6g / TP %.6g, protected %.6g)",
+		at.name, row.Symbol, row.StopLoss, row.TakeProfit, pe.ProtectedQty)
+	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场离线成交 %s</b>\n<i>%s,保护单已按实际成交价补挂</i>", notify.Escape(row.Symbol), row.Side))
 }

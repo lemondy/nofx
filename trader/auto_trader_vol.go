@@ -58,34 +58,53 @@ func resizeAction(actual, target float64) string {
 	}
 }
 
-// moveStopExchange re-points a position's exchange stop to newSL. Binance
-// allows only ONE closePosition stop per direction (-4130), so the old order
-// is cancelled FIRST — place-first always fails when a stop exists. The
-// seconds-level unprotected window is backstopped by the protection
-// watchdog, which re-places the recorded stop if the new placement fails.
+// moveStopExchange re-points a position's exchange stop to newSL.
+//
+// F02 (2026-10-01 review): the new stop is placed FIRST and the old one is
+// only retired after the new placement is confirmed — the old cancel-first
+// flow left the position with NO stop whenever the replacement was rejected
+// (cancel error ignored, no restore). Binance only allows ONE closePosition
+// stop per direction (-4130), so place-first there fails with -4130 and the
+// adapter's stale-leg self-heal performs the cancel+re-place internally —
+// the failure modes collapse to "old stop kept" instead of "naked position".
+// On qty-sized adapters (OKX/Bybit/Bitget) both legs can coexist, so a
+// failed RETIREMENT leaves a redundant duplicate (alert, harmless: the
+// tighter new stop triggers first; a reduceOnly leg without a position is
+// inert) instead of a missing one.
 func (at *AutoTrader) moveStopExchange(symbol, side string, newSL float64) error {
 	// Hedge-mode-safe cancel (2026-09-25 P0): the symbol-wide cancel killed
 	// the OPPOSITE side's stop too — updating the long stop left a short
 	// position naked. Side-aware on adapters that support it (Binance);
 	// others keep the wide cancel (their qty semantics differ, see the
 	// qty-0 finding).
-	// R1 (2026-09-26 review): resolve the REAL quantity BEFORE cancelling the
-	// old stop. Unknown size ⇒ keep the old stop in place and report — the
-	// old bug cancelled first and then placed qty:"0", which Bybit/OKX
-	// reject, stranding the position with NO protection. Binance ignores
-	// the qty (closePosition mode) but still needs a readable position.
+	// R1 (2026-09-26 review): resolve the REAL quantity BEFORE touching any
+	// order. Unknown size ⇒ keep the old stop in place and report — the old
+	// bug cancelled first and then placed qty:"0", which Bybit/OKX reject,
+	// stranding the position with NO protection. Binance ignores the qty
+	// (closePosition mode) but still needs a readable position.
 	qty, qtyOK := at.positionQty(symbol, side)
 	if !qtyOK {
 		return fmt.Errorf("moveStopExchange %s %s: live quantity unreadable — old stop KEPT, new SL %.6g not placed", symbol, side, newSL)
 	}
+	if err := at.trader.SetStopLoss(symbol, strings.ToUpper(side), qty, newSL); err != nil {
+		// Old stop untouched — the position keeps its existing protection.
+		return err
+	}
+	cancelErr := error(nil)
 	if c, ok := at.trader.(interface {
 		CancelStopLossOrdersForSide(symbol, positionSide string) error
 	}); ok {
-		_ = c.CancelStopLossOrdersForSide(symbol, strings.ToUpper(side))
+		cancelErr = c.CancelStopLossOrdersForSide(symbol, strings.ToUpper(side))
 	} else {
-		_ = at.trader.CancelStopLossOrders(symbol)
+		cancelErr = at.trader.CancelStopLossOrders(symbol)
 	}
-	return at.trader.SetStopLoss(symbol, strings.ToUpper(side), qty, newSL)
+	if cancelErr != nil {
+		logger.Warnf("⚠️ [%s] moveStopExchange %s %s: new SL %.6g is live but the OLD stop could not be retired: %v — duplicate stop possible, manual cleanup advised", at.name, symbol, side, newSL, cancelErr)
+		notify.Notify("ALERT", at.name, fmt.Sprintf(
+			"<b>⚠️ 止损新旧并存 %s</b>\n<i>新止损 %.6g 已生效,旧止损单撤除失败(%v)——冗余挂单请人工清理</i>",
+			notify.Escape(symbol), newSL, notify.Escape(cancelErr.Error())))
+	}
+	return nil
 }
 
 // trailingDecision computes the rule-based stop move for one position.

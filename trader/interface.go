@@ -28,39 +28,17 @@ func NewGridTraderAdapter(t Trader) *GridTraderAdapter {
 	return &GridTraderAdapter{Trader: t}
 }
 
-// PlaceLimitOrder implements limit order using available methods
-// For exchanges without native limit order support, this uses conditional orders
+// PlaceLimitOrder refuses to FABRICATE a grid entry (F12, 2026-10-01
+// review): the old fallback mapped BUY→SHORT-stop / SELL→LONG-TP and echoed
+// the client ID back as an exchange order ID with status NEW — a resting
+// EXIT-PROTECTION order is not a resting ENTRY limit, and the synthetic ID
+// poisoned the grid ledger (canceling it canceled nothing, a trigger opened
+// an opposite position the ledger never tracked). Exchanges without a
+// native GridTrader implementation must not run grid strategies;
+// placeGridLimitOrder rejects the adapter path up front and the decision
+// record shows the failure.
 func (a *GridTraderAdapter) PlaceLimitOrder(req *LimitOrderRequest) (*LimitOrderResult, error) {
-	// CRITICAL FIX: Set leverage before placing order
-	if req.Leverage > 0 {
-		if err := a.Trader.SetLeverage(req.Symbol, req.Leverage); err != nil {
-			logger.Warnf("[Grid] Failed to set leverage %dx: %v", req.Leverage, err)
-			// Continue anyway - some exchanges don't require explicit leverage setting
-		}
-	}
-
-	// Use SetStopLoss/SetTakeProfit as conditional limit orders
-	// For buy orders below current price, use stop-loss mechanism
-	// For sell orders above current price, use take-profit mechanism
-	var err error
-	if req.Side == "BUY" {
-		err = a.Trader.SetStopLoss(req.Symbol, "SHORT", req.Quantity, req.Price)
-	} else {
-		err = a.Trader.SetTakeProfit(req.Symbol, "LONG", req.Quantity, req.Price)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &LimitOrderResult{
-		OrderID:      req.ClientID,
-		ClientID:     req.ClientID,
-		Symbol:       req.Symbol,
-		Side:         req.Side,
-		PositionSide: req.PositionSide,
-		Price:        req.Price,
-		Quantity:     req.Quantity,
-		Status:       "NEW",
-	}, nil
+	return nil, fmt.Errorf("grid limit entry not supported on this exchange adapter: no native GridTrader implementation (order %s NOT placed — the protective-order fallback is disabled)", req.ClientID)
 }
 
 // CancelOrder cancels a specific order

@@ -42,6 +42,12 @@ type GridState struct {
 	PeakEquity     float64
 	DailyPnL       float64
 	LastDailyReset time.Time
+	// F14 (2026-10-01 review): the daily-loss halt measures LIVE equity
+	// against the first equity seen this day — the ledger figure only ever
+	// saw the internal stop-loss estimates (exchange closes, fees and
+	// funding never updated it).
+	DayStartDay    string
+	DayStartEquity float64
 
 	// Order tracking
 	OrderBook map[string]int // OrderID -> LevelIndex
@@ -128,6 +134,28 @@ func (at *AutoTrader) checkBreakout() (BreakoutType, float64) {
 	return BreakoutNone, 0
 }
 
+// gridAccountEquity reads the unified account equity from a balance map
+// (F14, 2026-10-01 review). Adapters publish "totalEquity" (camelCase —
+// binance/bybit/okx/hyperliquid); the old reads keyed on "total_equity"
+// (snake_case) which NO adapter sets, so the primary branch never hit and
+// OKX's UPL got double-counted through the wallet+uPnL fallback (OKX maps
+// totalEq — which already includes UPL — into both keys). Order:
+// totalEquity → total_equity (legacy) → wallet+uPnL.
+func gridAccountEquity(balance map[string]interface{}) float64 {
+	if equity, ok := balance["totalEquity"].(float64); ok && equity > 0 {
+		return equity
+	}
+	if equity, ok := balance["total_equity"].(float64); ok && equity > 0 {
+		return equity
+	}
+	total, hasTotal := balance["totalWalletBalance"].(float64)
+	unrealized, hasUPL := balance["totalUnrealizedProfit"].(float64)
+	if hasTotal && hasUPL && total+unrealized > 0 {
+		return total + unrealized
+	}
+	return 0
+}
+
 // checkMaxDrawdown checks if current drawdown exceeds maximum allowed
 // Returns: (exceeded bool, currentDrawdown float64)
 func (at *AutoTrader) checkMaxDrawdown() (bool, float64) {
@@ -141,15 +169,7 @@ func (at *AutoTrader) checkMaxDrawdown() (bool, float64) {
 	if err != nil {
 		return false, 0
 	}
-
-	currentEquity := 0.0
-	if equity, ok := balance["total_equity"].(float64); ok {
-		currentEquity = equity
-	} else if total, ok := balance["totalWalletBalance"].(float64); ok {
-		if unrealized, ok := balance["totalUnrealizedProfit"].(float64); ok {
-			currentEquity = total + unrealized
-		}
-	}
+	currentEquity := gridAccountEquity(balance)
 
 	if currentEquity <= 0 {
 		return false, 0
@@ -182,11 +202,20 @@ func (at *AutoTrader) checkMaxDrawdown() (bool, float64) {
 
 // checkDailyLossLimit checks if daily loss exceeds limit
 // Returns: (exceeded bool, dailyLossPct float64)
+//
+// F14 (2026-10-01 review): the ledger figure (DailyPnL) only ever saw the
+// internal stop-loss ESTIMATES — updateDailyPnL has no callers, so
+// exchange-executed closes, fees and funding never counted. The halt now
+// measures LIVE equity against the day-anchored baseline (same contract as
+// the main trader's halt) and takes the WORSE of the two measures, so the
+// internal estimates can only ever trip the halt earlier.
 func (at *AutoTrader) checkDailyLossLimit() (bool, float64) {
 	gridConfig := at.config.StrategyConfig.GridConfig
 	if gridConfig.DailyLossLimitPct <= 0 {
 		return false, 0
 	}
+
+	equityLossPct, equityKnown := at.gridEquityDailyLossPct()
 
 	at.gridState.mu.Lock()
 	// Reset daily PnL if new day
@@ -199,13 +228,44 @@ func (at *AutoTrader) checkDailyLossLimit() (bool, float64) {
 	dailyPnL := at.gridState.DailyPnL
 	at.gridState.mu.Unlock()
 
-	// Calculate daily loss as percentage of total investment
-	dailyLossPct := 0.0
+	ledgerPct := 0.0
 	if gridConfig.TotalInvestment > 0 && dailyPnL < 0 {
-		dailyLossPct = (-dailyPnL) / gridConfig.TotalInvestment * 100
+		ledgerPct = (-dailyPnL) / gridConfig.TotalInvestment * 100
 	}
-
+	if !equityKnown {
+		return ledgerPct >= gridConfig.DailyLossLimitPct, ledgerPct
+	}
+	dailyLossPct := equityLossPct
+	if ledgerPct > dailyLossPct {
+		dailyLossPct = ledgerPct
+	}
 	return dailyLossPct >= gridConfig.DailyLossLimitPct, dailyLossPct
+}
+
+// gridEquityDailyLossPct anchors once per day at the first readable equity
+// and measures the current loss from that baseline.
+func (at *AutoTrader) gridEquityDailyLossPct() (float64, bool) {
+	balance, err := at.trader.GetBalance()
+	if err != nil {
+		return 0, false
+	}
+	equity := gridAccountEquity(balance)
+	if equity <= 0 {
+		return 0, false
+	}
+	today := time.Now().Format("2006-01-02")
+	at.gridState.mu.Lock()
+	defer at.gridState.mu.Unlock()
+	if at.gridState.DayStartDay != today || at.gridState.DayStartEquity <= 0 {
+		at.gridState.DayStartDay = today
+		at.gridState.DayStartEquity = equity
+		return 0, true
+	}
+	lossPct := (at.gridState.DayStartEquity - equity) / at.gridState.DayStartEquity * 100
+	if lossPct < 0 {
+		lossPct = 0
+	}
+	return lossPct, true
 }
 
 // updateDailyPnL updates the daily PnL tracking
@@ -432,6 +492,7 @@ func (at *AutoTrader) RunGridCycle() error {
 	}
 
 	// Execute decisions
+	executionFailures := map[string]string{}
 	for _, d := range decision.Decisions {
 		// Check if trader is still running before each decision
 		at.isRunningMutex.RLock()
@@ -441,9 +502,11 @@ func (at *AutoTrader) RunGridCycle() error {
 			logger.Infof("[Grid] Trader stopped, skipping remaining %d decisions", len(decision.Decisions))
 			break
 		}
-
 		if err := at.executeGridDecision(&d); err != nil {
 			logger.Warnf("[Grid] Failed to execute decision %s: %v", d.Action, err)
+			// F12 (2026-10-01 review): a failed placement must be visible in
+			// the decision record — everything used to land as Success:true.
+			executionFailures[d.Action+"|"+d.Symbol] = err.Error()
 		}
 	}
 
@@ -451,7 +514,7 @@ func (at *AutoTrader) RunGridCycle() error {
 	at.syncGridState()
 
 	// Save decision record
-	at.saveGridDecisionRecord(decision)
+	at.saveGridDecisionRecordWithFailures(decision, executionFailures)
 
 	return nil
 }
@@ -495,7 +558,9 @@ func (at *AutoTrader) buildGridContext() (*kernel.GridContext, error) {
 	// Get account info
 	balance, err := at.trader.GetBalance()
 	if err == nil {
-		if equity, ok := balance["total_equity"].(float64); ok {
+		// F14 (2026-10-01 review): adapters publish "totalEquity" — the old
+		// snake_case key never matched and grid context equity was 0.
+		if equity := gridAccountEquity(balance); equity > 0 {
 			ctx.TotalEquity = equity
 		}
 		if available, ok := balance["availableBalance"].(float64); ok {
@@ -564,6 +629,10 @@ func (at *AutoTrader) IsGridStrategy() bool {
 
 // saveGridDecisionRecord saves the grid decision to database
 func (at *AutoTrader) saveGridDecisionRecord(decision *kernel.FullDecision) {
+	at.saveGridDecisionRecordWithFailures(decision, nil)
+}
+
+func (at *AutoTrader) saveGridDecisionRecordWithFailures(decision *kernel.FullDecision, executionFailures map[string]string) {
 	if at.store == nil {
 		return
 	}
@@ -579,7 +648,7 @@ func (at *AutoTrader) saveGridDecisionRecord(decision *kernel.FullDecision) {
 		CoTTrace:            decision.CoTTrace,
 		RawResponse:         decision.RawResponse,
 		AIRequestDurationMs: decision.AIRequestDurationMs,
-		Success:             true,
+		Success:             len(executionFailures) == 0,
 	}
 
 	if len(decision.Decisions) > 0 {
@@ -588,6 +657,12 @@ func (at *AutoTrader) saveGridDecisionRecord(decision *kernel.FullDecision) {
 
 		// Convert kernel.Decision to store.DecisionAction for frontend display
 		for _, d := range decision.Decisions {
+			success := true
+			reasoning := d.Reasoning
+			if failure, bad := executionFailures[d.Action+"|"+d.Symbol]; bad {
+				success = false
+				reasoning = fmt.Sprintf("%s\n[EXECUTION FAILED] %s", reasoning, failure)
+			}
 			actionRecord := store.DecisionAction{
 				Action:     d.Action,
 				Symbol:     d.Symbol,
@@ -597,15 +672,15 @@ func (at *AutoTrader) saveGridDecisionRecord(decision *kernel.FullDecision) {
 				StopLoss:   d.StopLoss,
 				TakeProfit: d.TakeProfit,
 				Confidence: d.Confidence,
-				Reasoning:  d.Reasoning,
+				Reasoning:  reasoning,
 				Timestamp:  time.Now().UTC(),
-				Success:    true, // Grid decisions are executed inline
+				Success:    success,
 			}
 			record.Decisions = append(record.Decisions, actionRecord)
 		}
 	}
 
-	record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("Grid cycle completed with %d decisions", len(decision.Decisions)))
+	record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("Grid cycle completed with %d decisions (%d failed)", len(decision.Decisions), len(executionFailures)))
 
 	if err := at.store.Decision().LogDecision(record); err != nil {
 		logger.Warnf("[Grid] Failed to save decision record: %v", err)

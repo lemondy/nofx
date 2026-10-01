@@ -68,6 +68,11 @@ func (t *OKXTrader) GetBalance() (map[string]interface{}, error) {
 		// "totalEquity": the executor's equity chain prefers that key, and
 		// without it sizing/margin-budget silently fell back to whatever
 		// "totalWalletBalance" held (QUANT_REVIEW_2026-09-22 D1).
+		// NOTE (F14, 2026-10-01 review): totalWalletBalance mirrors totalEq
+		// (UPL-inclusive), NOT a pure wallet balance — consumers must prefer
+		// "totalEquity" and never add "totalUnrealizedProfit" on top of the
+		// wallet key (that double-counted UPL in the grid drawdown until
+		// gridAccountEquity started preferring totalEquity).
 		"totalEquity":           totalEq,
 		"totalWalletBalance":    totalEq,
 		"availableBalance":      usdtAvail,

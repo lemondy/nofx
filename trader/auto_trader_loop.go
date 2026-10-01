@@ -804,6 +804,9 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		Positions:      positionInfos,
 		SymbolStats:    at.loadSymbolStats(),
 		CandidateCoins: candidateCoins,
+		// F10 (2026-10-01 review): analysis/anchor data pinned to the
+		// EXECUTION venue — Binance data must not drive another venue's book.
+		Exchange: at.exchange,
 	}
 	// NOTE: cycleGateStates is NOT assigned here — ctx.GateStates is created
 	// lazily during the prompt build (computeCoinSignal); it is wired into

@@ -14,15 +14,25 @@ import (
 // (extracted from past trade reviews). Hard rules with action=block reject the
 // decision; warn rules log a warning. Soft lessons are logged for awareness.
 // Returns the filtered decision list safe to execute.
+//
+// F5 (2026-10-01 review): covers BOTH market and resting-limit opens — the
+// old open_long/open_short filter let open_*_limit bypass every review rule.
+// Rule-load failures are FAIL-CLOSED for new risk: opens are dropped (with an
+// alert) instead of silently skipping the check; closes/adjustments always
+// pass.
 func (at *AutoTrader) preTradeRuleCheck(decisions []kernel.Decision, equity float64) []kernel.Decision {
-	if at.store == nil || len(decisions) == 0 {
+	if len(decisions) == 0 {
 		return decisions
+	}
+	if at.store == nil {
+		// No rule store wired → the review feedback loop cannot run → fail
+		// closed for new risk (production traders always carry a store).
+		return at.ruleCheckFailClosed(decisions, "rule store unavailable")
 	}
 
 	rules, err := at.store.Rule().GetEnabledRules(at.id)
 	if err != nil {
-		logger.Warnf("⚠️ [%s] Failed to load trading rules, skipping pre-trade check: %v", at.name, err)
-		return decisions
+		return at.ruleCheckFailClosed(decisions, fmt.Sprintf("rule load failed: %v", err))
 	}
 	if len(rules) == 0 {
 		return decisions
@@ -30,7 +40,7 @@ func (at *AutoTrader) preTradeRuleCheck(decisions []kernel.Decision, equity floa
 
 	filtered := make([]kernel.Decision, 0, len(decisions))
 	for _, d := range decisions {
-		if d.Action != "open_long" && d.Action != "open_short" {
+		if !kernel.IsOpenDecision(d.Action) {
 			filtered = append(filtered, d)
 			continue
 		}
@@ -64,6 +74,30 @@ func (at *AutoTrader) preTradeRuleCheck(decisions []kernel.Decision, equity floa
 			continue
 		}
 		filtered = append(filtered, d)
+	}
+	return filtered
+}
+
+// ruleCheckFailClosed drops every NEW-RISK decision when the rule system
+// itself is unavailable (F5, 2026-10-01 review: a fail-open skip silently
+// voided the review → rule → execution feedback loop). Closes/adjustments
+// always pass — the account must be able to de-risk.
+func (at *AutoTrader) ruleCheckFailClosed(decisions []kernel.Decision, cause string) []kernel.Decision {
+	filtered := make([]kernel.Decision, 0, len(decisions))
+	dropped := 0
+	for _, d := range decisions {
+		if kernel.IsOpenDecision(d.Action) {
+			dropped++
+			logger.Warnf("🚫 [%s] RULE SYSTEM UNAVAILABLE — blocked %s %s (%s)", at.name, d.Action, d.Symbol, cause)
+			at.setFilterReason(d, "rule system unavailable ("+cause+")")
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+	if dropped > 0 {
+		notify.Notify("ALERT", at.name, fmt.Sprintf(
+			"<b>🚨 复盘规则系统不可用 — 停止新增风险</b>\n<i>%s</i>\n本轮 <code>%d</code> 个开仓决策被保守拦截(平仓/调整不受影响),请检查规则存储",
+			notify.Escape(cause), dropped))
 	}
 	return filtered
 }

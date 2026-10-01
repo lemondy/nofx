@@ -102,6 +102,7 @@ func TestVendorDivergenceBlocksAllOpenPaths(t *testing.T) {
 // branch), letting the account lose ~1.6× the configured cap. The baseline
 // is now anchored every cycle via anchorDailyBaseline.
 func TestDailyLossHaltBaselineAnchoredPerCycle(t *testing.T) {
+	ResetDailyBaselineRegistryForTest() // the day anchor is process-shared (F8)
 	at := riskTestTrader(store.RiskControlConfig{DailyMaxLossPct: 10})
 
 	// 00:05 UTC: two stop-outs take equity 1000 → 932.5 (−6.75%). No open

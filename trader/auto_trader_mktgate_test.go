@@ -210,6 +210,7 @@ func TestBinanceSymbolGrossStopRiskIncludesBothSidesAndPending(t *testing.T) {
 // Pins for the D2 daily-loss halt: anchored at the first equity of each UTC
 // day, halting opens past the threshold, never blocking without config.
 func TestDailyLossHaltBlocks(t *testing.T) {
+	ResetDailyBaselineRegistryForTest() // the day anchor is process-shared (F8)
 	at := &AutoTrader{}
 	rc := store.RiskControlConfig{DailyMaxLossPct: 10}
 
@@ -224,8 +225,11 @@ func TestDailyLossHaltBlocks(t *testing.T) {
 		t.Fatalf("−10.5%% must halt, got %q", halt)
 	}
 
-	// Next UTC day re-anchors (simulated by rewinding the anchor day).
+	// Next UTC day re-anchors (simulated by rewinding the anchor day — the
+	// registry bucket is per-day, so a rolled-over day finds no anchor and
+	// re-anchors fresh; the reset mirrors that rollover).
 	at.dayStartDay = "2000-01-01"
+	ResetDailyBaselineRegistryForTest()
 	if halt := at.dailyLossHaltBlocks(rc, 900); halt != "" {
 		t.Fatalf("new day must re-anchor, got %s", halt)
 	}

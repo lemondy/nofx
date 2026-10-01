@@ -5,6 +5,7 @@ import (
 	"math"
 	"nofx/kernel"
 	"nofx/logger"
+	"strings"
 	"time"
 )
 
@@ -54,13 +55,38 @@ func (at *AutoTrader) checkTotalPositionLimit(symbol string, additionalValue flo
 	return allowed, currentPositionValue + pendingValue, maxTotalPositionValue
 }
 
+// gridOrderFilled queries ONE order's terminal status (F13, 2026-10-01
+// review). known=false → the adapter could not tell — the level stays
+// pending for the next sync instead of being guessed.
+func (at *AutoTrader) gridOrderFilled(orderID string) (filled, known bool) {
+	gridConfig := at.config.StrategyConfig.GridConfig
+	if gridConfig == nil || orderID == "" {
+		return false, false
+	}
+	status, err := at.trader.GetOrderStatus(gridConfig.Symbol, orderID)
+	if err != nil {
+		return false, false
+	}
+	st, _ := status["status"].(string)
+	switch strings.ToUpper(st) {
+	case "FILLED":
+		return true, true
+	case "CANCELED", "EXPIRED", "REJECTED":
+		return false, true
+	}
+	return false, false
+}
+
 // placeGridLimitOrder places a limit order for grid trading
 func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error {
-	// Check if trader supports GridTrader interface
+	// F12 (2026-10-01 review): REFUSE instead of falling back to the
+	// GridTraderAdapter — that adapter fabricated "entries" out of stop/TP
+	// protection orders with synthetic exchange order IDs. Grid requires a
+	// native GridTrader (binance/bybit/okx/hyperliquid/aster/bitget);
+	// kucoin/gate/indodax must not run grid strategies.
 	gridTrader, ok := at.trader.(GridTrader)
 	if !ok {
-		// Fallback to adapter
-		gridTrader = NewGridTraderAdapter(at.trader)
+		return fmt.Errorf("grid limit orders unsupported on %s: no native GridTrader implementation — grid strategy cannot run on this exchange", at.exchange)
 	}
 
 	gridConfig := at.config.StrategyConfig.GridConfig
@@ -139,13 +165,16 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 	if d.LevelIndex >= 0 && d.LevelIndex < len(at.gridState.Levels) {
 		at.gridState.Levels[d.LevelIndex].State = "pending"
 		at.gridState.Levels[d.LevelIndex].OrderID = result.OrderID
-		at.gridState.Levels[d.LevelIndex].OrderQuantity = d.Quantity
+		// F13 (2026-10-01 review): record the VALIDATED/capped quantity the
+		// exchange actually received — the raw AI quantity diverged whenever
+		// the cap fired and corrupted the fill inference baseline.
+		at.gridState.Levels[d.LevelIndex].OrderQuantity = quantity
 		at.gridState.OrderBook[result.OrderID] = d.LevelIndex
 	}
 	at.gridState.mu.Unlock()
 
 	logger.Infof("[Grid] Placed %s limit order at $%.2f, qty=%.4f, level=%d, orderID=%s",
-		side, d.Price, d.Quantity, d.LevelIndex, result.OrderID)
+		side, d.Price, quantity, d.LevelIndex, result.OrderID)
 
 	return nil
 }
@@ -260,11 +289,17 @@ func (at *AutoTrader) syncGridState() {
 		activeOrderIDs[order.OrderID] = true
 	}
 
-	// Get current positions to verify fills
+	// Get current positions to verify fills. F13 (2026-10-01 review): a
+	// FAILED position query no longer feeds 0 into the fill inference —
+	// unknown must stay unknown (levels keep their pending state for the
+	// next round) instead of marking vanished orders cancelled while they
+	// may have filled.
 	positions, err := at.trader.GetPositions()
 	currentPositionSize := 0.0
+	positionsKnown := true
 	if err != nil {
-		logger.Warnf("[Grid] Failed to get positions for state sync: %v", err)
+		positionsKnown = false
+		logger.Warnf("[Grid] Failed to get positions for state sync: %v — fill inference SKIPPED this round (levels stay pending, unknown ≠ cancelled)", err)
 	} else {
 		for _, pos := range positions {
 			if sym, ok := pos["symbol"].(string); ok && sym == gridConfig.Symbol {
@@ -287,26 +322,49 @@ func (at *AutoTrader) syncGridState() {
 	for i := range at.gridState.Levels {
 		level := &at.gridState.Levels[i]
 		if level.State == "pending" && level.OrderID != "" {
-			if !activeOrderIDs[level.OrderID] {
-				// Order no longer exists - check if position changed to determine fill vs cancel
-				// This is a heuristic - ideally we'd query order history
-				// If current position is larger than expected filled positions, this order was likely filled
-				if math.Abs(currentPositionSize) > math.Abs(expectedPositionSize) {
-					// Position increased, likely filled
-					level.State = "filled"
-					level.PositionEntry = level.Price
-					level.PositionSize = level.OrderQuantity
-					at.gridState.TotalTrades++
-					logger.Infof("[Grid] Level %d order filled at $%.2f", i, level.Price)
-				} else {
-					// Position didn't increase as expected, likely cancelled
-					level.State = "empty"
-					level.OrderID = ""
-					level.OrderQuantity = 0
-					logger.Infof("[Grid] Level %d order cancelled/expired", i)
-				}
-				delete(at.gridState.OrderBook, level.OrderID)
+			if activeOrderIDs[level.OrderID] {
+				continue
 			}
+			// Order no longer exists — classify via its OWN terminal status
+			// first (F13: the shared position-size heuristic marked a
+			// cancelled + a filled order in the SAME round both filled,
+			// double-counting the ledger).
+			filled, known := at.gridOrderFilled(level.OrderID)
+			switch {
+			case known && filled:
+				level.State = "filled"
+				level.PositionEntry = level.Price
+				level.PositionSize = level.OrderQuantity
+				at.gridState.TotalTrades++
+				expectedPositionSize += level.PositionSize
+				logger.Infof("[Grid] Level %d order filled at $%.2f", i, level.Price)
+			case known:
+				level.State = "empty"
+				level.OrderID = ""
+				level.OrderQuantity = 0
+				logger.Infof("[Grid] Level %d order cancelled/expired", i)
+			case positionsKnown && math.Abs(currentPositionSize) > math.Abs(expectedPositionSize):
+				// Terminal status unavailable (adapter without per-order
+				// query) — fall back to the position delta, updated per
+				// order so multiple resolutions in one round stay ordered.
+				level.State = "filled"
+				level.PositionEntry = level.Price
+				level.PositionSize = level.OrderQuantity
+				at.gridState.TotalTrades++
+				expectedPositionSize += level.PositionSize
+				logger.Infof("[Grid] Level %d order filled at $%.2f (position-delta inference)", i, level.Price)
+			case positionsKnown:
+				level.State = "empty"
+				level.OrderID = ""
+				level.OrderQuantity = 0
+				logger.Infof("[Grid] Level %d order cancelled/expired", i)
+			default:
+				// Nothing verifiable this round: keep the level pending —
+				// unknown is retried, never guessed.
+				logger.Infof("[Grid] Level %d order %s vanished but state unknown (position query failed) — kept pending for next sync", i, level.OrderID)
+				continue
+			}
+			delete(at.gridState.OrderBook, level.OrderID)
 		}
 	}
 	at.gridState.mu.Unlock()

@@ -22,7 +22,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	notify "nofx/telegram/notify"
 )
 
 // AutoTraderConfig auto trading configuration (simplified version - AI makes all decisions)
@@ -162,6 +165,7 @@ type AutoTrader struct {
 	positionInitialStopLoss    map[string]float64 // Opening-risk stop per open position (symbol_side -> price) — write-once 1R anchor; stop adjustments move only positionStopLoss
 	stopMonitorCh              chan struct{}      // Used to stop monitoring goroutine
 	monitorWg                  sync.WaitGroup     // Used to wait for monitoring goroutine to finish
+	cycleActive                atomic.Bool        // true while runCycle/RunGridCycle/reconcile own the shared trading state — the protection monitor skips its tick (F6)
 	peakPnLCache               map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
 	peakPnLCacheMutex          sync.RWMutex       // Cache read-write lock
 	tpTrimDone                 map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
@@ -523,11 +527,19 @@ func (at *AutoTrader) run() (err error) {
 	// Start drawdown monitoring
 	at.startDrawdownMonitor()
 
+	// F6 (2026-10-01 review): fill finalization + protection watchdog on a
+	// dedicated ticker — inside a decision cycle they used to wait for the
+	// NEXT cycle boundary (ScanInterval plus AI latency) while a just-filled
+	// limit entry sat naked.
+	at.startProtectionMonitor()
+
 	// Reconcile resting limit entries before the first decision cycle: a
 	// restart orphans the in-memory pending state — shadow rows re-claim live
 	// orders, offline fills get their protective orders placed, unowned
 	// tagged orders get cancelled (see auto_trader_reconcile.go).
+	at.cycleActive.Store(true)
 	at.ReconcilePendingEntries()
+	at.cycleActive.Store(false)
 
 	// All adapters, including wrappers such as Binance Stocks, share one
 	// lifecycle contract instead of a per-exchange start/stop matrix.
@@ -562,13 +574,17 @@ func (at *AutoTrader) run() (err error) {
 	}
 	// Execute immediately on first run
 	if isGridStrategy {
+		at.cycleActive.Store(true)
 		if err := at.RunGridCycle(); err != nil {
 			logger.Infof("❌ Grid execution failed: %v", err)
 		}
+		at.cycleActive.Store(false)
 	} else {
+		at.cycleActive.Store(true)
 		if err := at.runCycle(); err != nil {
 			logger.Infof("❌ Execution failed: %v", err)
 		}
+		at.cycleActive.Store(false)
 	}
 
 	for {
@@ -582,6 +598,7 @@ func (at *AutoTrader) run() (err error) {
 
 		select {
 		case <-timer.C:
+			at.cycleActive.Store(true)
 			if isGridStrategy {
 				if err := at.RunGridCycle(); err != nil {
 					logger.Infof("❌ Grid execution failed: %v", err)
@@ -591,6 +608,7 @@ func (at *AutoTrader) run() (err error) {
 					logger.Infof("❌ Execution failed: %v", err)
 				}
 			}
+			at.cycleActive.Store(false)
 			// Re-arm on the next wall-clock boundary — a cycle that overshoots
 			// a boundary skips it instead of bursting.
 			timer.Reset(nextAlignedWait(at.config.ScanInterval, time.Now()))
@@ -642,7 +660,38 @@ func (at *AutoTrader) Stop() {
 	} else if syncer, ok := at.trader.(interface{ StopOrderSync() }); ok {
 		syncer.StopOrderSync()
 	}
+	// F6b (2026-10-01 review): a stopped trader must not leave UNOWNED
+	// resting entry orders behind — a GTC limit can fill minutes later with
+	// the entire protection pipeline stopped. Cancel what still rests
+	// (cancelPending re-checks the order after the cancel and protects any
+	// slice that filled); anything uncancellable is surfaced, not silent.
+	at.cancelAllPendingEntries("trader stopped")
 	logger.Info("⏹ Automatic trading system stopped")
+}
+
+// cancelAllPendingEntries cancels every resting entry order this trader owns.
+// Persisted shadow rows are kept for restart reconciliation (dropPendingEntry
+// only removes them after a confirmed cancel).
+func (at *AutoTrader) cancelAllPendingEntries(cause string) {
+	keys := at.snapshotPendingKeys()
+	for _, key := range keys {
+		parts := strings.SplitN(key, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		pe := at.getPendingEntry(parts[0], parts[1])
+		if pe == nil {
+			continue
+		}
+		if err := at.cancelPending(pe); err != nil {
+			logger.Warnf("⚠️ [%s] Resting entry %s %s NOT cancelled on %s: %v — the order may still fill unmanaged, manual check advised", at.name, pe.Symbol, pe.Side, cause, err)
+			notify.Notify("ALERT", at.name, fmt.Sprintf(
+				"<b>⚠️ 停止后入场单仍在 %s</b>\n<i>%s %s 撤单失败(%v)——交易器已停止,该挂单成交将无人保护,请立即人工处理</i>",
+				notify.Escape(pe.Symbol), pe.Symbol, pe.Side, notify.Escape(err.Error())))
+		} else {
+			logger.Infof("📌 [%s] Resting entry %s %s cancelled on %s", at.name, pe.Symbol, pe.Side, cause)
+		}
+	}
 }
 
 // GetID gets trader ID

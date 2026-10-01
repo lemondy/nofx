@@ -11,6 +11,7 @@ import (
 	"nofx/trader/binance"
 	"nofx/trader/types"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -59,6 +60,54 @@ func (at *AutoTrader) drawdownProtectThresholds() (minProfit, maxDD float64) {
 		maxDD = rc.PeakDrawdownMaxDDPct
 	}
 	return minProfit, maxDD
+}
+
+// protectionMonitorInterval: the between-cycles protection tick (F6,
+// 2026-10-01 review). The decision cycle remains the primary pass; this
+// ticker bounds how long a just-filled limit entry waits for its protective
+// orders when the fill lands right after a cycle (previously: up to a full
+// ScanInterval plus AI latency).
+const protectionMonitorInterval = 30 * time.Second
+
+// startProtectionMonitor runs fill finalization (processPendingEntries) and
+// the protection watchdog on a dedicated ticker so a fill that lands between
+// decision cycles is protected within seconds, not on the next cycle
+// boundary. The cycleActive gate keeps the monitor strictly sequential with
+// runCycle/RunGridCycle/ReconcilePendingEntries — the shared trading state
+// (pending entries, recorded stops, peak caches) is single-threaded by
+// design, so the monitor yields whenever a cycle owns it.
+func (at *AutoTrader) startProtectionMonitor() {
+	at.monitorWg.Add(1)
+	go func() {
+		defer at.monitorWg.Done()
+		ticker := time.NewTicker(protectionMonitorInterval)
+		defer ticker.Stop()
+		logger.Infof("🛡️ [%s] Protection monitor started (fill/watchdog check every %s between cycles)", at.name, protectionMonitorInterval)
+		for {
+			select {
+			case <-at.stopMonitorCh:
+				logger.Info("⏹ Stopped protection monitor")
+				return
+			case <-ticker.C:
+				if at.cycleActive.Load() {
+					continue // a decision cycle owns the shared state right now
+				}
+				at.safeProtectionPass()
+			}
+		}
+	}()
+}
+
+// safeProtectionPass guards one monitor pass with a recover backstop — the
+// monitor must never die silently on an unexpected panic.
+func (at *AutoTrader) safeProtectionPass() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("🛡️ [%s] protection monitor pass panicked: %v", at.name, r)
+		}
+	}()
+	at.processPendingEntries()
+	at.processProtectionWatchdog()
 }
 
 // startDrawdownMonitor starts drawdown monitoring
@@ -1608,7 +1657,14 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			if tp := at.getOpenTakeProfit(symbol, side); tp > 0 {
 				valid := (side == "long" && tp > markPrice) || (side == "short" && tp < markPrice)
 				if valid {
-					if err := at.trader.SetTakeProfit(symbol, positionSide, 0, tp); err == nil {
+					// F01e (2026-10-01 review): pass the REAL position
+					// quantity — qty=0 is closePosition on Binance but a
+					// hard reject on OKX/Bybit/Bitget, so the TP repair was
+					// a silent no-op there. Unreadable size → alert.
+					qty, qtyOK := at.positionQty(symbol, side)
+					if !qtyOK {
+						at.alertUnprotectedPosition(symbol, side, "live position quantity unreadable — TP re-place skipped")
+					} else if err := at.trader.SetTakeProfit(symbol, positionSide, qty, tp); err == nil {
 						repaired = append(repaired, fmt.Sprintf("TP %.6g", tp))
 					} else {
 						logger.Infof("⚠️ [%s] Protection watchdog: TP re-place failed for %s: %v", at.name, symbol, err)
@@ -2028,20 +2084,96 @@ func unprotectedSuffix(n int) string {
 	return fmt.Sprintf(" (%d unprotected position(s) worst-cased at %.0f%% stop)", n, kernel.UnprotectedStopWorstCasePct)
 }
 
+// dailyBaselineRecord is the process-shared day anchor for one account.
+type dailyBaselineRecord struct {
+	day    string
+	equity float64
+}
+
+// The day-start equity anchor is shared per ACCOUNT across AutoTrader
+// instances in this process (F8, 2026-10-01 review: the anchor lived only on
+// the instance, so a strategy save — destroy + reload — re-anchored at the
+// CURRENT equity and silently cleared an active daily-loss halt). Keyed by
+// exchange account; anonymous keys (bare unit-test instances) share one
+// bucket — tests anchoring their own baseline must call
+// ResetDailyBaselineRegistryForTest.
+var (
+	dailyBaselineRegMu sync.Mutex
+	dailyBaselineReg   = map[string]dailyBaselineRecord{}
+)
+
+// ResetDailyBaselineRegistryForTest clears the process-shared day anchors.
+func ResetDailyBaselineRegistryForTest() {
+	dailyBaselineRegMu.Lock()
+	dailyBaselineReg = map[string]dailyBaselineRecord{}
+	dailyBaselineRegMu.Unlock()
+}
+
+// dailyBaselineKey identifies the ACCOUNT the halt governs — the exchange
+// account when known, else the trader identity, else the anonymous bucket.
+func (at *AutoTrader) dailyBaselineKey() string {
+	if at.exchangeID != "" {
+		return at.exchangeID
+	}
+	return at.userID + ":" + at.id
+}
+
+// inheritDailyBaseline looks up today's anchor in the process registry, then
+// the durable store. ok=false → no anchor exists yet today.
+func (at *AutoTrader) inheritDailyBaseline(day string) (float64, bool) {
+	key := at.dailyBaselineKey()
+	dailyBaselineRegMu.Lock()
+	rec, ok := dailyBaselineReg[key]
+	dailyBaselineRegMu.Unlock()
+	if ok && rec.day == day && rec.equity > 0 {
+		return rec.equity, true
+	}
+	if at.store != nil {
+		if baseline, found, err := at.store.RiskState().DayBaseline(key, day); err == nil && found && baseline > 0 {
+			return baseline, true
+		}
+	}
+	return 0, false
+}
+
 // anchorDailyBaseline pins the daily-loss-halt baseline ONCE per UTC day,
 // called every cycle right after the equity snapshot (09-28 review P2: the
 // anchor used to be captured lazily inside dailyLossHaltBlocks, whose only
 // call site is the open_ branch — losses accrued between midnight and the
 // day's first open DECISION never made it into the baseline, letting the
 // account lose ~1.6× the configured daily cap before the halt fired).
+//
+// F8 (2026-10-01 review): FIRST anchor per (account, UTC day) wins — shared
+// in-process via the registry, durable across restarts via the
+// risk_baselines store. A reloaded trader inherits today's anchor instead of
+// re-anchoring at the post-loss equity.
 func (at *AutoTrader) anchorDailyBaseline(equity float64) {
 	if equity <= 0 {
 		return
 	}
 	today := time.Now().UTC().Format("2006-01-02")
-	if at.dayStartDay != today {
-		at.dayStartDay = today
-		at.dayStartEquity = equity
+	key := at.dailyBaselineKey()
+
+	dailyBaselineRegMu.Lock()
+	if rec, ok := dailyBaselineReg[key]; ok && rec.day == today && rec.equity > 0 {
+		dailyBaselineRegMu.Unlock()
+		at.dayStartDay, at.dayStartEquity = rec.day, rec.equity
+		return
+	}
+	dailyBaselineReg[key] = dailyBaselineRecord{day: today, equity: equity}
+	dailyBaselineRegMu.Unlock()
+
+	at.dayStartDay, at.dayStartEquity = today, equity
+	if at.store != nil {
+		// Durable layer: on a restart mid-day the persisted (earlier) anchor
+		// governs. Best-effort — the registry already bounds in-process
+		// reloads; a persist failure only widens the exposure to a restart.
+		if anchored, err := at.store.RiskState().AnchorDayBaseline(key, today, equity); err == nil && anchored > 0 {
+			at.dayStartEquity = anchored
+			dailyBaselineRegMu.Lock()
+			dailyBaselineReg[key] = dailyBaselineRecord{day: today, equity: anchored}
+			dailyBaselineRegMu.Unlock()
+		}
 	}
 }
 
@@ -2049,21 +2181,22 @@ func (at *AutoTrader) anchorDailyBaseline(equity float64) {
 // daily_max_loss_pct from the first equity seen this UTC day. Empty string =
 // no halt. The baseline is anchored per-cycle via anchorDailyBaseline; the
 // lazy re-anchor here survives only as a fallback for a gate call before the
-// first snapshot of the day (fail-open, identical to the old behavior).
+// first snapshot of the day (fail-open, identical to the old behavior) —
+// F8: it now consults the shared/durable anchors FIRST so a reloaded
+// instance inherits an active halt instead of clearing it.
 func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity float64) string {
 	capPct := rc.EffectiveDailyMaxLossPct()
 	if capPct <= 0 || equity <= 0 {
 		return ""
 	}
 	today := time.Now().UTC().Format("2006-01-02")
-	if at.dayStartDay != today {
-		at.dayStartDay = today
-		at.dayStartEquity = equity
-		return ""
-	}
-	if at.dayStartEquity <= 0 {
-		at.dayStartEquity = equity
-		return ""
+	if at.dayStartDay != today || at.dayStartEquity <= 0 {
+		if baseline, ok := at.inheritDailyBaseline(today); ok {
+			at.dayStartDay, at.dayStartEquity = today, baseline
+		} else {
+			at.anchorDailyBaseline(equity)
+			return ""
+		}
 	}
 	lossPct := (at.dayStartEquity - equity) / at.dayStartEquity * 100
 	if lossPct >= capPct {
@@ -2071,6 +2204,25 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 			equity, lossPct, at.dayStartEquity, capPct)
 	}
 	return ""
+}
+
+// absoluteBanCode reports whether a kernel ban code has NO exception path on
+// the MARKET entry style either — the documented absolute contracts. Codes
+// with sanctioned exception/mirror paths are deliberately NOT listed here for
+// market opens: EXTENDED_PUMP_UNCONFIRMED → marketExceptionGate, MICRO_TREND_*
+// → execution timing re-derivation, RR_MAX_*/MIN_SIZE_DEAD_ZONE →
+// validateOpenRisk / min-size re-check, STOP_PLAN_* → designed ATR-band
+// fallback, LIMIT_ANCHOR_SUPPRESSED → market-anchored fail-closed at the
+// executor, VENDOR_DIVERGENCE* → its dedicated block below. On the LIMIT
+// style any disallowed direction blocks regardless of code (resting-limit
+// entries have no exception path at all).
+func absoluteBanCode(code string) bool {
+	switch code {
+	case "DATA_INSUFFICIENT", "POOR_HISTORY", "BSTOCK_DAILY_DATA_UNAVAILABLE",
+		"LOSS_STREAK_BANNED", "STOCK_WEEKEND":
+		return true
+	}
+	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_")
 }
 
 // applyHardRiskGates enforces program-level gates the AI cannot override:
@@ -2140,12 +2292,66 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		// not check divergence) or a resting limit executed anyway, on
 		// entry/stop/RR geometry priced off vendor candles diverged beyond
 		// the gate. The prompt's contract: this code has NO exception path.
+		//
+		// F03/F04 (2026-10-01 review): this is now the UNIFIED execution-side
+		// authorization for every open decision.
+		//   • open_*_limit: resting-limit entries have NO exception path
+		//     (marketExceptionGate is market-only), so ANY kernel ban code
+		//     with the direction disallowed blocks, and a symbol without a
+		//     gate state at all (never kernel-evaluated this cycle — gate
+		//     states exist only for pool candidates) is not authorized to
+		//     open. The review reproduced EXTENDED_PUMP_UNCONFIRMED /
+		//     DATA_INSUFFICIENT / POOR_HISTORY / NEG_EDGE_* limit entries
+		//     sailing through on prompt-compliance alone.
+		//   • open_* (market): the ABSOLUTE ban codes block here (documented
+		//     no-exception contracts). MICRO_TREND_*/RR_MAX_*/MIN_SIZE_DEAD_ZONE
+		//     keep their executor-mirrored live checks (timing re-derivation,
+		//     validateOpenRisk, min-size re-check); EXTENDED_PUMP_UNCONFIRMED
+		//     keeps its sanctioned market-exception path (marketExceptionGate);
+		//     STOP_PLAN_* keeps the designed ATR-band fallback; a market open
+		//     with NO gate state keeps the existing marketExceptionGate
+		//     semantics (missing-gate fail-closed when LimitEntryEnabled).
 		if strings.HasPrefix(d.Action, "open_") {
-			if gs := at.cycleGateStates[market.Normalize(d.Symbol)]; gs != nil {
-				failed := gs.LongFailed
-				if strings.HasPrefix(d.Action, "open_short") {
-					failed = gs.ShortFailed
+			gs := at.cycleGateStates[market.Normalize(d.Symbol)]
+			isLimitOpen := strings.HasSuffix(d.Action, "_limit")
+			isShort := strings.Contains(d.Action, "short")
+			allowed := true
+			var failed []string
+			if gs != nil {
+				allowed, failed = gs.LongAllowed, gs.LongFailed
+				if isShort {
+					allowed, failed = gs.ShortAllowed, gs.ShortFailed
 				}
+			}
+			blockCode := ""
+			switch {
+			case isLimitOpen && gs == nil:
+				blockCode = "NO_GATE_STATE"
+			case isLimitOpen && !allowed:
+				blockCode = "DIRECTION_DISALLOWED"
+			case !isLimitOpen && gs != nil && !allowed:
+				for _, code := range failed {
+					if absoluteBanCode(code) {
+						blockCode = code
+						break
+					}
+				}
+			}
+			if blockCode != "" {
+				_, push := at.gateNotifyRecord("gatecode:"+d.Symbol, time.Now())
+				logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: kernel direction gate (%s, failed: %s)",
+					at.name, d.Action, d.Symbol, blockCode, strings.Join(failed, "+"))
+				if push {
+					notify.Notify("ALERT", at.name, fmt.Sprintf(
+						"<b>🛡️ 方向硬门拦截 %s</b>\n<code>%s</code> 被程序阻断(%s):内核禁开码 <code>%s</code>\n<i>限价入场无例外路径;市价绝对禁开码无例外路径</i>",
+						notify.Escape(d.Symbol), d.Action, blockCode, notify.Escape(strings.Join(failed, "+"))))
+				}
+				at.setFilterReason(d, "kernel direction gate: "+blockCode+" ("+strings.Join(failed, "+")+")")
+				continue
+			}
+			if gs != nil {
+				// VENDOR_DIVERGENCE_* keeps its dedicated block + notify (no
+				// exception path on EITHER entry style).
 				vendorBlocked := false
 				for _, code := range failed {
 					if strings.HasPrefix(code, "VENDOR_DIVERGENCE") {
@@ -2157,6 +2363,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 								"<b>🛡️ 数据源偏差拦截 %s</b>\n%s 被程序硬门阻断(<code>%s</code>):K线数据源与实时价偏差超限,入场/止损/RR 全部失真——本码无例外路径,改挂限价与市价均不放行",
 								notify.Escape(d.Symbol), d.Action, notify.Escape(code)))
 						}
+						blockCode = code
 						break
 					}
 				}
