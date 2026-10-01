@@ -116,17 +116,26 @@ export function StrategyStudioPage() {
  const allModels = Array.isArray(data) ? data : (data.models || [])
  const enabledModels = allModels.filter((m: AIModel) => m.enabled)
  setAiModels(enabledModels)
- if (enabledModels.length > 0 && !selectedModelId) {
- setSelectedModelId(enabledModels[0].id)
+ // F16b (2026-10-01 review): functional auto-select + stable deps —
+ // depending on selectedModelId re-created this callback on every model
+ // switch, which re-ran the mount effect and re-fetched strategies,
+ // clobbering unsaved drafts.
+ if (enabledModels.length > 0) {
+ setSelectedModelId(prev => prev || enabledModels[0].id)
  }
  }
  } catch (err) {
  console.error('Failed to fetch AI models:', err)
  }
- }, [token, selectedModelId])
+ }, [token])
 
- // Fetch strategies
- const fetchStrategies = useCallback(async () => {
+ // Fetch strategies. F16b: by default this only refreshes the LIST and
+ // auto-selects when nothing is selected yet — a background refresh must
+ // never yank the selection back to the active/first strategy and overwrite
+ // editingConfig (that discarded unsaved drafts on every model switch).
+ // reselect=true (mount) restores the old active/first selection;
+ // strategyId refreshes ONE strategy's server copy into the editor.
+ const fetchStrategies = useCallback(async (opts?: { reselect?: boolean; strategyId?: string; force?: boolean }) => {
  if (!token) return
  try {
  const response = await fetch(`${API_BASE}/api/strategies`, {
@@ -136,7 +145,15 @@ export function StrategyStudioPage() {
  const data = await response.json()
  setStrategies(data.strategies || [])
 
- // Select active or first strategy
+ if (opts?.strategyId) {
+ const fresh = (data.strategies || []).find((s: Strategy) => s.id === opts.strategyId)
+ if (fresh && (forceConfigRef.current || !hasChangesRef.current)) {
+ setSelectedStrategy(prev => (prev ? { ...prev, ...fresh } : fresh))
+ setEditingConfig(fresh.config)
+ }
+ return
+ }
+ if (opts?.reselect) {
  const active = data.strategies?.find((s: Strategy) => s.is_active)
  if (active) {
  setSelectedStrategy(active)
@@ -145,6 +162,14 @@ export function StrategyStudioPage() {
  setSelectedStrategy(data.strategies[0])
  setEditingConfig(data.strategies[0].config)
  }
+ return
+ }
+ // Default: keep whatever the user has selected/edited.
+ setSelectedStrategy(prev => {
+ if (prev) return prev
+ const active = data.strategies?.find((s: Strategy) => s.is_active)
+ return active || data.strategies?.[0] || null
+ })
  } catch (err) {
  setError(err instanceof Error ? err.message : 'Unknown error')
  } finally {
@@ -153,29 +178,44 @@ export function StrategyStudioPage() {
  }, [token])
 
  useEffect(() => {
- fetchStrategies()
+ fetchStrategies({ reselect: true })
  fetchAiModels()
- }, [fetchStrategies, fetchAiModels])
+ // eslint-disable-next-line react-hooks/exhaustive-deps — mount-only
+ }, [])
+
+ // Mirrors of dirty/selection state for effects and callbacks that must not
+ // depend on them (F16: the language switch and background refreshes need to
+ // READ dirtiness without re-firing).
+ const hasChangesRef = useRef(hasChanges)
+ useEffect(() => { hasChangesRef.current = hasChanges }, [hasChanges])
+ const forceConfigRef = useRef(false)
 
  // Track previous language to detect actual changes
  const prevLanguageRef = useRef(language)
 
- // When language changes, update prompt sections to match the new language
+ // When the UI language changes, apply the new language's default prompt
+ // template — but ONLY when the editor is clean. F16a (2026-10-01 review):
+ // this effect used to overwrite prompt_sections unconditionally and mark
+ // the strategy dirty, so switching the INTERFACE language silently rewrote
+ // a customized prompt (and the next save pushed it to trading).
  useEffect(() => {
  const updatePromptSectionsForLanguage = async () => {
  // Only update if language actually changed (not on initial mount)
  if (prevLanguageRef.current === language) return
- prevLanguageRef.current = language
-
  if (!token) return
-
+ if (hasChangesRef.current) {
+ // Unsaved edits — the user's prompt wins over the template.
+ prevLanguageRef.current = language
+ return
+ }
  try {
  // Fetch default config for the new language
  const response = await fetch(
  `${API_BASE}/api/strategies/default-config?lang=${language}`,
  { headers: { Authorization: `Bearer ${token}` } }
  )
- if (!response.ok) return
+ if (!response.ok) return // keep prevLanguageRef so a re-switch retries
+ prevLanguageRef.current = language
  const defaultConfig = await response.json()
 
  // Update only the prompt sections and language field
@@ -221,25 +261,21 @@ export function StrategyStudioPage() {
  })
  if (!response.ok) throw new Error('Failed to create strategy')
  const result = await response.json()
- await fetchStrategies()
- // Auto-select the newly created strategy
  if (result.id) {
- const now = new Date().toISOString()
- const newStrategy = {
- id: result.id,
- name: tr('newStrategyName'),
- description: '',
- is_active: false,
- is_default: false,
- is_public: false,
- config_visible: true,
- config: defaultConfig,
- created_at: now,
- updated_at: now,
- }
- setSelectedStrategy(newStrategy)
- setEditingConfig(defaultConfig)
+ // F16c (2026-10-01 review): fetch the SERVER-created strategy instead of
+ // fabricating one with a client-side updated_at — the fabricated
+ // timestamp could never match the server's (RFC3339Nano) and the first
+ // save reliably died on the optimistic-lock 409.
+ const createdResp = await fetch(`${API_BASE}/api/strategies/${result.id}`, {
+ headers: { Authorization: `Bearer ${token}` },
+ })
+ if (createdResp.ok) {
+ const created = await createdResp.json()
+ setSelectedStrategy(prev => (prev ? { ...prev, ...created } : created))
+ setEditingConfig(created.config)
  setHasChanges(false)
+ }
+ await fetchStrategies()
  }
  } catch (err) {
  setError(err instanceof Error ? err.message : 'Unknown error')
@@ -438,17 +474,20 @@ export function StrategyStudioPage() {
 	 signal: controller.signal,
 	 }
 	 )
-	 if (!response.ok) {
-	 if (response.status === 409) {
-	 const msg =
-	 '保存被拒绝：该策略在你打开页面后已被其他修改更新（另一标签页或后台脚本）。已刷新为最新配置——请核对数值后重新保存。'
-	 setError(msg)
-	 notify.error(msg)
-	 // Reload from the DB so the editor shows the NEWER config the
-	 // stale snapshot was about to overwrite.
-	 await fetchStrategies()
-	 return
-	 }
+ if (!response.ok) {
+ if (response.status === 409) {
+ const msg =
+ '保存被拒绝：该策略在你打开页面后已被其他修改更新（另一标签页或后台脚本）。已刷新为最新配置——请核对数值后重新保存。'
+ setError(msg)
+ notify.error(msg)
+ // Reload from the DB so the editor shows the NEWER config the
+ // stale snapshot was about to overwrite. force=true: the stale
+ // draft must be replaced by server truth even though it is dirty.
+ forceConfigRef.current = true
+ await fetchStrategies({ strategyId: selectedStrategy.id })
+ forceConfigRef.current = false
+ return
+ }
 	 const body = await response.text().catch(() => '')
 	 throw new Error(
 	 `保存失败 (HTTP ${response.status})${
@@ -477,8 +516,11 @@ export function StrategyStudioPage() {
  clearTimeout(timeoutId)
  setIsSaving(false)
  }
- // Refresh the list in the background — never block the saving state on it.
- fetchStrategies()
+ // Refresh in the background — never block the saving state on it.
+ // strategyId: refresh THIS strategy's server copy (updated_at advances
+ // after a save; the next save's optimistic lock needs it) without yanking
+ // the selection or clobbering a draft the user may already be typing.
+ fetchStrategies({ strategyId: selectedStrategy.id })
  }
 
  // Update config section
@@ -748,7 +790,7 @@ export function StrategyStudioPage() {
  <Sparkles className="w-5 h-5 text-black" />
  </div>
  <div>
- <h1 className="text-lg font-bold text-nofx-text">{tr('strategyStudio')}</h1>
+ <h1 className="text-lg font-bold text-nofx-text">{tr('title')}</h1>
  <p className="text-xs text-nofx-text-muted">{tr('subtitle')}</p>
  </div>
  </div>

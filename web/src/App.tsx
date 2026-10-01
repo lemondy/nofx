@@ -270,7 +270,12 @@ function App() {
  : null,
  () => api.getAccount(selectedTraderId, true),
  {
- refreshInterval: accountPollOff ? 0 : 15000,
+ // F17 (2026-10-01 review): after the 2-retry backoff the poll keeps a
+ // SLOW heartbeat (60s) instead of latching OFF with refreshInterval 0 —
+ // the old latch froze the panel on stale numbers until a manual reload
+ // or another panel's mutate happened to fire a request. onSuccess
+ // clears the latch as soon as any heartbeat succeeds.
+ refreshInterval: accountPollOff ? 60000 : 15000,
  revalidateOnFocus: false,
  dedupingInterval: 10000,
  onErrorRetry: (_err, _key, _config, revalidate, { retryCount }) => {
@@ -287,7 +292,7 @@ function App() {
  : null,
  () => api.getPositions(selectedTraderId, true),
  {
- refreshInterval: positionsPollOff ? 0 : 15000,
+ refreshInterval: positionsPollOff ? 60000 : 15000, // F17: slow heartbeat, never a permanent latch
  revalidateOnFocus: false,
  dedupingInterval: 10000,
  onErrorRetry: (_err, _key, _config, revalidate, { retryCount }) => {

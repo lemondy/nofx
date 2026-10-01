@@ -45,6 +45,9 @@ export interface Position {
     sl_price?: number
     tp_price?: number
     limit_price?: number
+    // F17 (2026-10-01): 挂单查询失败 → 保护状态未知,前端显式展示「?」,
+    // 不得与「无挂单」混同
+    protection_error?: boolean
   } | null
 }
 

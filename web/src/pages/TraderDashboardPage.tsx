@@ -487,7 +487,11 @@ export function TraderDashboardPage({
 
  {/* Debug Info */}
  <div className="mb-4 px-3 py-1.5 rounded bg-[#E9E4D6] border border-nofx-line/50 text-[10px] font-mono text-nofx-text-muted flex justify-between items-center opacity-60 hover:opacity-100 transition-opacity">
- <span style={{ color: '#2E7D4F' }}>SYSTEM_STATUS::ONLINE</span>
+ {/* F17 (2026-10-01 review): the status line used to read ONLINE unconditionally —
+     stale account/position data looked live. Fetch failure ⇒ STALE (red). */}
+ <span style={{ color: accountFailed || positionsFailed ? '#C0392B' : '#2E7D4F' }}>
+ {accountFailed || positionsFailed ? 'SYSTEM_STATUS::STALE' : 'SYSTEM_STATUS::ONLINE'}
+ </span>
  {account ? (
  <div className="flex gap-4">
  <span>LAST_UPDATE::{lastUpdate}</span>
@@ -598,19 +602,25 @@ export function TraderDashboardPage({
  <div className="overflow-x-auto">
  <table className="w-full text-xs">
  <thead className="text-left border-b border-nofx-line/50">
+ {/* F18 (2026-10-01 review): entry/mark/leverage/SL-TP/liq were `hidden` on
+     mobile while the close button stayed — a position could be closed with
+     zero risk context on a 390px screen. The risk columns are now always
+     rendered; the table scrolls horizontally (overflow-x-auto above). Only
+     the low-stakes `value` column stays md+.
+     Keep in sync: the matching `hidden md:table-cell` cells below. */}
  <tr>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-left">{t('symbol', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-center">{t('side', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-center">{t('traderDashboard.action', language)}</th>
- <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('entryPrice', language)}>{t('traderDashboard.entry', language)}</th>
- <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('markPrice', language)}>{t('traderDashboard.mark', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('entryPrice', language)}>{t('traderDashboard.entry', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('markPrice', language)}>{t('traderDashboard.mark', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('quantity', language)}>{t('traderDashboard.qty', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('positionValue', language)}>{t('traderDashboard.value', language)}</th>
- <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-center hidden md:table-cell" title={t('leverage', language)}>{t('traderDashboard.lev', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-center" title={t('leverage', language)}>{t('traderDashboard.lev', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('unrealizedPnL', language)}>{t('traderDashboard.uPnL', language)}</th>
  <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('unrealizedPnL', language)}>{t('traderDashboard.pnlPct', language)}</th>
- <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('traderDashboard.ordersHint', language)}>{t('traderDashboard.orders', language)}</th>
- <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right hidden md:table-cell" title={t('liqPrice', language)}>{t('traderDashboard.liq', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('traderDashboard.ordersHint', language)}>{t('traderDashboard.orders', language)}</th>
+ <th className="px-1 pb-3 font-semibold text-nofx-text-muted whitespace-nowrap text-right" title={t('liqPrice', language)}>{t('traderDashboard.liq', language)}</th>
  </tr>
  </thead>
  <tbody>
@@ -658,11 +668,11 @@ export function TraderDashboardPage({
  {t('traderDashboard.close', language)}
  </button>
  </td>
- <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-main hidden md:table-cell">{formatPrice(pos.entry_price)}</td>
- <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-main hidden md:table-cell">{formatPrice(pos.mark_price)}</td>
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-main">{formatPrice(pos.entry_price)}</td>
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-main">{formatPrice(pos.mark_price)}</td>
  <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-main">{formatQuantity(pos.quantity)}</td>
  <td className="px-1 py-3 font-mono font-bold whitespace-nowrap text-right text-nofx-text-main hidden md:table-cell">{(pos.quantity * pos.mark_price).toFixed(2)}</td>
- <td className="px-1 py-3 font-mono whitespace-nowrap text-center text-nofx-gold hidden md:table-cell">{pos.leverage}x</td>
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-center text-nofx-gold">{pos.leverage}x</td>
  <td className="px-1 py-3 font-mono whitespace-nowrap text-right">
  <span
  className={`font-bold ${pos.unrealized_pnl >= 0 ? 'text-nofx-green shadow-nofx-green' : 'text-nofx-red shadow-nofx-red'}`}
@@ -680,11 +690,17 @@ export function TraderDashboardPage({
  {(pos.unrealized_pnl_pct ?? 0).toFixed(2)}%
  </span>
  </td>
- <td className="px-1 py-3 font-mono whitespace-nowrap text-right hidden md:table-cell">
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-right">
  {(() => {
  const sl = pos.protection?.sl_price
  const tp = pos.protection?.tp_price
  const lim = pos.protection?.limit_price
+ // F17 (2026-10-01 review): "query failed" (unknown) must not render
+ // like "no orders" — a naked-looking position may actually be fine,
+ // and a "protected-looking" silence may be a blind read.
+ if (pos.protection?.protection_error) {
+ return <span className="text-nofx-gold" title={t('traderDashboard.ordersUnknown', language)}>?</span>
+ }
  if (sl == null && tp == null && lim == null) {
  return <span className="text-nofx-text-muted" title={t('traderDashboard.ordersMissing', language)}>—</span>
  }
@@ -703,7 +719,7 @@ export function TraderDashboardPage({
  )
  })()}
  </td>
- <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-muted hidden md:table-cell">{formatPrice(pos.liquidation_price)}</td>
+ <td className="px-1 py-3 font-mono whitespace-nowrap text-right text-nofx-text-muted">{formatPrice(pos.liquidation_price)}</td>
  </tr>
  ))}
  </tbody>
