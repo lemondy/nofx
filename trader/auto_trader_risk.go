@@ -2229,7 +2229,8 @@ func absoluteBanCode(code string) bool {
 		return true
 	}
 	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
-		strings.HasPrefix(code, "EMA20_STRETCH_") || strings.HasPrefix(code, "BTC_WEAK_LONG_")
+		strings.HasPrefix(code, "EMA20_STRETCH_") || strings.HasPrefix(code, "BTC_WEAK_LONG_") ||
+		strings.HasPrefix(code, "WIDE_STOP_")
 }
 
 // applyHardRiskGates enforces program-level gates the AI cannot override:

@@ -162,3 +162,32 @@ func TestSentimentDeweightOnLongGateReads(t *testing.T) {
 		t.Fatalf("greed deweight must read the long score as +35, failed=%v", g.Failed)
 	}
 }
+
+func TestWideStopGate(t *testing.T) {
+	// Craft a wide stop: entry 100, 1h ATR 2% (buffer), a deep support at 85
+	// → the stop plan lands ≥13% below the entry, over the 10% cap.
+	wide := &SymbolSignal{
+		Symbol: "WIDEUSDT",
+		Price:  100,
+		Timeframes: map[string]*TFSignal{
+			// 4h ATR 9% makes the band cap max(18,8)=18% — band-legal wide
+			// stop, exactly the USUSDT shape the cap targets.
+			"1h": {ATRPct: 2.0, Support: []float64{85}, StructuralSupport: []float64{85}},
+			"4h": {ATRPct: 9.0},
+		},
+	}
+	opt := lpOpt()
+	opt.SLMinATRMult = 1.5 // stop-plan block runs only with a noise floor
+	opt.MaxStopDistancePct = 10
+	g := computeHardEntryGate(wide, opt)
+	if !hasCode(g.Long, "WIDE_STOP_") {
+		t.Fatalf("wide stop plan must emit WIDE_STOP, failed=%v stopPct=%v", g.Long.Failed, g.Long.StopPlanPct)
+	}
+	// Disabled (negative → resolver 0) → no code.
+	off := opt
+	off.MaxStopDistancePct = 0
+	g2 := computeHardEntryGate(wide, off)
+	if hasCode(g2.Long, "WIDE_STOP_") {
+		t.Fatal("disabled cap must not emit WIDE_STOP")
+	}
+}

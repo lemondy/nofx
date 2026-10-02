@@ -1590,6 +1590,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		SentimentLongDeweightPts:   e.config.RiskControl.EffectiveSentimentLongDeweightPts(),
 		SentimentLongDeweightArmed: sentimentGreedy(e.config.RiskControl.EffectiveSentimentLongDeweightFNG()),
 		BtcTrendCloses:             binanceBTC1hCloses(300),
+		MaxStopDistancePct:         e.config.RiskControl.EffectiveMaxStopDistancePct(),
 	}
 	// DataQuality's bar requirements must match what fetchMarketDataWithStrategy
 	// actually fetches — including its legacy expansion of an empty

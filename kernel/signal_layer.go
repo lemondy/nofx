@@ -648,6 +648,9 @@ type SignalOptions struct {
 	// / breakout market exception). Pts <=0 or !Armed = off.
 	SentimentLongDeweightPts   int
 	SentimentLongDeweightArmed bool
+	// MaxStopDistancePct: a stop plan further than this from the entry fails
+	// the direction with WIDE_STOP (both directions; <=0 = check disabled).
+	MaxStopDistancePct float64
 	// NEGATIVE_EDGE health gate (user review 2026-09-27 #4): active only
 	// while the strategy's rolling stats sit on the negative edge (PF<0.9).
 	// Resolved via the NegativeEdge* resolvers in anchor_offset.go — the
@@ -1758,6 +1761,14 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 				g.StopPlanPct = round2(dist)
 				g.StopPlanSource = "structure"
 				g.RR = scanRRForSymbol(sig, g.EntryPrice, g.EntryBasis, dist, price, isLong, opt.MinRR)
+				// WIDE_STOP (user directive 2026-10-02): a stop plan beyond
+				// the cap means the coin's volatility structure doesn't fit
+				// the sizing geometry — USUSDT's 16.8% stop died in 4 minutes
+				// with risk capped at 2%. BOTH directions: a wide stop is a
+				// position-geometry problem, not a directional one.
+				if opt.MaxStopDistancePct > 0 && g.StopPlanPct > opt.MaxStopDistancePct {
+					add(fmt.Sprintf("WIDE_STOP_%.1f_GT_%.0f", g.StopPlanPct, opt.MaxStopDistancePct))
+				}
 			}
 		}
 		if opt.EntryTimingGate && sig.ExecutionFilter != nil {

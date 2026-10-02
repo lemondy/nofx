@@ -552,6 +552,11 @@ type RiskControlConfig struct {
 	// SentimentLongDeweightFNG: the FNG threshold arming the deweight.
 	// 0/unset = 70.
 	SentimentLongDeweightFNG int `json:"sentiment_long_deweight_fng"`
+	// MaxStopDistancePct: a stop plan further than this from the entry blocks
+	// the open (WIDE_STOP) — a wide stop on a violent coin fits the 2%-risk
+	// sizing geometry but not its win rate (USUSDT 16.8% stop died in 4
+	// minutes). Applies to BOTH directions. 0 = default 10; negative = off.
+	MaxStopDistancePct float64 `json:"max_stop_distance_pct"`
 	// TPMenuEnabled: nil/true = the tp_options menu + exit_mode contract is
 	// active — the model picks a program-precomputed TP plan (tp_option) and
 	// classifies the regime (exit_mode trend/range/quick); false = the legacy
@@ -768,6 +773,21 @@ func (r RiskControlConfig) EffectiveSentimentLongDeweightFNG() int {
 		return 70
 	}
 	return r.SentimentLongDeweightFNG
+}
+
+// DefaultMaxStopDistancePct: the stop-plan distance cap for BOTH directions
+// (user directive 2026-10-02, WIDE_STOP).
+const DefaultMaxStopDistancePct = 10.0
+
+// EffectiveMaxStopDistancePct: 0/unset -> default 10 (%), negative -> off.
+func (r RiskControlConfig) EffectiveMaxStopDistancePct() float64 {
+	if r.MaxStopDistancePct < 0 {
+		return 0
+	}
+	if r.MaxStopDistancePct == 0 {
+		return DefaultMaxStopDistancePct
+	}
+	return r.MaxStopDistancePct
 }
 
 // EffectiveDailyMaxLossPct resolves the daily-loss halt threshold:

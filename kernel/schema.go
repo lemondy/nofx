@@ -320,6 +320,7 @@ func getSchemaPromptZH() string {
 	prompt += "- **EMA20_STRETCH_x_GT_y**: 现价高于 4h EMA20 超过 y%(当前 x%)——追强势被程序禁止;突破确认的币会给出 long_pullback 回踩锚,等回踩而非追\n"
 	prompt += "- **BTC_4H_DOWNTREND**: BTC 4h 处于下跌趋势(EMA20<EMA50 且价在 EMA20 下)——山寨多头整体暂停\n"
 	prompt += "- **BTC_WEAK_LONG_x_VS_y**: 该币 24h 涨幅(x%)弱于 BTC(y%)——不接弱势跟跌的多头\n"
+	prompt += "- **WIDE_STOP_x_GT_y**: 止损计划距离 x% 超过上限 y%——币的波动结构不配 2% 风险的仓位几何,直接放弃该标的\n"
 
 	return prompt
 }
@@ -369,6 +370,7 @@ func getSchemaPromptEN() string {
 	prompt += "- **EMA20_STRETCH_x_GT_y**: price is x% above the 4h EMA20 (cap y%) — chasing strength is program-blocked; breakout-confirmed coins carry a long_pullback retest anchor instead of a chase price\n"
 	prompt += "- **BTC_4H_DOWNTREND**: BTC 4h is in a downtrend (EMA20<EMA50 and price below EMA20) — altcoin longs pause market-wide\n"
 	prompt += "- **BTC_WEAK_LONG_x_VS_y**: the coin's 24h return (x%) lags BTC's (y%) — no longs on weak laggards\n"
+	prompt += "- **WIDE_STOP_x_GT_y**: the stop-plan distance (x%) exceeds the cap (y%) — the coin's volatility structure doesn't fit 2%-risk sizing geometry; skip the symbol entirely\n"
 
 	return prompt
 }
