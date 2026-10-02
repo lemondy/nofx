@@ -2216,13 +2216,20 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 // executor, VENDOR_DIVERGENCE* → its dedicated block below. On the LIMIT
 // style any disallowed direction blocks regardless of code (resting-limit
 // entries have no exception path at all).
+//
+// 2026-10-01 long-side discipline (user design): EMA20_STRETCH_* (chase cap
+// vs the 4h EMA20 — the retest-anchor path is the kernel-side exemption, the
+// code never coexists with an active pullback anchor) and BTC_4H_DOWNTREND /
+// BTC_WEAK_LONG_* (market-level BTC filter) enter the absolute list — chasing
+// stretched laggards has no sanctioned market path.
 func absoluteBanCode(code string) bool {
 	switch code {
 	case "DATA_INSUFFICIENT", "POOR_HISTORY", "BSTOCK_DAILY_DATA_UNAVAILABLE",
-		"LOSS_STREAK_BANNED", "STOCK_WEEKEND":
+		"LOSS_STREAK_BANNED", "STOCK_WEEKEND", "BTC_4H_DOWNTREND":
 		return true
 	}
-	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_")
+	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
+		strings.HasPrefix(code, "EMA20_STRETCH_") || strings.HasPrefix(code, "BTC_WEAK_LONG_")
 }
 
 // applyHardRiskGates enforces program-level gates the AI cannot override:

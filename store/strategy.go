@@ -535,6 +535,23 @@ type RiskControlConfig struct {
 	// from the validated price is a different trade than the gates approved.
 	// (CODE ENFORCED)
 	MaxEntrySlippageBps int `json:"max_entry_slippage_bps"`
+	// ---- Long-side entry discipline (user design 2026-10-01) ----
+	// LongPullbackEntry: nil/true = breakout-confirmed LONG anchors at the
+	// BROKEN level (retest entry); false = legacy offset anchors.
+	LongPullbackEntry *bool `json:"long_pullback_entry,omitempty"`
+	// LongMaxEMA20DistPct: chase entries above this distance from the 4h
+	// EMA20 are blocked (EMA20_STRETCH); the retest-anchor path is exempt.
+	// 0 = default 12; negative = off.
+	LongMaxEMA20DistPct float64 `json:"long_max_ema20_dist_pct"`
+	// BTCFilterLong: nil/true = altcoin longs need coin 24h return ≥ BTC's
+	// and BTC 4h closes not declining (BTC_WEAK_LONG).
+	BTCFilterLong *bool `json:"btc_filter_long,omitempty"`
+	// SentimentLongDeweightPts: directional-score penalty for LONGS while
+	// crypto FNG ≥ SentimentLongDeweightFNG. 0 = default 10; negative = off.
+	SentimentLongDeweightPts int `json:"sentiment_long_deweight_pts"`
+	// SentimentLongDeweightFNG: the FNG threshold arming the deweight.
+	// 0/unset = 70.
+	SentimentLongDeweightFNG int `json:"sentiment_long_deweight_fng"`
 	// TPMenuEnabled: nil/true = the tp_options menu + exit_mode contract is
 	// active — the model picks a program-precomputed TP plan (tp_option) and
 	// classifies the regime (exit_mode trend/range/quick); false = the legacy
@@ -686,6 +703,71 @@ func (r RiskControlConfig) EffectiveMaxNetDirectionalRiskPct() float64 {
 		return DefaultMaxNetDirectionalRiskPct
 	}
 	return r.MaxNetDirectionalRiskPct
+}
+
+// ============================================================================
+// Long-side entry discipline (user design 2026-10-01, "保留突破,改入场方式"):
+// breakout-confirmed longs enter on the RETEST of the broken level instead of
+// chasing the extension, with symmetric evidence and market-level filters.
+// All knobs follow the house style: pointer nil = default, negative = off.
+// ============================================================================
+
+// LongPullbackEntry: nil/true = a breakout-confirmed LONG's limit anchor is
+// the BROKEN resistance level (old resistance becomes support) instead of
+// snapshot−offset — the model waits for the retest rather than chasing.
+// false = legacy offset anchors. (CODE ENFORCED)
+func (r RiskControlConfig) EffectiveLongPullbackEntry() bool {
+	return r.LongPullbackEntry == nil || *r.LongPullbackEntry
+}
+
+// DefaultLongMaxEMA20DistPct: how far above the 4h EMA20 a CHASE entry may
+// still be considered; beyond it the coin is "extended from the mean" and
+// longs wait for the pullback anchor (which by construction closes most of
+// the stretch). The retest-anchor path is EXEMPT — waiting for the level is
+// the designed alternative, not a chase.
+const DefaultLongMaxEMA20DistPct = 12.0
+
+// EffectiveLongMaxEMA20DistPct: 0/unset -> default 12 (%), negative -> off.
+func (r RiskControlConfig) EffectiveLongMaxEMA20DistPct() float64 {
+	if r.LongMaxEMA20DistPct < 0 {
+		return 0
+	}
+	if r.LongMaxEMA20DistPct == 0 {
+		return DefaultLongMaxEMA20DistPct
+	}
+	return r.LongMaxEMA20DistPct
+}
+
+// EffectiveBTCFilterLong: nil/true = altcoin LONGs require the coin's 24h
+// return ≥ BTC's AND BTC's 4h closes not in a declining sequence. false = off.
+func (r RiskControlConfig) EffectiveBTCFilterLong() bool {
+	return r.BTCFilterLong == nil || *r.BTCFilterLong
+}
+
+// DefaultSentimentLongDeweightPts: while crypto FNG reads ≥ the threshold,
+// a long's directional score carries this many penalty points at the gate
+// reads (CONSENSUS_OPPOSED / NEG_EDGE_SCORE / breakout exception) — the
+// greed backdrop de-ranks chasing, it does not block.
+const DefaultSentimentLongDeweightPts = 10
+
+// EffectiveSentimentLongDeweightPts: 0/unset -> default 10, negative -> off.
+func (r RiskControlConfig) EffectiveSentimentLongDeweightPts() int {
+	if r.SentimentLongDeweightPts < 0 {
+		return 0
+	}
+	if r.SentimentLongDeweightPts == 0 {
+		return DefaultSentimentLongDeweightPts
+	}
+	return r.SentimentLongDeweightPts
+}
+
+// SentimentLongDeweightFNG: the crypto Fear&Greed value at or above which
+// the long deweight arms. 0/unset -> 70.
+func (r RiskControlConfig) EffectiveSentimentLongDeweightFNG() int {
+	if r.SentimentLongDeweightFNG <= 0 {
+		return 70
+	}
+	return r.SentimentLongDeweightFNG
 }
 
 // EffectiveDailyMaxLossPct resolves the daily-loss halt threshold:

@@ -1581,6 +1581,15 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		NegativeEdgeMinScore:    NegativeEdgeMinScore(&e.config.RiskControl),
 		NegativeEdgeMinRR:       NegativeEdgeMinRR(&e.config.RiskControl),
 		NegativeEdgeBlockLosing: NegativeEdgeBlockLosingSymbol(&e.config.RiskControl),
+		// Long-side entry discipline (user design 2026-10-01): breakout
+		// retest anchors, the EMA20 chase cap, the BTC market filter and the
+		// greed deweight — all config-switchable via risk_control.
+		LongPullbackEntry:          e.config.RiskControl.EffectiveLongPullbackEntry(),
+		LongMaxEMA20DistPct:        e.config.RiskControl.EffectiveLongMaxEMA20DistPct(),
+		BTCFilterLong:              e.config.RiskControl.EffectiveBTCFilterLong(),
+		SentimentLongDeweightPts:   e.config.RiskControl.EffectiveSentimentLongDeweightPts(),
+		SentimentLongDeweightArmed: sentimentGreedy(e.config.RiskControl.EffectiveSentimentLongDeweightFNG()),
+		BtcTrendCloses:             binanceBTC1hCloses(300),
 	}
 	// DataQuality's bar requirements must match what fetchMarketDataWithStrategy
 	// actually fetches — including its legacy expansion of an empty
@@ -1956,6 +1965,7 @@ func (e *StrategyEngine) formatMarketData(data *market.Data, quantData *QuantDat
 const signalBlockLegend = `时间口径: timeframe 名称是K线粒度;trend_window_return_pct 的窗口看 return_window_hours;price_change_60m/24h_live_pct 使用实时价;prev_hour_close_change_pct 只看最近完整1h收盘。macd_hist 实际为 MACD line(EMA12-EMA26)/price,不是传统 histogram。
 程序字段是唯一权威,禁止重算:
 - hard_entry_gate.long/short.allowed 是最终方向权限。false→wait并逐项引用 failed;true 且 limit_allowed→限价复制 entry_price;true 且 !limit_allowed 且 market_exception→可走市价例外。不存在其他路径。
+- long_pullback 块(突破回踩多头):breakout 确认后 limit_buy_price 即被破前阻力位(旧阻转支撑),止损计划按该位下方结构生成——等回踩、不追延伸;chase_dist_pct 是现价距锚的延伸度,funding_not_overheated / volume_confirmation / oi_confirmation 是对称证据徽章,ema20_4h_dist_pct 是偏离度。回踩失败(收盘跌回位下)状态自动转 fake_break,锚随之消失——不要在无锚时自行猜回踩位。
 - market_regime、execution_filter、pump_guard、data_quality、data_freshness、liquidity、funding_rollover、bb_ride(布林上轨骑行)/short_ride(布林下轨骑行) 和 breakout 均为程序结果。funding_rate 是原始小数;funding_annualized_pct 才是年化百分比。pump_guard.return_4h_pct = 最近 5 根已闭合 4h K 线(约 20 小时)的趋势窗口累计涨幅——4h 周期指标,不是最近 4 小时的涨幅。
 - bias.scanner 只是候选来源姿态;方向依据 structure/execution/directional_score。仅在 hard_entry_gate.allowed=true 且准备开仓时处理 signal_conflict;已被硬门阻断时直接 wait,不展开冲突分析。
 - support/resistance 与距离均按实时价生成;空数组表示对应方向没有结构参考。trend 与窗口收益方向不同可以是合法反弹/回撤,不自动构成冲突。

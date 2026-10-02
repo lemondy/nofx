@@ -317,6 +317,9 @@ func getSchemaPromptZH() string {
 	prompt += "- **STOP_PLAN_OUT_OF_BAND**: 程序止损计划距离超出 [1.5×ATR(1h), max(2×ATR(4h),8%)] 允许带(过紧或过宽均算,码不区分方向)——wait,不要自行改止损凑带\n"
 	prompt += "- **STOP_PLAN_NO_STRUCTURE**: 对侧没有可用结构位生成止损计划——wait\n"
 	prompt += "- **VENDOR_DIVERGENCE_x.xx**: x.xx 为带符号偏差,判级取绝对值(|偏差| > 1.0% 即拦)——wait\n"
+	prompt += "- **EMA20_STRETCH_x_GT_y**: 现价高于 4h EMA20 超过 y%(当前 x%)——追强势被程序禁止;突破确认的币会给出 long_pullback 回踩锚,等回踩而非追\n"
+	prompt += "- **BTC_4H_DOWNTREND**: BTC 4h 处于下跌趋势(EMA20<EMA50 且价在 EMA20 下)——山寨多头整体暂停\n"
+	prompt += "- **BTC_WEAK_LONG_x_VS_y**: 该币 24h 涨幅(x%)弱于 BTC(y%)——不接弱势跟跌的多头\n"
 
 	return prompt
 }
@@ -363,6 +366,9 @@ func getSchemaPromptEN() string {
 	prompt += "- **STOP_PLAN_OUT_OF_BAND**: the stop-plan distance sits outside [1.5×ATR(1h), max(2×ATR(4h),8%)] (either too tight or too wide; the code does not distinguish) — wait, never move the stop to fit the band\n"
 	prompt += "- **STOP_PLAN_NO_STRUCTURE**: no usable opposite-side structure to build a stop plan — wait\n"
 	prompt += "- **VENDOR_DIVERGENCE_x.xx**: x.xx is a SIGNED deviation; grading uses its absolute value (|deviation| > 1.0% blocks) — wait\n"
+	prompt += "- **EMA20_STRETCH_x_GT_y**: price is x% above the 4h EMA20 (cap y%) — chasing strength is program-blocked; breakout-confirmed coins carry a long_pullback retest anchor instead of a chase price\n"
+	prompt += "- **BTC_4H_DOWNTREND**: BTC 4h is in a downtrend (EMA20<EMA50 and price below EMA20) — altcoin longs pause market-wide\n"
+	prompt += "- **BTC_WEAK_LONG_x_VS_y**: the coin's 24h return (x%) lags BTC's (y%) — no longs on weak laggards\n"
 
 	return prompt
 }

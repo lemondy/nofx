@@ -174,6 +174,12 @@ type SymbolSignal struct {
 	ExecutionFilter *ExecutionFilter `json:"execution_filter,omitempty"`
 	// ⑫ Precomputed breakout state vs the 1h structure levels.
 	Breakout *BreakoutState `json:"breakout,omitempty"`
+	// ⑬ Long pullback plan (user design 2026-10-01): when a LONG breakout is
+	// confirmed/retesting, the limit anchor IS the broken level and this block
+	// carries the entry geometry plus the symmetric evidence badges (funding
+	// not overheated / volume+OI confirmation / EMA20 distance). nil = the
+	// breakout-pullback path is not active for this symbol.
+	LongPullback *LongPullbackPlan `json:"long_pullback,omitempty"`
 	// BBRide is the pre-computed 15m upper-band ride verdict (bb_ride):
 	// volume surge + ≥3 consecutive bullish closed 15m bars hugging the upper
 	// Bollinger band — the momentum-ride market-entry evidence.
@@ -270,6 +276,29 @@ type BreakoutState struct {
 	DistancePct   float64 `json:"distance_pct"`        // price vs level, % (positive = beyond)
 	VolumeConfirm bool    `json:"volume_confirmation"` // breakout bars carry ≥1.5× volume
 	OIConfirm     bool    `json:"oi_confirmation"`     // OI expanded in the breakout direction (1h)
+}
+
+// DataQuality separates "the fetch worked" from "there is enough history for
+// the indicators to mean anything" (⑩): a 3-day-old listing has complete but
+// insufficient 4h bars.
+
+// LongPullbackPlan is the breakout-retest entry geometry for LONGS (user
+// design 2026-10-01, "保留突破,改入场方式"): the limit anchor IS the broken
+// resistance (old resistance → support), the stop lives below it (structural;
+// "closing back under the level" is the failure signal), and the evidence
+// badges mirror the short-side discipline (funding not overheated, volume+OI
+// confirmation, EMA20 distance). Everything is neutral evidence + geometry —
+// the trade decision stays with the model under the same hard gates.
+type LongPullbackPlan struct {
+	Active         bool     `json:"active"`                           // the limit anchor IS the retest level
+	Entry          float64  `json:"entry"`                            // the broken level (== limit_buy_price when active)
+	Level          float64  `json:"level"`                            // the breakout structure level
+	Status         string   `json:"breakout_status"`                  // confirmed | retest_hold
+	ChaseDistPct   float64  `json:"chase_dist_pct"`                   // live price above the level, % — the stretch the retest must close
+	FundingOK      *bool    `json:"funding_not_overheated,omitempty"` // annualized ≤ the market-exception cap; nil = unknown
+	VolumeConfirm  bool     `json:"volume_confirmation"`
+	OIConfirm      bool     `json:"oi_confirmation"`
+	EMA20Dist4hPct *float64 `json:"ema20_4h_dist_pct,omitempty"` // live price vs 4h EMA20, % — the stretch gate reads this
 }
 
 // DataQuality separates "the fetch worked" from "there is enough history for
@@ -391,9 +420,9 @@ type RRScan struct {
 // TPOption is one precomputed take-profit plan. The model answers with a
 // 1-based index (Decision.TPOption); it never authors the price.
 type TPOption struct {
-	Level           float64 `json:"level"`                     // the structural target price
-	RR              float64 `json:"rr"`                        // RR at the gated stop_plan
-	TouchCount      int     `json:"touch_count,omitempty"`     // closed 1h (bstock 1d) bars in the window whose range reached the level — neutral "price has been here" evidence, NOT a probability
+	Level           float64 `json:"level"`                 // the structural target price
+	RR              float64 `json:"rr"`                    // RR at the gated stop_plan
+	TouchCount      int     `json:"touch_count,omitempty"` // closed 1h (bstock 1d) bars in the window whose range reached the level — neutral "price has been here" evidence, NOT a probability
 	TouchWindowDays int     `json:"touch_window_days,omitempty"`
 	BeyondStructure bool    `json:"beyond_structure,omitempty"` // beyond every timeframe's structure extreme
 	Default         bool    `json:"default,omitempty"`          // option 1 (nearest qualifying) — the legacy first_rr_ge_target
@@ -546,16 +575,21 @@ type SignalOptions struct {
 	// value.
 	PumpGuard4hPct float64
 
-	QuoteVolume24hUsd      float64            // absolute 24h turnover (USDT)
-	ScannerBias            string             // "short" when the symbol carries a short-scanner hint
-	ScannerConflict        bool               // two scanners give OPPOSITE directional conclusions for this symbol
-	Quant                  *QuantData         // per-symbol quant snapshot (24h rolling change, current OI)
-	LongShortAccountRatio  *float64           // global accounts long/short
-	TopTraderPositionRatio *float64           // top traders' position long/short
-	TakerBuySellRatio      *float64           // taker buy/sell volume ratio
-	BtcCloses              []float64          // closed 1h BTC closes for correlation/beta
-	VendorStalenessPct     *float64           // vendor forming close vs live ticker
-	TraderHistory          *TraderHistoryStat // this trader's closed-trade record on the symbol
+	QuoteVolume24hUsd      float64    // absolute 24h turnover (USDT)
+	ScannerBias            string     // "short" when the symbol carries a short-scanner hint
+	ScannerConflict        bool       // two scanners give OPPOSITE directional conclusions for this symbol
+	Quant                  *QuantData // per-symbol quant snapshot (24h rolling change, current OI)
+	LongShortAccountRatio  *float64   // global accounts long/short
+	TopTraderPositionRatio *float64   // top traders' position long/short
+	TakerBuySellRatio      *float64   // taker buy/sell volume ratio
+	BtcCloses              []float64  // closed 1h BTC closes for correlation/beta
+	// BtcTrendCloses: a LONGER cached series (300×1h → 75×4h) for the BTC
+	// 4h downtrend verdict + 24h return of the long-side BTC filter
+	// (btc4hShape). Separate from BtcCloses so the correlation input length
+	// stays untouched.
+	BtcTrendCloses     []float64
+	VendorStalenessPct *float64           // vendor forming close vs live ticker
+	TraderHistory      *TraderHistoryStat // this trader's closed-trade record on the symbol
 	// LossStreakBannedUntil is non-zero when the trader's circuit breaker has
 	// banned this symbol from new opens until that moment (program-computed
 	// from the closed-trade record — never the model's judgment).
@@ -597,6 +631,23 @@ type SignalOptions struct {
 	// (MYXUSDT 09-18) — entry, stop and target are all priced off the wrong
 	// tick. <=0 (disabled) skips the check.
 	MaxVendorDivergencePct float64
+	// ---- Long-side entry discipline (user design 2026-10-01) ----
+	// LongPullbackEntry: breakout-confirmed LONG anchors at the BROKEN level
+	// (retest entry) instead of snapshot−offset (nil=true).
+	LongPullbackEntry bool
+	// LongMaxEMA20DistPct: chase entries beyond this distance above the 4h
+	// EMA20 fail with EMA20_STRETCH; the retest anchor path is exempt.
+	// <=0 = check disabled.
+	LongMaxEMA20DistPct float64
+	// BTCFilterLong: altcoin longs need coin 24h return ≥ BTC's and BTC 4h
+	// closes not declining; failure emits BTC_WEAK_LONG.
+	BTCFilterLong bool
+	// SentimentLongDeweightPts / SentimentLongDeweightArmed: while ARMED
+	// (engine-side: crypto FNG ≥ threshold), a LONG's directional score loses
+	// this many points at the gate reads (CONSENSUS_OPPOSED / NEG_EDGE_SCORE
+	// / breakout market exception). Pts <=0 or !Armed = off.
+	SentimentLongDeweightPts   int
+	SentimentLongDeweightArmed bool
 	// NEGATIVE_EDGE health gate (user review 2026-09-27 #4): active only
 	// while the strategy's rolling stats sit on the negative edge (PF<0.9).
 	// Resolved via the NegativeEdge* resolvers in anchor_offset.go — the
@@ -1088,6 +1139,18 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	sig.LimitEntryOffsetPct = AnchorOffsetPct(anchorATRPct, offsetCfg)
 	sig.LimitBuyPrice = data.CurrentPrice * (1 - sig.LimitEntryOffsetPct/100)
 	sig.LimitSellPrice = data.CurrentPrice * (1 + sig.LimitEntryOffsetPct/100)
+	// ⑬ Breakout-retest long anchor (user design 2026-10-01, "保留突破,改入场
+	// 方式"): a confirmed LONG breakout does NOT chase the extension — the
+	// limit anchor moves to the BROKEN level (old resistance → support) so
+	// the fill lands on the retest, and the stop plan / RR below compute from
+	// that anchor (structural stop under the level → short distance → honest
+	// RR; a close back under it demotes the state to fake_break and the
+	// anchor disappears with the state — no crossed-anchor market fallback
+	// into a failed retest). Evidence badges ride along.
+	sig.LongPullback = buildLongPullbackPlan(sig, data, opt)
+	if sig.LongPullback != nil && sig.LongPullback.Active {
+		sig.LimitBuyPrice = sig.LongPullback.Entry
+	}
 
 	// ① Anchor cross-validation (user review 2026-09-07): the pre-computed
 	// limit anchors are checked against the same supply-zone rule the trader
@@ -1410,6 +1473,9 @@ const UnprotectedStopWorstCasePct = 8.0
 // loss-streak are separate gate codes), the 15m upper-band ride (exception
 // two, longs), the lower-band ride (exception three, shorts).
 //
+// effectiveScore is the SIDE-ADJUSTED directional score (the sentiment
+// deweight already applied for longs — user design 2026-10-01).
+//
 // 09-19 audit: with the limit anchor suppressed these are the ONLY entry
 // paths — when none holds, the direction is unexecutable and must FAIL
 // CLOSED (ZEC long shipped allowed=true with limit_buy_price=0,
@@ -1421,7 +1487,7 @@ const UnprotectedStopWorstCasePct = 8.0
 // ignored the score the prompt demanded — the exception was prompt-advisory.
 // The kernel verdict lands on DirectionGate.MarketException, which the
 // trader enforces at the open dispatch.
-func marketExceptionEvidence(sig *SymbolSignal, isLong bool) bool {
+func marketExceptionEvidence(sig *SymbolSignal, isLong bool, effectiveScore int) bool {
 	// A chase is permitted only after two closed 1h evaluations agree on a
 	// direction-matched trend regime. RANGE/CHOP/UNKNOWN fail closed; ordinary
 	// structure-based limit entries continue through their existing gates.
@@ -1440,7 +1506,7 @@ func marketExceptionEvidence(sig *SymbolSignal, isLong bool) bool {
 	if sig.Breakout != nil && sig.Breakout.Status == "confirmed" &&
 		sig.Breakout.VolumeConfirm && sig.Breakout.OIConfirm &&
 		breakoutDirectionMatches(sig, isLong) &&
-		directionScoreAtLeast(sig, isLong, MarketExceptionMinScore) {
+		directionScoreAtLeastScore(effectiveScore, isLong, MarketExceptionMinScore) {
 		return fundingAllowsMarketException(sig, isLong)
 	}
 	return false
@@ -1478,11 +1544,137 @@ func breakoutDirectionMatches(sig *SymbolSignal, isLong bool) bool {
 	return sig.Breakout.Direction == "breakdown"
 }
 
-func directionScoreAtLeast(sig *SymbolSignal, isLong bool, min int) bool {
-	score := 0
-	if sig.SignalConflict != nil {
-		score = sig.SignalConflict.DirectionalScore
+// buildLongPullbackPlan returns the breakout-retest entry geometry for
+// LONGS when the 1h breakout state machine is in a long-eligible window:
+// status "confirmed" (price beyond the level) or "retest_hold" (at the level
+// and holding). The retest anchor activates only under the strategy switch
+// AND with the level still below the live price; nil = the path is inactive
+// and the legacy offset anchor stands (evidence badges still attach whenever
+// the breakout is long-directional).
+func buildLongPullbackPlan(sig *SymbolSignal, data *market.Data, opt SignalOptions) *LongPullbackPlan {
+	b := sig.Breakout
+	if b == nil || b.Level <= 0 || b.Direction == "breakdown" || data.CurrentPrice <= 0 {
+		return nil
 	}
+	p := &LongPullbackPlan{
+		Level:         b.Level,
+		Status:        b.Status,
+		VolumeConfirm: b.VolumeConfirm,
+		OIConfirm:     b.OIConfirm,
+	}
+	if sig.Derivatives != nil && sig.Derivatives.FundingAnnualizedPct != nil {
+		ok := *sig.Derivatives.FundingAnnualizedPct <= MarketExceptionMaxFundingAnnPct
+		p.FundingOK = &ok
+	}
+	if t4h := sig.Timeframes["4h"]; t4h != nil && t4h.EMAFast != nil && *t4h.EMAFast > 0 {
+		d := (data.CurrentPrice - *t4h.EMAFast) / *t4h.EMAFast * 100
+		p.EMA20Dist4hPct = &d
+	}
+	if opt.LongPullbackEntry && (b.Status == "confirmed" || b.Status == "retest_hold") &&
+		b.Level < data.CurrentPrice {
+		p.Active = true
+		p.Entry = b.Level
+		p.ChaseDistPct = (data.CurrentPrice - b.Level) / b.Level * 100
+	}
+	return p
+}
+
+// ema20Stretch4hPct: live price above the 4h EMA20 in %. Missing evidence →
+// 0 (the gate must not fire on absent data).
+func ema20Stretch4hPct(sig *SymbolSignal) float64 {
+	if sig.LongPullback != nil && sig.LongPullback.EMA20Dist4hPct != nil {
+		return *sig.LongPullback.EMA20Dist4hPct
+	}
+	if t4h := sig.Timeframes["4h"]; t4h != nil && t4h.EMAFast != nil && *t4h.EMAFast > 0 && sig.Price > 0 {
+		return (sig.Price - *t4h.EMAFast) / *t4h.EMAFast * 100
+	}
+	return 0
+}
+
+// btc4hShape aggregates the shared cached BTC 1h closes to 4h and reports
+// (a) the downtrend verdict — 4h EMA20 < EMA50 AND the last 4h close below
+// its EMA20 (the short scan's bull predicate, inverted) — and (b) BTC's 24h
+// return. known=false when the closes are too short for the EMA pair; the
+// degraded fallback (three consecutive declining 4h closes) keeps the filter
+// alive on short history.
+func btc4hShape(closes []float64) (down bool, ret24 float64, known bool) {
+	n := len(closes)
+	if n >= 210 {
+		var c4 []float64
+		for i := 3; i < n; i += 4 {
+			c4 = append(c4, closes[i])
+		}
+		if len(c4) >= 52 {
+			e20 := emaOf(c4, 20)
+			e50 := emaOf(c4, 50)
+			last := c4[len(c4)-1]
+			down = e20 < e50 && last < e20
+			ret24 = (last - c4[len(c4)-7]) / c4[len(c4)-7] * 100
+			return down, ret24, true
+		}
+	}
+	if n >= 26 {
+		var c4 []float64
+		for i := n - 4; i >= 0 && len(c4) < 3; i -= 4 {
+			c4 = append([]float64{closes[i]}, c4...)
+		}
+		if len(c4) == 3 {
+			return c4[2] < c4[1] && c4[1] < c4[0],
+				(closes[n-1] - closes[n-25]) / closes[n-25] * 100, true
+		}
+	}
+	return false, 0, false
+}
+
+// emaOf computes the EMA over a float slice (last value).
+func emaOf(vals []float64, n int) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	k := 2.0 / float64(n+1)
+	e := vals[0]
+	for _, v := range vals[1:] {
+		e = v*k + e*(1-k)
+	}
+	return e
+}
+
+// btcWeakLongCodes: the market-level BTC filter for altcoin LONGS (user
+// design 2026-10-01): BTC 4h must not be in a downtrend, and the coin must
+// be at least as strong as BTC over the last 24h. Missing data passes — a
+// data gap must not freeze every altcoin long.
+func btcWeakLongCodes(sig *SymbolSignal, opt SignalOptions) []string {
+	var codes []string
+	down, ret24, known := btc4hShape(opt.BtcTrendCloses)
+	if !known {
+		return codes
+	}
+	if down {
+		codes = append(codes, "BTC_4H_DOWNTREND")
+	}
+	if sig.Derivatives != nil && sig.Derivatives.PriceChange24hLivePct != nil {
+		coin24 := *sig.Derivatives.PriceChange24hLivePct
+		if coin24 < ret24 {
+			codes = append(codes, fmt.Sprintf("BTC_WEAK_LONG_%.1f_VS_%.1f", coin24, ret24))
+		}
+	}
+	return codes
+}
+
+// sentimentGreedy: the crypto Fear&Greed index reads at or above the
+// threshold (missing index → not greedy, no deweight). Lives engine-side —
+// ComputeSymbolSignals stays pure so the gates stay unit-testable.
+func sentimentGreedy(threshold int) bool {
+	if threshold <= 0 {
+		return false
+	}
+	if s := market.GetMarketSentiment(); s != nil {
+		return s.Crypto.Value >= threshold
+	}
+	return false
+}
+
+func directionScoreAtLeastScore(score int, isLong bool, min int) bool {
 	if isLong {
 		return score >= min
 	}
@@ -1531,6 +1723,18 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 	}
 	evaluate := func(isLong bool) *DirectionGate {
 		g := &DirectionGate{Failed: []string{}}
+		// Effective directional score for THIS side (user design 2026-10-01):
+		// while the crypto FNG reads at/above the greed threshold, a LONG
+		// carries a score penalty at every gate read (CONSENSUS_OPPOSED /
+		// NEG_EDGE_SCORE / breakout market exception) — the greed backdrop
+		// de-ranks chasing without blocking it outright.
+		effectiveScore := 0
+		if sig.SignalConflict != nil {
+			effectiveScore = sig.SignalConflict.DirectionalScore
+		}
+		if isLong && opt.SentimentLongDeweightPts > 0 && opt.SentimentLongDeweightArmed {
+			effectiveScore -= opt.SentimentLongDeweightPts
+		}
 		anchor := sig.LimitBuyPrice
 		if !isLong {
 			anchor = sig.LimitSellPrice
@@ -1576,14 +1780,35 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		// allowed=true / failed=[] with every path dead). The anchor is
 		// suppressed by the breathing rule regardless of the mode flag, and
 		// the executor's supply-zone gate rejects those fills too — block it.
-		if !g.LimitAllowed && !marketExceptionEvidence(sig, isLong) {
+		if !g.LimitAllowed && !marketExceptionEvidence(sig, isLong, effectiveScore) {
 			add("LIMIT_ANCHOR_SUPPRESSED")
 		}
 		// B1 (QUANT_REVIEW 2026-09-22): the market-order exception verdict is
 		// program-decided here and enforced at the trader's open dispatch —
 		// previously it existed only as prompt prose, so a market open without
 		// any exception evidence went straight to the exchange.
-		g.MarketException = marketExceptionEvidence(sig, isLong)
+		g.MarketException = marketExceptionEvidence(sig, isLong, effectiveScore)
+		// Long-side entry discipline (user design 2026-10-01):
+		// EMA20 stretch cap — a CHASE entry far above the 4h EMA20 is the
+		// exact "买强势" slice the 177-long attribution blamed (entries >5%
+		// above EMA20 net −8.55U; 0-2% −8.06U at 28% win). The retest-anchor
+		// path is EXEMPT: waiting at the broken level is the designed
+		// alternative, and by the time it fills the stretch has closed.
+		if isLong && opt.LongMaxEMA20DistPct > 0 &&
+			(sig.LongPullback == nil || !sig.LongPullback.Active) {
+			if d := ema20Stretch4hPct(sig); d > opt.LongMaxEMA20DistPct {
+				add(fmt.Sprintf("EMA20_STRETCH_%.1f_GT_%.0f", d, opt.LongMaxEMA20DistPct))
+			}
+		}
+		// BTC relative strength (market-level filter): BTC 4h must not be in
+		// a downtrend and the coin must be at least as strong as BTC over
+		// 24h — chasing laggards in a decaying market was the second long
+		// loss pool (deep-pullback knife catches, 39 trades −13.56U).
+		if isLong && opt.BTCFilterLong {
+			for _, code := range btcWeakLongCodes(sig, opt) {
+				add(code)
+			}
+		}
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
 			add(fmt.Sprintf("RR_MAX_%.2f", g.RR.BestRR))
 		}
@@ -1608,8 +1833,9 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		}
 		// 09-19 audit 六-③: opening AGAINST a ≥50 directional consensus is the
 		// counter-trend slice of the loss ledger — zero-cost, score-based.
+		// effectiveScore carries the sentiment deweight for longs.
 		if sig.SignalConflict != nil {
-			sc := sig.SignalConflict.DirectionalScore
+			sc := effectiveScore
 			if (isLong && sc <= -50) || (!isLong && sc >= 50) {
 				add(fmt.Sprintf("CONSENSUS_OPPOSED_%d", sc))
 			}
@@ -1620,10 +1846,9 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		// so the wait reason is citable and gate_shadow_blocks can calibrate
 		// the thresholds later.
 		if opt.NegativeEdge {
-			score := 0
-			if sig.SignalConflict != nil {
-				score = sig.SignalConflict.DirectionalScore
-			}
+			// effectiveScore carries the sentiment deweight for longs —
+			// greed raises the evidence bar for longs symmetrically.
+			score := effectiveScore
 			if opt.NegativeEdgeMinScore > 0 && math.Abs(float64(score)) < opt.NegativeEdgeMinScore {
 				add(fmt.Sprintf("NEG_EDGE_SCORE_%+d_LT_%.0f", score, opt.NegativeEdgeMinScore))
 			}
