@@ -319,3 +319,5 @@ func parseFloat(v interface{}) float64 {
 		return 0
 	}
 }
+
+func (t *IndodaxTrader) InvalidateAccountCache() { t.clearCache() }

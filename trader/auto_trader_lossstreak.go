@@ -59,7 +59,7 @@ func lossStreakState(positions []store.TraderPosition, maxLosses int, nowMs int6
 		if p.ExitTime <= 0 {
 			break
 		}
-		if p.RealizedPnL < 0 {
+		if p.RealizedPnL-p.Fee < 0 {
 			streak++
 			if streak >= maxLosses {
 				break

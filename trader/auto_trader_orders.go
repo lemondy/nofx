@@ -269,6 +269,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
+	entryID, _ := orderIDString(order)
+	at.markAIManaged(decision.Symbol, "long", entryID)
 	at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0)
 
 	fillPrice := orderFloat(order, "avgPrice")
@@ -309,7 +311,6 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// the previous trade's peak (stale peaks poison the drawdown monitors).
 	at.ClearPeakPnLCache(decision.Symbol, "long")
 
-	at.markAIManaged(decision.Symbol, "long")
 	slErr, tpErr := at.placeProtectiveOrders(decision, "LONG", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
 	// F01 (2026-10-01 review): a missing protective leg must never be
@@ -528,6 +529,8 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
+	entryID, _ := orderIDString(order)
+	at.markAIManaged(decision.Symbol, "short", entryID)
 	at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, marketData.CurrentPrice, decision.Leverage, 0)
 
 	// Record position opening time and stop-loss (drives the min-hold gate)
@@ -558,7 +561,6 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// Peak PnL is per-position state — see the open_long note above.
 	at.ClearPeakPnLCache(decision.Symbol, "short")
 
-	at.markAIManaged(decision.Symbol, "short")
 	slErr, tpErr := at.placeProtectiveOrders(decision, "SHORT", quantity, marketData.CurrentPrice, fillPrice)
 	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
 	// F01: same no-false-success contract as the long side above.
@@ -652,75 +654,76 @@ func orderIDString(m map[string]interface{}) (string, bool) {
 // retry after one leg's failure cannot stack duplicate stops on qty-sized
 // adapters (OKX/Bybit); Binance closePosition dedupes via the -4130 self-heal.
 func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) (slErr, tpErr error) {
-	// NOTE: callers pass FINAL (fill-reanchored) SL/TP — the reanchor used to
-	// live here, but it ran AFTER the recorded stop/1R-anchor were written,
-	// leaving memory on the pre-slippage plan while the exchange got the
-	// shifted one (2026-09-25 P2). Market paths reanchor explicitly before
-	// recording; pending/partial paths pre-anchor in protectExecutedSlice.
+	mode := decision.ExitMode
+	if mode == "" {
+		mode = kernel.ExitModeTrend
+	}
+	tpQty := quantity * tpFractionForMode(mode, at.effectiveTPCloseFraction())
 	if decision.StopLoss > 0 {
-		if protectiveLegAtPrice(at.trader, decision.Symbol, positionSide, "SL", decision.StopLoss) {
-			logger.Infof("  ℹ️ SL leg already resting at %.6g for %s %s — placement skipped (retry-safe)", decision.StopLoss, decision.Symbol, positionSide)
-		} else if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
-			slErr = err
-			logger.Infof("  ⚠ Failed to set stop loss for %s: %v", decision.Symbol, err)
-			notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ %s 止损单设置失败</b>\n<code>%s</code>\n该仓位当前没有交易所止损保护，请人工关注！", notify.Escape(decision.Symbol), notify.Escape(err.Error())))
-		}
-	} else {
-		logger.Infof("  ⚠ AI decision for %s has no stop_loss, exchange stop not placed", decision.Symbol)
+		slErr = ensureProtectiveCoverage(at.trader, decision.Symbol, positionSide, "SL", decision.StopLoss, quantity)
 	}
 	if decision.TakeProfit > 0 {
-		// Split TP (09-21 user experiment): the algo closes only
-		// tp_close_fraction of the position at the structure level; the
-		// remainder stays on as a trend-runner under the trailing stop.
-		// Collapsed to a full close when trailing is disabled — a runner
-		// without a ratchet just gives the move back.
-		//
-		// Exit-mode menu (user directive 09-29): only the TREND template runs
-		// a runner. range/quick chose "the target IS the exit" — their TP
-		// closes the FULL position at the chosen menu level.
-		//
-		// tpQty keeps the legacy contract (full quantity — adapters size
-		// their TP order by it) whenever the split is off.
-		mode := decision.ExitMode
-		if mode == "" {
-			mode = kernel.ExitModeTrend
-		}
-		tpQty := quantity
-		frac := tpFractionForMode(mode, at.effectiveTPCloseFraction())
-		split := frac < 1.0
-		runnerKey := decision.Symbol + "_" + strings.ToLower(positionSide)
-		if split {
-			tpQty = quantity * frac
-			logger.Infof("  🏃 %s split TP: algo closes %.0f%% (%.6g) at %.6g — remainder trails", decision.Symbol, frac*100, tpQty, decision.TakeProfit)
-		}
-		if protectiveLegAtPrice(at.trader, decision.Symbol, positionSide, "TP", decision.TakeProfit) {
-			if split {
-				// The remainder is already a runner: the protection watchdog
-				// must NOT re-place a full TP over it (the same flag also
-				// marks the legacy TP-runner conversion).
-				at.markTPRunner(runnerKey)
-			}
-			logger.Infof("  ℹ️ TP leg already resting at %.6g for %s %s — placement skipped (retry-safe)", decision.TakeProfit, decision.Symbol, positionSide)
-		} else if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, tpQty, decision.TakeProfit); err != nil {
-			tpErr = err
-			logger.Infof("  ⚠ Failed to set take profit for %s: %v", decision.Symbol, err)
-		} else if split {
-			// F01d (2026-10-01 review): mark ONLY after the split TP actually
-			// rests — the old pre-success mark made the watchdog's
-			// !tpRunnerDone guard skip the repair of a leg that never placed.
-			at.markTPRunner(runnerKey)
-		}
-		side := strings.ToLower(positionSide)
-		at.recordOpenTakeProfit(decision.Symbol, side, decision.TakeProfit)
+		tpErr = ensureProtectiveCoverage(at.trader, decision.Symbol, positionSide, "TP", decision.TakeProfit, tpQty)
 	}
+	verifiedSL, verifiedTP := at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, decision.TakeProfit > 0, quantity, tpQty)
+	if slErr == nil {
+		slErr = verifiedSL
+	}
+	if tpErr == nil {
+		tpErr = verifiedTP
+	}
+	if tpErr == nil && decision.TakeProfit > 0 {
+		if tpQty < quantity {
+			at.markTPRunner(decision.Symbol + "_" + strings.ToLower(positionSide))
+		}
+		at.recordOpenTakeProfit(decision.Symbol, strings.ToLower(positionSide), decision.TakeProfit)
+	}
+	return
+}
 
-	// MANDATORY post-open verification (09-22 lesson): placement APIs can
-	// succeed while the leg never rests (the -1106 reduceOnly rejection left
-	// every split-TP position SL-only behind a single log line). Re-query the
-	// exchange and confirm each intended leg is actually there — escalate to
-	// ALERT when it is not, so a missing leg can never again be silent.
-	at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, decision.TakeProfit > 0)
-	return slErr, tpErr
+func protectiveOrderMatches(o types.OpenOrder, side, kind string, price float64) bool {
+	typ := strings.ToUpper(o.Type)
+	match := strings.Contains(typ, "TAKE_PROFIT")
+	if kind == "SL" {
+		match = strings.Contains(typ, "STOP") && !strings.Contains(typ, "TAKE_PROFIT")
+	}
+	matchesSide := strings.EqualFold(o.PositionSide, side)
+	if o.PositionSide == "" || strings.EqualFold(o.PositionSide, "BOTH") {
+		matchesSide = o.Side == "" || (strings.EqualFold(side, "LONG") && strings.EqualFold(o.Side, "SELL")) || (strings.EqualFold(side, "SHORT") && strings.EqualFold(o.Side, "BUY"))
+	}
+	return match && matchesSide && o.StopPrice > 0 && math.Abs(o.StopPrice-price)/price < 0.001
+}
+
+func protectiveCoverage(orders []types.OpenOrder, side, kind string, price float64) float64 {
+	qty := 0.0
+	for _, o := range orders {
+		if !protectiveOrderMatches(o, side, kind, price) {
+			continue
+		}
+		if o.ClosePosition {
+			return math.Inf(1)
+		}
+		qty += math.Max(0, o.Quantity)
+	}
+	return qty
+}
+
+func ensureProtectiveCoverage(t Trader, symbol, side, kind string, price, quantity float64) error {
+	if price <= 0 || quantity <= 0 {
+		return fmt.Errorf("invalid %s protection price/quantity", kind)
+	}
+	orders, err := t.GetOpenOrders(symbol)
+	if err != nil {
+		return fmt.Errorf("%s coverage unknown: %w", kind, err)
+	}
+	missing := quantity - protectiveCoverage(orders, side, kind, price)
+	if missing <= math.Max(1e-9, quantity*1e-6) {
+		return nil
+	}
+	if kind == "SL" {
+		return t.SetStopLoss(symbol, side, missing, price)
+	}
+	return t.SetTakeProfit(symbol, side, missing, price)
 }
 
 // protectiveLegAtPrice reports whether a protective leg (kind "SL"/"TP") for
@@ -778,30 +781,51 @@ func missingLegsReport(orders []types.OpenOrder, positionSide string, wantSL, wa
 // placement pass. One retry after a short delay rides out read-after-write
 // lag without masking a real rejection; a still-missing leg is an ALERT —
 // the position is running unprotected or without its profit leg.
-func (at *AutoTrader) verifyProtectiveLegs(decision *kernel.Decision, positionSide string, wantSL, wantTP bool) {
-	if !wantSL && !wantTP {
-		return // no leg was intended — nothing to verify
-	}
-	report := ""
+func (at *AutoTrader) verifyProtectiveLegs(decision *kernel.Decision, positionSide string, wantSL, wantTP bool, quantities ...float64) (slErr, tpErr error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
-			time.Sleep(2 * time.Second)
+			time.Sleep(200 * time.Millisecond)
 		}
+		slErr, tpErr = nil, nil
 		orders, err := at.trader.GetOpenOrders(decision.Symbol)
 		if err != nil {
-			report = fmt.Sprintf("open-orders query failed: %v", err)
+			if wantSL {
+				slErr = err
+			}
+			if wantTP {
+				tpErr = err
+			}
 			continue
 		}
-		report = missingLegsReport(orders, positionSide, wantSL, wantTP)
-		if report == "" {
-			logger.Infof("  ✅ [%s] protective legs verified on exchange: %s %s", at.name, decision.Symbol, positionSide)
+		if len(quantities) >= 2 {
+			if wantSL && protectiveCoverage(orders, positionSide, "SL", decision.StopLoss)+math.Max(1e-9, quantities[0]*1e-6) < quantities[0] {
+				slErr = fmt.Errorf("SL coverage unconfirmed")
+			}
+			if wantTP && protectiveCoverage(orders, positionSide, "TP", decision.TakeProfit)+math.Max(1e-9, quantities[1]*1e-6) < quantities[1] {
+				tpErr = fmt.Errorf("TP coverage unconfirmed")
+			}
+		} else {
+			missing := missingLegsReport(orders, positionSide, wantSL, wantTP)
+			if strings.Contains(missing, "SL") {
+				slErr = fmt.Errorf("SL missing")
+			}
+			if strings.Contains(missing, "TP") {
+				tpErr = fmt.Errorf("TP missing")
+			}
+		}
+		if slErr == nil && tpErr == nil {
 			return
 		}
 	}
-	logger.Infof("  🚨 [%s] protective leg verification FAILED: %s %s missing %s", at.name, decision.Symbol, positionSide, report)
-	notify.Notify("ALERT", at.name, fmt.Sprintf(
-		"<b>🚨 %s %s 保护单核验失败</b>\n<i>开仓后交易所挂单核验(已重试): <b>%s</b> 腿缺失——仓位可能在无止损/无止盈状态运行,请立即人工核查!</i>",
-		notify.Escape(decision.Symbol), positionSide, report))
+	// 2026-10-03 review P2 (cosmetic): a nil leg error printed "TP: <nil>".
+	legText := func(name string, err error) string {
+		if err == nil {
+			return name + ": OK"
+		}
+		return fmt.Sprintf("%s: %v", name, err)
+	}
+	notify.Notify("ALERT", at.name, fmt.Sprintf("<b>保护核验未完成 %s %s</b>\n%s / %s — 恢复任务保留", notify.Escape(decision.Symbol), positionSide, legText("SL", slErr), legText("TP", tpErr)))
+	return
 }
 
 // effectiveTPCloseFraction resolves the split-TP fraction for this trader:

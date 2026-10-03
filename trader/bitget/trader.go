@@ -327,3 +327,5 @@ func genBitgetClientOid() string {
 	rand := time.Now().Nanosecond() % 100000
 	return fmt.Sprintf("nofx%d%05d", timestamp, rand)
 }
+
+func (t *BitgetTrader) InvalidateAccountCache() { t.clearCache() }

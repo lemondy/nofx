@@ -89,21 +89,12 @@ func (at *AutoTrader) executeBreakoutAction(action BreakoutAction) error {
 	case BreakoutActionPauseGrid:
 		// Mid box breakout: pause grid + cancel orders
 		logger.Infof("Mid box breakout confirmed, pausing grid and canceling orders")
-		at.gridState.mu.Lock()
-		at.gridState.IsPaused = true
-		at.gridState.mu.Unlock()
-		return at.cancelAllGridOrders()
+		return at.pauseGrid("breakout")
 
 	case BreakoutActionCloseAll:
 		// Long box breakout: pause + cancel + close all
 		logger.Infof("Long box breakout confirmed, closing all positions")
-		at.gridState.mu.Lock()
-		at.gridState.IsPaused = true
-		at.gridState.mu.Unlock()
-		if err := at.cancelAllGridOrders(); err != nil {
-			logger.Infof("Failed to cancel orders: %v", err)
-		}
-		return at.closeAllPositions()
+		return at.emergencyExit("breakout")
 
 	case BreakoutActionAdjustDirection:
 		// Direction adjustment is handled separately via executeDirectionAdjustment
@@ -175,9 +166,13 @@ func (at *AutoTrader) checkFalseBreakoutRecovery() error {
 	at.gridState.mu.RLock()
 	breakoutLevel := at.gridState.BreakoutLevel
 	isPaused := at.gridState.IsPaused
+	pauseReason := at.gridState.PauseReason
 	positionReduction := at.gridState.PositionReductionPct
 	currentDirection := at.gridState.CurrentDirection
 	at.gridState.mu.RUnlock()
+	if isPaused && pauseReason != "breakout" {
+		return nil
+	}
 
 	// Only check if we had a breakout or non-neutral direction
 	needsRecoveryCheck := breakoutLevel != string(market.BreakoutNone) ||
@@ -205,6 +200,7 @@ func (at *AutoTrader) checkFalseBreakoutRecovery() error {
 		at.gridState.BreakoutConfirmCount = 0
 		at.gridState.PositionReductionPct = 50 // Recover at 50%
 		at.gridState.IsPaused = false
+		at.gridState.PauseReason = ""
 		at.gridState.mu.Unlock()
 	}
 

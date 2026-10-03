@@ -263,19 +263,24 @@ func (at *AutoTrader) autoAdjustGrid() {
 	// Cancel existing orders first (before taking the lock for state modification)
 	if err := at.cancelAllGridOrders(); err != nil {
 		logger.Errorf("[Grid] Failed to cancel orders during auto-adjust: %v", err)
-		// Continue with adjustment anyway
+		return // retain the existing ledger until all cancellations are reconciled
 	}
 
 	// CRITICAL FIX: Hold lock for the entire adjustment operation to ensure atomicity
+	defer at.persistGridLedger()
 	at.gridState.mu.Lock()
 	defer at.gridState.mu.Unlock()
 
 	// Preserve filled positions before reinitializing
 	filledPositions := make(map[int]kernel.GridLevelInfo)
 	for i, level := range at.gridState.Levels {
-		if level.State == "filled" {
+		if level.PositionSize > 0 {
 			filledPositions[i] = level
 		}
+	}
+	if len(filledPositions) > gridConfig.GridCount {
+		logger.Errorf("[Grid] Cannot shrink grid below the number of open lots")
+		return
 	}
 
 	// CRITICAL FIX: Recalculate grid bounds centered on current price
@@ -304,11 +309,15 @@ func (at *AutoTrader) autoAdjustGrid() {
 	at.initializeGridLevelsLocked(currentPrice, gridConfig)
 
 	// CRITICAL FIX: Restore filled positions - find closest new level for each filled position
+	restored := map[int]bool{}
 	for _, filledLevel := range filledPositions {
 		closestIdx := -1
 		closestDist := math.MaxFloat64
 
 		for i, newLevel := range at.gridState.Levels {
+			if restored[i] {
+				continue
+			}
 			dist := math.Abs(newLevel.Price - filledLevel.PositionEntry)
 			if dist < closestDist {
 				closestDist = dist
@@ -317,14 +326,9 @@ func (at *AutoTrader) autoAdjustGrid() {
 		}
 
 		if closestIdx >= 0 {
-			// Restore the filled state to the closest level
-			at.gridState.Levels[closestIdx].State = "filled"
-			at.gridState.Levels[closestIdx].PositionEntry = filledLevel.PositionEntry
-			at.gridState.Levels[closestIdx].PositionSize = filledLevel.PositionSize
-			at.gridState.Levels[closestIdx].UnrealizedPnL = filledLevel.UnrealizedPnL
-			at.gridState.Levels[closestIdx].OrderID = filledLevel.OrderID
-			at.gridState.Levels[closestIdx].OrderQuantity = filledLevel.OrderQuantity
-			logger.Infof("[Grid] Restored filled position at level %d (entry $%.2f)", closestIdx, filledLevel.PositionEntry)
+			restored[closestIdx] = true
+			filledLevel.Index = closestIdx
+			at.gridState.Levels[closestIdx] = filledLevel
 		}
 	}
 }

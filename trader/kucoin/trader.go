@@ -372,3 +372,12 @@ func (t *KuCoinTrader) quantityToLots(symbol string, quantity float64) (int64, e
 
 	return lotsInt, nil
 }
+
+func (t *KuCoinTrader) InvalidateAccountCache() {
+	t.balanceCacheMutex.Lock()
+	t.cachedBalance = nil
+	t.balanceCacheMutex.Unlock()
+	t.positionsCacheMutex.Lock()
+	t.cachedPositions = nil
+	t.positionsCacheMutex.Unlock()
+}

@@ -17,6 +17,7 @@ import (
 
 // OpenLong opens a long position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	var placement map[string]interface{}
 	// First cancel all pending orders for this coin
 	if err := t.CancelAllOrders(symbol); err != nil {
 		logger.Infof("  ⚠ Failed to cancel old pending orders: %v", err)
@@ -50,7 +51,8 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 	// Handle xyz dex assets differently
 	if isXyz {
 		// xyz dex order
-		if err := t.placeXyzOrder(coin, true, quantity, aggressivePrice, false); err != nil {
+		placement, err = t.placeXyzOrder(coin, true, quantity, aggressivePrice, false)
+		if err != nil {
 			return nil, fmt.Errorf("failed to open long position on xyz dex: %w", err)
 		}
 	} else {
@@ -71,24 +73,26 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 			ReduceOnly: false,
 		}
 
-		_, err = t.exchange.Order(t.ctx, order, defaultBuilder)
+		response, placementErr := t.exchange.Order(t.ctx, order, defaultBuilder)
+		err = placementErr
 		if err != nil {
 			return nil, fmt.Errorf("failed to open long position: %w", err)
+		}
+		placement, err = hyperliquidOrderReceipt(response)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	logger.Infof("✓ Long position opened successfully: %s quantity: %.4f", symbol, quantity)
 
-	result := make(map[string]interface{})
-	result["orderId"] = 0
-	result["symbol"] = symbol
-	result["status"] = "FILLED"
-
-	return result, nil
+	placement["symbol"] = symbol
+	return placement, nil
 }
 
 // OpenShort opens a short position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	var placement map[string]interface{}
 	// First cancel all pending orders for this coin
 	if err := t.CancelAllOrders(symbol); err != nil {
 		logger.Infof("  ⚠ Failed to cancel old pending orders: %v", err)
@@ -122,7 +126,8 @@ func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage 
 	// Handle xyz dex assets differently
 	if isXyz {
 		// xyz dex order
-		if err := t.placeXyzOrder(coin, false, quantity, aggressivePrice, false); err != nil {
+		placement, err = t.placeXyzOrder(coin, false, quantity, aggressivePrice, false)
+		if err != nil {
 			return nil, fmt.Errorf("failed to open short position on xyz dex: %w", err)
 		}
 	} else {
@@ -143,24 +148,26 @@ func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage 
 			ReduceOnly: false,
 		}
 
-		_, err = t.exchange.Order(t.ctx, order, defaultBuilder)
+		response, placementErr := t.exchange.Order(t.ctx, order, defaultBuilder)
+		err = placementErr
 		if err != nil {
 			return nil, fmt.Errorf("failed to open short position: %w", err)
+		}
+		placement, err = hyperliquidOrderReceipt(response)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	logger.Infof("✓ Short position opened successfully: %s quantity: %.4f", symbol, quantity)
 
-	result := make(map[string]interface{})
-	result["orderId"] = 0
-	result["symbol"] = symbol
-	result["status"] = "FILLED"
-
-	return result, nil
+	placement["symbol"] = symbol
+	return placement, nil
 }
 
 // CloseLong closes a long position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	var placement map[string]interface{}
 	// Hyperliquid symbol format
 	coin := convertSymbolToHyperliquid(symbol)
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -204,7 +211,8 @@ func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[stri
 	// Handle xyz dex assets differently
 	if isXyz {
 		// xyz dex close order
-		if err := t.placeXyzOrder(coin, false, quantity, aggressivePrice, true); err != nil {
+		placement, err = t.placeXyzOrder(coin, false, quantity, aggressivePrice, true)
+		if err != nil {
 			return nil, fmt.Errorf("failed to close long position on xyz dex: %w", err)
 		}
 	} else {
@@ -225,9 +233,14 @@ func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[stri
 			ReduceOnly: true,
 		}
 
-		_, err = t.exchange.Order(t.ctx, order, defaultBuilder)
+		response, placementErr := t.exchange.Order(t.ctx, order, defaultBuilder)
+		err = placementErr
 		if err != nil {
 			return nil, fmt.Errorf("failed to close long position: %w", err)
+		}
+		placement, err = hyperliquidOrderReceipt(response)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -238,16 +251,13 @@ func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[stri
 		logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
 	}
 
-	result := make(map[string]interface{})
-	result["orderId"] = 0
-	result["symbol"] = symbol
-	result["status"] = "FILLED"
-
-	return result, nil
+	placement["symbol"] = symbol
+	return placement, nil
 }
 
 // CloseShort closes a short position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	var placement map[string]interface{}
 	// Hyperliquid symbol format
 	coin := convertSymbolToHyperliquid(symbol)
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -291,7 +301,8 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 	// Handle xyz dex assets differently
 	if isXyz {
 		// xyz dex close order
-		if err := t.placeXyzOrder(coin, true, quantity, aggressivePrice, true); err != nil {
+		placement, err = t.placeXyzOrder(coin, true, quantity, aggressivePrice, true)
+		if err != nil {
 			return nil, fmt.Errorf("failed to close short position on xyz dex: %w", err)
 		}
 	} else {
@@ -312,9 +323,14 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 			ReduceOnly: true,
 		}
 
-		_, err = t.exchange.Order(t.ctx, order, defaultBuilder)
+		response, placementErr := t.exchange.Order(t.ctx, order, defaultBuilder)
+		err = placementErr
 		if err != nil {
 			return nil, fmt.Errorf("failed to close short position: %w", err)
+		}
+		placement, err = hyperliquidOrderReceipt(response)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -325,12 +341,8 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 		logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
 	}
 
-	result := make(map[string]interface{})
-	result["orderId"] = 0
-	result["symbol"] = symbol
-	result["status"] = "FILLED"
-
-	return result, nil
+	placement["symbol"] = symbol
+	return placement, nil
 }
 
 // CancelStopLossOrders only cancels stop loss orders (Hyperliquid cannot distinguish stop loss and take profit, cancel all)
@@ -581,7 +593,7 @@ func floatToWireStr(x float64) string {
 // Note: xyz dex orders use builder-deployed perpetuals and require different handling
 // xyz dex asset indices start from 10000 (10000 + meta_index)
 // This implementation bypasses the SDK's NameToAsset lookup and directly constructs the order
-func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64, price float64, reduceOnly bool) error {
+func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64, price float64, reduceOnly bool) (map[string]interface{}, error) {
 	// Fetch xyz meta if not cached
 	t.xyzMetaMutex.RLock()
 	hasMeta := t.xyzMeta != nil
@@ -589,14 +601,14 @@ func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64,
 
 	if !hasMeta {
 		if err := t.fetchXyzMeta(); err != nil {
-			return fmt.Errorf("failed to fetch xyz meta: %w", err)
+			return nil, fmt.Errorf("failed to fetch xyz meta: %w", err)
 		}
 	}
 
 	// Get asset index from xyz meta (returns 0-based index)
 	metaIndex := t.getXyzAssetIndex(coin)
 	if metaIndex < 0 {
-		return fmt.Errorf("xyz asset %s not found in meta", coin)
+		return nil, fmt.Errorf("xyz asset %s not found in meta", coin)
 	}
 
 	// HIP-3 perp dex asset index formula: 100000 + perp_dex_index * 10000 + index_in_meta
@@ -649,7 +661,7 @@ func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64,
 
 	sig, err := hyperliquid.SignL1Action(t.privateKey, action, vaultAddress, nonce, nil, isMainnet)
 	if err != nil {
-		return fmt.Errorf("failed to sign xyz dex order: %w", err)
+		return nil, fmt.Errorf("failed to sign xyz dex order: %w", err)
 	}
 
 	// Construct payload for /exchange endpoint
@@ -668,27 +680,27 @@ func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64,
 	// POST to /exchange
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
 	logger.Infof("📤 Sending xyz dex order to %s/exchange", apiURL)
 
 	req, err := http.NewRequestWithContext(t.ctx, http.MethodPost, apiURL+"/exchange", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := security.ReadResponseBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	// Parse response
@@ -697,17 +709,7 @@ func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64,
 		Response struct {
 			Type string `json:"type"`
 			Data struct {
-				Statuses []struct {
-					Resting *struct {
-						Oid int64 `json:"oid"`
-					} `json:"resting,omitempty"`
-					Filled *struct {
-						TotalSz string `json:"totalSz"`
-						AvgPx   string `json:"avgPx"`
-						Oid     int    `json:"oid"`
-					} `json:"filled,omitempty"`
-					Error *string `json:"error,omitempty"`
-				} `json:"statuses"`
+				Statuses []hyperliquid.OrderStatus `json:"statuses"`
 			} `json:"data"`
 		} `json:"response"`
 	}
@@ -715,30 +717,18 @@ func (t *HyperliquidTrader) placeXyzOrder(coin string, isBuy bool, size float64,
 	if err := json.Unmarshal(body, &result); err != nil {
 		// Try to parse as error response
 		logger.Infof("⚠️  Failed to parse response as success, raw body: %s", string(body))
-		return fmt.Errorf("xyz dex order failed, status=%d, body=%s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("xyz dex order failed, status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
 	// Check for errors in response
 	if result.Status != "ok" {
-		return fmt.Errorf("xyz dex order failed: status=%s, body=%s", result.Status, string(body))
+		return nil, fmt.Errorf("xyz dex order failed: status=%s, body=%s", result.Status, string(body))
 	}
 
-	// Check order statuses
-	if len(result.Response.Data.Statuses) > 0 {
-		status := result.Response.Data.Statuses[0]
-		if status.Error != nil {
-			return fmt.Errorf("xyz dex order error (coin=%s, assetIndex=%d, size=%.4f, price=%.4f): %s", coin, assetIndex, roundedSize, roundedPrice, *status.Error)
-		}
-		if status.Filled != nil {
-			logger.Infof("✅ xyz dex order filled: totalSz=%s avgPx=%s oid=%d",
-				status.Filled.TotalSz, status.Filled.AvgPx, status.Filled.Oid)
-		} else if status.Resting != nil {
-			logger.Infof("✅ xyz dex order resting: oid=%d", status.Resting.Oid)
-		}
+	if len(result.Response.Data.Statuses) == 0 {
+		return nil, fmt.Errorf("xyz order has no receipt")
 	}
-
-	logger.Infof("✅ xyz dex order placed successfully: %s (response: %s)", coin, string(body))
-	return nil
+	return hyperliquidOrderReceipt(result.Response.Data.Statuses[0])
 }
 
 // placeXyzTriggerOrder places a trigger order (stop loss / take profit) on the xyz dex
@@ -1007,6 +997,9 @@ func (t *HyperliquidTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*type
 
 	// Round quantity to allowed decimals
 	roundedQuantity := t.roundToSzDecimals(coin, req.Quantity)
+	if roundedQuantity <= 0 {
+		return nil, fmt.Errorf("grid quantity below exchange minimum")
+	}
 
 	// Round price to 5 significant figures
 	roundedPrice := t.roundPriceToSigfigs(req.Price)
@@ -1029,15 +1022,17 @@ func (t *HyperliquidTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*type
 		ReduceOnly: req.ReduceOnly,
 	}
 
-	_, err := t.exchange.Order(t.ctx, order, defaultBuilder)
+	response, err := t.exchange.Order(t.ctx, order, defaultBuilder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to place limit order: %w", err)
 	}
 
-	// Note: Hyperliquid's Order response doesn't return the order ID directly
-	// We would need to query open orders to get it, but for grid trading
-	// we can track orders by price level instead
-	orderID := fmt.Sprintf("%d", time.Now().UnixNano())
+	receipt, err := hyperliquidOrderReceipt(response)
+	if err != nil {
+		return nil, err
+	}
+	orderID := fmt.Sprint(receipt["orderId"])
+	status, _ := receipt["status"].(string)
 
 	logger.Infof("✓ [Hyperliquid] Limit order placed: %s %s @ %.4f",
 		coin, req.Side, roundedPrice)
@@ -1050,7 +1045,7 @@ func (t *HyperliquidTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*type
 		PositionSide: req.PositionSide,
 		Price:        roundedPrice,
 		Quantity:     roundedQuantity,
-		Status:       "NEW",
+		Status:       status,
 	}, nil
 }
 
@@ -1072,4 +1067,22 @@ func (t *HyperliquidTrader) CancelOrder(symbol, orderID string) error {
 
 	logger.Infof("✓ [Hyperliquid] Order cancelled: %s %s", symbol, orderID)
 	return nil
+}
+
+func hyperliquidOrderReceipt(status hyperliquid.OrderStatus) (map[string]interface{}, error) {
+	if status.Error != nil {
+		return nil, fmt.Errorf("exchange order rejected: %s", *status.Error)
+	}
+	if status.Filled != nil {
+		qty, e1 := strconv.ParseFloat(status.Filled.TotalSz, 64)
+		avg, e2 := strconv.ParseFloat(status.Filled.AvgPx, 64)
+		if e1 != nil || e2 != nil || qty <= 0 || avg <= 0 || status.Filled.Oid <= 0 {
+			return nil, fmt.Errorf("filled order receipt incomplete")
+		}
+		return map[string]interface{}{"orderId": int64(status.Filled.Oid), "status": "FILLED", "executedQty": qty, "avgPrice": avg}, nil
+	}
+	if status.Resting != nil && status.Resting.Oid > 0 {
+		return map[string]interface{}{"orderId": status.Resting.Oid, "status": "NEW", "executedQty": 0.0, "avgPrice": 0.0}, nil
+	}
+	return nil, fmt.Errorf("exchange order receipt unknown")
 }

@@ -316,3 +316,12 @@ func (t *OKXTrader) formatSize(sz float64, inst *OKXInstrument) string {
 	format := fmt.Sprintf("%%.%df", precision)
 	return fmt.Sprintf(format, sz)
 }
+
+func (t *OKXTrader) InvalidateAccountCache() {
+	t.balanceCacheMutex.Lock()
+	t.cachedBalance = nil
+	t.balanceCacheMutex.Unlock()
+	t.positionsCacheMutex.Lock()
+	t.cachedPositions = nil
+	t.positionsCacheMutex.Unlock()
+}

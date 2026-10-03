@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"nofx/kernel"
@@ -23,31 +24,49 @@ func (at *AutoTrader) checkTotalPositionLimit(symbol string, additionalValue flo
 	maxTotalPositionValue := gridConfig.TotalInvestment * float64(gridConfig.Leverage)
 
 	// Get current position value from exchange
+	if cache, ok := at.trader.(interface{ InvalidateAccountCache() }); ok {
+		cache.InvalidateAccountCache()
+	}
 	currentPositionValue := 0.0
 	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			if sym, ok := pos["symbol"].(string); ok && sym == symbol {
-				if size, ok := pos["positionAmt"].(float64); ok {
-					if price, ok := pos["markPrice"].(float64); ok {
-						currentPositionValue = math.Abs(size) * price
-					} else if entryPrice, ok := pos["entryPrice"].(float64); ok {
-						currentPositionValue = math.Abs(size) * entryPrice
-					}
-				}
-			}
+	if err != nil {
+		return false, 0, maxTotalPositionValue
+	}
+	for _, pos := range positions {
+		sym, ok := pos["symbol"].(string)
+		if !ok {
+			return false, math.Inf(1), maxTotalPositionValue
 		}
+		if sym != symbol {
+			continue
+		}
+		size, ok := pos["positionAmt"].(float64)
+		if !ok || math.IsNaN(size) || math.IsInf(size, 0) {
+			return false, math.Inf(1), maxTotalPositionValue
+		}
+		if size == 0 {
+			continue
+		}
+		price, ok := pos["markPrice"].(float64)
+		if !ok || price <= 0 {
+			price, ok = pos["entryPrice"].(float64)
+		}
+		if !ok || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+			return false, math.Inf(1), maxTotalPositionValue
+		}
+		currentPositionValue += math.Abs(size) * price
 	}
 
-	// Also count pending orders as potential position
-	at.gridState.mu.RLock()
+	// Include every trader's resting entry on the same account and symbol.
 	pendingValue := 0.0
-	for _, level := range at.gridState.Levels {
-		if level.State == "pending" {
-			pendingValue += level.OrderQuantity * level.Price
+	for key, pe := range at.accountPendingEntries() {
+		if key == "unknown" {
+			return false, math.Inf(1), maxTotalPositionValue
+		}
+		if pe != nil && pe.Symbol == symbol {
+			pendingValue += math.Max(0, pe.Quantity-pe.ProtectedQty) * pe.Price
 		}
 	}
-	at.gridState.mu.RUnlock()
 
 	totalAfterOrder := currentPositionValue + pendingValue + additionalValue
 	allowed := totalAfterOrder <= maxTotalPositionValue
@@ -90,6 +109,19 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 	}
 
 	gridConfig := at.config.StrategyConfig.GridConfig
+	if d.Symbol != gridConfig.Symbol || d.Price <= 0 || d.Quantity <= 0 || d.LevelIndex < 0 || d.LevelIndex >= len(at.gridState.Levels) {
+		return fmt.Errorf("invalid grid entry")
+	}
+	at.gridState.mu.RLock()
+	level := at.gridState.Levels[d.LevelIndex]
+	paused := at.gridState.IsPaused
+	at.gridState.mu.RUnlock()
+	if paused || level.State == "pending" || level.PositionSize > 0 || level.ExitOrderID != "" {
+		return fmt.Errorf("grid level unavailable for new entry")
+	}
+	if err := at.persistGridLedger(); err != nil {
+		return err
+	}
 
 	// CRITICAL: Validate and cap quantity to prevent excessive position sizes
 	// This protects against AI miscalculations or leverage misconfigurations
@@ -144,6 +176,18 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 		return fmt.Errorf("total position value $%.2f would exceed limit $%.2f", currentValue+orderValue, maxValue)
 	}
 
+	balance, err := at.trader.GetBalance()
+	if err != nil || gridAccountEquity(balance) <= 0 {
+		return fmt.Errorf("grid account equity unknown: %v", err)
+	}
+	positionSide := "long"
+	if strings.EqualFold(side, "SELL") {
+		positionSide = "short"
+	}
+	if blocked, reason := at.marginBudgetBlocksOpen(d.Symbol, positionSide, orderValue, float64(gridConfig.Leverage), gridAccountEquity(balance)); blocked {
+		return fmt.Errorf("grid %s", reason)
+	}
+
 	req := &LimitOrderRequest{
 		Symbol:     d.Symbol,
 		Side:       side,
@@ -164,15 +208,26 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 	at.gridState.mu.Lock()
 	if d.LevelIndex >= 0 && d.LevelIndex < len(at.gridState.Levels) {
 		at.gridState.Levels[d.LevelIndex].State = "pending"
+		at.gridState.Levels[d.LevelIndex].Side = strings.ToLower(side)
 		at.gridState.Levels[d.LevelIndex].OrderID = result.OrderID
 		// F13 (2026-10-01 review): record the VALIDATED/capped quantity the
 		// exchange actually received — the raw AI quantity diverged whenever
 		// the cap fired and corrupted the fill inference baseline.
-		at.gridState.Levels[d.LevelIndex].OrderQuantity = quantity
+		at.gridState.Levels[d.LevelIndex].OrderQuantity = result.Quantity
+		if result.Quantity <= 0 {
+			at.gridState.Levels[d.LevelIndex].OrderQuantity = quantity
+		}
+		at.gridState.Levels[d.LevelIndex].ExecutedQuantity = 0
+		if result.Price > 0 {
+			at.gridState.Levels[d.LevelIndex].Price = result.Price
+		}
 		at.gridState.OrderBook[result.OrderID] = d.LevelIndex
 	}
 	at.gridState.mu.Unlock()
 
+	if err := at.persistGridLedger(); err != nil {
+		return fmt.Errorf("grid entry %s placed but recovery ledger failed: %w", result.OrderID, err)
+	}
 	logger.Infof("[Grid] Placed %s limit order at $%.2f, qty=%.4f, level=%d, orderID=%s",
 		side, d.Price, quantity, d.LevelIndex, result.OrderID)
 
@@ -181,81 +236,95 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 
 // cancelGridOrder cancels a specific grid order
 func (at *AutoTrader) cancelGridOrder(d *kernel.Decision) error {
-	gridTrader, ok := at.trader.(GridTrader)
-	if !ok {
-		gridTrader = NewGridTraderAdapter(at.trader)
+	if at.gridState == nil {
+		return fmt.Errorf("grid state missing")
 	}
-
-	if err := gridTrader.CancelOrder(d.Symbol, d.OrderID); err != nil {
-		return fmt.Errorf("failed to cancel order: %w", err)
-	}
-
-	// Update state
-	at.gridState.mu.Lock()
-	if levelIdx, ok := at.gridState.OrderBook[d.OrderID]; ok {
-		if levelIdx >= 0 && levelIdx < len(at.gridState.Levels) {
-			at.gridState.Levels[levelIdx].State = "empty"
-			at.gridState.Levels[levelIdx].OrderID = ""
-			at.gridState.Levels[levelIdx].OrderQuantity = 0
+	at.gridState.mu.RLock()
+	owned := false
+	for _, level := range at.gridState.Levels {
+		if level.OrderID == d.OrderID && level.State == "pending" && d.Symbol == at.config.StrategyConfig.GridConfig.Symbol {
+			owned = true
 		}
-		delete(at.gridState.OrderBook, d.OrderID)
 	}
-	at.gridState.mu.Unlock()
-
-	logger.Infof("[Grid] Cancelled order: %s", d.OrderID)
+	at.gridState.mu.RUnlock()
+	if !owned {
+		return fmt.Errorf("grid order %s is not owned by this trader", d.OrderID)
+	}
+	canceler, ok := at.trader.(interface{ CancelOrder(string, string) error })
+	if !ok {
+		return fmt.Errorf("native grid cancellation unsupported")
+	}
+	cancelErr := canceler.CancelOrder(d.Symbol, d.OrderID)
+	at.syncGridState()
+	at.gridState.mu.RLock()
+	defer at.gridState.mu.RUnlock()
+	for _, level := range at.gridState.Levels {
+		if level.OrderID == d.OrderID && level.State == "pending" {
+			return errors.Join(cancelErr, fmt.Errorf("grid order %s cancellation/final fill unconfirmed", d.OrderID))
+		}
+	}
+	// A final exchange receipt is authoritative even if a duplicate cancel was rejected.
 	return nil
 }
 
-// cancelAllGridOrders cancels all grid orders
+// Cancel only owned entry IDs; do not cancel another trader's protection/orders.
 func (at *AutoTrader) cancelAllGridOrders() error {
-	gridConfig := at.config.StrategyConfig.GridConfig
-
-	if err := at.trader.CancelAllOrders(gridConfig.Symbol); err != nil {
-		return fmt.Errorf("failed to cancel all orders: %w", err)
+	if at.gridState == nil {
+		return nil
 	}
-
-	// Reset all pending levels
-	at.gridState.mu.Lock()
-	for i := range at.gridState.Levels {
-		if at.gridState.Levels[i].State == "pending" {
-			at.gridState.Levels[i].State = "empty"
-			at.gridState.Levels[i].OrderID = ""
-			at.gridState.Levels[i].OrderQuantity = 0
+	symbol := at.config.StrategyConfig.GridConfig.Symbol
+	at.gridState.mu.RLock()
+	ids := []string{}
+	for _, level := range at.gridState.Levels {
+		if level.State == "pending" && level.OrderID != "" {
+			ids = append(ids, level.OrderID)
 		}
 	}
-	at.gridState.OrderBook = make(map[string]int)
-	at.gridState.mu.Unlock()
-
-	logger.Infof("[Grid] Cancelled all orders")
-	return nil
+	at.gridState.mu.RUnlock()
+	var failures []error
+	for _, id := range ids {
+		if err := at.cancelGridOrder(&kernel.Decision{Symbol: symbol, OrderID: id}); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // pauseGrid pauses grid trading
 func (at *AutoTrader) pauseGrid(reason string) error {
-	at.cancelAllGridOrders()
-
+	err := at.cancelAllGridOrders()
+	err = errors.Join(err, at.protectGridResidue())
 	at.gridState.mu.Lock()
+	if !at.gridState.IsPaused {
+		at.gridState.PauseReason = reason
+	}
+	if err != nil {
+		at.gridState.PauseReason = "unresolved pause: " + reason
+	}
 	at.gridState.IsPaused = true
 	at.gridState.mu.Unlock()
 
 	logger.Infof("[Grid] Paused: %s", reason)
-	return nil
+	return errors.Join(err, at.persistGridLedger())
 }
 
 // resumeGrid resumes grid trading
 func (at *AutoTrader) resumeGrid() error {
 	at.gridState.mu.Lock()
 	at.gridState.IsPaused = false
+	at.gridState.PauseReason = ""
 	at.gridState.mu.Unlock()
 
 	logger.Infof("[Grid] Resumed")
-	return nil
+	return at.persistGridLedger()
 }
 
 // adjustGrid adjusts grid parameters
 func (at *AutoTrader) adjustGrid(d *kernel.Decision) error {
 	// Cancel existing orders first
-	at.cancelAllGridOrders()
+	if err := at.cancelAllGridOrders(); err != nil {
+		return err
+	}
 
 	gridConfig := at.config.StrategyConfig.GridConfig
 
@@ -265,213 +334,295 @@ func (at *AutoTrader) adjustGrid(d *kernel.Decision) error {
 		return fmt.Errorf("failed to get market price: %w", err)
 	}
 
-	// Reinitialize grid levels
-	at.initializeGridLevels(price, gridConfig)
-
-	logger.Infof("[Grid] Adjusted grid bounds around price $%.2f", price)
-	return nil
-}
-
-// syncGridState syncs grid state with exchange
-func (at *AutoTrader) syncGridState() {
-	gridConfig := at.config.StrategyConfig.GridConfig
-
-	// Get open orders from exchange
-	openOrders, err := at.trader.GetOpenOrders(gridConfig.Symbol)
-	if err != nil {
-		logger.Warnf("[Grid] Failed to get open orders: %v", err)
-		return
-	}
-
-	// Build set of active order IDs
-	activeOrderIDs := make(map[string]bool)
-	for _, order := range openOrders {
-		activeOrderIDs[order.OrderID] = true
-	}
-
-	// Get current positions to verify fills. F13 (2026-10-01 review): a
-	// FAILED position query no longer feeds 0 into the fill inference —
-	// unknown must stay unknown (levels keep their pending state for the
-	// next round) instead of marking vanished orders cancelled while they
-	// may have filled.
-	positions, err := at.trader.GetPositions()
-	currentPositionSize := 0.0
-	positionsKnown := true
-	if err != nil {
-		positionsKnown = false
-		logger.Warnf("[Grid] Failed to get positions for state sync: %v — fill inference SKIPPED this round (levels stay pending, unknown ≠ cancelled)", err)
-	} else {
-		for _, pos := range positions {
-			if sym, ok := pos["symbol"].(string); ok && sym == gridConfig.Symbol {
-				if size, ok := pos["positionAmt"].(float64); ok {
-					currentPositionSize = size
-				}
-			}
-		}
-	}
-
-	// Update levels based on order status
+	// Reinitialize only empty slots; preserve every filled lot at its own level.
 	at.gridState.mu.Lock()
-	expectedPositionSize := 0.0
-	for _, level := range at.gridState.Levels {
-		if level.State == "filled" {
-			expectedPositionSize += level.PositionSize
+	old := append([]kernel.GridLevelInfo(nil), at.gridState.Levels...)
+	for i, level := range old {
+		if i >= gridConfig.GridCount && (level.PositionSize > 0 || level.ExitOrderID != "") {
+			at.gridState.mu.Unlock()
+			return fmt.Errorf("grid count cannot discard open lots")
 		}
 	}
-
-	for i := range at.gridState.Levels {
-		level := &at.gridState.Levels[i]
-		if level.State == "pending" && level.OrderID != "" {
-			if activeOrderIDs[level.OrderID] {
-				continue
-			}
-			// Order no longer exists — classify via its OWN terminal status
-			// first (F13: the shared position-size heuristic marked a
-			// cancelled + a filled order in the SAME round both filled,
-			// double-counting the ledger).
-			filled, known := at.gridOrderFilled(level.OrderID)
-			switch {
-			case known && filled:
-				level.State = "filled"
-				level.PositionEntry = level.Price
-				level.PositionSize = level.OrderQuantity
-				at.gridState.TotalTrades++
-				expectedPositionSize += level.PositionSize
-				logger.Infof("[Grid] Level %d order filled at $%.2f", i, level.Price)
-			case known:
-				level.State = "empty"
-				level.OrderID = ""
-				level.OrderQuantity = 0
-				logger.Infof("[Grid] Level %d order cancelled/expired", i)
-			case positionsKnown && math.Abs(currentPositionSize) > math.Abs(expectedPositionSize):
-				// Terminal status unavailable (adapter without per-order
-				// query) — fall back to the position delta, updated per
-				// order so multiple resolutions in one round stay ordered.
-				level.State = "filled"
-				level.PositionEntry = level.Price
-				level.PositionSize = level.OrderQuantity
-				at.gridState.TotalTrades++
-				expectedPositionSize += level.PositionSize
-				logger.Infof("[Grid] Level %d order filled at $%.2f (position-delta inference)", i, level.Price)
-			case positionsKnown:
-				level.State = "empty"
-				level.OrderID = ""
-				level.OrderQuantity = 0
-				logger.Infof("[Grid] Level %d order cancelled/expired", i)
-			default:
-				// Nothing verifiable this round: keep the level pending —
-				// unknown is retried, never guessed.
-				logger.Infof("[Grid] Level %d order %s vanished but state unknown (position query failed) — kept pending for next sync", i, level.OrderID)
-				continue
-			}
-			delete(at.gridState.OrderBook, level.OrderID)
+	at.initializeGridLevelsLocked(price, gridConfig)
+	for i, level := range old {
+		if level.PositionSize > 0 {
+			at.gridState.Levels[i] = level
 		}
 	}
 	at.gridState.mu.Unlock()
 
-	logger.Debugf("[Grid] Synced state: position=%.4f, orders=%d", currentPositionSize, len(openOrders))
-
-	// Check stop loss
-	at.checkAndExecuteStopLoss()
-
-	// Check grid skew
-	at.autoAdjustGrid()
+	logger.Infof("[Grid] Adjusted grid bounds around price $%.2f", price)
+	return at.persistGridLedger()
 }
 
-// closeAllPositions closes all open positions for the grid symbol
+// syncGridState syncs grid state with exchange
+func (at *AutoTrader) syncGridState() {
+	if at.gridState == nil {
+		return
+	}
+	defer at.persistGridLedger()
+	symbol := at.config.StrategyConfig.GridConfig.Symbol
+	at.gridState.mu.RLock()
+	levels := append([]kernel.GridLevelInfo(nil), at.gridState.Levels...)
+	at.gridState.mu.RUnlock()
+	for i, old := range levels {
+		if old.ExitOrderID != "" {
+			at.reconcileGridExit(i, nil)
+			continue
+		}
+		if old.State != "pending" || old.OrderID == "" {
+			continue
+		}
+		receipt, err := at.trader.GetOrderStatus(symbol, old.OrderID)
+		if err != nil {
+			continue
+		}
+		st, _ := receipt["status"].(string)
+		st = strings.ToUpper(st)
+		terminal := st == "FILLED" || st == "CANCELED" || st == "EXPIRED" || st == "REJECTED"
+		if !terminal && st != "PARTIALLY_FILLED" && st != "NEW" {
+			continue
+		}
+		if _, exists := receipt["executedQty"]; !exists {
+			continue
+		}
+		qty, avg, valid := fillReceipt(receipt)
+		if !valid {
+			continue
+		}
+		if qty < old.ExecutedQuantity || (qty > 0 && avg <= 0) || (st == "FILLED" && qty <= 0) {
+			continue
+		}
+		at.gridState.mu.Lock()
+		if i >= len(at.gridState.Levels) || at.gridState.Levels[i].OrderID != old.OrderID {
+			at.gridState.mu.Unlock()
+			continue
+		}
+		level := &at.gridState.Levels[i]
+		if qty > 0 {
+			if level.ExecutedQuantity == 0 {
+				at.gridState.TotalTrades++
+			}
+			level.PositionSize = qty
+			level.PositionEntry = avg
+			level.ExecutedQuantity = qty
+		}
+		if terminal {
+			if qty > 0 {
+				level.State = "filled"
+			} else {
+				level.State = "empty"
+			}
+			delete(at.gridState.OrderBook, level.OrderID)
+			level.OrderID = ""
+			level.OrderQuantity = 0
+		}
+		at.gridState.mu.Unlock()
+	}
+}
+
+// closeAllPositions exits owned grid lots and requires final receipts.
 func (at *AutoTrader) closeAllPositions() error {
-	gridConfig := at.config.StrategyConfig.GridConfig
-	if gridConfig == nil {
+	if at.gridState == nil || at.config.StrategyConfig.GridConfig == nil {
 		return nil
 	}
-
-	positions, err := at.trader.GetPositions()
-	if err != nil {
-		return fmt.Errorf("failed to get positions: %w", err)
+	at.gridState.mu.RLock()
+	levels := append([]kernel.GridLevelInfo(nil), at.gridState.Levels...)
+	at.gridState.mu.RUnlock()
+	var failures []error
+	for i, level := range levels {
+		if level.PositionSize > 0 || level.ExitOrderID != "" {
+			if err := at.closeGridLevel(i); err != nil {
+				failures = append(failures, fmt.Errorf("grid level %d: %w", i, err))
+			}
+		}
 	}
+	return errors.Join(failures...)
+}
 
-	for _, pos := range positions {
-		symbol, _ := pos["symbol"].(string)
-		if symbol != gridConfig.Symbol {
-			continue
+// closeGridLevel retains exit tasks until cumulative final fills are confirmed.
+func (at *AutoTrader) closeGridLevel(index int) error {
+	cfg := at.config.StrategyConfig.GridConfig
+	at.gridState.mu.RLock()
+	level := at.gridState.Levels[index]
+	at.gridState.mu.RUnlock()
+	if level.ExitOrderID == "" {
+		if level.State == "pending" && level.OrderID != "" {
+			if err := at.cancelGridOrder(&kernel.Decision{Symbol: cfg.Symbol, OrderID: level.OrderID}); err != nil {
+				return err
+			}
+			at.gridState.mu.RLock()
+			level = at.gridState.Levels[index]
+			at.gridState.mu.RUnlock()
 		}
-
-		size, _ := pos["positionAmt"].(float64)
-		if size == 0 {
-			continue
+		if level.PositionSize <= 0 {
+			return nil
 		}
-
-		if size > 0 {
-			_, err = at.trader.CloseLong(symbol, size)
+		var result map[string]interface{}
+		var err error
+		if level.Side == "buy" {
+			result, err = at.trader.CloseLong(cfg.Symbol, level.PositionSize)
 		} else {
-			_, err = at.trader.CloseShort(symbol, -size)
+			result, err = at.trader.CloseShort(cfg.Symbol, level.PositionSize)
 		}
 		if err != nil {
-			logger.Infof("Failed to close position: %v", err)
+			return fmt.Errorf("close failed: %w", err)
 		}
+		id, ok := orderIDString(result)
+		if !ok {
+			id = "unknown"
+		}
+		at.gridState.mu.Lock()
+		at.gridState.Levels[index].ExitOrderID = id
+		at.gridState.Levels[index].ExitExecutedQuantity = 0
+		at.gridState.Levels[index].ExitRealizedPnL = 0
+		at.gridState.mu.Unlock()
+		if err := at.persistGridLedger(); err != nil {
+			return err
+		}
+		at.reconcileGridExit(index, result)
+	} else {
+		at.reconcileGridExit(index, nil)
 	}
-
+	at.gridState.mu.RLock()
+	remaining := at.gridState.Levels[index]
+	at.gridState.mu.RUnlock()
+	if remaining.ExitOrderID != "" || remaining.PositionSize > 1e-9 {
+		return fmt.Errorf("exit unconfirmed: order=%s remaining=%.8g", remaining.ExitOrderID, remaining.PositionSize)
+	}
 	return nil
 }
 
 // checkAndExecuteStopLoss checks if any filled level has exceeded stop loss and closes it
 func (at *AutoTrader) checkAndExecuteStopLoss() {
-	gridConfig := at.config.StrategyConfig.GridConfig
-	if gridConfig.StopLossPct <= 0 {
-		return // Stop loss not configured
-	}
-
-	currentPrice, err := at.trader.GetMarketPrice(gridConfig.Symbol)
-	if err != nil {
-		logger.Warnf("[Grid] Failed to get market price for stop loss check: %v", err)
+	cfg := at.config.StrategyConfig.GridConfig
+	if cfg.StopLossPct <= 0 {
 		return
 	}
-
-	at.gridState.mu.Lock()
-	defer at.gridState.mu.Unlock()
-
-	for i := range at.gridState.Levels {
-		level := &at.gridState.Levels[i]
-		if level.State != "filled" || level.PositionEntry <= 0 {
+	price, err := at.trader.GetMarketPrice(cfg.Symbol)
+	if err != nil {
+		logger.Warnf("[Grid] Stop-loss price unknown: %v", err)
+		return
+	}
+	at.gridState.mu.RLock()
+	levels := append([]kernel.GridLevelInfo(nil), at.gridState.Levels...)
+	at.gridState.mu.RUnlock()
+	for i, snapshot := range levels {
+		if snapshot.ExitOrderID != "" {
+			at.reconcileGridExit(i, nil)
 			continue
 		}
-
-		// Calculate loss percentage
-		var lossPct float64
-		if level.Side == "buy" {
-			// Long position: loss when price drops
-			lossPct = (level.PositionEntry - currentPrice) / level.PositionEntry * 100
-		} else {
-			// Short position: loss when price rises
-			lossPct = (currentPrice - level.PositionEntry) / level.PositionEntry * 100
+		if snapshot.PositionSize <= 0 || snapshot.PositionEntry <= 0 {
+			continue
 		}
-
-		// Check if stop loss triggered
-		if lossPct >= gridConfig.StopLossPct {
-			logger.Warnf("[Grid] STOP LOSS TRIGGERED: Level %d, entry=$%.2f, current=$%.2f, loss=%.2f%%",
-				i, level.PositionEntry, currentPrice, lossPct)
-
-			// Close the position
-			var closeErr error
-			if level.Side == "buy" {
-				_, closeErr = at.trader.CloseLong(gridConfig.Symbol, level.PositionSize)
-			} else {
-				_, closeErr = at.trader.CloseShort(gridConfig.Symbol, level.PositionSize)
-			}
-
-			if closeErr != nil {
-				logger.Errorf("[Grid] Failed to execute stop loss for level %d: %v", i, closeErr)
-			} else {
-				level.State = "stopped"
-				realizedLoss := -lossPct * level.AllocatedUSD / 100
-				level.UnrealizedPnL = realizedLoss
-				at.gridState.TotalTrades++
-				// Update daily PnL tracking (lock already held, update directly)
-				at.gridState.DailyPnL += realizedLoss
-				at.gridState.TotalProfit += realizedLoss
-				logger.Infof("[Grid] Stop loss executed: Level %d closed at $%.2f (loss %.2f%%)",
-					i, currentPrice, lossPct)
-			}
+		loss := (snapshot.PositionEntry - price) / snapshot.PositionEntry * 100
+		if snapshot.Side == "sell" {
+			loss = -loss
+		}
+		if loss < cfg.StopLossPct {
+			continue
+		}
+		if err := at.closeGridLevel(i); err != nil {
+			logger.Errorf("[Grid] Stop-loss exit incomplete: %v", err)
 		}
 	}
+}
+
+// Unknown exit receipts remain tied to their order ID and never trigger another close.
+func (at *AutoTrader) reconcileGridExit(index int, receipt map[string]interface{}) {
+	at.gridState.mu.RLock()
+	level := at.gridState.Levels[index]
+	at.gridState.mu.RUnlock()
+	var err error
+	if level.ExitOrderID != "unknown" {
+		receipt, err = at.trader.GetOrderStatus(at.config.StrategyConfig.GridConfig.Symbol, level.ExitOrderID)
+	}
+	if err != nil || receipt == nil {
+		logger.Warnf("[Grid] Close %s final fill unknown: %v", level.ExitOrderID, err)
+		return
+	}
+	st, _ := receipt["status"].(string)
+	st = strings.ToUpper(st)
+	terminal := st == "FILLED" || st == "CANCELED" || st == "EXPIRED" || st == "REJECTED"
+	if !terminal && st != "NEW" && st != "PARTIALLY_FILLED" {
+		return
+	}
+	if _, ok := receipt["executedQty"]; !ok {
+		return
+	}
+	qty, avg, valid := fillReceipt(receipt)
+	if !valid {
+		return
+	}
+	if qty < level.ExitExecutedQuantity || (qty > 0 && avg <= 0) || (st == "FILLED" && qty <= 0) {
+		return
+	}
+	delta := math.Min(qty-level.ExitExecutedQuantity, level.PositionSize)
+	realized := (avg - level.PositionEntry) * qty
+	if level.Side == "sell" {
+		realized = -realized
+	}
+	pnlDelta := realized - level.ExitRealizedPnL
+	defer at.persistGridLedger()
+	at.gridState.mu.Lock()
+	defer at.gridState.mu.Unlock()
+	current := &at.gridState.Levels[index]
+	current.PositionSize = math.Max(0, current.PositionSize-delta)
+	current.ExitExecutedQuantity = qty
+	current.ExitRealizedPnL = realized
+	at.gridState.DailyPnL += pnlDelta
+	at.gridState.TotalProfit += pnlDelta
+	if terminal {
+		current.ExitOrderID = ""
+		current.ExitExecutedQuantity = 0
+		current.ExitRealizedPnL = 0
+		at.gridState.TotalTrades++
+		if current.PositionSize <= 1e-9 {
+			current.State = "stopped"
+			current.PositionSize = 0
+			current.UnrealizedPnL = 0
+		}
+	}
+}
+
+// Persist an exchange-side stop before the local protection service exits.
+func (at *AutoTrader) protectGridResidue() error {
+	cfg := at.config.StrategyConfig.GridConfig
+	if cfg.StopLossPct <= 0 {
+		return nil
+	}
+	at.gridState.mu.RLock()
+	levels := append([]kernel.GridLevelInfo(nil), at.gridState.Levels...)
+	at.gridState.mu.RUnlock()
+	type protection struct{ quantity, price float64 }
+	legs := map[string]protection{}
+	for _, level := range levels {
+		if level.PositionSize <= 0 || level.PositionEntry <= 0 {
+			continue
+		}
+		side := "LONG"
+		stop := level.PositionEntry * (1 - cfg.StopLossPct/100)
+		if level.Side == "sell" {
+			side = "SHORT"
+			stop = level.PositionEntry * (1 + cfg.StopLossPct/100)
+		}
+		leg := legs[side]
+		leg.quantity += level.PositionSize
+		// Tightest configured stop covers all owned lots on this side.
+		if leg.price == 0 || (side == "LONG" && stop > leg.price) || (side == "SHORT" && stop < leg.price) {
+			leg.price = stop
+		}
+		legs[side] = leg
+	}
+	var failures []error
+	for side, leg := range legs {
+		err := ensureProtectiveCoverage(at.trader, cfg.Symbol, side, "SL", leg.price, leg.quantity)
+		if err == nil {
+			err, _ = at.verifyProtectiveLegs(&kernel.Decision{Symbol: cfg.Symbol, StopLoss: leg.price}, side, true, false, leg.quantity, 0)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("grid residual %s qty %.8g protection unconfirmed: %w", side, leg.quantity, err))
+		}
+	}
+	return errors.Join(failures...)
 }

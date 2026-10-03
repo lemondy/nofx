@@ -48,8 +48,16 @@ func (at *AutoTrader) saveDecision(record *store.DecisionRecord) error {
 	}
 
 	if err := at.store.Decision().LogDecision(record); err != nil {
-		logger.Infof("⚠️ Failed to save decision record: %v", err)
-		return err
+		// 2026-10-03 review: a lost 150KB decision row breaks the audit
+		// chain AND the journal's decision enrichment (plan SL/TP blank,
+		// trade misattributed manual). WAL busy is transient — retry once
+		// before giving up.
+		time.Sleep(300 * time.Millisecond)
+		if err2 := at.store.Decision().LogDecision(record); err2 != nil {
+			logger.Errorf("❌ [%s] decision record LOST (cycle %d, retried once): %v / %v", at.id, record.CycleNumber, err, err2)
+			return err2
+		}
+		logger.Warnf("⚠️ [%s] decision record saved on retry (cycle %d, first attempt: %v)", at.id, record.CycleNumber, err)
 	}
 
 	logger.Infof("📝 Decision record saved: trader=%s, cycle=%d", at.id, at.cycleNumber)

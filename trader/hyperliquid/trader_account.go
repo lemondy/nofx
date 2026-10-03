@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"nofx/logger"
 	"nofx/security"
@@ -352,51 +353,63 @@ func (t *HyperliquidTrader) getXyzMarketPrice(coin string) (float64, error) {
 	return 0, fmt.Errorf("xyz dex price not found for %s (lookup key: %s)", coin, lookupKey)
 }
 
-// GetOrderStatus gets order status
-// Hyperliquid uses IOC orders, usually filled or cancelled immediately
-// For completed orders, need to query historical records
-func (t *HyperliquidTrader) GetOrderStatus(symbol string, orderID string) (map[string]interface{}, error) {
-	// Hyperliquid's IOC orders are completed almost immediately
-	// If order was placed through this system, returned status will be FILLED
-	// Try to query open orders to determine if still pending
-	coin := convertSymbolToHyperliquid(symbol)
-
-	// First check if in open orders
-	openOrders, err := t.exchange.Info().OpenOrders(t.ctx, t.walletAddr)
+// Query the order itself; absence from open orders is not a fill receipt.
+func (t *HyperliquidTrader) GetOrderStatus(symbol, orderID string) (map[string]interface{}, error) {
+	oid, err := strconv.ParseInt(orderID, 10, 64)
 	if err != nil {
-		// If query fails, assume order is completed
-		return map[string]interface{}{
-			"orderId":     orderID,
-			"status":      "FILLED",
-			"avgPrice":    0.0,
-			"executedQty": 0.0,
-			"commission":  0.0,
-		}, nil
+		return nil, err
 	}
-
-	// Check if order is in open orders list
-	for _, order := range openOrders {
-		if order.Coin == coin && fmt.Sprintf("%d", order.Oid) == orderID {
-			// Order is still pending
-			return map[string]interface{}{
-				"orderId":     orderID,
-				"status":      "NEW",
-				"avgPrice":    0.0,
-				"executedQty": 0.0,
-				"commission":  0.0,
-			}, nil
+	result, err := t.exchange.Info().QueryOrderByOid(t.ctx, t.walletAddr, oid)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || string(result.Status) != "order" {
+		return nil, fmt.Errorf("order %s status unknown", orderID)
+	}
+	order := result.Order.Order
+	if order.Coin != convertSymbolToHyperliquid(symbol) {
+		return nil, fmt.Errorf("order symbol mismatch")
+	}
+	fills, err := t.exchange.Info().UserFillsByTime(t.ctx, t.walletAddr, order.Timestamp, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	qty, notional, fee := 0.0, 0.0, 0.0
+	for _, f := range fills {
+		if f.Oid != oid || f.Coin != order.Coin {
+			continue
+		}
+		q, _ := strconv.ParseFloat(f.Size, 64)
+		p, _ := strconv.ParseFloat(f.Price, 64)
+		c, _ := strconv.ParseFloat(f.Fee, 64)
+		qty += q
+		notional += q * p
+		fee += c
+	}
+	avg := 0.0
+	if qty > 0 {
+		avg = notional / qty
+	}
+	status := strings.ToUpper(string(result.Order.Status))
+	if status == "OPEN" {
+		status = "NEW"
+		if qty > 0 {
+			status = "PARTIALLY_FILLED"
 		}
 	}
-
-	// Order not in open list, meaning completed or cancelled
-	// Hyperliquid IOC orders not in open list are usually filled
-	return map[string]interface{}{
-		"orderId":     orderID,
-		"status":      "FILLED",
-		"avgPrice":    0.0, // Hyperliquid does not directly return execution price, need to get from position info
-		"executedQty": 0.0,
-		"commission":  0.0,
-	}, nil
+	if strings.HasSuffix(status, "CANCELED") {
+		status = "CANCELED"
+	}
+	orig, _ := strconv.ParseFloat(order.OrigSz, 64)
+	remaining, _ := strconv.ParseFloat(order.Sz, 64)
+	expected := math.Max(0, orig-remaining)
+	if status == "FILLED" {
+		expected = orig
+	}
+	if qty+math.Max(1e-9, expected*1e-6) < expected || (status == "FILLED" && (qty <= 0 || avg <= 0)) {
+		return nil, fmt.Errorf("order %s fill receipt incomplete", orderID)
+	}
+	return map[string]interface{}{"orderId": orderID, "status": status, "executedQty": qty, "avgPrice": avg, "commission": fee}, nil
 }
 
 // GetClosedPnL gets recent closing trades from Hyperliquid

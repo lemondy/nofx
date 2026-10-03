@@ -557,9 +557,15 @@ func (t *BybitTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 		return nil, fmt.Errorf("failed to get open orders: %w", err)
 	}
 
-	if resp.RetCode == 0 {
+	if resp.RetCode != 0 {
+		return nil, fmt.Errorf("open orders unknown: %s", resp.RetMsg)
+	}
+	{
 		resultData, ok := resp.Result.(map[string]interface{})
-		if ok {
+		if !ok {
+			return nil, fmt.Errorf("open order response malformed")
+		}
+		{
 			list, _ := resultData["list"].([]interface{})
 			for _, item := range list {
 				order, ok := item.(map[string]interface{})
@@ -578,17 +584,22 @@ func (t *BybitTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 				price, _ := strconv.ParseFloat(triggerPrice, 64)
 				quantity, _ := strconv.ParseFloat(qty, 64)
 
-				// Determine type based on stopOrderType
-				displayType := orderType
-				if stopOrderType != "" {
-					displayType = stopOrderType
+				triggerDirection, _ := strconv.Atoi(fmt.Sprint(order["triggerDirection"]))
+				displayType := protectiveOrderType(stopOrderType, side, triggerDirection)
+				if displayType == "" {
+					displayType = orderType
+				}
+
+				positionSide := "LONG"
+				if strings.EqualFold(side, "Buy") {
+					positionSide = "SHORT"
 				}
 
 				result = append(result, types.OpenOrder{
 					OrderID:      orderId,
 					Symbol:       sym,
 					Side:         side,
-					PositionSide: "", // Bybit doesn't use positionSide for UTA
+					PositionSide: positionSide,
 					Type:         displayType,
 					Price:        0,
 					StopPrice:    price,
@@ -756,4 +767,22 @@ func (t *BybitTrader) GetOrderBook(symbol string, depth int) (bids, asks [][]flo
 	}
 
 	return bids, asks, nil
+}
+
+func protectiveOrderType(stopType, side string, direction int) string {
+	switch strings.ToLower(stopType) {
+	case "takeprofit", "partialtakeprofit":
+		return "TAKE_PROFIT_MARKET"
+	case "stoploss", "partialstoploss":
+		return "STOP_MARKET"
+	case "stop":
+		if (strings.EqualFold(side, "Sell") && direction == 1) || (strings.EqualFold(side, "Buy") && direction == 2) {
+			return "TAKE_PROFIT_MARKET"
+		}
+		if direction == 1 || direction == 2 {
+			return "STOP_MARKET"
+		}
+		return "" // An unclassified trigger is not evidence of a protective leg.
+	}
+	return stopType
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"nofx/store"
+	"nofx/trader/types"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,9 @@ func (t *blockedGridTrader) GetMarketPrice(string) (float64, error) {
 	<-t.release
 	return 0, fmt.Errorf("fake upstream failure")
 }
+
+func (t *blockedGridTrader) CancelAllOrders(string) error                    { return nil }
+func (t *blockedGridTrader) GetOpenOrders(string) ([]types.OpenOrder, error) { return nil, nil }
 
 func TestStartNonBlockingStopJoinsAndDuplicateRejected(t *testing.T) {
 	at := lifecycleFixture(t)

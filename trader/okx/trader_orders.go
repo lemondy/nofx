@@ -672,13 +672,17 @@ func (t *OKXTrader) GetOrderStatus(symbol string, orderID string) (map[string]in
 // GetOpenOrders gets all open/pending orders for a symbol
 func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	instId := t.convertSymbol(symbol)
+	inst, err := t.getInstrument(symbol)
+	if err != nil || inst.CtVal <= 0 {
+		return nil, fmt.Errorf("protection quantity conversion unavailable: %v", err)
+	}
 	var result []types.OpenOrder
 
 	// 1. Get pending limit orders
 	path := fmt.Sprintf("%s?instId=%s&instType=SWAP", okxPendingOrdersPath, instId)
 	data, err := t.doRequest("GET", path, nil)
 	if err != nil {
-		logger.Warnf("[OKX] Failed to get pending orders: %v", err)
+		return nil, fmt.Errorf("pending orders unknown: %w", err)
 	}
 	if err == nil && data != nil {
 		var orders []struct {
@@ -691,10 +695,14 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 			Sz      string `json:"sz"`      // size
 			State   string `json:"state"`   // live/partially_filled
 		}
-		if err := json.Unmarshal(data, &orders); err == nil {
+		if err := json.Unmarshal(data, &orders); err != nil {
+			return nil, err
+		}
+		{
 			for _, order := range orders {
 				price, _ := strconv.ParseFloat(order.Px, 64)
 				quantity, _ := strconv.ParseFloat(order.Sz, 64)
+				quantity *= inst.CtVal
 
 				// Convert OKX side to standard format
 				side := strings.ToUpper(order.Side)
@@ -723,7 +731,7 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	algoPath := fmt.Sprintf("%s?instId=%s&instType=SWAP&ordType=conditional", okxAlgoPendingPath, instId)
 	algoData, err := t.doRequest("GET", algoPath, nil)
 	if err != nil {
-		logger.Warnf("[OKX] Failed to get algo orders: %v", err)
+		return nil, fmt.Errorf("algo protection unknown: %w", err)
 	}
 	if err == nil && algoData != nil {
 		var algoOrders []struct {
@@ -738,9 +746,13 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 			Sz          string `json:"sz"`
 			State       string `json:"state"`
 		}
-		if err := json.Unmarshal(algoData, &algoOrders); err == nil {
+		if err := json.Unmarshal(algoData, &algoOrders); err != nil {
+			return nil, err
+		}
+		{
 			for _, order := range algoOrders {
 				quantity, _ := strconv.ParseFloat(order.Sz, 64)
+				quantity *= inst.CtVal
 
 				side := strings.ToUpper(order.Side)
 				positionSide := strings.ToUpper(order.PosSide)
@@ -753,7 +765,8 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					slPrice, _ := strconv.ParseFloat(order.SlTriggerPx, 64)
 					if slPrice > 0 {
 						result = append(result, types.OpenOrder{
-							OrderID:      order.AlgoId + "_sl",
+							OrderID:      order.AlgoId,
+							Algo:         true,
 							Symbol:       symbol,
 							Side:         side,
 							PositionSide: positionSide,
@@ -771,7 +784,8 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					tpPrice, _ := strconv.ParseFloat(order.TpTriggerPx, 64)
 					if tpPrice > 0 {
 						result = append(result, types.OpenOrder{
-							OrderID:      order.AlgoId + "_tp",
+							OrderID:      order.AlgoId,
+							Algo:         true,
 							Symbol:       symbol,
 							Side:         side,
 							PositionSide: positionSide,
@@ -790,6 +804,7 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					if triggerPrice > 0 {
 						result = append(result, types.OpenOrder{
 							OrderID:      order.AlgoId,
+							Algo:         true,
 							Symbol:       symbol,
 							Side:         side,
 							PositionSide: positionSide,
@@ -962,4 +977,12 @@ func (t *OKXTrader) GetOrderBook(symbol string, depth int) (bids, asks [][]float
 	}
 
 	return bids, asks, nil
+}
+
+func (t *OKXTrader) CancelProtectiveOrder(symbol string, order types.OpenOrder) error {
+	if !order.Algo {
+		return t.CancelOrder(symbol, order.OrderID)
+	}
+	_, err := t.doRequest("POST", okxCancelAlgoPath, []map[string]interface{}{{"algoId": order.OrderID, "instId": t.convertSymbol(symbol)}})
+	return err
 }

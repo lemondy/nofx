@@ -3,6 +3,7 @@ package binance
 import (
 	"context"
 	"fmt"
+	"math"
 	"nofx/logger"
 	"nofx/trader/types"
 	"strconv"
@@ -648,8 +649,9 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 		req.Symbol, req.Side, positionSide, priceStr, quantityStr, order.OrderID)
 
 	return &types.LimitOrderResult{
-		OrderID:      fmt.Sprintf("%d", order.OrderID),
-		ClientID:     order.ClientOrderID,
+		OrderID:  fmt.Sprintf("%d", order.OrderID),
+		ClientID: order.ClientOrderID,
+
 		Symbol:       order.Symbol,
 		Side:         string(order.Side),
 		PositionSide: string(order.PositionSide),
@@ -800,16 +802,17 @@ func (t *FuturesTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) 
 		quantity, _ := strconv.ParseFloat(order.OrigQuantity, 64)
 
 		result = append(result, types.OpenOrder{
-			OrderID:      fmt.Sprintf("%d", order.OrderID),
-			Symbol:       order.Symbol,
-			Side:         string(order.Side),
-			PositionSide: string(order.PositionSide),
-			Type:         string(order.Type),
-			Price:        price,
-			StopPrice:    stopPrice,
-			Quantity:     quantity,
-			Status:       string(order.Status),
-			ClientID:     order.ClientOrderID,
+			OrderID:       fmt.Sprintf("%d", order.OrderID),
+			Symbol:        order.Symbol,
+			Side:          string(order.Side),
+			PositionSide:  string(order.PositionSide),
+			Type:          string(order.Type),
+			Price:         price,
+			StopPrice:     stopPrice,
+			Quantity:      quantity,
+			Status:        string(order.Status),
+			ClientID:      order.ClientOrderID,
+			ClosePosition: order.ClosePosition, ReduceOnly: order.ReduceOnly,
 		})
 	}
 
@@ -818,21 +821,25 @@ func (t *FuturesTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) 
 		Symbol(symbol).
 		Do(context.Background())
 
-	if err == nil {
+	if err != nil {
+		return nil, fmt.Errorf("algo protection query failed: %w", err)
+	}
+	{
 		for _, algoOrder := range algoOrders {
 			triggerPrice, _ := strconv.ParseFloat(algoOrder.TriggerPrice, 64)
 			quantity, _ := strconv.ParseFloat(algoOrder.Quantity, 64)
 
 			result = append(result, types.OpenOrder{
-				OrderID:      fmt.Sprintf("%d", algoOrder.AlgoId),
-				Symbol:       algoOrder.Symbol,
-				Side:         string(algoOrder.Side),
-				PositionSide: string(algoOrder.PositionSide),
-				Type:         string(algoOrder.OrderType),
-				Price:        0, // Algo orders use stop price
-				StopPrice:    triggerPrice,
-				Quantity:     quantity,
-				Status:       "NEW",
+				OrderID:       fmt.Sprintf("%d", algoOrder.AlgoId),
+				Symbol:        algoOrder.Symbol,
+				Side:          string(algoOrder.Side),
+				PositionSide:  string(algoOrder.PositionSide),
+				Type:          string(algoOrder.OrderType),
+				Price:         0, // Algo orders use stop price
+				StopPrice:     triggerPrice,
+				Quantity:      quantity,
+				Status:        "NEW",
+				ClosePosition: algoOrder.ClosePosition, ReduceOnly: algoOrder.ReduceOnly, Algo: true,
 			})
 		}
 	}
@@ -884,8 +891,24 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		// leg carries a STALE trigger — cancel this side's SL legs once and
 		// re-place at the new price; if the cancel itself fails, surface the
 		// ORIGINAL error (the position stays protected at the old level).
-		if cerr := t.CancelStopLossOrdersForSide(symbol, string(posSide)); cerr != nil {
-			return fmt.Errorf("failed to set stop-loss: stale algo leg replacement failed at cancel: %w", cerr)
+		previous, readErr := t.GetOpenOrders(symbol)
+		if readErr != nil {
+			return fmt.Errorf("cannot snapshot original stop: %w", readErr)
+		}
+
+		originals := []types.OpenOrder{}
+		for _, old := range previous {
+			if (old.Type == "STOP_MARKET" || old.Type == "STOP") && strings.EqualFold(old.PositionSide, string(posSide)) && old.OrderID != "" && old.StopPrice > 0 {
+				originals = append(originals, old)
+			}
+		}
+		if len(originals) == 0 {
+			return fmt.Errorf("stale stop replacement: original protection unknown: %w", err)
+		}
+		for _, old := range originals {
+			if cerr := t.CancelProtectiveOrder(symbol, old); cerr != nil {
+				return fmt.Errorf("stale stop %s cancel failed: %w", old.OrderID, cerr)
+			}
 		}
 		if _, err2 := t.client.NewCreateAlgoOrderService().
 			Symbol(symbol).
@@ -897,6 +920,23 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 			ClosePosition(true).
 			ClientAlgoId(getBrOrderID()).
 			Do(context.Background()); err2 != nil {
+			for _, old := range originals {
+				_, restoreErr := t.client.NewCreateAlgoOrderService().Symbol(symbol).Side(side).PositionSide(posSide).Type(futures.AlgoOrderTypeStopMarket).TriggerPrice(strconv.FormatFloat(old.StopPrice, 'f', -1, 64)).WorkingType(futures.WorkingTypeContractPrice).ClosePosition(true).ClientAlgoId(getBrOrderID()).Do(context.Background())
+				if restoreErr != nil {
+					return fmt.Errorf("replacement rejected (%v), original stop restore failed: %w", err2, restoreErr)
+				}
+				restored, verifyErr := t.GetOpenOrders(symbol)
+				confirmed := false
+				for _, o := range restored {
+					if o.ClosePosition && (o.Type == "STOP_MARKET" || o.Type == "STOP") && strings.EqualFold(o.PositionSide, string(posSide)) && math.Abs(o.StopPrice-old.StopPrice)/old.StopPrice < 0.001 {
+						confirmed = true
+					}
+				}
+				if verifyErr != nil || !confirmed {
+					return fmt.Errorf("replacement rejected (%v), original stop restoration unconfirmed: %v", err2, verifyErr)
+				}
+				break
+			}
 			return fmt.Errorf("failed to set stop-loss: stale algo leg cancelled but re-place failed: %w", err2)
 		}
 		logger.Infof("  ♻️ Stop-loss replaced: stale -4130 leg cancelled, new trigger %.4f (Algo Order)", stopPrice)
@@ -1057,4 +1097,16 @@ func (t *FuturesTrader) DebugListOpenAlgoOrders(symbol string) []string {
 			a.AlgoId, a.OrderType, a.Side, a.PositionSide, a.TriggerPrice, a.Quantity, a.AlgoStatus))
 	}
 	return out
+}
+
+func (t *FuturesTrader) CancelProtectiveOrder(symbol string, o types.OpenOrder) error {
+	id, err := strconv.ParseInt(o.OrderID, 10, 64)
+	if err != nil {
+		return err
+	}
+	if o.Algo {
+		_, err = t.client.NewCancelAlgoOrderService().AlgoID(id).Do(context.Background())
+		return err
+	}
+	return t.CancelOrder(symbol, o.OrderID)
 }

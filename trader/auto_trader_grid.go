@@ -2,7 +2,9 @@ package trader
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
@@ -32,6 +34,7 @@ type GridState struct {
 
 	// State flags
 	IsPaused      bool
+	PauseReason   string
 	IsInitialized bool
 
 	// Performance tracking
@@ -142,15 +145,21 @@ func (at *AutoTrader) checkBreakout() (BreakoutType, float64) {
 // totalEq — which already includes UPL — into both keys). Order:
 // totalEquity → total_equity (legacy) → wallet+uPnL.
 func gridAccountEquity(balance map[string]interface{}) float64 {
-	if equity, ok := balance["totalEquity"].(float64); ok && equity > 0 {
-		return equity
+	if equity, ok := balance["totalEquity"].(float64); ok {
+		if equity > 0 && !math.IsNaN(equity) && !math.IsInf(equity, 0) {
+			return equity
+		}
+		return 0
 	}
-	if equity, ok := balance["total_equity"].(float64); ok && equity > 0 {
-		return equity
+	if equity, ok := balance["total_equity"].(float64); ok {
+		if equity > 0 && !math.IsNaN(equity) && !math.IsInf(equity, 0) {
+			return equity
+		}
+		return 0
 	}
 	total, hasTotal := balance["totalWalletBalance"].(float64)
 	unrealized, hasUPL := balance["totalUnrealizedProfit"].(float64)
-	if hasTotal && hasUPL && total+unrealized > 0 {
+	if hasTotal && hasUPL && total+unrealized > 0 && !math.IsNaN(total+unrealized) && !math.IsInf(total+unrealized, 0) {
 		return total + unrealized
 	}
 	return 0
@@ -164,23 +173,47 @@ func (at *AutoTrader) checkMaxDrawdown() (bool, float64) {
 		return false, 0
 	}
 
-	// Get current equity
+	// Get current equity. 2026-10-03 review P2: transient failures here used
+	// to report "drawdown 100%" and trip the grid breaker on a data hiccup —
+	// skip the check this round instead (fail-open with a log; the next cycle
+	// retries and the exchange-side stops still protect positions).
 	balance, err := at.trader.GetBalance()
 	if err != nil {
+		logger.Warnf("⚠️ [Grid] drawdown check skipped: balance fetch failed: %v", err)
 		return false, 0
 	}
 	currentEquity := gridAccountEquity(balance)
 
 	if currentEquity <= 0 {
+		logger.Warnf("⚠️ [Grid] drawdown check skipped: equity unreadable/zero")
 		return false, 0
 	}
 
-	// Update peak equity
-	at.gridState.mu.Lock()
-	if currentEquity > at.gridState.PeakEquity {
-		at.gridState.PeakEquity = currentEquity
+	at.gridState.mu.RLock()
+	seedPeak := math.Max(currentEquity, at.gridState.PeakEquity)
+	at.gridState.mu.RUnlock()
+	peakEquity := seedPeak
+	if at.store != nil {
+		var persistErr error
+		peakEquity, persistErr = at.store.RiskState().UpdatePeak(at.dailyBaselineKey(), seedPeak)
+		if persistErr != nil {
+			// Transient store error ≠ a real drawdown — skip this round.
+			logger.Warnf("⚠️ [Grid] drawdown check skipped: peak persist failed: %v", persistErr)
+			return false, 0
+		}
+	} else {
+		dailyBaselineRegMu.Lock()
+		key := "peak:" + at.dailyBaselineKey()
+		rec := dailyBaselineReg[key]
+		if seedPeak > rec.equity {
+			rec.equity = seedPeak
+			dailyBaselineReg[key] = rec
+		}
+		peakEquity = rec.equity
+		dailyBaselineRegMu.Unlock()
 	}
-	peakEquity := at.gridState.PeakEquity
+	at.gridState.mu.Lock()
+	at.gridState.PeakEquity = peakEquity
 	at.gridState.mu.Unlock()
 
 	if peakEquity <= 0 {
@@ -233,7 +266,7 @@ func (at *AutoTrader) checkDailyLossLimit() (bool, float64) {
 		ledgerPct = (-dailyPnL) / gridConfig.TotalInvestment * 100
 	}
 	if !equityKnown {
-		return ledgerPct >= gridConfig.DailyLossLimitPct, ledgerPct
+		return true, ledgerPct // cannot admit risk without a verified equity baseline
 	}
 	dailyLossPct := equityLossPct
 	if ledgerPct > dailyLossPct {
@@ -253,19 +286,22 @@ func (at *AutoTrader) gridEquityDailyLossPct() (float64, bool) {
 	if equity <= 0 {
 		return 0, false
 	}
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
+	var baseline float64
+	if at.store != nil {
+		baseline, err = at.store.RiskState().AnchorDayBaseline(at.dailyBaselineKey(), today, equity)
+		if err != nil {
+			return 0, false
+		}
+	} else {
+		at.anchorDailyBaseline(equity)
+		baseline = at.dayStartEquity
+	}
 	at.gridState.mu.Lock()
-	defer at.gridState.mu.Unlock()
-	if at.gridState.DayStartDay != today || at.gridState.DayStartEquity <= 0 {
-		at.gridState.DayStartDay = today
-		at.gridState.DayStartEquity = equity
-		return 0, true
-	}
-	lossPct := (at.gridState.DayStartEquity - equity) / at.gridState.DayStartEquity * 100
-	if lossPct < 0 {
-		lossPct = 0
-	}
-	return lossPct, true
+	at.gridState.DayStartDay = today
+	at.gridState.DayStartEquity = baseline
+	at.gridState.mu.Unlock()
+	return math.Max(0, (baseline-equity)/baseline*100), true
 }
 
 // updateDailyPnL updates the daily PnL tracking
@@ -278,37 +314,9 @@ func (at *AutoTrader) updateDailyPnL(realizedPnL float64) {
 
 // emergencyExit closes all positions and cancels all orders
 func (at *AutoTrader) emergencyExit(reason string) error {
-	gridConfig := at.config.StrategyConfig.GridConfig
-
-	logger.Errorf("[Grid] EMERGENCY EXIT: %s", reason)
-
-	// Cancel all orders
-	if err := at.cancelAllGridOrders(); err != nil {
-		logger.Errorf("[Grid] Failed to cancel orders in emergency: %v", err)
-	}
-
-	// Close all positions
-	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			if sym, ok := pos["symbol"].(string); ok && sym == gridConfig.Symbol {
-				if size, ok := pos["positionAmt"].(float64); ok && size != 0 {
-					if size > 0 {
-						at.trader.CloseLong(gridConfig.Symbol, size)
-					} else {
-						at.trader.CloseShort(gridConfig.Symbol, -size)
-					}
-				}
-			}
-		}
-	}
-
-	// Pause grid
-	at.gridState.mu.Lock()
-	at.gridState.IsPaused = true
-	at.gridState.mu.Unlock()
-
-	return nil
+	cancelErr := at.pauseGrid(reason)
+	closeErr := at.closeAllPositions()
+	return errors.Join(cancelErr, closeErr)
 }
 
 // handleBreakout handles price breakout from grid range
@@ -319,17 +327,7 @@ func (at *AutoTrader) handleBreakout(breakoutType BreakoutType, breakoutPct floa
 	if breakoutPct >= 2.0 {
 		logger.Warnf("[Grid] Significant breakout (%.2f%%), pausing grid and canceling orders", breakoutPct)
 
-		// Cancel all pending orders to prevent further losses
-		if err := at.cancelAllGridOrders(); err != nil {
-			logger.Errorf("[Grid] Failed to cancel orders on breakout: %v", err)
-		}
-
-		// Pause grid trading
-		at.gridState.mu.Lock()
-		at.gridState.IsPaused = true
-		at.gridState.mu.Unlock()
-
-		return fmt.Errorf("grid paused due to %s breakout (%.2f%%)", breakoutType, breakoutPct)
+		return errors.Join(fmt.Errorf("grid paused due to %s breakout (%.2f%%)", breakoutType, breakoutPct), at.pauseGrid("breakout"))
 	}
 
 	// If breakout is minor (< 2%), consider adjusting grid
@@ -358,6 +356,53 @@ func (at *AutoTrader) InitializeGrid() error {
 	at.runtimeMu.Lock()
 	defer at.runtimeMu.Unlock()
 	at.gridState = NewGridState(gridConfig)
+	if at.store != nil {
+		row, err := at.store.PendingEntry().LoadGrid(at.id)
+		if err != nil {
+			return fmt.Errorf("grid recovery ledger unavailable: %w", err)
+		}
+		if row != nil {
+			restored := NewGridState(gridConfig)
+			if err := json.Unmarshal([]byte(row.StateJSON), restored); err != nil {
+				return fmt.Errorf("grid recovery ledger corrupt: %w", err)
+			}
+			active := false
+			for _, level := range restored.Levels {
+				if level.PositionSize > 0 || level.OrderID != "" || level.ExitOrderID != "" {
+					active = true
+				}
+			}
+			if active {
+				if row.Symbol != gridConfig.Symbol || row.ExchangeID != at.executionAccountKey() {
+					return fmt.Errorf("grid account/symbol cannot change with unresolved orders or positions")
+				}
+				restored.Config = gridConfig
+				restored.OrderBook = map[string]int{}
+				for i, level := range restored.Levels {
+					if level.OrderID != "" {
+						restored.OrderBook[level.OrderID] = i
+					}
+				}
+				at.gridState = restored
+				// Recover pending receipt tasks before deciding whether to allow entries.
+				at.syncGridState()
+				// A successful user stop may resume on explicit restart. Risk or
+				// uncertain cancellation pauses remain in force across restart.
+				if restored.PauseReason == "trader stopped" {
+					unresolved := false
+					for _, level := range restored.Levels {
+						unresolved = unresolved || level.OrderID != "" || level.ExitOrderID != ""
+					}
+					if !unresolved {
+						restored.IsPaused = false
+						restored.PauseReason = ""
+						return at.persistGridLedger()
+					}
+				}
+				return nil
+			}
+		}
+	}
 
 	// Get current market price
 	price, err := at.trader.GetMarketPrice(gridConfig.Symbol)
@@ -401,11 +446,14 @@ func (at *AutoTrader) InitializeGrid() error {
 	logger.Infof("[Grid] Initialized: %d levels, $%.2f - $%.2f, spacing $%.2f",
 		gridConfig.GridCount, at.gridState.LowerPrice, at.gridState.UpperPrice, at.gridState.GridSpacing)
 
-	return nil
+	return at.persistGridLedger()
 }
 
 // RunGridCycle executes one grid trading cycle
 func (at *AutoTrader) RunGridCycle() error {
+	mu := at.executionMutex()
+	mu.Lock()
+	defer mu.Unlock()
 	// Check if trader is stopped (early exit to prevent trades after Stop() is called)
 	at.isRunningMutex.RLock()
 	running := at.isRunning
@@ -421,6 +469,8 @@ func (at *AutoTrader) RunGridCycle() error {
 		}
 	}
 
+	at.syncGridState()
+	at.checkAndExecuteStopLoss()
 	// CRITICAL: Check for breakout before executing any trades
 	breakoutType, breakoutPct := at.checkBreakout()
 	if breakoutType != BreakoutNone {
@@ -439,10 +489,7 @@ func (at *AutoTrader) RunGridCycle() error {
 	dailyExceeded, dailyLossPct := at.checkDailyLossLimit()
 	if dailyExceeded {
 		logger.Errorf("[Grid] Daily loss limit exceeded: %.2f%%", dailyLossPct)
-		at.gridState.mu.Lock()
-		at.gridState.IsPaused = true
-		at.gridState.mu.Unlock()
-		return fmt.Errorf("daily loss limit exceeded: %.2f%%", dailyLossPct)
+		return errors.Join(fmt.Errorf("daily loss limit exceeded: %.2f%%", dailyLossPct), at.pauseGrid("daily loss limit"))
 	}
 
 	// Check multi-period box breakout
@@ -464,6 +511,7 @@ func (at *AutoTrader) RunGridCycle() error {
 		return nil
 	}
 
+	at.autoAdjustGrid()
 	gridConfig := at.config.StrategyConfig.GridConfig
 	lang := at.config.StrategyConfig.Language
 	if lang == "" {
@@ -477,7 +525,9 @@ func (at *AutoTrader) RunGridCycle() error {
 	}
 
 	// Get AI decisions
-	decision, err := kernel.GetGridDecisions(gridCtx, at.mcpClient, gridConfig, lang)
+	decision, err := withoutExecutionLock(mu, func() (*kernel.FullDecision, error) {
+		return kernel.GetGridDecisions(gridCtx, at.mcpClient, gridConfig, lang)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to get grid decisions: %w", err)
 	}
@@ -488,6 +538,21 @@ func (at *AutoTrader) RunGridCycle() error {
 	at.isRunningMutex.RUnlock()
 	if !running {
 		logger.Infof("[Grid] Trader stopped before decision execution, aborting grid cycle")
+		return nil
+	}
+
+	// AI latency may span a loss-halt transition or another trader's execution.
+	at.syncGridState()
+	if exceeded, drawdown := at.checkMaxDrawdown(); exceeded {
+		return at.emergencyExit(fmt.Sprintf("max drawdown exceeded: %.2f%%", drawdown))
+	}
+	if exceeded, loss := at.checkDailyLossLimit(); exceeded {
+		return errors.Join(fmt.Errorf("daily loss limit exceeded: %.2f%%", loss), at.pauseGrid("daily loss limit"))
+	}
+	at.gridState.mu.RLock()
+	paused := at.gridState.IsPaused
+	at.gridState.mu.RUnlock()
+	if paused {
 		return nil
 	}
 
@@ -717,4 +782,24 @@ type GridRiskInfo struct {
 	CurrentGridDirection  string `json:"current_grid_direction"`
 	DirectionChangeCount  int    `json:"direction_change_count"`
 	EnableDirectionAdjust bool   `json:"enable_direction_adjust"`
+}
+
+func (at *AutoTrader) persistGridLedger() error {
+	if at.store == nil || at.gridState == nil {
+		return nil
+	}
+	at.gridState.mu.RLock()
+	data, err := json.Marshal(at.gridState)
+	at.gridState.mu.RUnlock()
+	if err == nil {
+		err = at.store.PendingEntry().SaveGrid(&store.GridCheckpoint{TraderID: at.id, ExchangeID: at.executionAccountKey(), Symbol: at.config.StrategyConfig.GridConfig.Symbol, StateJSON: string(data), UpdatedAt: time.Now().UTC()})
+	}
+	if err != nil {
+		at.gridState.mu.Lock()
+		at.gridState.IsPaused = true
+		at.gridState.PauseReason = "ledger persistence failed"
+		at.gridState.mu.Unlock()
+		logger.Errorf("[Grid] Ledger persistence failed; new entries paused: %v", err)
+	}
+	return err
 }

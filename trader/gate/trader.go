@@ -113,3 +113,5 @@ func (t *GateTrader) clearCache() {
 
 // Ensure GateTrader implements Trader interface
 var _ types.Trader = (*GateTrader)(nil)
+
+func (t *GateTrader) InvalidateAccountCache() { t.clearCache() }

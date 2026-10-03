@@ -521,7 +521,7 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 
 	data, err := t.doRequest("GET", bitgetPendingPath, params)
 	if err != nil {
-		logger.Warnf("[Bitget] Failed to get pending orders: %v", err)
+		return nil, fmt.Errorf("pending orders unknown: %w", err)
 	}
 	if err == nil && data != nil {
 		var orders struct {
@@ -537,7 +537,10 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 				State     string `json:"state"`
 			} `json:"entrustedList"`
 		}
-		if err := json.Unmarshal(data, &orders); err == nil {
+		if err := json.Unmarshal(data, &orders); err != nil {
+			return nil, err
+		}
+		{
 			for _, order := range orders.EntrustedList {
 				price, _ := strconv.ParseFloat(order.Price, 64)
 				quantity, _ := strconv.ParseFloat(order.Size, 64)
@@ -570,7 +573,7 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 
 	planData, err := t.doRequest("GET", "/api/v2/mix/order/orders-plan-pending", planParams)
 	if err != nil {
-		logger.Warnf("[Bitget] Failed to get plan orders: %v", err)
+		return nil, fmt.Errorf("plan orders unknown: %w", err)
 	}
 	if err == nil && planData != nil {
 		var planOrders struct {
@@ -587,7 +590,10 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 				PlanStatus              string `json:"planStatus"`
 			} `json:"entrustedList"`
 		}
-		if err := json.Unmarshal(planData, &planOrders); err == nil {
+		if err := json.Unmarshal(planData, &planOrders); err != nil {
+			return nil, err
+		}
+		{
 			for _, order := range planOrders.EntrustedList {
 				// Filter by symbol if specified
 				if symbol != "" && order.Symbol != symbol {
@@ -598,7 +604,7 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 				var triggerPrice float64
 				orderType := "STOP_MARKET"
 
-				if order.PlanType == "pos_profit" {
+				if order.PlanType == "pos_profit" || order.PlanType == "profit_plan" {
 					// Take profit order
 					orderType = "TAKE_PROFIT_MARKET"
 					if order.StopSurplusTriggerPrice != "" {
@@ -620,15 +626,17 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 				positionSide := strings.ToUpper(order.PosSide)
 
 				result = append(result, types.OpenOrder{
-					OrderID:      order.OrderId,
-					Symbol:       order.Symbol,
-					Side:         side,
-					PositionSide: positionSide,
-					Type:         orderType,
-					Price:        0,
-					StopPrice:    triggerPrice,
-					Quantity:     quantity,
-					Status:       "NEW",
+					OrderID:       order.OrderId,
+					Algo:          true,
+					ClosePosition: order.PlanType == "pos_profit" || order.PlanType == "pos_loss",
+					Symbol:        order.Symbol,
+					Side:          side,
+					PositionSide:  positionSide,
+					Type:          orderType,
+					Price:         0,
+					StopPrice:     triggerPrice,
+					Quantity:      quantity,
+					Status:        "NEW",
 				})
 			}
 		}
@@ -729,4 +737,12 @@ func (t *BitgetTrader) CancelOrder(symbol, orderID string) error {
 
 	logger.Infof("✓ [Bitget] Order cancelled: %s %s", symbol, orderID)
 	return nil
+}
+
+func (t *BitgetTrader) CancelProtectiveOrder(symbol string, order types.OpenOrder) error {
+	if !order.Algo {
+		return t.CancelOrder(symbol, order.OrderID)
+	}
+	_, err := t.doRequest("POST", "/api/v2/mix/order/cancel-plan-order", map[string]interface{}{"symbol": t.convertSymbol(symbol), "productType": "USDT-FUTURES", "marginCoin": "USDT", "orderId": order.OrderID})
+	return err
 }

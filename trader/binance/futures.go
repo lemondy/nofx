@@ -276,3 +276,12 @@ func quantizeToTick(price, tickSize float64, tickDecimals int) (string, error) {
 	}
 	return out, nil
 }
+
+func (t *FuturesTrader) InvalidateAccountCache() {
+	t.balanceCacheMutex.Lock()
+	t.cachedBalance = nil
+	t.balanceCacheMutex.Unlock()
+	t.positionsCacheMutex.Lock()
+	t.cachedPositions = nil
+	t.positionsCacheMutex.Unlock()
+}

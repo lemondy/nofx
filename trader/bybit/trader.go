@@ -203,3 +203,5 @@ func (t *BybitTrader) parseOrderResult(result *bybit.ServerResponse) (map[string
 		"status":  "NEW",
 	}, nil
 }
+
+func (t *BybitTrader) InvalidateAccountCache() { t.clearCache() }
