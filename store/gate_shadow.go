@@ -19,10 +19,10 @@ import (
 
 type GateShadowBlock struct {
 	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID     string    `gorm:"column:trader_id;index:idx_gshadow_key;uniqueIndex:uniq_gshadow_open" json:"trader_id"`
-	Symbol       string    `gorm:"column:symbol;index:idx_gshadow_key;uniqueIndex:uniq_gshadow_open" json:"symbol"`
-	Direction    string    `gorm:"column:direction;size:8;index:idx_gshadow_key;uniqueIndex:uniq_gshadow_open" json:"direction"` // long / short
-	HorizonHours int       `gorm:"column:horizon_hours;uniqueIndex:uniq_gshadow_open" json:"horizon_hours"`
+	TraderID     string    `gorm:"column:trader_id;index:idx_gshadow_key" json:"trader_id"`
+	Symbol       string    `gorm:"column:symbol;index:idx_gshadow_key" json:"symbol"`
+	Direction    string    `gorm:"column:direction;size:8;index:idx_gshadow_key" json:"direction"` // long / short
+	HorizonHours int       `gorm:"column:horizon_hours" json:"horizon_hours"`
 	CycleNumber  int       `gorm:"column:cycle_number" json:"cycle_number"`
 	BlockedCodes string    `gorm:"column:blocked_codes;size:256" json:"blocked_codes"` // comma-joined machine codes
 	EntryPrice   float64   `gorm:"column:entry_price" json:"entry_price"`
@@ -53,7 +53,30 @@ func NewGateShadowStore(db *gorm.DB) *GateShadowStore {
 }
 
 func (s *GateShadowStore) initTables() error {
-	return s.db.AutoMigrate(&GateShadowBlock{})
+	if err := s.db.AutoMigrate(&GateShadowBlock{}); err != nil {
+		return err
+	}
+	// 2026-10-04: enforce "one UNEVALUATED row per (trader, symbol, direction,
+	// horizon)" with a PARTIAL unique index — a full unique index (the tag
+	// version that broke startup, FATA at boot) also fires on historical
+	// duplicates among EVALUATED rows, and re-blocking a key after its
+	// counterfactual was resolved is legitimate business. GORM tags cannot
+	// express partial indexes, so this is raw SQL after AutoMigrate, with a
+	// dedupe pass first: historical races (pre-index CreateIfIdle) may hold
+	// multiple open rows per key — keep the newest, drop the rest.
+	if err := s.db.Exec(`
+		DELETE FROM gate_shadow_blocks
+		WHERE outcome = '' AND id NOT IN (
+			SELECT MAX(id) FROM gate_shadow_blocks
+			WHERE outcome = ''
+			GROUP BY trader_id, symbol, direction, horizon_hours
+		)`).Error; err != nil {
+		return err
+	}
+	return s.db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS uniq_gshadow_open
+		ON gate_shadow_blocks(trader_id, symbol, direction, horizon_hours)
+		WHERE outcome = ''`).Error
 }
 
 // CreateIfIdle writes the counterfactual unless an UNEVALUATED row already
