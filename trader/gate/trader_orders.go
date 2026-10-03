@@ -454,6 +454,21 @@ func (t *GateTrader) cancelTriggerOrders(symbol string, orderType string) error 
 	return nil
 }
 
+// CancelOrder cancels ONE order by ID (2026-10-03 review P1: the stop-move
+// retirement loop needs per-ID cancellation — Gate keeps price-triggered
+// protective legs in a SEPARATE ID space from regular orders, so this tries
+// the trigger cancel first and falls back to the regular order cancel).
+func (t *GateTrader) CancelOrder(symbol, orderID string) error {
+	symbol = t.convertSymbol(symbol)
+	if _, _, err := t.client.FuturesApi.CancelPriceTriggeredOrder(t.ctx, "usdt", orderID); err == nil {
+		return nil
+	}
+	if _, _, err := t.client.FuturesApi.CancelFuturesOrder(t.ctx, "usdt", orderID, nil); err == nil {
+		return nil
+	}
+	return fmt.Errorf("cancel order %s failed (tried trigger + regular spaces)", orderID)
+}
+
 // CancelAllOrders cancels all pending orders for a symbol
 func (t *GateTrader) CancelAllOrders(symbol string) error {
 	symbol = t.convertSymbol(symbol)

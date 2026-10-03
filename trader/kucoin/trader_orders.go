@@ -409,6 +409,24 @@ func (t *KuCoinTrader) SetTakeProfit(symbol string, positionSide string, quantit
 	return nil
 }
 
+// CancelOrder cancels ONE order by ID (2026-10-03 review P1: needed by the
+// stop-move retirement loop). KuCoin keeps price-triggered protective legs in
+// the SEPARATE /stopOrders ID space — try that first, then regular orders.
+func (t *KuCoinTrader) CancelOrder(symbol, orderID string) error {
+	kcSymbol := t.convertSymbol(symbol)
+	// stop-order space first (protective legs are stop orders)
+	cancelPath := fmt.Sprintf("%s/%s", kucoinCancelStopPath, orderID)
+	if _, err := t.doRequest("DELETE", cancelPath, nil); err == nil {
+		return nil
+	}
+	// regular order space
+	regPath := fmt.Sprintf("%s/%s", kucoinCancelOrderPath, orderID)
+	if _, err := t.doRequest("DELETE", regPath+"?symbol="+kcSymbol, nil); err == nil {
+		return nil
+	}
+	return fmt.Errorf("cancel order %s failed (tried stop + regular spaces)", orderID)
+}
+
 // CancelStopLossOrders cancels stop loss orders
 func (t *KuCoinTrader) CancelStopLossOrders(symbol string) error {
 	return t.cancelStopOrdersByType(symbol, "sl")

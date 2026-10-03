@@ -514,7 +514,14 @@ func (s *Scheduler) RefreshNow(maxWait time.Duration) {
 			}
 			s.scanning = true
 			s.mu.Unlock()
+			started := time.Now()
 			s.runOnce(nil)
+			// 2026-10-03 review: RefreshNow's maxWait bounds only the WAIT —
+			// surface scans that exceed it so callers know the sync refresh
+			// overran their budget.
+			if took := time.Since(started); took > maxWait {
+				logger.Warnf("🐷 Synchronous refresh took %s (caller budget %s) — Binance slow or board large", took.Round(time.Second), maxWait)
+			}
 			return
 		}
 		s.mu.Unlock()

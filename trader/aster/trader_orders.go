@@ -342,6 +342,11 @@ func (t *AsterTrader) SetStopLoss(symbol string, positionSide string, quantity, 
 		"stopPrice":    priceStr,
 		"quantity":     qtyStr,
 		"timeInForce":  "GTC",
+		// 2026-10-03 review P1: without reduceOnly every stop move STACKED
+		// another full-size trigger leg (positionSide is fixed "BOTH" here),
+		// and a stale leg firing after the first close could OPEN an
+		// opposite position.
+		"reduceOnly": "true",
 	}
 
 	_, err = t.request("POST", "/fapi/v3/order", params)
@@ -383,6 +388,7 @@ func (t *AsterTrader) SetTakeProfit(symbol string, positionSide string, quantity
 		"stopPrice":    priceStr,
 		"quantity":     qtyStr,
 		"timeInForce":  "GTC",
+		"reduceOnly":   "true", // 2026-10-03 review P1, same rationale as the SL leg
 	}
 
 	_, err = t.request("POST", "/fapi/v3/order", params)
