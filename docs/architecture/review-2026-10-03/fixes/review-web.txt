@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /Users/zhangyun/workspace/nofx/web
+
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  08:05:10
+   Duration  460ms (transform 68ms, setup 28ms, import 108ms, tests 74ms, environment 131ms)
+

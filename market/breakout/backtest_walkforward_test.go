@@ -145,4 +145,8 @@ func TestTuneWalkForwardVerifiesOnHoldout(t *testing.T) {
 	if GetParams().StrongThreshold == prev.StrongThreshold {
 		t.Fatal("verified cutoff should have been applied")
 	}
+	next := GetParams()
+	if next.PriceATRCenter != prev.PriceATRCenter || next.VolCenter != prev.VolCenter {
+		t.Fatal("old-score holdout incorrectly authorized new scorer centers")
+	}
 }

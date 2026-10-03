@@ -1,0 +1,3 @@
+# nofx/trader.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-2358998829/000031.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+ok  	nofx/trader	4.208s

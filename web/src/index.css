@@ -16,46 +16,52 @@ html {
   参考基准: DataPage FeaturedCard
 */
 :root {
-  --nofx-gold: #B8912A;
-  --nofx-bg: #F2EFE6; /* page + inset controls */
-  --nofx-card: #ECE8DB; /* card surface */
-  --nofx-accent: #6B7F5E;
+  --nofx-gold: #b8912a;
+  --nofx-bg: #f2efe6; /* page + inset controls */
+  --nofx-card: #ece8db; /* card surface */
+  --nofx-accent: #6b7f5e;
   --nofx-glass: rgba(236, 232, 219, 0.92);
   --nofx-border: rgba(184, 145, 42, 0.25);
 
-  --background: #F2EFE6;
+  --background: #f2efe6;
   --header-bg: rgba(242, 239, 230, 0.88);
 
-  --glass-bg: #ECE8DB;
+  --glass-bg: #ece8db;
   --glass-border: rgba(192, 185, 162, 0.55);
 
-  --panel-bg: #ECE8DB;
-  --panel-bg-hover: #E7E2D2;
-  --panel-inset: #F2EFE6;
+  --panel-bg: #ece8db;
+  --panel-bg-hover: #e7e2d2;
+  --panel-inset: #f2efe6;
   --panel-border: rgba(192, 185, 162, 0.7);
   --panel-border-hover: rgba(184, 145, 42, 0.45);
 
-  --foreground: #1E1E1A;
-  --text-primary: #1E1E1A;
-  --text-secondary: #6E6E60;
-  --text-tertiary: #8A8A7C;
-  --text-disabled: #B5B2A4;
+  --foreground: #1e1e1a;
+  --text-primary: #1e1e1a;
+  --text-secondary: #6e6e60;
+  --text-tertiary: #8a8a7c;
+  --text-disabled: #b5b2a4;
 
   /* Trading Colors */
-  --binance-green: #2E7D4F;
+  --binance-green: #2e7d4f;
   --binance-green-bg: rgba(46, 125, 79, 0.1);
   --binance-green-border: rgba(46, 125, 79, 0.3);
-  --binance-red: #C0392B;
+  --binance-red: #c0392b;
   --binance-red-bg: rgba(192, 57, 43, 0.1);
   --binance-red-border: rgba(192, 57, 43, 0.3);
-  --binance-yellow: #B8912A;
+  --binance-yellow: #b8912a;
 
   /* Shadows — soft, warm */
   --shadow-sm: 0 1px 3px rgba(30, 30, 26, 0.06);
   --shadow-md: 0 4px 12px rgba(30, 30, 26, 0.07);
   --shadow-lg: 0 12px 32px rgba(30, 30, 26, 0.1);
 
-  font-family: 'IBM Plex Mono', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family:
+    'IBM Plex Mono',
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
   line-height: 1.6;
   font-weight: 400;
   color-scheme: light;
@@ -101,7 +107,7 @@ body {
 /* Selection */
 ::selection {
   background: rgba(184, 145, 42, 0.25);
-  color: #1E1E1A;
+  color: #1e1e1a;
 }
 
 #root {
@@ -120,7 +126,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #C0B9A2;
+  background: #c0b9a2;
   border-radius: 4px;
   transition: background 0.2s;
 }
@@ -217,7 +223,7 @@ body {
 }
 
 .nofx-toast {
-  background: #F2EFE6 !important;
+  background: #f2efe6 !important;
   border: 1px solid var(--panel-border) !important;
   color: var(--text-primary) !important;
   box-shadow: var(--shadow-lg) !important;
@@ -235,7 +241,7 @@ body {
 
 /* Success / Error / Warning tint */
 .nofx-toast[data-type='success'] {
-  background: #F2EFE6 !important;
+  background: #f2efe6 !important;
   border-color: var(--binance-green) !important;
   border-left: 3px solid var(--binance-green) !important;
 }
@@ -246,7 +252,7 @@ body {
 }
 
 .nofx-toast[data-type='error'] {
-  background: #F2EFE6 !important;
+  background: #f2efe6 !important;
   border-color: var(--binance-red) !important;
   border-left: 3px solid var(--binance-red) !important;
 }
@@ -258,7 +264,7 @@ body {
 
 .nofx-toast[data-type='warning'],
 .nofx-toast[data-type='info'] {
-  background: #F2EFE6 !important;
+  background: #f2efe6 !important;
   border-color: var(--binance-yellow) !important;
   border-left: 3px solid var(--binance-yellow) !important;
 }
@@ -305,7 +311,7 @@ button:disabled {
 /* Button Variants */
 .btn-success {
   background: rgba(46, 125, 79, 0.1);
-  color: #2E7D4F;
+  color: #2e7d4f;
   border: 1px solid rgba(46, 125, 79, 0.3);
 }
 
@@ -315,7 +321,7 @@ button:disabled {
 
 .btn-danger {
   background: rgba(192, 57, 43, 0.1);
-  color: #C0392B;
+  color: #c0392b;
   border: 1px solid rgba(192, 57, 43, 0.3);
 }
 
@@ -325,13 +331,13 @@ button:disabled {
 
 .btn-outline {
   background: transparent;
-  color: #6E6E60;
-  border: 1px solid #C0B9A2;
+  color: #6e6e60;
+  border: 1px solid #c0b9a2;
 }
 
 .btn-outline:hover:not(:disabled) {
-  border-color: #B8912A;
-  color: #B8912A;
+  border-color: #b8912a;
+  color: #b8912a;
   background: rgba(184, 145, 42, 0.08);
 }
 
@@ -425,13 +431,15 @@ textarea::placeholder {
 }
 
 .binance-gradient {
-  background: linear-gradient(135deg, #B8912A 0%, #C9A227 100%);
+  background: linear-gradient(135deg, #b8912a 0%, #c9a227 100%);
 }
 
 .binance-gradient-subtle {
-  background: linear-gradient(135deg,
-      rgba(184, 145, 42, 0.12) 0%,
-      rgba(201, 162, 39, 0.05) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(184, 145, 42, 0.12) 0%,
+    rgba(201, 162, 39, 0.05) 100%
+  );
   border: 1px solid rgba(184, 145, 42, 0.25);
 }
 
@@ -460,11 +468,13 @@ textarea::placeholder {
 
 /* Skeleton loading */
 .skeleton {
-  background: #E3DECD;
-  background-image: linear-gradient(90deg,
-      transparent,
-      rgba(242, 239, 230, 0.7),
-      transparent);
+  background: #e3decd;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(242, 239, 230, 0.7),
+    transparent
+  );
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 4px;
@@ -484,7 +494,7 @@ textarea::placeholder {
 }
 
 .btn-binance:hover {
-  background: #C9A227;
+  background: #c9a227;
   box-shadow: var(--shadow-md);
 }
 
@@ -602,8 +612,20 @@ tr:hover {
 
 /* Linear Fade Mask for Scrollable Areas */
 .mask-linear-fade {
-  mask-image: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    black 5%,
+    black 95%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    black 5%,
+    black 95%,
+    transparent 100%
+  );
 }
 
 /* Divider */
@@ -657,10 +679,12 @@ tr:hover {
   left: 0;
   right: 0;
   height: 2px;
-  background: linear-gradient(90deg,
-      transparent,
-      var(--binance-yellow),
-      transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--binance-yellow),
+    transparent
+  );
   opacity: 0;
   transition: opacity 0.2s ease;
 }

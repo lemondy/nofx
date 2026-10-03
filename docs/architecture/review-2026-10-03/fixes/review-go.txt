@@ -1,0 +1,43 @@
+=== RUN   TestReview03StopUpdateMustRetainNewProtection
+--- PASS: TestReview03StopUpdateMustRetainNewProtection (0.00s)
+=== RUN   TestReview03VerificationFailureMustKeepWatermark
+10-03 08:09:37 [INFO] trader/auto_trader_pending.go:731 ⚠️ [] partial-fill protection FAILED for XUSDT long (SL: SL coverage unconfirmed, TP: TP coverage unconfirmed) — watermark NOT advanced, retried next cycle
+--- PASS: TestReview03VerificationFailureMustKeepWatermark (0.20s)
+=== RUN   TestReview03AdditionalPartialFillMustIncreaseCoverage
+10-03 08:09:37 [INFO] trader/auto_trader_pending.go:739 📌 [] Partial-fill protection: XUSDT long executed 0.4 @ 100 — SL 95 / TP 110 re-anchored to the actual fill
+10-03 08:09:37 [INFO] trader/auto_trader_pending.go:739 📌 [] Partial-fill protection: XUSDT long executed 0.8 @ 100 — SL 95 / TP 110 re-anchored to the actual fill
+--- PASS: TestReview03AdditionalPartialFillMustIncreaseCoverage (0.00s)
+=== RUN   TestReview03CanceledPartialFailureMustKeepPlan
+10-03 08:09:37 [INFO] trader/auto_trader_pending.go:731 ⚠️ [] partial-fill protection FAILED for XUSDT long (SL: simulated SL rejection, TP: <nil>) — watermark NOT advanced, retried next cycle
+--- PASS: TestReview03CanceledPartialFailureMustKeepPlan (0.20s)
+=== RUN   TestReview03CancelUnknownFinalFillMustKeepPlan
+--- PASS: TestReview03CancelUnknownFinalFillMustKeepPlan (0.00s)
+=== RUN   TestReview03FilledWithoutReceiptMustKeepPlan
+10-03 08:09:37 [INFO] trader/auto_trader_pending.go:483 ⚠️ [] Limit entry FILLED XUSDT long but protection incomplete (0/0 protected) — pending row KEPT, legs retried next cycle
+--- PASS: TestReview03FilledWithoutReceiptMustKeepPlan (0.00s)
+=== RUN   TestReview03PauseGridMustReportCancelFailure
+10-03 08:09:37 [INFO] trader/auto_trader_grid_orders.go:307 [Grid] Paused: review
+--- PASS: TestReview03PauseGridMustReportCancelFailure (0.00s)
+=== RUN   TestReview03NetLossesMustTriggerLossStreak
+--- PASS: TestReview03NetLossesMustTriggerLossStreak (0.00s)
+=== RUN   TestReview03GridPartialCancelMustRetainExposure
+--- PASS: TestReview03GridPartialCancelMustRetainExposure (0.00s)
+=== RUN   TestReview03GridDailyBaselineMustSurviveReload
+--- PASS: TestReview03GridDailyBaselineMustSurviveReload (0.00s)
+=== RUN   TestReview03StopGridMustCancelRestingEntries
+10-03 08:09:37 [INFO] trader/auto_trader_grid_orders.go:307 [Grid] Paused: trader stopped
+10-03 08:09:37 [ERRO] trader/auto_trader.go:683 grid stop incomplete: grid order entry cancellation/final fill unconfirmed
+10-03 08:09:37 [INFO] trader/auto_trader.go:695 ⏹ Automatic trading system stopped
+--- PASS: TestReview03StopGridMustCancelRestingEntries (0.00s)
+=== RUN   TestReview03GridUnknownPositionMustBlockNewRisk
+--- PASS: TestReview03GridUnknownPositionMustBlockNewRisk (0.00s)
+=== RUN   TestReview03AccountCapMustIncludeOtherTraderPendingRisk
+--- PASS: TestReview03AccountCapMustIncludeOtherTraderPendingRisk (0.00s)
+PASS
+ok  	nofx/trader	0.905s
+=== RUN   TestReview03OwnershipMustSurviveCloseBeforeSync
+10-03 08:09:37 [INFO] store/store.go:108 ✅ Database initialized (GORM, SQLite)
+10-03 08:09:37 [INFO] store/position_builder.go:178   ✅ Full close: XUSDT LONG 1.000000 @ 95.00 (avg exit: 95.00, entry: 100.00, PnL: -5.00)
+--- PASS: TestReview03OwnershipMustSurviveCloseBeforeSync (0.01s)
+PASS
+ok  	nofx/store	0.381s

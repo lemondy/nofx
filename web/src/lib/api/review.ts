@@ -16,7 +16,12 @@ export const reviewApi = {
   // ===== Journal =====
   async getJournal(
     traderId?: string,
-    opts?: { limit?: number; offset?: number; symbol?: string; reviewStatus?: string }
+    opts?: {
+      limit?: number
+      offset?: number
+      symbol?: string
+      reviewStatus?: string
+    }
   ): Promise<JournalListResponse> {
     const params = new URLSearchParams()
     if (traderId) params.append('trader_id', traderId)
@@ -35,7 +40,9 @@ export const reviewApi = {
     const url = traderId
       ? `${API_BASE}/review/journal/sync?trader_id=${traderId}`
       : `${API_BASE}/review/journal/sync`
-    const result = await httpClient.request<{ created: number }>(url, { method: 'POST' })
+    const result = await httpClient.request<{ created: number }>(url, {
+      method: 'POST',
+    })
     if (!result.success) throw new Error('Failed to sync trade journal')
     return result.data!
   },
@@ -74,7 +81,10 @@ export const reviewApi = {
     return result.data!
   },
 
-  async createRule(traderId: string | undefined, input: RuleInput): Promise<{ rule: TradingRule }> {
+  async createRule(
+    traderId: string | undefined,
+    input: RuleInput
+  ): Promise<{ rule: TradingRule }> {
     const params = new URLSearchParams()
     if (traderId) params.append('trader_id', traderId)
     const result = await httpClient.request<{ rule: TradingRule }>(
@@ -110,7 +120,10 @@ export const reviewApi = {
     if (!result.success) throw new Error('Failed to delete trading rule')
   },
 
-  async getRuleLogs(traderId?: string, limit = 50): Promise<{ logs: RuleCheckLog[] }> {
+  async getRuleLogs(
+    traderId?: string,
+    limit = 50
+  ): Promise<{ logs: RuleCheckLog[] }> {
     const url = traderId
       ? `${API_BASE}/review/rules/logs?trader_id=${traderId}&limit=${limit}`
       : `${API_BASE}/review/rules/logs?limit=${limit}`
@@ -143,13 +156,18 @@ export const reviewApi = {
   },
 
   // ===== AI review =====
-  async aiExtractRules(traderId?: string): Promise<{ proposals: RuleProposal[]; ai_response: string }> {
+  async aiExtractRules(
+    traderId?: string
+  ): Promise<{ proposals: RuleProposal[]; ai_response: string }> {
     const params = new URLSearchParams()
     if (traderId) params.append('trader_id', traderId)
-    const result = await httpClient.request<{ proposals: RuleProposal[]; ai_response: string }>(
-      `${API_BASE}/review/ai/extract-rules?${params}`,
-      { method: 'POST', data: {} }
-    )
+    const result = await httpClient.request<{
+      proposals: RuleProposal[]
+      ai_response: string
+    }>(`${API_BASE}/review/ai/extract-rules?${params}`, {
+      method: 'POST',
+      data: {},
+    })
     if (!result.success) throw new Error('Failed to extract rules with AI')
     return result.data!
   },
@@ -192,7 +210,10 @@ export const reviewApi = {
 
   async savePromptConfig(
     update: Partial<
-      Pick<ReviewPromptConfig, 'review_system_prompt' | 'rule_extract_system_prompt'>
+      Pick<
+        ReviewPromptConfig,
+        'review_system_prompt' | 'rule_extract_system_prompt'
+      >
     >
   ): Promise<void> {
     const result = await httpClient.request<{ message: string }>(

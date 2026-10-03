@@ -46,3 +46,21 @@ func TestSafeHTTPClientExemptsSchemelessProxy(t *testing.T) {
 		t.Fatalf("DialContext exemption source missing the proxy: %v", hosts)
 	}
 }
+
+func TestSafeClientValidatesProxyDestinationAndRedirect(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+	c := SafeHTTPClient(time.Second)
+	tr := c.Transport.(*http.Transport)
+	for _, raw := range []string{"http://127.0.0.1/private", "http://169.254.169.254/latest/meta-data/", "http://[::1]/"} {
+		req, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tr.Proxy(req); err == nil {
+			t.Fatalf("proxy destination validation bypass: %s", raw)
+		}
+		if err := c.CheckRedirect(req, nil); err == nil {
+			t.Fatalf("redirect validation bypass: %s", raw)
+		}
+	}
+}

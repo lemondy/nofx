@@ -1,0 +1,74 @@
+import React from 'react'
+import { afterEach, expect, test, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrategyStudioPage } from './StrategyStudioPage'
+
+const state = vi.hoisted(() => ({ language: 'zh' }))
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ token: 'mock-token' }) }))
+vi.mock('../contexts/LanguageContext', () => ({ useLanguage: () => ({ language: state.language }) }))
+vi.mock('../i18n/translations', () => ({ t: (k: string) => k.split('.').at(-1) }))
+vi.mock('../lib/notify', () => ({ notify: { success: vi.fn(), warning: vi.fn(), error: vi.fn() }, confirmToast: vi.fn() }))
+vi.mock('../components/strategy/CoinSourceEditor', () => ({ CoinSourceEditor: () => null }))
+vi.mock('../components/strategy/IndicatorEditor', () => ({ IndicatorEditor: () => null }))
+vi.mock('../components/strategy/RiskControlEditor', () => ({ RiskControlEditor: () => null }))
+vi.mock('../components/strategy/PublishSettingsEditor', () => ({ PublishSettingsEditor: () => null }))
+vi.mock('../components/strategy/GridConfigEditor', () => ({ GridConfigEditor: () => null, defaultGridConfig: {} }))
+vi.mock('../components/strategy/TokenEstimateBar', () => ({ TokenEstimateBar: () => null }))
+vi.mock('../components/common/DeepVoidBackground', () => ({ DeepVoidBackground: ({ children }: any) => <div>{children}</div> }))
+vi.mock('../components/strategy/PromptSectionsEditor', () => ({ PromptSectionsEditor: ({ config }: any) => <pre data-testid="prompt-sections">{JSON.stringify(config)}</pre> }))
+
+const savedConfig = { language: 'zh', strategy_type: 'ai_trading', coin_source: {}, indicators: {}, risk_control: {}, prompt_sections: { role_definition: 'USER_SAVED_CUSTOM' }, custom_prompt: '' }
+const saved = { id: 's1', name: 'Saved Custom', is_active: true, is_default: false, updated_at: '2026-10-03T00:00:00Z', config: savedConfig }
+function installFetch(delayDefault = false) {
+ let releaseDefault: (value: any) => void = () => {}
+ const defaults = new Promise(resolve => { releaseDefault = resolve })
+ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+  if (url.includes('default-config')) {
+   if (delayDefault) await defaults
+   return { ok: true, json: async () => ({ ...savedConfig, language: 'en', prompt_sections: { role_definition: 'ENGLISH_DEFAULT' } }) }
+  }
+  if (url.endsWith('/api/strategies')) return { ok: true, json: async () => ({ strategies: [saved] }) }
+  if (url.endsWith('/api/models')) return { ok: true, json: async () => [] }
+  return { ok: true, json: async () => ({ system_prompt: 'test', prompt_variant: 'balanced', config_summary: {} }) }
+ }))
+ return () => releaseDefault(null)
+}
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); state.language = 'zh' })
+test('Review03 switching UI language must preserve saved customized prompt', async () => {
+ installFetch()
+ const view = render(<StrategyStudioPage />)
+ await screen.findByText('Saved Custom')
+ fireEvent.click(screen.getByText('promptSections'))
+ expect(screen.getByTestId('prompt-sections')).toHaveTextContent('USER_SAVED_CUSTOM')
+ state.language = 'en'; view.rerender(<StrategyStudioPage />)
+ // Wait for the fetched template to commit so the safety assertion cannot
+ // pass merely because it ran before the async state update.
+ await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+ expect(screen.getByTestId('prompt-sections')).toHaveTextContent('USER_SAVED_CUSTOM')
+})
+
+test('Review03 late save refresh must preserve a newly selected strategy', async () => {
+ const other = { ...saved, id: 's2', name: 'Strategy B', is_active: false, config: { ...savedConfig, prompt_sections: { role_definition: 'B_CUSTOM' } } }
+ let listCalls = 0
+ let release: () => void = () => {}
+ const delayed = new Promise<void>(resolve => { release = resolve })
+ vi.stubGlobal('fetch', vi.fn(async (url: string, options?: any) => {
+  if (url.endsWith('/api/strategies')) {
+   listCalls++
+   if (listCalls > 1) await delayed
+   return { ok: true, json: async () => ({ strategies: [saved, other] }) }
+  }
+  if (options?.method === 'PUT') return { ok: true, json: async () => ({ message: 'saved' }) }
+  if (url.endsWith('/api/models')) return { ok: true, json: async () => [] }
+  return { ok: true, json: async () => ({ system_prompt: 'test', prompt_variant: 'balanced', config_summary: {} }) }
+ }))
+ render(<StrategyStudioPage />)
+ await screen.findByDisplayValue('Saved Custom')
+ fireEvent.change(screen.getByDisplayValue('Saved Custom'), { target: { value: 'Changed A' } })
+ fireEvent.click(screen.getByRole('button', { name: 'save' }))
+ await waitFor(() => expect(listCalls).toBe(2))
+ fireEvent.click(screen.getByText('Strategy B'))
+ expect(screen.getByDisplayValue('Strategy B')).toBeInTheDocument()
+ await act(async () => { release(); await new Promise(resolve => setTimeout(resolve, 0)) })
+ expect(screen.getByDisplayValue('Strategy B')).toBeInTheDocument()
+})

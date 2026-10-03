@@ -27,7 +27,14 @@ export interface JournalEntry {
   executed_as_plan: '' | 'yes' | 'partial' | 'no' | string
   deviation_note: string
   emotions: string // comma-separated tags
-  mistake_category: '' | 'strategy' | 'execution' | 'risk_control' | 'market' | 'none' | string
+  mistake_category:
+    | ''
+    | 'strategy'
+    | 'execution'
+    | 'risk_control'
+    | 'market'
+    | 'none'
+    | string
   strategy_tag: string
   lesson: string
   review_status: 'pending' | 'reviewed' | string

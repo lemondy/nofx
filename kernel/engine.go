@@ -1038,8 +1038,18 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 	}
 	scheduler := breakout.DefaultScheduler()
 	symbols, age := scheduler.TopSymbolsWithDirectionAge(limit, direction)
-	if len(symbols) == 0 || age > piggyDashMaxAge {
-		if len(symbols) > 0 {
+	// 2026-10-03 review P2: distinguish "empty board" from "direction has no
+	// match on a FRESH board" — the old condition re-ran a full synchronous
+	// scan every cycle just to confirm the direction filter still matches
+	// nothing. Refresh only on staleness or a genuinely empty board.
+	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(limit, "")
+	directionEmpty := len(anyCount) == 0
+	if directionEmpty || age > piggyDashMaxAge {
+		if !directionEmpty && len(symbols) == 0 {
+			logger.Infof("🐷 Piggy-dash board fresh but no %q match — not rescanning", direction)
+			return nil, fmt.Errorf("piggy-dash: no %q symbols on a fresh board", direction)
+		}
+		if !directionEmpty {
 			logger.Infof("🐷 Piggy-dash snapshot is stale (%s old > %s) — refreshing synchronously", age.Round(time.Second), piggyDashMaxAge)
 		} else {
 			logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")

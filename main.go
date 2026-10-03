@@ -190,23 +190,14 @@ func main() {
 		os.Exit(130)
 	}()
 
-	// Stop all traders — bounded wait so an in-flight AI call (up to 120s
-	// timeout × retries) cannot stall shutdown for minutes.
-	done := make(chan struct{})
-	go func() {
-		traderManager.StopAll()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		logger.Warn("⏱️ Graceful trader stop timed out (10s) — exiting anyway; in-flight cycle will be abandoned")
-	}
+	// AI calls are canceled by SignalStop; complete cancellation/receipt work
+	// before exiting. A second interrupt remains the explicit forced-exit escape.
+	traderManager.StopAll()
 
 	// Stop background engines
 	breakout.DefaultScheduler().Stop()
 
-	logger.Info("✅ System shut down safely")
+	logger.Info("✅ System shutdown completed; any unconfirmed orders were reported and retained for recovery")
 }
 
 // initInstallationID initializes the anonymous installation ID for experience improvement

@@ -1,0 +1,11 @@
+ok  	nofx/trader	3.991s
+ok  	nofx/store	2.041s
+ok  	nofx/api	4.415s
+?   	nofx/manager	[no test files]
+ok  	nofx/kernel	39.644s
+ok  	nofx/mcp	26.485s
+ok  	nofx/security	1.439s
+ok  	nofx/market/breakout	1.365s
+ok  	nofx/trader/binance	17.984s
+ok  	nofx/trader/bybit	1.493s
+ok  	nofx/trader/hyperliquid	1.610s

@@ -1734,7 +1734,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			if ctx.LimitAnchors == nil {
 				ctx.LimitAnchors = make(map[string]*LimitAnchor)
 			}
-			ctx.LimitAnchors[market.Normalize(data.Symbol)] = &LimitAnchor{
+			ctx.LimitAnchors[market.Normalize(sig.Symbol)] = &LimitAnchor{
 				LimitBuy:  sig.LimitBuyPrice,
 				LimitSell: sig.LimitSellPrice,
 			}
@@ -1753,7 +1753,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					rc.ShortRR, rc.ShortUsable = sig.HardGate.Short.RR.BestRR, sig.HardGate.Short.RR.Usable
 				}
 			}
-			ctx.RRCeilings[market.Normalize(data.Symbol)] = rc
+			ctx.RRCeilings[market.Normalize(sig.Symbol)] = rc
 			// Capture the hard-gate verdicts so wait_state can be derived
 			// program-side from (wait_bias, gate) instead of model judgment.
 			if ctx.GateStates == nil {
@@ -1796,7 +1796,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					}
 				}
 			}
-			ctx.GateStates[market.Normalize(data.Symbol)] = gs
+			ctx.GateStates[market.Normalize(sig.Symbol)] = gs
 		}
 		// Raw OHLCV (user directive 2026-09-25): the strategy config's 市场数据
 		// panel promises raw candles alongside the derived metrics. CLOSED bars

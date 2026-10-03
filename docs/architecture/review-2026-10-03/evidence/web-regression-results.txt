@@ -1,0 +1,198 @@
+
+ RUN  v4.1.11 /Users/zhangyun/workspace/nofx/web
+
+ ❯ src/pages/__review_20261003.test.tsx (2 tests | 2 failed) 81ms
+   × Review03 switching UI language must preserve saved customized prompt 39ms
+   × Review03 late save refresh must preserve a newly selected strategy 41ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/pages/__review_20261003.test.tsx > Review03 switching UI language must preserve saved customized prompt
+Error: expect(element).toHaveTextContent()
+
+Expected element to have text content:
+  USER_SAVED_CUSTOM
+Received:
+  {"role_definition":"ENGLISH_DEFAULT"}
+ ❯ src/pages/__review_20261003.test.tsx:48:48
+     46|  // pass merely because it ran before the async state update.
+     47|  await act(async () => { await new Promise(resolve => setTimeout(resol…
+     48|  expect(screen.getByTestId('prompt-sections')).toHaveTextContent('USER…
+       |                                                ^
+     49| })
+     50|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/pages/__review_20261003.test.tsx > Review03 late save refresh must preserve a newly selected strategy
+TestingLibraryElementError: Unable to find an element with the display value: Strategy B.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex-shrink-0 px-4 py-3 border-b border-nofx-gold/20 bg-nofx-bg/60 z-10"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex items-center justify-between"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-3"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"p-2 rounded-lg bg-gradient-to-br from-nofx-gold to-yellow-500"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-sparkles w-5 h-5 text-black"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"24"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"24"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M20 2v4"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M22 4h-4"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"4"[39m
+                  [33mcy[39m=[32m"20"[39m
+                  [33mr[39m=[32m"2"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</div>[39m
+            [36m<div>[39m
+              [36m<h1[39m
+                [33mclass[39m=[32m"text-lg font-bold text-nofx-text"[39m
+              [36m>[39m
+                [0mtitle[0m
+              [36m</h1>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"text-xs text-nofx-text-muted"[39m
+              [36m>[39m
+                [0msubtitle[0m
+              [36m</p>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex-1 flex overflow-hidden"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"w-48 flex-shrink-0 border-r border-nofx-gold/20 overflow-y-auto bg-nofx-bg/30 z-10"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"p-2"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex items-center justify-between mb-2 px-2"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-xs font-medium text-nofx-text-muted"[39m
+              [36m>[39m
+                [0mstrategies[0m
+              [36m</span>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex items-center gap-1"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"p-1 rounded hover:bg-[#1E1E1A]/10 transition-colors cursor-pointer text-nofx-text-muted hover:text-[#1E1E1A]"[39m
+                  [33mtitle[39m=[32m"importStrategy"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-upload w-4 h-4"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M12 3v12"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m17 8-5-5-5 5"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                  [36m<input[39m
+                    [33maccept[39m=[32m".json"[39m
+                    [33mclass[39m=[32m"hidden"[39m
+                    [33mtype[39m=[32m"file"[39m
+                  [36m/>[39m
+                [36m</label>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"p-1 rounded hover:bg-[#1E1E1A]/10 transition-colors text-nofx-gold"[39m
+                  [33mtitle[39m=[32m"newStrategyTooltip"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-plus w-4 h-4"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"24"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"24"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M5 12h14"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M12 5v14"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"space-y-2"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"group px-2 py-2 rounded-lg cursor-pointer transition-all ring-1 ring-nofx-gold/50 bg-nofx-gold/10 shadow-[0_0_15px_rgba(184,145,42,0.1)]"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex items-start justify-between"[39m
+                ...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/pages/__review_20261003.test.tsx:74:16
+     72|  expect(screen.getByDisplayValue('Strategy B')).toBeInTheDocument()
+     73|  await act(async () => { release(); await new Promise(resolve => setTi…
+     74|  expect(screen.getByDisplayValue('Strategy B')).toBeInTheDocument()
+       |                ^
+     75| })
+     76|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed (2)
+   Start at  00:32:46
+   Duration  468ms (transform 68ms, setup 31ms, import 109ms, tests 81ms, environment 122ms)
+

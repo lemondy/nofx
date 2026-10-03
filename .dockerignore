@@ -47,3 +47,22 @@ web/dist/
 tmp/
 temp/
 *.tmp
+
+# Credentials and runtime state must never enter build layers/cache.
+.env
+.env.*
+!.env.example
+!.env.sample
+secrets/
+keys/
+*.pem
+*.key
+*.p12
+*.pfx
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*

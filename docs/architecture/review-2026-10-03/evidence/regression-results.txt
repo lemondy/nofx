@@ -1,0 +1,65 @@
+=== RUN   TestReview03StopUpdateMustRetainNewProtection
+    review_20261003_test.go:66: successful stop update canceled the new stop together with the old stop
+--- FAIL: TestReview03StopUpdateMustRetainNewProtection (0.00s)
+=== RUN   TestReview03VerificationFailureMustKeepWatermark
+10-03 00:31:53 [INFO] trader/auto_trader_orders.go:801   🚨 [] protective leg verification FAILED: XUSDT LONG missing SL+TP
+10-03 00:31:53 [INFO] trader/auto_trader_pending.go:710 📌 [] Partial-fill protection: XUSDT long executed 1 @ 100 — SL 95 / TP 110 re-anchored to the actual fill
+    review_20261003_test.go:72: exchange has no protective orders, but ProtectedQty=1
+--- FAIL: TestReview03VerificationFailureMustKeepWatermark (2.00s)
+=== RUN   TestReview03AdditionalPartialFillMustIncreaseCoverage
+10-03 00:31:53 [INFO] trader/auto_trader_orders.go:797   ✅ [] protective legs verified on exchange: XUSDT LONG
+10-03 00:31:53 [INFO] trader/auto_trader_pending.go:710 📌 [] Partial-fill protection: XUSDT long executed 0.4 @ 100 — SL 95 / TP 110 re-anchored to the actual fill
+10-03 00:31:53 [INFO] trader/auto_trader_orders.go:662   ℹ️ SL leg already resting at 95 for XUSDT LONG — placement skipped (retry-safe)
+10-03 00:31:53 [INFO] trader/auto_trader_orders.go:703   ℹ️ TP leg already resting at 110 for XUSDT LONG — placement skipped (retry-safe)
+10-03 00:31:53 [INFO] trader/auto_trader_orders.go:797   ✅ [] protective legs verified on exchange: XUSDT LONG
+10-03 00:31:53 [INFO] trader/auto_trader_pending.go:710 📌 [] Partial-fill protection: XUSDT long executed 0.8 @ 100 — SL 95 / TP 110 re-anchored to the actual fill
+    review_20261003_test.go:80: executed=0.8, watermark=0.8, but actual SL coverage=0.4; price-only dedupe skipped new slice
+--- FAIL: TestReview03AdditionalPartialFillMustIncreaseCoverage (0.00s)
+=== RUN   TestReview03CanceledPartialFailureMustKeepPlan
+10-03 00:31:53 [INFO] trader/auto_trader_orders.go:665   ⚠ Failed to set stop loss for XUSDT: simulated SL rejection
+10-03 00:31:55 [INFO] trader/auto_trader_orders.go:801   🚨 [] protective leg verification FAILED: XUSDT LONG missing SL
+10-03 00:31:55 [INFO] trader/auto_trader_pending.go:706 ⚠️ [] partial-fill protection FAILED for XUSDT long (SL: simulated SL rejection, TP: <nil>) — watermark NOT advanced, retried next cycle
+10-03 00:31:55 [INFO] trader/auto_trader_pending.go:493 📌 [] Limit entry XUSDT CANCELED externally (CANCELED) — state dropped (executed slice protected if any)
+    review_20261003_test.go:85: canceled partially-filled order lost recovery plan despite failed SL
+--- FAIL: TestReview03CanceledPartialFailureMustKeepPlan (2.00s)
+=== RUN   TestReview03CancelUnknownFinalFillMustKeepPlan
+    review_20261003_test.go:91: cancel succeeded but final fill is unknown; durable recovery plan was deleted
+--- FAIL: TestReview03CancelUnknownFinalFillMustKeepPlan (0.00s)
+=== RUN   TestReview03FilledWithoutReceiptMustKeepPlan
+10-03 00:31:55 [INFO] trader/auto_trader_pending.go:486 ✅ [] Limit entry FILLED: XUSDT long @ 100 — protective orders anchored
+    review_20261003_test.go:96: FILLED without quantity/price dropped pending plan and reported protected without placing any SL/TP
+--- FAIL: TestReview03FilledWithoutReceiptMustKeepPlan (0.00s)
+=== RUN   TestReview03PauseGridMustReportCancelFailure
+10-03 00:31:55 [INFO] trader/auto_trader_grid_orders.go:241 [Grid] Paused: review
+    review_20261003_test.go:101: grid pause reported success while exchange entry cancellation failed
+--- FAIL: TestReview03PauseGridMustReportCancelFailure (0.00s)
+=== RUN   TestReview03NetLossesMustTriggerLossStreak
+    review_20261003_test.go:106: three consecutive net losses reset the breaker because gross PnL is positive
+--- FAIL: TestReview03NetLossesMustTriggerLossStreak (0.00s)
+=== RUN   TestReview03GridPartialCancelMustRetainExposure
+10-03 00:31:55 [INFO] trader/auto_trader_grid_orders.go:345 [Grid] Level 0 order cancelled/expired
+    review_20261003_test.go:116: canceled order filled 0.4 but grid discarded exposure: {Index:0 Price:100 State:empty Side: OrderID: OrderQuantity:0 PositionSize:0 PositionEntry:0 AllocatedUSD:0 UnrealizedPnL:0}
+--- FAIL: TestReview03GridPartialCancelMustRetainExposure (0.00s)
+=== RUN   TestReview03GridDailyBaselineMustSurviveReload
+    review_20261003_test.go:124: same-day reload reset actual 10% loss: before=10% after=0%
+--- FAIL: TestReview03GridDailyBaselineMustSurviveReload (0.00s)
+=== RUN   TestReview03StopGridMustCancelRestingEntries
+10-03 00:31:55 [INFO] trader/auto_trader.go:669 ⏹ Automatic trading system stopped
+    review_20261003_test.go:131: stopped grid trader left its resting entries on the exchange
+--- FAIL: TestReview03StopGridMustCancelRestingEntries (0.00s)
+=== RUN   TestReview03GridUnknownPositionMustBlockNewRisk
+    review_20261003_test.go:137: unreadable actual position treated as zero and additional grid exposure allowed
+--- FAIL: TestReview03GridUnknownPositionMustBlockNewRisk (0.00s)
+=== RUN   TestReview03AccountCapMustIncludeOtherTraderPendingRisk
+    review_20261003_test.go:146: same-account trader sees no other pending risk: 20+20 exceeds account cap 30 but gate passed
+--- FAIL: TestReview03AccountCapMustIncludeOtherTraderPendingRisk (0.00s)
+FAIL
+FAIL	nofx/trader	4.909s
+=== RUN   TestReview03OwnershipMustSurviveCloseBeforeSync
+10-03 00:31:50 [INFO] store/store.go:108 ✅ Database initialized (GORM, SQLite)
+10-03 00:31:50 [INFO] store/position_builder.go:177   ✅ Full close: XUSDT LONG 1.000000 @ 95.00 (avg exit: 95.00, entry: 100.00, PnL: -5.00)
+    review_20261003_test.go:22: AI fill synced before ownership mark stayed manual after mark was removed before close-fill sync; loss streak excludes this loss
+--- FAIL: TestReview03OwnershipMustSurviveCloseBeforeSync (0.02s)
+FAIL
+FAIL	nofx/store	0.443s
+FAIL

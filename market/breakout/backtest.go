@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"sort"
 	"time"
@@ -21,18 +20,18 @@ import (
 // penalty (no funding/OI/LS history) stays out of the replay score.
 
 const (
-	btForwardBars1h  = 4    // 15m bars ≈ 1h
-	btForwardBars4h  = 16   // 15m bars ≈ 4h
-	btForwardBars24h = 96   // 15m bars ≈ 24h
+	btForwardBars1h  = 4  // 15m bars ≈ 1h
+	btForwardBars4h  = 16 // 15m bars ≈ 4h
+	btForwardBars24h = 96 // 15m bars ≈ 24h
 	// btReplayScoreFloor: replay collects signals down to this fixed floor
 	// (below the 50..90 cutoff search range) so threshold tuning can see
 	// would-be trades of candidates LOOSER than the current threshold (F15).
 	btReplayScoreFloor = 45.0
-	btWarmupBars     = 260  // bars before the first scored bar (windows + levels)
-	btMinSample      = 40   // TRAIN-set minimum signals for a cutoff to be selectable
-	btVerifySample   = 15   // TEST-set minimum signals for a change to verify
-	btTrainSplit     = 0.7  // temporal walk-forward split (train share)
-	btCostRoundTrip  = 0.20 // % net cost per trade: 2×5bps taker fee + 2×5bps slippage
+	btWarmupBars       = 260  // bars before the first scored bar (windows + levels)
+	btMinSample        = 40   // TRAIN-set minimum signals for a cutoff to be selectable
+	btVerifySample     = 15   // TEST-set minimum signals for a change to verify
+	btTrainSplit       = 0.7  // temporal walk-forward split (train share)
+	btCostRoundTrip    = 0.20 // % net cost per trade: 2×5bps taker fee + 2×5bps slippage
 )
 
 // BTSignal is one historical signal with forward outcomes.
@@ -492,42 +491,10 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 		changes = append(changes, fmt.Sprintf("medium_threshold: %.1f → %.1f", prev.MediumThreshold, next.MediumThreshold))
 	}
 
-	// 2. Sigmoid centers: median ATR strength / volume multiple of TRAIN
-	// winners, half-step toward target (small bounded drift, no holdout claim).
-	var winATR, winVol []float64
-	for _, s := range train {
-		if s.Ret24h > 0 {
-			winATR = append(winATR, s.ATRStrength)
-			winVol = append(winVol, s.VolMultiple)
-		}
-	}
-	if len(winATR) >= btMinSample && len(winVol) >= btMinSample {
-		// P1 fix (2026-09-26 review): the old shape passed the SAME pointer as
-		// target and current (a guaranteed no-op) and never computed the
-		// medians it collected. Now: target = winner median, half-step toward
-		// it, clamped — the small bounded drift the design intended.
-		//
-		// F15 (2026-10-01 review): the drift is now GATED on the holdout —
-		// it used to move centers off train medians unconditionally, so a
-		// verifiably WORSE parameter set went live whenever thresholds were
-		// rejected (review case: +10% train / −10% holdout still moved both
-		// centers). Drift requires a positive holdout edge with enough
-		// samples; otherwise it is recorded as rejected.
-		if testOverall > 0 && len(test) >= btVerifySample {
-			half := func(key string, target float64, current *float64) {
-				t := clampParam(key, target)
-				if math.Abs(t-*current) < 0.01 {
-					return
-				}
-				*current = clampParam(key, *current+0.5*(t-*current))
-				changes = append(changes, fmt.Sprintf("%s: %.3f → %.3f (train-median %.3f, half-step, holdout-verified)", key, prevValue(key, prev), *current, t))
-			}
-			half("price_atr_center", median(winATR), &next.PriceATRCenter)
-			half("vol_center", median(winVol), &next.VolCenter)
-		} else {
-			rejected = append(rejected, fmt.Sprintf("centers: holdout edge %+.2f%% (n=%d) — parameter drift withheld", testOverall, len(test)))
-		}
-	}
+	// Stored BTSignal scores cannot replay changes to scorer centers. Keep
+	// these parameters unchanged until a complete raw-feature replay exists;
+	// an old positive holdout is not validation of a different scorer.
+	rejected = append(rejected, "centers: candidate drift not applied; full scorer replay required")
 
 	if len(changes) == 0 {
 		return nil, verified, rejected, trainN, testN

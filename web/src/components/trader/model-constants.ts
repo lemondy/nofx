@@ -76,12 +76,22 @@ export const AI_PROVIDER_CONFIG: Record<string, AIProviderConfig> = {
 }
 
 // Helper function to get exchange display name from exchange ID (UUID)
-export function getExchangeDisplayName(exchangeId: string | undefined, exchanges: { id: string; exchange_type?: string; name: string; account_name?: string }[]): string {
+export function getExchangeDisplayName(
+  exchangeId: string | undefined,
+  exchanges: {
+    id: string
+    exchange_type?: string
+    name: string
+    account_name?: string
+  }[]
+): string {
   if (!exchangeId) return 'Unknown'
-  const exchange = exchanges.find(e => e.id === exchangeId)
+  const exchange = exchanges.find((e) => e.id === exchangeId)
   if (!exchange) return exchangeId.substring(0, 8).toUpperCase() + '...' // Show truncated UUID if not found
   const typeName = exchange.exchange_type?.toUpperCase() || exchange.name
-  return exchange.account_name ? `${typeName} - ${exchange.account_name}` : typeName
+  return exchange.account_name
+    ? `${typeName} - ${exchange.account_name}`
+    : typeName
 }
 
 // Helper function to check if exchange is a perp-dex type (wallet-based)
@@ -92,7 +102,16 @@ export function isPerpDexExchange(exchangeType: string | undefined): boolean {
 }
 
 // Helper function to get wallet address for perp-dex exchanges
-export function getWalletAddress(exchange: { exchange_type?: string; hyperliquidWalletAddr?: string; lighterWalletAddr?: string; asterSigner?: string } | undefined): string | undefined {
+export function getWalletAddress(
+  exchange:
+    | {
+        exchange_type?: string
+        hyperliquidWalletAddr?: string
+        lighterWalletAddr?: string
+        asterSigner?: string
+      }
+    | undefined
+): string | undefined {
   if (!exchange) return undefined
   const type = exchange.exchange_type?.toLowerCase()
   switch (type) {
@@ -108,7 +127,11 @@ export function getWalletAddress(exchange: { exchange_type?: string; hyperliquid
 }
 
 // Helper function to truncate wallet address for display
-export function truncateAddress(address: string, startLen = 6, endLen = 4): string {
+export function truncateAddress(
+  address: string,
+  startLen = 6,
+  endLen = 4
+): string {
   if (address.length <= startLen + endLen + 3) return address
   return `${address.slice(0, startLen)}...${address.slice(-endLen)}`
 }

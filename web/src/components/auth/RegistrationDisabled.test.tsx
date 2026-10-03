@@ -48,7 +48,9 @@ describe('RegistrationDisabled Component', () => {
 
     it('should display registration closed message', () => {
       renderComponent()
-      const message = screen.getByText(/User registration is currently disabled/i)
+      const message = screen.getByText(
+        /User registration is currently disabled/i
+      )
       expect(message).toBeTruthy()
     })
 
@@ -82,7 +84,9 @@ describe('RegistrationDisabled Component', () => {
       const { container } = renderComponent()
       const mainDiv = container.firstChild as HTMLElement
       // Browser converts hex to rgb
-      expect(mainDiv.style.background).toMatch(/rgb\(242,\s*239,\s*230\)|#F2EFE6/i)
+      expect(mainDiv.style.background).toMatch(
+        /rgb\(242,\s*239,\s*230\)|#F2EFE6/i
+      )
     })
 
     it('should have correct text color', () => {

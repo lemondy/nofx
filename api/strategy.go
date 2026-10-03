@@ -412,7 +412,7 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		}()
 	}
 
-	response := gin.H{"message": "Strategy updated successfully", "reload": "background"}
+	response := gin.H{"message": "Strategy updated successfully", "reload": "background", "updated_at": strategy.UpdatedAt, "config": mergedConfig}
 	if len(reloadTargets) > 0 {
 		response["reloaded_traders"] = len(reloadTargets)
 	}

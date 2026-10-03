@@ -59,6 +59,9 @@ func TestRunShortTunerNoWeightWriteWhenDisabled(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
+	originalClient := binanceHTTP
+	binanceHTTP = srv.Client()
+	t.Cleanup(func() { binanceHTTP = originalClient })
 	t.Setenv("BINANCE_FAPI_BASE", srv.URL)
 
 	before := shortWeights()

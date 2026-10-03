@@ -1,0 +1,114 @@
+
+> nofx-web@1.0.0 build
+> tsc && vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 2922 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                         1.47 kB │ gzip:   0.76 kB
+dist/assets/KaTeX_Size3-Regular-CTq5MqoE.woff           4.42 kB
+dist/assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2          4.93 kB
+dist/assets/KaTeX_Size2-Regular-Dy4dx90m.woff2          5.21 kB
+dist/assets/KaTeX_Size1-Regular-mCD8mA8B.woff2          5.47 kB
+dist/assets/KaTeX_Size4-Regular-BF-4gkZK.woff           5.98 kB
+dist/assets/KaTeX_Size2-Regular-oD1tc_U0.woff           6.19 kB
+dist/assets/KaTeX_Size1-Regular-C195tn64.woff           6.50 kB
+dist/assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2    6.91 kB
+dist/assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2       6.91 kB
+dist/assets/KaTeX_Size3-Regular-DgpXs0kz.ttf            7.59 kB
+dist/assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff     7.66 kB
+dist/assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff        7.72 kB
+dist/assets/KaTeX_Script-Regular-D3wIWfF6.woff2         9.64 kB
+dist/assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2     10.34 kB
+dist/assets/KaTeX_Size4-Regular-DWFBv043.ttf           10.36 kB
+dist/assets/KaTeX_Script-Regular-D5yQViql.woff         10.59 kB
+dist/assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2       11.32 kB
+dist/assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2          11.35 kB
+dist/assets/KaTeX_Size2-Regular-B7gKUWhC.ttf           11.51 kB
+dist/assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2      12.03 kB
+dist/assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2        12.22 kB
+dist/assets/KaTeX_Size1-Regular-Dbsnue_I.ttf           12.23 kB
+dist/assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff      12.32 kB
+dist/assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf     12.34 kB
+dist/assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf        12.37 kB
+dist/assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff        13.21 kB
+dist/assets/KaTeX_Fraktur-Bold-BsDP51OF.woff           13.30 kB
+dist/assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2    13.57 kB
+dist/assets/KaTeX_SansSerif-Italic-DN2j7dab.woff       14.11 kB
+dist/assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff         14.41 kB
+dist/assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff     16.03 kB
+dist/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2       16.40 kB
+dist/assets/KaTeX_Math-Italic-t53AETM-.woff2           16.44 kB
+dist/assets/KaTeX_Script-Regular-C5JkGWo-.ttf          16.65 kB
+dist/assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2       16.78 kB
+dist/assets/KaTeX_Main-Italic-NWA7e6Wa.woff2           16.99 kB
+dist/assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff        18.67 kB
+dist/assets/KaTeX_Math-Italic-DA0__PXp.woff            18.75 kB
+dist/assets/KaTeX_Main-BoldItalic-SpSLRI95.woff        19.41 kB
+dist/assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf       19.44 kB
+dist/assets/KaTeX_Fraktur-Regular-CB_wures.ttf         19.57 kB
+dist/assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf            19.58 kB
+dist/assets/KaTeX_Main-Italic-BMLOBm91.woff            19.68 kB
+dist/assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf        22.36 kB
+dist/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf          24.50 kB
+dist/assets/KaTeX_Main-Bold-Cx986IdX.woff2             25.32 kB
+dist/assets/KaTeX_Main-Regular-B22Nviop.woff2          26.27 kB
+dist/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf      27.56 kB
+dist/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2           28.08 kB
+dist/assets/KaTeX_Main-Bold-Jm3AIy58.woff              29.91 kB
+dist/assets/KaTeX_Main-Regular-Dr94JaBh.woff           30.77 kB
+dist/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf         31.20 kB
+dist/assets/KaTeX_Math-Italic-flOr_0UB.ttf             31.31 kB
+dist/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf         32.97 kB
+dist/assets/KaTeX_AMS-Regular-DMm9YOAa.woff            33.52 kB
+dist/assets/KaTeX_Main-Italic-3WenGoN9.ttf             33.58 kB
+dist/assets/KaTeX_Main-Bold-waoOVXN0.ttf               51.34 kB
+dist/assets/KaTeX_Main-Regular-ypZvNtVU.ttf            53.58 kB
+dist/assets/KaTeX_AMS-Regular-DRggAlZN.ttf             63.63 kB
+dist/assets/math-DWnSZQSX.css                          29.17 kB │ gzip:   8.04 kB
+dist/assets/index-CiqzFcYT.css                         97.66 kB │ gzip:  16.86 kB
+dist/assets/chevron-right-fk_NeCsI.js                   0.30 kB │ gzip:   0.25 kB
+dist/assets/search-CY0eiI4U.js                          0.34 kB │ gzip:   0.27 kB
+dist/assets/trending-up-DCj4XHvC.js                     0.35 kB │ gzip:   0.28 kB
+dist/assets/trending-down-D3NUxgVN.js                   0.35 kB │ gzip:   0.28 kB
+dist/assets/activity-CRtPzcx-.js                        0.41 kB │ gzip:   0.31 kB
+dist/assets/circle-question-mark-CDK-UiGj.js            0.42 kB │ gzip:   0.31 kB
+dist/assets/chart-column-CkR7-Ju7.js                    0.42 kB │ gzip:   0.30 kB
+dist/assets/zap-DDtZTKJP.js                             0.44 kB │ gzip:   0.31 kB
+dist/assets/shield-ClObWRJM.js                          0.44 kB │ gzip:   0.33 kB
+dist/assets/book-open-B_GjQe_5.js                       0.45 kB │ gzip:   0.31 kB
+dist/assets/send-5QHDTNYH.js                            0.46 kB │ gzip:   0.33 kB
+dist/assets/users-cUszXAgW.js                           0.48 kB │ gzip:   0.33 kB
+dist/assets/bot-mX4ubIER.js                             0.50 kB │ gzip:   0.33 kB
+dist/assets/copy-DFB5ocSd.js                            0.65 kB │ gzip:   0.35 kB
+dist/assets/sparkles-DppOyelh.js                        0.67 kB │ gzip:   0.38 kB
+dist/assets/target-DbS8pVwt.js                          0.76 kB │ gzip:   0.36 kB
+dist/assets/trash-2-CSkUUyS0.js                         0.78 kB │ gzip:   0.37 kB
+dist/assets/cpu-CSu63PtS.js                             0.82 kB │ gzip:   0.40 kB
+dist/assets/layers-CzKaQmLX.js                          0.95 kB │ gzip:   0.42 kB
+dist/assets/message-circle-DdoAR5pe.js                  1.08 kB │ gzip:   0.46 kB
+dist/assets/select-D7qJscgC.js                          2.11 kB │ gzip:   1.15 kB
+dist/assets/PunkAvatar-C-6SkNKM.js                      7.15 kB │ gzip:   1.68 kB
+dist/assets/SystemQualityPage-CFcP3vr6.js               8.25 kB │ gzip:   3.09 kB
+dist/assets/StrategyMarketPage-BOFrkzOn.js             13.99 kB │ gzip:   4.21 kB
+dist/assets/SettingsPage-Dpl34JZd.js                   14.60 kB │ gzip:   4.48 kB
+dist/assets/FAQPage-9iBI9tOa.js                        22.60 kB │ gzip:   6.78 kB
+dist/assets/CompetitionPage-Dlnqfy5a.js                26.42 kB │ gzip:   7.19 kB
+dist/assets/DataPage-Nj49LTBG.js                       32.15 kB │ gzip:   7.12 kB
+dist/assets/strategy-translations-DWsJtdU3.js          36.13 kB │ gzip:  13.64 kB
+dist/assets/ReviewPage-BaHrxXlR.js                     37.02 kB │ gzip:   7.72 kB
+dist/assets/LandingPage-BPopUaIF.js                    44.87 kB │ gzip:  12.12 kB
+dist/assets/AITradersPage-BmV8XLXt.js                  50.08 kB │ gzip:  13.85 kB
+dist/assets/chart-math-COzZXLFH.js                     62.65 kB │ gzip:  20.42 kB
+dist/assets/ModelConfigModal-CBlW0F85.js               63.98 kB │ gzip:  14.60 kB
+dist/assets/TraderDashboardPage-C3WI6Y-U.js           111.75 kB │ gzip:  27.66 kB
+dist/assets/StrategyStudioPage-D-xpfNeG.js            115.44 kB │ gzip:  21.91 kB
+dist/assets/motion-BacCcx64.js                        117.09 kB │ gzip:  38.65 kB
+dist/assets/react-2QRWSVwF.js                         143.52 kB │ gzip:  45.99 kB
+dist/assets/candles-Co9zvok5.js                       182.34 kB │ gzip:  58.81 kB
+dist/assets/math-kdo2BnjP.js                          265.18 kB │ gzip:  77.29 kB
+dist/assets/charts-BP18NXOZ.js                        353.34 kB │ gzip:  90.66 kB
+dist/assets/index-BoNDT1tG.js                         469.10 kB │ gzip: 160.26 kB
+✓ built in 2.75s

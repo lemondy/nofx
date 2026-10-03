@@ -1,0 +1,49 @@
+?   	nofx	[no test files]
+ok  	nofx/api	0.988s
+ok  	nofx/auth	0.613s
+?   	nofx/cmd/cancelorphan	[no test files]
+?   	nofx/cmd/listalgos	[no test files]
+?   	nofx/cmd/placetp	[no test files]
+?   	nofx/cmd/protectposition	[no test files]
+?   	nofx/config	[no test files]
+ok  	nofx/crypto	0.391s
+?   	nofx/hook	[no test files]
+ok  	nofx/kernel	38.331s
+ok  	nofx/logger	0.319s
+?   	nofx/manager	[no test files]
+ok  	nofx/market	1.280s
+ok  	nofx/market/breakout	0.268s
+ok  	nofx/mcp	25.262s
+ok  	nofx/mcp/provider	0.313s
+?   	nofx/provider/alpaca	[no test files]
+?   	nofx/provider/coinank	[no test files]
+ok  	nofx/provider/coinank/coinank_api	64.435s
+?   	nofx/provider/coinank/coinank_enum	[no test files]
+ok  	nofx/provider/hyperliquid	2.287s
+ok  	nofx/provider/nofxos	0.173s
+?   	nofx/provider/openbb	[no test files]
+?   	nofx/provider/twelvedata	[no test files]
+ok  	nofx/provider/vergex	0.208s
+ok  	nofx/security	0.192s
+ok  	nofx/store	0.442s
+?   	nofx/telegram	[no test files]
+ok  	nofx/telegram/agent	0.153s
+ok  	nofx/telegram/notify	0.166s
+?   	nofx/telegram/session	[no test files]
+?   	nofx/telemetry	[no test files]
+ok  	nofx/trader	2.515s
+ok  	nofx/trader/aster	0.227s
+ok  	nofx/trader/binance	16.699s
+?   	nofx/trader/binance_stocks	[no test files]
+?   	nofx/trader/bitget	[no test files]
+ok  	nofx/trader/bybit	0.208s
+ok  	nofx/trader/gate	0.207s
+ok  	nofx/trader/hyperliquid	0.444s
+ok  	nofx/trader/indodax	0.138s
+ok  	nofx/trader/kucoin	0.172s
+ok  	nofx/trader/lighter	0.183s
+?   	nofx/trader/okx	[no test files]
+?   	nofx/trader/testutil	[no test files]
+ok  	nofx/trader/types	0.129s
+?   	nofx/wallet	[no test files]
+?   	nofx/web/node_modules/flatted/golang/pkg/flatted	[no test files]

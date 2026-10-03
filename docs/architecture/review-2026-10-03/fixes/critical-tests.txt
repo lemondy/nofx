@@ -1,0 +1,4 @@
+ok  	nofx/trader	3.788s
+ok  	nofx/store	1.389s
+ok  	nofx/api	1.507s
+?   	nofx/manager	[no test files]

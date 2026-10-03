@@ -1,0 +1,13 @@
+
+> nofx-web@1.0.0 test
+> vitest run
+
+
+ RUN  v4.1.11 /Users/zhangyun/workspace/nofx/web
+
+
+ Test Files  7 passed (7)
+      Tests  113 passed (113)
+   Start at  08:04:21
+   Duration  1.21s (transform 770ms, setup 475ms, import 1.03s, tests 361ms, environment 2.42s)
+

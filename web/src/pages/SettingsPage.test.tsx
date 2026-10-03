@@ -70,12 +70,10 @@ describe('Settings password security', () => {
   it('does not sign out or claim success when the current password is rejected', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: false,
-          json: async () => ({ error: 'Current password incorrect' }),
-        })
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ error: 'Current password incorrect' }),
+      })
     )
     submit()
     await waitFor(() =>

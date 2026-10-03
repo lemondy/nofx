@@ -2,21 +2,20 @@ package api
 
 import "nofx/logger"
 
-// Stop joins the old client and persists false. Preserve the pre-reload intent
-// so the manager alone starts the replacement exactly once.
+// Running intent remains in the database while the old client drains. The
+// loader checks its current version, so a stop during reload cannot be undone.
 func (s *Server) removeTraderForReload(userID, traderID string) {
-	cfg, err := s.store.Trader().GetForUser(userID, traderID)
-	if err != nil {
+	if _, err := s.store.Trader().GetForUser(userID, traderID); err != nil {
 		return
 	}
-	resume := cfg.IsRunning
-	full, configErr := s.store.Trader().GetFullConfig(userID, traderID)
-	if configErr != nil || full.AIModel == nil || !full.AIModel.Enabled || full.Exchange == nil || !full.Exchange.Enabled {
-		resume = false
+	cfg, err := s.store.Trader().GetFullConfig(userID, traderID)
+	if err != nil || cfg.AIModel == nil || !cfg.AIModel.Enabled || cfg.Exchange == nil || !cfg.Exchange.Enabled {
+		if err := s.store.Trader().UpdateStatus(userID, traderID, false); err != nil {
+			logger.Errorf("disable reload: %v", err)
+			return
+		}
 	}
-	if err := s.traderManager.RemoveTraderAndThen(traderID, func() error {
-		return s.store.Trader().UpdateStatus(userID, traderID, resume)
-	}); err != nil {
-		logger.Errorf("Failed to preserve trader reload state: %v", err)
+	if err := s.traderManager.RemoveTraderAndThen(traderID, nil); err != nil {
+		logger.Errorf("trader reload: %v", err)
 	}
 }

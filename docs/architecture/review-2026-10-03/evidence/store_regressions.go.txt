@@ -1,0 +1,23 @@
+package store
+
+import (
+ "path/filepath"
+ "testing"
+ "time"
+)
+
+// Deterministic fill-sync -> later ownership mark -> exchange closure cleanup
+// -> close-fill sync. All storage is in a temporary SQLite database.
+func TestReview03OwnershipMustSurviveCloseBeforeSync(t *testing.T) {
+ st,err:=NewWithConfig(DBConfig{Type:DBTypeSQLite,Path:filepath.Join(t.TempDir(),"review.db")})
+ if err!=nil {t.Fatal(err)}
+ defer st.Close()
+ pb:=NewPositionBuilder(st.Position());now:=time.Now().UnixMilli()
+ if err:=pb.ProcessTrade("t1","fake","binance","XUSDT","LONG","open_long",1,100,0.1,0,now,"entry");err!=nil {t.Fatal(err)}
+ if err:=st.AIManaged().Mark("t1","XUSDT","long");err!=nil {t.Fatal(err)}
+ if err:=st.AIManaged().Unmark("t1","XUSDT","long");err!=nil {t.Fatal(err)}
+ if err:=pb.ProcessTrade("t1","fake","binance","XUSDT","LONG","close_long",1,95,0.1,-5,now+1000,"exit");err!=nil {t.Fatal(err)}
+ var row TraderPosition
+ if err:=st.gdb.Where("trader_id = ? AND status = ?","t1","CLOSED").First(&row).Error;err!=nil {t.Fatal(err)}
+ if !row.AIManaged {t.Fatal("AI fill synced before ownership mark stayed manual after mark was removed before close-fill sync; loss streak excludes this loss")}
+}

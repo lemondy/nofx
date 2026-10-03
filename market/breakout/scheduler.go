@@ -269,6 +269,14 @@ func (s *Scheduler) Stop() {
 // runOnce refreshes the snapshot. onDone (when non-nil) fires after the
 // snapshot is stored — used by RefreshNow to unblock a cold-start waiter.
 func (s *Scheduler) runOnce(onDone func()) {
+	// 2026-10-03 review: the ONLY scan entry without a recover — a panic in
+	// AnalyzeMany/ScanShorts ran on the background ticker goroutine (or a
+	// RefreshNow caller's goroutine) and took the whole process down.
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("🐷 Breakout scan panicked (recovered): %v", r)
+		}
+	}()
 	start := time.Now()
 	symbols, err := TopVolumeSymbols(s.Symbols)
 	if err != nil {

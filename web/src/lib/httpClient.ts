@@ -108,12 +108,14 @@ export class HttpClient {
    */
   private async handleError(error: AxiosError): Promise<any> {
     const isSilent = (error.config as any)?.silentError === true
-    const errorData = error.response?.data as {
-      error?: string
-      message?: string
-      error_key?: string
-      error_params?: Record<string, string>
-    } | undefined
+    const errorData = error.response?.data as
+      | {
+          error?: string
+          message?: string
+          error_key?: string
+          error_params?: Record<string, string>
+        }
+      | undefined
     const serverMessage = errorData?.error || errorData?.message
 
     // Network error (no response from server)
