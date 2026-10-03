@@ -41,10 +41,17 @@ var (
 )
 
 // slowTopSnapshot returns the last computed slow-top results (may be empty
-// before the first refresh; ScanShorts merges whatever is available).
+// before the first refresh; ScanShorts merges whatever is available). A cache
+// older than 2×TTL is dropped entirely (2026-10-03 review): the refresher
+// keeps the previous list on failures — merging an arbitrarily old near_high
+// board would feed the fetch-side OI exemption (which trusts the scan's
+// recency) with rotted symbols.
 func slowTopSnapshot() []ShortSignal {
 	slowTopMu.Lock()
 	defer slowTopMu.Unlock()
+	if !slowTopAt.IsZero() && time.Since(slowTopAt) > 2*slowTopCacheTTL {
+		return nil
+	}
 	out := make([]ShortSignal, len(slowTopCache))
 	copy(out, slowTopCache)
 	return out

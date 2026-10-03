@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"nofx/logger"
 	"nofx/market"
-	"nofx/provider/openbb"
 	"nofx/provider/nofxos"
+	"nofx/provider/openbb"
 	"nofx/security"
 	"sort"
-	"strings"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -712,4 +712,42 @@ func binanceOrderBookSpreadPct(symbol string) float64 {
 		return 0
 	}
 	return (ask - bid) / mid * 100
+}
+
+// binanceBTC4hCloses returns the last `limit` closed 4h BTC closes (cached 5
+// min, shared with the 1h variant's cache shape). The BTC long-side filter
+// reads TRUE 4h bars — the same convention as the short scan's bull
+// predicate — instead of phase-arbitrary 1h aggregates (2026-10-03 review).
+func binanceBTC4hCloses(limit int) []float64 {
+	btcClosesMu.Lock()
+	if len(btcClosesCache) >= limit && time.Since(btcClosesFetched) < 5*time.Minute {
+		out := btcClosesCache[len(btcClosesCache)-limit:]
+		btcClosesMu.Unlock()
+		return out
+	}
+	btcClosesMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var candles [][]interface{}
+	if err := binanceGet(ctx, "/fapi/v1/klines?symbol=BTCUSDT&interval=4h&limit="+strconv.Itoa(limit+1), &candles); err != nil {
+		return nil
+	}
+	closes := make([]float64, 0, len(candles))
+	for i := 0; i < len(candles)-1; i++ { // drop the forming candle
+		if c, ok := candles[i][4].(string); ok {
+			if v, err := strconv.ParseFloat(c, 64); err == nil {
+				closes = append(closes, v)
+			}
+		}
+	}
+	btcClosesMu.Lock()
+	btcClosesCache = closes
+	btcClosesFetched = time.Now()
+	btcClosesMu.Unlock()
+	out := closes
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
 }

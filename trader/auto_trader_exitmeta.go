@@ -110,6 +110,16 @@ func classifyExitReason(side string, exitPrice, entryPrice, recordedSL, recorded
 	if intentReason != "" {
 		return intentReason
 	}
+	// 2026-10-03 review: a LOSS beyond the recorded stop that missed the
+	// 0.5% price match is a slipped stop (fast-market gap — meme-coin
+	// territory), not "external". Distinct label keeps the gap visible
+	// without polluting the manual-close bucket.
+	lossBeyondStop := recordedSL > 0 &&
+		((side == "long" && entryPrice > 0 && exitPrice < recordedSL) ||
+			(side == "short" && entryPrice > 0 && exitPrice > recordedSL))
+	if lossBeyondStop {
+		return "stop_loss_slipped"
+	}
 	return "external"
 }
 

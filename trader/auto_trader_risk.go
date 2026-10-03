@@ -72,10 +72,8 @@ const protectionMonitorInterval = 30 * time.Second
 // startProtectionMonitor runs fill finalization (processPendingEntries) and
 // the protection watchdog on a dedicated ticker so a fill that lands between
 // decision cycles is protected within seconds, not on the next cycle
-// boundary. The cycleActive gate keeps the monitor strictly sequential with
-// runCycle/RunGridCycle/ReconcilePendingEntries — the shared trading state
-// (pending entries, recorded stops, peak caches) is single-threaded by
-// design, so the monitor yields whenever a cycle owns it.
+// boundary. The shared execution mutex serializes order state changes; AI
+// waits release it so monitoring continues during slow external requests.
 func (at *AutoTrader) startProtectionMonitor() {
 	at.monitorWg.Add(1)
 	go func() {
@@ -89,9 +87,6 @@ func (at *AutoTrader) startProtectionMonitor() {
 				logger.Info("⏹ Stopped protection monitor")
 				return
 			case <-ticker.C:
-				if at.cycleActive.Load() {
-					continue // a decision cycle owns the shared state right now
-				}
 				at.safeProtectionPass()
 			}
 		}
@@ -101,6 +96,9 @@ func (at *AutoTrader) startProtectionMonitor() {
 // safeProtectionPass guards one monitor pass with a recover backstop — the
 // monitor must never die silently on an unexpected panic.
 func (at *AutoTrader) safeProtectionPass() {
+	mu := at.executionMutex()
+	mu.Lock()
+	defer mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("🛡️ [%s] protection monitor pass panicked: %v", at.name, r)
@@ -108,6 +106,10 @@ func (at *AutoTrader) safeProtectionPass() {
 	}()
 	at.processPendingEntries()
 	at.processProtectionWatchdog()
+	if at.gridState != nil && at.config.StrategyConfig != nil && at.config.StrategyConfig.GridConfig != nil {
+		at.syncGridState()
+		at.checkAndExecuteStopLoss()
+	}
 }
 
 // startDrawdownMonitor starts drawdown monitoring
@@ -139,6 +141,9 @@ func (at *AutoTrader) startDrawdownMonitor() {
 // reintroduces an unguarded assertion): one bad cycle logs and moves on
 // instead of taking down the whole goroutine for the rest of the process.
 func (at *AutoTrader) safeCheckPositionDrawdown() {
+	mu := at.executionMutex()
+	mu.Lock()
+	defer mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("❌ Drawdown monitoring: recovered from panic: %v", r)
@@ -1040,10 +1045,11 @@ func marginExceedsBudget(usedMargin, newMargin, equity, budgetFrac float64) bool
 // budget. excludeKey is the same-side entry being replaced; an opposite-side
 // order on the same symbol still reserves margin.
 func (at *AutoTrader) pendingMarginReserved(excludeKey string) float64 {
-	at.pendingEntriesMu.RLock()
-	defer at.pendingEntriesMu.RUnlock()
 	total := 0.0
-	for key, pe := range at.pendingEntries {
+	for key, pe := range at.accountPendingEntries() {
+		if key == "unknown" {
+			return math.Inf(1)
+		}
 		if key == excludeKey || pe == nil || pe.Price <= 0 || pe.Quantity <= 0 {
 			continue
 		}
@@ -1074,7 +1080,7 @@ func (at *AutoTrader) marginBudgetBlocksOpen(symbol, side string, newSizeUSD, ne
 	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
-		return false, ""
+		return true, "margin budget: account positions unknown"
 	}
 	newMargin := newSizeUSD / newLeverage
 	pending := at.pendingMarginReserved(pendingEntryKey(symbol, side))
@@ -2007,8 +2013,10 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		side = "short"
 	}
 	excludeKey := pendingEntryKey(d.Symbol, side)
-	at.pendingEntriesMu.RLock()
-	for key, pe := range at.pendingEntries {
+	for key, pe := range at.accountPendingEntries() {
+		if key == "unknown" {
+			return true, "account pending reservations unknown", 0
+		}
 		if key == excludeKey || pe == nil || pe.Price <= 0 || pe.StopLoss <= 0 {
 			continue
 		}
@@ -2024,7 +2032,6 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 			symbolRisk += risk
 		}
 	}
-	at.pendingEntriesMu.RUnlock()
 	// R8 (2026-09-26 review): the candidate is priced ALONE — the caller
 	// books candidateRisk only when the candidate PASSES, so the reservation
 	// accumulates linearly (20→40→60), never compounding (the old shape fed
@@ -2154,27 +2161,27 @@ func (at *AutoTrader) anchorDailyBaseline(equity float64) {
 	today := time.Now().UTC().Format("2006-01-02")
 	key := at.dailyBaselineKey()
 
+	// 2026-10-03 review: consult the DURABLE layer BEFORE publishing to the
+	// registry — the old order seeded the registry with the new equity and
+	// corrected it after the store read, letting a same-account peer inherit
+	// the non-durable anchor for one pass (and leaving a crash window where
+	// the registry said "anchored" but the store did not).
+	if at.store != nil {
+		if anchored, err := at.store.RiskState().AnchorDayBaseline(key, today, equity); err == nil && anchored > 0 {
+			equity = anchored
+		}
+	}
 	dailyBaselineRegMu.Lock()
 	if rec, ok := dailyBaselineReg[key]; ok && rec.day == today && rec.equity > 0 {
-		dailyBaselineRegMu.Unlock()
-		at.dayStartDay, at.dayStartEquity = rec.day, rec.equity
-		return
+		// FIRST anchor for the day wins — a later call NEVER moves the
+		// baseline, in either direction (that is the entire halt contract,
+		// and the reload-survival tests pin it).
+		equity = rec.equity
 	}
 	dailyBaselineReg[key] = dailyBaselineRecord{day: today, equity: equity}
 	dailyBaselineRegMu.Unlock()
 
 	at.dayStartDay, at.dayStartEquity = today, equity
-	if at.store != nil {
-		// Durable layer: on a restart mid-day the persisted (earlier) anchor
-		// governs. Best-effort — the registry already bounds in-process
-		// reloads; a persist failure only widens the exposure to a restart.
-		if anchored, err := at.store.RiskState().AnchorDayBaseline(key, today, equity); err == nil && anchored > 0 {
-			at.dayStartEquity = anchored
-			dailyBaselineRegMu.Lock()
-			dailyBaselineReg[key] = dailyBaselineRecord{day: today, equity: anchored}
-			dailyBaselineRegMu.Unlock()
-		}
-	}
 }
 
 // dailyLossHaltBlocks reports the halt reason when equity has retraced ≥
@@ -2478,7 +2485,18 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				if trend == "pullback" || trend == "rally" {
 					if md := ctx.MarketDataMap[d.Symbol]; md != nil {
 						line := regimeLineOf(md, tf)
+						// Evaluate the FILL SITE, not the live tick (2026-10-03
+						// review): a limit entry happens at its anchor — a
+						// retest limit ABOVE the regime line is a valid dip
+						// entry even when the live tick has dipped below the
+						// line for a few minutes. Market entries keep the live
+						// price.
 						px := md.CurrentPrice
+						basis := ""
+						if strings.HasSuffix(d.Action, "_limit") && d.Price > 0 {
+							px = d.Price
+							basis = "(锚位)"
+						}
 						if line > 0 && px > 0 {
 							broken := (isLongAction && px < line) || (isShortAction && px > line)
 							if broken {
@@ -2487,8 +2505,8 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 									at.name, d.Action, d.Symbol, tf, line, px, streak)
 								if push {
 									notify.Notify("ALERT", at.name, fmt.Sprintf(
-										"<b>🛡️ 已拦截 %s %s</b>\n%s 回踩/反弹入场,但 %s 慢线(regime line)<code>%.6g</code> 已被 <code>%.6g</code> 跌/升破——可能是趋势反转而非入场窗\n\n<i>%s</i>",
-										notify.Escape(d.Symbol), map[bool]string{true: "做多", false: "做空"}[isLongAction], tf, tf, line, px, notify.Escape(d.Reasoning)))
+										"<b>🛡️ 已拦截 %s %s</b>\n%s 回踩/反弹入场,但 %s 慢线(regime line)<code>%.6g</code> 已被 <code>%.6g</code> 跌/升破%s——可能是趋势反转而非入场窗\n\n<i>%s</i>",
+										notify.Escape(d.Symbol), map[bool]string{true: "做多", false: "做空"}[isLongAction], tf, tf, line, px, basis, notify.Escape(d.Reasoning)))
 								}
 								continue
 							}

@@ -101,13 +101,13 @@ func TestEMA20StretchGateExemptsPullback(t *testing.T) {
 }
 
 func TestBTCWeakLongGates(t *testing.T) {
-	declining := make([]float64, 300)
+	declining := make([]float64, 80) // TRUE 4h closes: steady −0.5%/bar
 	base := 100.0
-	for i := range declining { // steady −0.5% per 1h bar → 4h closes decline
+	for i := range declining {
 		declining[i] = base
 		base *= 0.995
 	}
-	rising := make([]float64, 300)
+	rising := make([]float64, 80)
 	base = 100.0
 	for i := range rising {
 		rising[i] = base

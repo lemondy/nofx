@@ -583,10 +583,9 @@ type SignalOptions struct {
 	TopTraderPositionRatio *float64   // top traders' position long/short
 	TakerBuySellRatio      *float64   // taker buy/sell volume ratio
 	BtcCloses              []float64  // closed 1h BTC closes for correlation/beta
-	// BtcTrendCloses: a LONGER cached series (300×1h → 75×4h) for the BTC
-	// 4h downtrend verdict + 24h return of the long-side BTC filter
-	// (btc4hShape). Separate from BtcCloses so the correlation input length
-	// stays untouched.
+	// BtcTrendCloses: cached TRUE-4h BTC closes for the long-side BTC
+	// filter (btc4hShape). Separate from BtcCloses so the correlation
+	// input length stays untouched.
 	BtcTrendCloses     []float64
 	VendorStalenessPct *float64           // vendor forming close vs live ticker
 	TraderHistory      *TraderHistoryStat // this trader's closed-trade record on the symbol
@@ -1072,7 +1071,13 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// Round-4 review R4-3: 4h (and any other TF beyond 15m/1h) is required
 	// only when the strategy's fetch list carries it — see
 	// SignalOptions.ConfiguredTimeframes.
-	minBars := map[string]int{"15m": 60, "1h": 60}
+	// 2026-10-03 review (HIGH): "15m" was STATIC here while 4h had been made
+	// dynamic in R4-3 — a strategy whose fetch list omits 15m (e.g.
+	// ["5m","1h","4h"]) saw 0 bars for it, sufficient=false, and EVERY
+	// candidate failed DATA_INSUFFICIENT forever (silent permanent all-wait).
+	// The base is now 1h only; 15m enters through ConfiguredTimeframes (or
+	// PrimaryTF) like every other TF.
+	minBars := map[string]int{"1h": 60}
 	if opt.PrimaryTF != "" {
 		if _, ok := minBars[opt.PrimaryTF]; !ok {
 			minBars[opt.PrimaryTF] = 60
@@ -1586,39 +1591,23 @@ func ema20Stretch4hPct(sig *SymbolSignal) float64 {
 	return 0
 }
 
-// btc4hShape aggregates the shared cached BTC 1h closes to 4h and reports
-// (a) the downtrend verdict — 4h EMA20 < EMA50 AND the last 4h close below
-// its EMA20 (the short scan's bull predicate, inverted) — and (b) BTC's 24h
-// return. known=false when the closes are too short for the EMA pair; the
-// degraded fallback (three consecutive declining 4h closes) keeps the filter
-// alive on short history.
-func btc4hShape(closes []float64) (down bool, ret24 float64, known bool) {
-	n := len(closes)
-	if n >= 210 {
-		var c4 []float64
-		for i := 3; i < n; i += 4 {
-			c4 = append(c4, closes[i])
-		}
-		if len(c4) >= 52 {
-			e20 := emaOf(c4, 20)
-			e50 := emaOf(c4, 50)
-			last := c4[len(c4)-1]
-			down = e20 < e50 && last < e20
-			ret24 = (last - c4[len(c4)-7]) / c4[len(c4)-7] * 100
-			return down, ret24, true
-		}
+// btc4hShape reads the TRUE 4h BTC closes (shared cached fetch, same
+// convention as the short scan's bull predicate — 2026-10-03 review: the
+// 1h-aggregate version had phase-arbitrary buckets that drifted hourly) and
+// reports (a) the downtrend verdict — 4h EMA20 < EMA50 AND the last 4h close
+// below its EMA20 — and (b) BTC's 24h return (6 bars). known=false when
+// fewer than 60 4h closes exist (EMA50 not converged).
+func btc4hShape(closes4h []float64) (down bool, ret24 float64, known bool) {
+	n := len(closes4h)
+	if n < 60 {
+		return false, 0, false
 	}
-	if n >= 26 {
-		var c4 []float64
-		for i := n - 4; i >= 0 && len(c4) < 3; i -= 4 {
-			c4 = append([]float64{closes[i]}, c4...)
-		}
-		if len(c4) == 3 {
-			return c4[2] < c4[1] && c4[1] < c4[0],
-				(closes[n-1] - closes[n-25]) / closes[n-25] * 100, true
-		}
-	}
-	return false, 0, false
+	e20 := emaOf(closes4h, 20)
+	e50 := emaOf(closes4h, 50)
+	last := closes4h[n-1]
+	down = e20 < e50 && last < e20
+	ret24 = (last - closes4h[n-7]) / closes4h[n-7] * 100
+	return down, ret24, true
 }
 
 // emaOf computes the EMA over a float slice (last value).
@@ -1663,7 +1652,9 @@ func sentimentGreedy(threshold int) bool {
 	if threshold <= 0 {
 		return false
 	}
-	if s := market.GetMarketSentiment(); s != nil {
+	// 2026-10-03: Crypto is a POINTER and stays nil while its fetch is in
+	// flight or has failed — the unconditional deref crashed the cycle.
+	if s := market.GetMarketSentiment(); s != nil && s.Crypto != nil {
 		return s.Crypto.Value >= threshold
 	}
 	return false
@@ -1758,7 +1749,14 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 				// the sizing geometry — USUSDT's 16.8% stop died in 4 minutes
 				// with risk capped at 2%. BOTH directions: a wide stop is a
 				// position-geometry problem, not a directional one.
-				if opt.MaxStopDistancePct > 0 && g.StopPlanPct > opt.MaxStopDistancePct {
+				//
+				// bstock exemption (2026-10-03 review): equity tokens price
+				// the whole stop band off the DAILY scale — floor
+				// 1.5×ATR(1d), cap max(2×ATR(1d), 8%) — so a band-legal stop
+				// can legitimately sit at 10-16% on a high-ATR ticker. Their
+				// own band governs; the absolute 10% cap applies to crypto.
+				if opt.MaxStopDistancePct > 0 && !market.IsBStockSymbol(sig.Symbol) &&
+					g.StopPlanPct > opt.MaxStopDistancePct {
 					add(fmt.Sprintf("WIDE_STOP_%.1f_GT_%.0f", g.StopPlanPct, opt.MaxStopDistancePct))
 				}
 			}

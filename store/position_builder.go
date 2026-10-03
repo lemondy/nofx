@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"gorm.io/gorm"
 	"math"
 	"nofx/logger"
 	"strings"
@@ -62,7 +63,8 @@ func (pb *PositionBuilder) handleOpen(
 		// averaging into it keep the first-open ownership. The loss-streak
 		// circuit breaker consumes this flag to keep manual trades (and
 		// other traders sharing the account) out of the AI's streak.
-		aiOwned := NewAIManagedStore(pb.positionStore.db).IsMarked(traderID, symbol, strings.ToLower(side))
+		registry := NewAIManagedStore(pb.positionStore.db)
+		aiOwned := registry.OwnsEntry(traderID, symbol, side, orderID) || registry.IsLegacyMarked(traderID, symbol, side)
 		// Create new position
 		position := &TraderPosition{
 			TraderID:           traderID,
@@ -231,9 +233,12 @@ func (s *PositionStore) BackfillReconciledPnL(traderID, symbol, side string, rea
 	if err != nil {
 		return false
 	}
+	// Atomic accumulate (2026-10-03 review): the old shape read the row then
+	// wrote row.RealizedPnL + realizedPnL — two close fills landing near-
+	// simultaneously both read the same base and one leg's PnL/fee vanished.
 	updates := map[string]interface{}{
-		"realized_pnl": row.RealizedPnL + realizedPnL,
-		"fee":          row.Fee + fee,
+		"realized_pnl": gorm.Expr("realized_pnl + ?", realizedPnL),
+		"fee":          gorm.Expr("fee + ?", fee),
 		"exit_price":   price,
 		"exit_time":    tradeTimeMs,
 		"close_reason": "sync",

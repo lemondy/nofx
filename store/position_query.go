@@ -171,6 +171,10 @@ type RecentTrade struct {
 	EntryTime     int64   `json:"entry_time"`
 	ExitTime      int64   `json:"exit_time"`
 	HoldDuration  string  `json:"hold_duration"`
+	// CloseReason: the per-cycle exit attribution (stop_loss / trailing_stop
+	// / ai_close / take_profit / trend_runner / external …) — the trades
+	// endpoint previously couldn't surface it while /positions/history could.
+	CloseReason string `json:"close_reason"`
 }
 
 // GetRecentTrades gets recent closed trades
@@ -187,10 +191,11 @@ func (s *PositionStore) GetRecentTrades(traderID string, limit int) ([]RecentTra
 	var trades []RecentTrade
 	for _, pos := range positions {
 		t := RecentTrade{
-			Symbol:     pos.Symbol,
-			Side:       strings.ToLower(pos.Side),
-			EntryPrice: pos.EntryPrice,
-			ExitPrice:  pos.ExitPrice,
+			Symbol:      pos.Symbol,
+			CloseReason: pos.CloseReason,
+			Side:        strings.ToLower(pos.Side),
+			EntryPrice:  pos.EntryPrice,
+			ExitPrice:   pos.ExitPrice,
 			// Net of fee (user audit 2026-10-01): the stored realized_pnl is
 			// the exchange's gross realized PnL — rendering it raw contradicted
 			// the dictionary ("已扣手续费") and overstated every winner. The
@@ -402,8 +407,12 @@ func (s *PositionStore) GetHoldingTimeStats(traderID string) ([]HoldingTimeStats
 
 		r := rangeStats[rangeKey]
 		r.count++
-		r.totalPnL += pos.RealizedPnL
-		if pos.RealizedPnL > 0 {
+		// NET caliber (2026-10-03 review): every other aggregate on this
+		// store nets the fee — this one fed the history summary's
+		// best-hold-range with gross numbers.
+		net := pos.RealizedPnL - pos.Fee
+		r.totalPnL += net
+		if net > 0 {
 			r.wins++
 		}
 	}

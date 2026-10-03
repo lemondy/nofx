@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"nofx/kernel"
@@ -22,7 +23,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	notify "nofx/telegram/notify"
@@ -154,6 +154,9 @@ type AutoTrader struct {
 	stopUntil                  time.Time
 	isRunning                  bool
 	lifecycleMu                sync.Mutex
+	executionStateMu           sync.Mutex
+	runVersion                 uint64
+	aiCancel                   context.CancelFunc
 	runDone                    chan struct{}
 	runtimeMu                  sync.RWMutex
 	isRunningMutex             sync.RWMutex       // Mutex to protect isRunning flag
@@ -165,7 +168,6 @@ type AutoTrader struct {
 	positionInitialStopLoss    map[string]float64 // Opening-risk stop per open position (symbol_side -> price) — write-once 1R anchor; stop adjustments move only positionStopLoss
 	stopMonitorCh              chan struct{}      // Used to stop monitoring goroutine
 	monitorWg                  sync.WaitGroup     // Used to wait for monitoring goroutine to finish
-	cycleActive                atomic.Bool        // true while runCycle/RunGridCycle/reconcile own the shared trading state — the protection monitor skips its tick (F6)
 	peakPnLCache               map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
 	peakPnLCacheMutex          sync.RWMutex       // Cache read-write lock
 	tpTrimDone                 map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
@@ -176,27 +178,27 @@ type AutoTrader struct {
 	// executor gates this cycle (symbol|action -> reason) — the Telegram
 	// CoT summary used to render a bare "被闸门过滤，未执行" with no cause,
 	// forcing a manual log dig every time (LITUSDT 10-01 user report).
-	filterReasons map[string]string
-	lastBalanceSyncTime        time.Time                   // Last balance sync time
-	userID                     string                      // User ID
-	gridState                  *GridState                  // Grid trading state (only used when StrategyType == "grid_trading")
-	consecutiveAIFailures      int                         // Consecutive AI call failures
-	safeMode                   bool                        // Safe mode: no new positions, protect existing ones
-	safeModeReason             string                      // Why safe mode was activated
-	authBlocked                bool                        // Binance auth/IP rejection (-2015/-2014): trading paused until operator fixes config
-	authBlockedReason          string                      // Why auth blocking was activated
-	gateNotify                 map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
-	gateNotifyMu               sync.Mutex
-	pendingEntries             map[string]*pendingEntry // limit-entry state machine (symbol|side → order)
-	pendingEntriesMu           sync.RWMutex
-	volResizeLast              map[string]time.Time // per-position vol-resize cooldown
-	volResizeMu                sync.Mutex
-	tpRunnerDoneMap            map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
-	openTP                     map[string]float64 // recorded decision TP per open position (symbol_side)
-	openTPMu                   sync.RWMutex
-	closeIntents               map[string]closeIntent // program close intents for exit classification (symbol|side → why)
-	closeIntentsMu             sync.Mutex
-	positionExitMode           map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
+	filterReasons         map[string]string
+	lastBalanceSyncTime   time.Time                   // Last balance sync time
+	userID                string                      // User ID
+	gridState             *GridState                  // Grid trading state (only used when StrategyType == "grid_trading")
+	consecutiveAIFailures int                         // Consecutive AI call failures
+	safeMode              bool                        // Safe mode: no new positions, protect existing ones
+	safeModeReason        string                      // Why safe mode was activated
+	authBlocked           bool                        // Binance auth/IP rejection (-2015/-2014): trading paused until operator fixes config
+	authBlockedReason     string                      // Why auth blocking was activated
+	gateNotify            map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
+	gateNotifyMu          sync.Mutex
+	pendingEntries        map[string]*pendingEntry // limit-entry state machine (symbol|side → order)
+	pendingEntriesMu      sync.RWMutex
+	volResizeLast         map[string]time.Time // per-position vol-resize cooldown
+	volResizeMu           sync.Mutex
+	tpRunnerDoneMap       map[string]bool    // TP-runner conversion done per position (GUARDED BY volResizeMu; cleared with the position lifecycle in ClearPeakPnLCache)
+	openTP                map[string]float64 // recorded decision TP per open position (symbol_side)
+	openTPMu              sync.RWMutex
+	closeIntents          map[string]closeIntent // program close intents for exit classification (symbol|side → why)
+	closeIntentsMu        sync.Mutex
+	positionExitMode      map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
 }
 
 // Binance hedge legs must use isolated margin for this strategy. Other
@@ -395,7 +397,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	strategyEngine := kernel.NewStrategyEngine(config.StrategyConfig)
 	logger.Infof("✓ [%s] Using strategy engine (strategy configuration loaded)", config.Name)
 
-	return &AutoTrader{
+	at := &AutoTrader{
 		id:                      config.ID,
 		name:                    config.Name,
 		aiModel:                 config.AIModel,
@@ -434,7 +436,9 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		peakPnLCacheMutex:       sync.RWMutex{},
 		lastBalanceSyncTime:     time.Now(),
 		userID:                  userID,
-	}, nil
+	}
+	registerAccountTrader(at)
+	return at, nil
 }
 
 // InitialBalance exposes the configured starting capital for stats/reporting.
@@ -444,8 +448,11 @@ func (at *AutoTrader) InitialBalance() float64 {
 
 // Run runs the automatic trading main loop
 var ErrAlreadyRunning = errors.New("trader is already running")
+var ErrRunIntentChanged = errors.New("trader running intent changed")
 
-func (at *AutoTrader) beginRun() error {
+func (at *AutoTrader) beginRun() error { return at.beginRunWithIntent(nil) }
+
+func (at *AutoTrader) beginRunWithIntent(expected *uint64) error {
 	at.lifecycleMu.Lock()
 	defer at.lifecycleMu.Unlock()
 	if at.runDone != nil {
@@ -456,10 +463,21 @@ func (at *AutoTrader) beginRun() error {
 		}
 	}
 	if at.store != nil {
-		if err := at.store.Trader().UpdateStatus(at.userID, at.id, true); err != nil {
+		if expected == nil {
+			if err := at.store.Trader().UpdateStatus(at.userID, at.id, true); err != nil {
+				return err
+			}
+		}
+		row, err := at.store.Trader().GetForUser(at.userID, at.id)
+		if err != nil {
 			return err
 		}
+		if expected != nil && (!row.IsRunning || row.RunVersion != *expected) {
+			return ErrRunIntentChanged
+		}
+		at.runVersion = row.RunVersion
 	}
+
 	at.runtimeMu.Lock()
 	at.startTime = time.Now()
 	at.runtimeMu.Unlock()
@@ -468,6 +486,11 @@ func (at *AutoTrader) beginRun() error {
 	at.stopMonitorCh = make(chan struct{})
 	at.runDone = make(chan struct{})
 	at.isRunning = true
+	aiCtx, cancel := context.WithCancel(context.Background())
+	at.aiCancel = cancel
+	if client, ok := at.mcpClient.(interface{ SetRequestContext(context.Context) }); ok {
+		client.SetRequestContext(aiCtx)
+	}
 	at.isRunningMutex.Unlock()
 	return nil
 }
@@ -508,12 +531,18 @@ func (at *AutoTrader) run() (err error) {
 		}
 		at.monitorWg.Done()
 		at.monitorWg.Wait()
-		if at.store != nil {
-			_ = at.store.Trader().UpdateStatus(at.userID, at.id, false)
+		if err != nil && at.store != nil {
+			_ = at.store.Trader().StopIfVersion(at.userID, at.id, at.runVersion)
 		}
 		close(at.runDone)
 	}()
 
+	if at.store != nil {
+		row, e := at.store.Trader().GetForUser(at.userID, at.id)
+		if e != nil || !row.IsRunning || row.RunVersion != at.runVersion {
+			return nil
+		}
+	}
 	select {
 	case <-at.stopMonitorCh:
 		return nil
@@ -537,9 +566,7 @@ func (at *AutoTrader) run() (err error) {
 	// restart orphans the in-memory pending state — shadow rows re-claim live
 	// orders, offline fills get their protective orders placed, unowned
 	// tagged orders get cancelled (see auto_trader_reconcile.go).
-	at.cycleActive.Store(true)
-	at.ReconcilePendingEntries()
-	at.cycleActive.Store(false)
+	withExecutionLock(at.executionMutex(), func() (bool, error) { at.ReconcilePendingEntries(); return true, nil })
 
 	// All adapters, including wrappers such as Binance Stocks, share one
 	// lifecycle contract instead of a per-exchange start/stop matrix.
@@ -561,7 +588,8 @@ func (at *AutoTrader) run() (err error) {
 	isGridStrategy := at.IsGridStrategy()
 	if isGridStrategy {
 		logger.Infof("🔲 [%s] Grid trading strategy detected, initializing grid...", at.name)
-		if err := at.InitializeGrid(); err != nil {
+		_, initErr := withExecutionLock(at.executionMutex(), func() (bool, error) { return true, at.InitializeGrid() })
+		if err := initErr; err != nil {
 			logger.Errorf("❌ [%s] Failed to initialize grid: %v", at.name, err)
 			return fmt.Errorf("grid initialization failed: %w", err)
 		}
@@ -574,17 +602,13 @@ func (at *AutoTrader) run() (err error) {
 	}
 	// Execute immediately on first run
 	if isGridStrategy {
-		at.cycleActive.Store(true)
 		if err := at.RunGridCycle(); err != nil {
 			logger.Infof("❌ Grid execution failed: %v", err)
 		}
-		at.cycleActive.Store(false)
 	} else {
-		at.cycleActive.Store(true)
 		if err := at.runCycle(); err != nil {
 			logger.Infof("❌ Execution failed: %v", err)
 		}
-		at.cycleActive.Store(false)
 	}
 
 	for {
@@ -598,7 +622,6 @@ func (at *AutoTrader) run() (err error) {
 
 		select {
 		case <-timer.C:
-			at.cycleActive.Store(true)
 			if isGridStrategy {
 				if err := at.RunGridCycle(); err != nil {
 					logger.Infof("❌ Grid execution failed: %v", err)
@@ -608,7 +631,6 @@ func (at *AutoTrader) run() (err error) {
 					logger.Infof("❌ Execution failed: %v", err)
 				}
 			}
-			at.cycleActive.Store(false)
 			// Re-arm on the next wall-clock boundary — a cycle that overshoots
 			// a boundary skips it instead of bursting.
 			timer.Reset(nextAlignedWait(at.config.ScanInterval, time.Now()))
@@ -647,25 +669,29 @@ func (at *AutoTrader) Stop() {
 	at.isRunningMutex.Lock()
 	wasRunning := at.isRunning
 	at.isRunning = false
+	if at.aiCancel != nil {
+		at.aiCancel()
+	}
 	if wasRunning {
 		close(at.stopMonitorCh)
 	}
 	at.isRunningMutex.Unlock()
 
-	// Exchange-config updates rebuild the AutoTrader with a new SDK client.
-	// Stop the old Binance sync ticker before dropping that client; it embeds
-	// the API key and otherwise survives independently of the main loop.
+	at.executionMutex().Lock()
+	if at.trader != nil && at.gridState != nil && at.config.StrategyConfig != nil && at.config.StrategyConfig.GridConfig != nil {
+		if err := at.pauseGrid("trader stopped"); err != nil {
+			logger.Errorf("grid stop incomplete: %v", err)
+		}
+	}
+	at.cancelAllPendingEntries("trader stopped")
+	at.executionMutex().Unlock()
 	if at.runDone != nil {
 		<-at.runDone
 	} else if syncer, ok := at.trader.(interface{ StopOrderSync() }); ok {
 		syncer.StopOrderSync()
 	}
-	// F6b (2026-10-01 review): a stopped trader must not leave UNOWNED
-	// resting entry orders behind — a GTC limit can fill minutes later with
-	// the entire protection pipeline stopped. Cancel what still rests
-	// (cancelPending re-checks the order after the cancel and protects any
-	// slice that filled); anything uncancellable is surfaced, not silent.
-	at.cancelAllPendingEntries("trader stopped")
+	unregisterAccountTrader(at)
+
 	logger.Info("⏹ Automatic trading system stopped")
 }
 
@@ -781,11 +807,20 @@ func calculatePnLPercentage(unrealizedPnl, marginUsed float64) float64 {
 // every AI open path marks at fill time; everything unmarked is manual.
 // ============================================================================
 
-func (at *AutoTrader) markAIManaged(symbol, side string) {
+func (at *AutoTrader) markAIManaged(symbol, side string, orders ...string) {
 	if at.store == nil {
 		return
 	}
-	if err := at.store.AIManaged().Mark(at.id, symbol, strings.ToLower(side)); err == nil {
+	orderID := ""
+	if len(orders) > 0 {
+		orderID = orders[0]
+	}
+	if err := at.store.AIManaged().MarkEntry(at.id, symbol, strings.ToLower(side), orderID); err != nil {
+		// 2026-10-03 review: a swallowed mark failure classifies the position
+		// MANUAL = automation hands-off — exactly what this registry exists
+		// to prevent. Surface it.
+		logger.Errorf("🤖 [%s] AI-managed MARK FAILED %s %s: %v — position treated as manual (hands-off) until marked", at.name, symbol, side, err)
+	} else {
 		logger.Infof("🤖 [%s] position marked AI-managed: %s %s — automation owns its lifecycle", at.name, symbol, side)
 	}
 }
@@ -862,4 +897,32 @@ func (at *AutoTrader) popFilterReason(d kernel.Decision) string {
 	r := at.filterReasons[d.Symbol+"|"+d.Action]
 	delete(at.filterReasons, d.Symbol+"|"+d.Action)
 	return r
+}
+
+// StartIfDesired never rewrites a newer stop intent while a reload is finishing.
+func (at *AutoTrader) StartIfDesired(version uint64) error {
+	if err := at.beginRunWithIntent(&version); err != nil {
+		if errors.Is(err, ErrRunIntentChanged) {
+			return nil
+		}
+		return err
+	}
+	go func() {
+		if err := at.run(); err != nil {
+			logger.Errorf("trader loop: %v", err)
+		}
+	}()
+	return nil
+}
+
+func (at *AutoTrader) SignalStop() {
+	at.isRunningMutex.Lock()
+	defer at.isRunningMutex.Unlock()
+	if at.isRunning {
+		if at.aiCancel != nil {
+			at.aiCancel()
+		}
+		at.isRunning = false
+		close(at.stopMonitorCh)
+	}
 }

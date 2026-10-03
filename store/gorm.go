@@ -35,12 +35,20 @@ func InitGorm(dbPath string) (*gorm.DB, error) {
 	// Per-connection pragmas ride the DSN so EVERY pooled connection gets
 	// them (pool >1 makes the old one-shot db.Exec pragmas insufficient —
 	// foreign_keys and journal mode are per-connection in SQLite).
+	if strings.TrimSpace(dbPath) == "" {
+		// 2026-10-03 review: an empty path makes SQLite open a throwaway
+		// in-memory DB — total silent data "loss". Fail fast instead.
+		return nil, fmt.Errorf("sqlite path is empty")
+	}
+	if strings.Contains(dbPath, "?") && !strings.HasPrefix(dbPath, "file:") {
+		// mattn splits a PLAIN path at the first "?" and swallows the rest as
+		// params — the app would silently open the wrong file.
+		return nil, fmt.Errorf("sqlite path %q contains '?' — use a file: URI or rename the file", dbPath)
+	}
 	dsn := dbPath
 	sep := "?"
-	if len(dsn) > 0 && (strings.Contains(dsn, "?") || strings.HasPrefix(dsn, "file:")) {
-		if strings.Contains(dsn, "?") {
-			sep = "&"
-		}
+	if strings.Contains(dsn, "?") {
+		sep = "&"
 	}
 	dsn = dsn + sep + "_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{

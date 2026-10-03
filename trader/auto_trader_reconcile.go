@@ -111,7 +111,12 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 	// --- Step 1: re-claim from shadow rows ------------------------------
 	rows, err := at.store.PendingEntry().List(at.id)
 	if err != nil {
-		logger.Infof("⚠️ [%s] Pending-entry reconciliation: shadow row list failed: %v", at.name, err)
+		// 2026-10-03 review: a failed OWNERSHIP read must skip the whole
+		// reconcile — continuing leaves `owned` empty and step 2 cancels
+		// every lim- tagged order on the account as "orphaned" on a
+		// transient DB error.
+		logger.Errorf("⚠️ [%s] Pending-entry reconciliation ABORTED: shadow row list failed: %v — orphan sweep skipped this boot", at.name, err)
+		return
 	}
 	for _, row := range rows {
 		status, err := at.trader.GetOrderStatus(row.Symbol, row.OrderID)
@@ -142,7 +147,13 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 			// executed slice BEFORE the plan row goes away — the live
 			// CANCELED branch has always done this; the offline path
 			// silently dropped the residue.
-			at.protectOfflineResidue(row, status)
+			pe := pendingEntryFromRow(row)
+			at.setPendingEntry(&pe)
+			at.protectExecutedSlice(&pe, status)
+			if !pendingProtectionComplete(&pe, status) {
+				continue
+			}
+			at.dropPendingEntry(pe.Symbol, pe.Side)
 			if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 				logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 			}
@@ -190,7 +201,12 @@ func pendingEntryFromRow(row *store.PendingEntryDB) pendingEntry {
 		Symbol: row.Symbol, Side: row.Side, Price: row.Price,
 		Quantity: row.Quantity, StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,
 		Leverage: row.Leverage, OrderID: row.OrderID, PlacedAt: row.PlacedAt,
-		ExitMode: row.ExitMode,
+		ExitMode:    row.ExitMode,
+		ExecutedQty: row.ExecutedQty,
+		// 2026-10-03 review: carry the protection watermark too — without it
+		// a re-claimed entry re-fires the "保护未完成" alert for an already-
+		// protected slice (account_execution restores it, this path didn't).
+		ProtectedQty: row.ProtectedQty,
 	}
 }
 
@@ -200,7 +216,7 @@ func (at *AutoTrader) protectOfflineResidue(row *store.PendingEntryDB, status ma
 	if statusFloat(status, "executedQty") <= 0 {
 		return
 	}
-	at.markAIManaged(row.Symbol, row.Side)
+	at.markAIManaged(row.Symbol, row.Side, row.OrderID)
 	pe := pendingEntryFromRow(row)
 	at.protectExecutedSlice(&pe, status)
 }
@@ -214,9 +230,16 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB, status map[
 	// R6 (2026-09-26 review): the offline fill IS an AI fill (this is the
 	// AI's own pending entry) — mark ownership BEFORE anything else, so the
 	// hands-off watchdog can never classify it manual later.
-	at.markAIManaged(row.Symbol, row.Side)
+	at.markAIManaged(row.Symbol, row.Side, row.OrderID)
 	pe := pendingEntryFromRow(row)
-	executed := statusFloat(status, "executedQty")
+	executed, _, valid := fillReceipt(status)
+	if !valid || executed <= 0 {
+		at.setPendingEntry(&pe)
+		return
+	}
+	if cache, ok := at.trader.(interface{ InvalidateAccountCache() }); ok {
+		cache.InvalidateAccountCache()
+	}
 
 	// Position may have been closed externally in the offline window; check
 	// before placing protection, otherwise the protective orders would open a
@@ -252,7 +275,7 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB, status map[
 	}
 
 	at.protectExecutedSlice(&pe, status)
-	if executed > 0 && pe.ProtectedQty+1e-9 < executed {
+	if !pendingProtectionComplete(&pe, status) {
 		// Protection did not complete — keep the plan live (in-memory map +
 		// durable row) so the pending lifecycle retries the missing legs.
 		at.setPendingEntry(&pe)

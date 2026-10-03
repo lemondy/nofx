@@ -75,7 +75,11 @@ type CandidateCoin struct {
 	ShortReasons    []string `json:"short_reasons,omitempty"`     // topping confirmations printed
 	ShortFundingAnn float64  `json:"short_funding_ann,omitempty"` // funding annualized % AT SCAN TIME
 	ShortScanAtMs   int64    `json:"short_scan_at_ms,omitempty"`  // when the scanner snapshot was taken
-	ShortUniverse   string   `json:"short_universe,omitempty"`    // "gainer" | "hist_gainer" (历史涨幅池) | "near_high" (磨顶池)
+	ShortUniverse   string   `json:"short_universe,omitempty"`
+	// NearHighAlso: also passed the grinding-top screen under another universe
+	// label — scan time exempted it from the min-OI floor, fetch must too
+	// (2026-10-03 review: exemption was dead for collision coins).
+	NearHighAlso bool `json:"near_high_also,omitempty"` // "gainer" | "hist_gainer" (历史涨幅池) | "near_high" (磨顶池)
 	// ScannerDirection is the direction the scanning engine concluded for
 	// this symbol: short_scan ⇒ "short"; piggy_dash ⇒ "up"/"down".
 	ScannerDirection string `json:"scanner_direction,omitempty"`
@@ -871,10 +875,14 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			}
 		}
 
+		var piggyCoins []CandidateCoin
 		if coinSource.UsePiggyDash {
-			piggyCoins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
-			if err != nil {
-				logger.Infof("⚠️  Failed to get Piggy Dash coins: %v", err)
+			// Single fetch per cycle (2026-10-03 review): the stale-snapshot
+			// path pays a synchronous refresh — calling getPiggyDashCoins
+			// twice (fan-in + piggyMeta below) doubled that cost on failure.
+			piggyCoins, piggyErr := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
+			if piggyErr != nil {
+				logger.Infof("⚠️  Failed to get Piggy Dash coins: %v", piggyErr)
 			} else {
 				for _, coin := range piggyCoins {
 					symbolSources[coin.Symbol] = appendUniqueSource(symbolSources[coin.Symbol], "piggy_dash")
@@ -887,6 +895,11 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		includeStatic := coinSource.UseStatic == nil || *coinSource.UseStatic
 		if includeStatic {
 			for _, symbol := range coinSource.StaticCoins {
+				// Skip blanks: Normalize("") yields "USDT", which would enter
+				// the pool as a phantom candidate (2026-10-03 review).
+				if strings.TrimSpace(symbol) == "" {
+					continue
+				}
 				symbol = market.Normalize(symbol)
 				if _, exists := symbolSources[symbol]; !exists {
 					symbolSources[symbol] = []string{"static"}
@@ -906,12 +919,8 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// Piggy-dash direction metadata survives the collapse too — the
 		// cross-scanner conflict check needs it (audit 2026-09-12 #11).
 		piggyMeta := make(map[string]CandidateCoin)
-		if coinSource.UsePiggyDash {
-			if piggyCoins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection); err == nil {
-				for _, c := range piggyCoins {
-					piggyMeta[c.Symbol] = c
-				}
-			}
+		for _, c := range piggyCoins {
+			piggyMeta[c.Symbol] = c
 		}
 		for symbol, sources := range symbolSources {
 			c := CandidateCoin{Symbol: symbol, Sources: sources}
@@ -1002,7 +1011,7 @@ func (e *StrategyEngine) filterExcludedCoins(candidates []CandidateCoin) []Candi
 // background scanner has been failing — the old list used to be consumed
 // forever, silently decoupling "why these symbols" from reality. Display of
 // an old board (Data page) is unaffected; only candidate selection checks.
-const piggyDashMaxAge = 10 * time.Minute
+const piggyDashMaxAge = 12 * time.Minute
 
 // getPiggyDashCoins returns the strongest breakout-engine signals (猪猪冲刺).
 // Data comes exclusively from the breakout scheduler, which computes
@@ -1191,6 +1200,7 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 		ShortFundingAnn:  sig.FundingAnnualPct,
 		ShortScanAtMs:    scanAt.UnixMilli(),
 		ShortUniverse:    sig.Universe,
+		NearHighAlso:     sig.NearHighAlso,
 	}
 	if sig.Universe == "near_high" {
 		c.ShortReasons = append(c.ShortReasons, "磨顶:距90日高点<5%")

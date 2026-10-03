@@ -483,15 +483,27 @@ func (s *Scheduler) TopSymbols(limit int, direction string) []string {
 	return out
 }
 
-// RefreshNow runs one snapshot refresh synchronously so a cold (empty)
-// snapshot is filled with fresh Binance-computed data before the caller
+// RefreshNow runs one snapshot refresh synchronously so a cold (empty) or
+// stale snapshot is filled with fresh Binance-computed data before the caller
 // re-reads TopSymbols. Waits for any in-flight scan (background ticker or a
-// concurrent RefreshNow) up to maxWait instead of double-scanning.
+// concurrent RefreshNow) up to maxWait instead of double-scanning: a waiter
+// returns as soon as the snapshot it is waiting for LANDS (updatedAt advances
+// past the wait start) — it never claims a second back-to-back scan.
 func (s *Scheduler) RefreshNow(maxWait time.Duration) {
 	deadline := time.Now().Add(maxWait)
+	s.mu.RLock()
+	waitedFor := s.updatedAt // a scan completing after this instant satisfies us
+	s.mu.RUnlock()
 	for {
 		s.mu.Lock()
 		if !s.scanning {
+			if s.updatedAt.After(waitedFor) {
+				// The scan we were waiting for already landed — do NOT start
+				// another one (the old loop re-claimed the flag and ran a
+				// duplicate full scan back-to-back).
+				s.mu.Unlock()
+				return
+			}
 			s.scanning = true
 			s.mu.Unlock()
 			s.runOnce(nil)

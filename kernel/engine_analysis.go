@@ -414,7 +414,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		// is the scanner's volume bar, engine.go near_high selection) — the
 		// old post-fetch filter re-applied the floor anyway and silently
 		// evicted exactly those candidates (pool ≠ prompt ≠ execable).
-		isNearHighExempt := coin.ShortUniverse == "near_high"
+		isNearHighExempt := coin.ShortUniverse == "near_high" || coin.NearHighAlso
 		if !isExistingPosition && !isXyzAsset && !isNearHighExempt && data.CurrentPrice > 0 {
 			if !data.OpenInterestOK {
 				// A failed OI fetch used to masquerade as OI=0 here and the

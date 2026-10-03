@@ -649,8 +649,8 @@ func (s *Server) buildRuleExtractionPrompts(userID string, entries []*store.Trad
 	var sb strings.Builder
 	sb.WriteString("## Reviewed Trade Journal\n")
 	for _, e := range entries {
-		sb.WriteString(fmt.Sprintf("- %s %s | entry %.4f exit %.4f | %dx | PnL %+.2f (%+.1f%%) | plan:SL=%.4f,TP=%.4f | adherence=%s | emotions=%s | category=%s | strategy=%s | lesson=%s\n",
-			e.Symbol, e.Side, e.EntryPrice, e.ExitPrice, e.Leverage, e.RealizedPnL, e.PnLPct,
+		sb.WriteString(fmt.Sprintf("- %s %s | entry %.4f exit %.4f | %dx | PnL(净) %+.2f (%+.1f%%) | plan:SL=%.4f,TP=%.4f | adherence=%s | emotions=%s | category=%s | strategy=%s | lesson=%s\n",
+			e.Symbol, e.Side, e.EntryPrice, e.ExitPrice, e.Leverage, e.RealizedPnL-e.Fee, e.PnLPct,
 			e.PlannedStopLoss, e.PlannedTakeProfit, orDash(e.ExecutedAsPlan), orDash(e.Emotions),
 			orDash(e.MistakeCategory), orDash(e.StrategyTag), orDash(e.Lesson)))
 	}
@@ -683,8 +683,8 @@ func (s *Server) buildReviewPrompts(userID, period string, entries []*store.Trad
 	sb.WriteString(fmt.Sprintf("## Review Period Request: %s\n\n", period))
 	sb.WriteString("## Trade Journal (most recent 100)\n")
 	for _, e := range entries {
-		sb.WriteString(fmt.Sprintf("- %s %s | entry %.4f exit %.4f | %dx | PnL %+.2f (%+.1f%%) | plan:SL=%.4f,TP=%.4f | adherence=%s | emotions=%s | category=%s | strategy=%s | lesson=%s\n",
-			e.Symbol, e.Side, e.EntryPrice, e.ExitPrice, e.Leverage, e.RealizedPnL, e.PnLPct,
+		sb.WriteString(fmt.Sprintf("- %s %s | entry %.4f exit %.4f | %dx | PnL(净) %+.2f (%+.1f%%) | plan:SL=%.4f,TP=%.4f | adherence=%s | emotions=%s | category=%s | strategy=%s | lesson=%s\n",
+			e.Symbol, e.Side, e.EntryPrice, e.ExitPrice, e.Leverage, e.RealizedPnL-e.Fee, e.PnLPct,
 			e.PlannedStopLoss, e.PlannedTakeProfit, orDash(e.ExecutedAsPlan), orDash(e.Emotions),
 			orDash(e.MistakeCategory), orDash(e.StrategyTag), orDash(e.Lesson)))
 	}
