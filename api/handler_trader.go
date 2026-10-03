@@ -782,15 +782,24 @@ func (s *Server) handleDeleteTrader(c *gin.Context) {
 		SafeNotFound(c, "Trader")
 		return
 	}
-	err := s.traderManager.RemoveTraderAndThen(traderID, func() error { return s.store.Trader().Delete(userID, traderID) })
-	if err != nil {
-		SafeInternalError(c, "Failed to delete trader", err)
-		return
-	}
+	// 2026-10-03 review P1: this handler used to run RemoveTraderAndThen
+	// (Stop JOIN, network-bound) INLINE while holding the SERVER-GLOBAL
+	// traderOpsMu — deleting a trader mid-cycle queued every other user's
+	// create/update/start/stop/save behind the join. Persist the delete
+	// intent now, run the stop→delete chain in the background (loadMu keeps
+	// it serialized with reloads; same shape as the save-path reloads).
 	s.traderManager.InvalidateCompetitionCache()
+	go func() {
+		if err := s.traderManager.RemoveTraderAndThen(traderID, func() error { return s.store.Trader().Delete(userID, traderID) }); err != nil {
+			logger.Errorf("❌ background trader delete %s failed: %v", traderID, err)
+			return
+		}
+		s.traderManager.InvalidateCompetitionCache()
+		logger.Infof("✓ Trader deleted (background): %s", traderID)
+	}()
 
-	logger.Infof("✓ Trader deleted: %s", traderID)
-	c.JSON(http.StatusOK, gin.H{"message": "Trader deleted"})
+	logger.Infof("✓ Trader delete accepted: %s", traderID)
+	c.JSON(http.StatusOK, gin.H{"message": "Trader deletion accepted (stopping in background)"})
 }
 
 // handleStartTrader Start trader
@@ -890,40 +899,19 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 	traderID := c.Param("id")
 
 	// Verify trader belongs to current user
-	_, err := s.store.Trader().GetFullConfig(userID, traderID)
+	_, err := s.store.Trader().GetForUser(userID, traderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist or no access permission"})
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist"})
+	if err := s.store.Trader().UpdateStatus(userID, traderID, false); err != nil {
+		SafeInternalError(c, "Failed to persist stop intent", err)
 		return
 	}
-
-	// Check if trader is running
-	status := trader.GetStatus()
-	if isRunning, ok := status["is_running"].(bool); ok && !isRunning {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Trader is already stopped"})
-		return
+	if trader, err := s.traderManager.GetTrader(traderID); err == nil {
+		trader.SignalStop()
+		go trader.Stop()
 	}
-
-	// Stop trader. 2026-10-01: Stop() JOINS the in-flight AI decision cycle
-	// (1-10min on slow models) before returning — waiting for it here hung
-	// the stop request for minutes. The isRunning flip and channel close
-	// inside Stop() are near-instant; only the join waits, so the join runs
-	// in the background. The in-flight cycle still completes its
-	// already-made decisions — identical trading semantics, the HTTP caller
-	// just no longer waits on it.
-	go trader.Stop()
-
-	// Update running status in database
-	err = s.store.Trader().UpdateStatus(userID, traderID, false)
-	if err != nil {
-		logger.Infof("⚠️  Failed to update trader status: %v", err)
-	}
-
-	logger.Infof("⏹  Trader %s stop signalled", trader.GetName())
-	c.JSON(http.StatusOK, gin.H{"message": "Trader stop signalled"})
+	c.JSON(http.StatusOK, gin.H{"message": "Trader stop intent persisted"})
 }

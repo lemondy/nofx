@@ -42,8 +42,8 @@ func init() {
 
 // SSRFError represents a Server-Side Request Forgery attempt
 type SSRFError struct {
-	URL     string
-	Reason  string
+	URL    string
+	Reason string
 }
 
 func (e *SSRFError) Error() string {
@@ -139,8 +139,14 @@ func ValidateURL(rawURL string) error {
 			}
 			return nil // It's a valid public IP
 		}
-		// DNS resolution failed, but it's not an IP - could be a typo or non-existent domain
-		// Allow it and let the HTTP client handle the error
+		// DNS resolution failed and it's not an IP literal. Direct dial:
+		// let the HTTP client surface the error. WITH a proxy configured the
+		// destination check is skipped at dial time — a locally
+		// unresolvable name could resolve to a private IP on the proxy's
+		// side, so fail closed (2026-10-03 review P2).
+		if hasEnvProxy() {
+			return &SSRFError{URL: rawURL, Reason: "DNS resolution failed while a proxy is configured — destination cannot be verified"}
+		}
 		return nil
 	}
 
@@ -169,7 +175,12 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 	proxyHosts := envProxyHosts()
 
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if err := ValidateURL(req.URL.String()); err != nil {
+				return nil, err
+			}
+			return http.ProxyFromEnvironment(req)
+		},
 		// Re-enable HTTP/2: a custom DialContext alone would force HTTP/1.1.
 		ForceAttemptHTTP2: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -184,17 +195,31 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 			// private-IP check (the real destination is resolved remotely by
 			// the proxy, so dial-time DNS validation cannot apply anyway).
 			if !proxyHosts[host] {
-				// Resolve and check the IP
-				ips, err := net.LookupIP(host)
+				ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 				if err != nil {
-					return nil, fmt.Errorf("SSRF protection: failed to resolve host %s: %w", host, err)
+					return nil, err
 				}
-
 				for _, ip := range ips {
-					if isPrivateIP(ip) {
-						return nil, fmt.Errorf("SSRF protection: blocked connection to private IP %s", ip)
+					if isPrivateIP(ip.IP) {
+						return nil, fmt.Errorf("SSRF protection: private IP %s", ip.IP)
 					}
 				}
+				_, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				var dialErr error
+				for _, ip := range ips {
+					conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+					if err == nil {
+						return conn, nil
+					}
+					dialErr = err
+				}
+				if dialErr == nil {
+					dialErr = fmt.Errorf("SSRF protection: no resolved address for %s", host)
+				}
+				return nil, dialErr
 			}
 
 			return dialer.DialContext(ctx, network, addr)
@@ -263,4 +288,19 @@ func SafeGet(rawURL string, timeout time.Duration) (*http.Response, error) {
 	// Use the safe HTTP client
 	client := SafeHTTPClient(timeout)
 	return client.Get(rawURL)
+}
+
+// hasEnvProxy reports whether a standard-environment proxy is configured
+// (the same variables envProxyHosts reads).
+func hasEnvProxy() bool {
+	for _, key := range []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"ALL_PROXY", "all_proxy",
+	} {
+		if os.Getenv(key) != "" {
+			return true
+		}
+	}
+	return false
 }

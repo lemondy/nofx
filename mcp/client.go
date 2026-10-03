@@ -11,6 +11,7 @@ import (
 	"nofx/logger"
 	"nofx/security"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,12 +58,14 @@ type TokenUsage struct {
 
 // Client AI API configuration
 type Client struct {
-	Provider   string
-	APIKey     string
-	BaseURL    string
-	Model      string
-	UseFullURL bool // Whether to use full URL (without appending /chat/completions)
-	MaxTokens  int  // Maximum tokens for AI response
+	requestMu      sync.RWMutex
+	requestContext context.Context
+	Provider       string
+	APIKey         string
+	BaseURL        string
+	Model          string
+	UseFullURL     bool // Whether to use full URL (without appending /chat/completions)
+	MaxTokens      int  // Maximum tokens for AI response
 
 	HTTPClient *http.Client // Exported for sub-packages
 	Log        Logger       // Exported for sub-packages
@@ -202,7 +205,9 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 		if attempt < maxRetries {
 			waitTime := client.Cfg.RetryWaitBase * time.Duration(attempt)
 			client.Log.Infof("⏳ Waiting %v before retry...", waitTime)
-			time.Sleep(waitTime)
+			if err := client.waitForRetry(waitTime); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -393,7 +398,7 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	}
 
 	// Step 5: Send HTTP request (fixed logic)
-	resp, err := client.HTTPClient.Do(req)
+	resp, err := client.HTTPClient.Do(req.WithContext(client.RequestContext()))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
@@ -483,7 +488,9 @@ func (client *Client) CallWithRequest(req *Request) (string, error) {
 		if attempt < maxRetries {
 			waitTime := client.Cfg.RetryWaitBase * time.Duration(attempt)
 			client.Log.Infof("⏳ Waiting %v before retry...", waitTime)
-			time.Sleep(waitTime)
+			if err := client.waitForRetry(waitTime); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -515,7 +522,9 @@ func (client *Client) CallWithRequestFull(req *Request) (*LLMResponse, error) {
 		}
 		if attempt < maxRetries {
 			waitTime := client.Cfg.RetryWaitBase * time.Duration(attempt)
-			time.Sleep(waitTime)
+			if err := client.waitForRetry(waitTime); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return nil, fmt.Errorf("still failed after %d retries: %w", maxRetries, lastErr)
@@ -537,7 +546,7 @@ func (client *Client) callWithRequestFull(req *Request) (*LLMResponse, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := client.HTTPClient.Do(httpReq)
+	resp, err := client.HTTPClient.Do(httpReq.WithContext(client.RequestContext()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -575,7 +584,7 @@ func (client *Client) callWithRequest(req *Request) (string, error) {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := client.HTTPClient.Do(httpReq)
+	resp, err := client.HTTPClient.Do(httpReq.WithContext(client.RequestContext()))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
@@ -720,7 +729,7 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 	// Idle-timeout watchdog: cancel the request if no SSE line arrives for 60 seconds.
 	// This breaks the scanner out of an indefinitely blocking Read on a hung connection.
 	const idleTimeout = 60 * time.Second
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(client.RequestContext())
 	defer cancel()
 	resetCh := make(chan struct{}, 1)
 	go func() {
@@ -911,13 +920,11 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 	// prompts + restored ranking context push reasoning generations past
 	// 150s, and the hard cap was aborting legitimate mid-stream responses.
 	// The 90s idle watchdog still bounds genuinely hung connections.
-	httpClient := &http.Client{
-		Transport: client.HTTPClient.Transport,
-		Timeout:   hardCap,
-	}
+	httpClient := *client.HTTPClient
+	httpClient.Timeout = hardCap
 
 	const idleTimeout = 90 * time.Second
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(client.RequestContext())
 	defer cancel()
 	resetCh := make(chan struct{}, 1)
 	go func() {
@@ -956,6 +963,13 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 		// retry this attempt once via the non-stream flow.
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			logger.Warnf("⚠️  Stream rejected (status %d) — falling back to non-stream for this attempt", resp.StatusCode)
+			// NOTE (2026-10-03 review): Hooks.Call carries its own retry
+			// loop — nested here attempts multiply (bounded 3×3) and the
+			// fallback escapes this attempt's hard cap. Accepted for now:
+			// a 4xx stream rejection is terminal for the stream path, the
+			// non-stream fallback is the only working route, and the
+			// multiplication is bounded. A single-attempt primitive on
+			// Client would be the clean fix.
 			return client.Hooks.Call(systemPrompt, userPrompt)
 		}
 		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(body), 200))
@@ -974,4 +988,31 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// RequestContext belongs to one trader run. Cancellation covers normal requests,
+// streaming body reads and retry waits, while a subsequent run gets a fresh context.
+func (client *Client) SetRequestContext(ctx context.Context) {
+	client.requestMu.Lock()
+	defer client.requestMu.Unlock()
+	client.requestContext = ctx
+}
+func (client *Client) RequestContext() context.Context {
+	client.requestMu.RLock()
+	defer client.requestMu.RUnlock()
+	if client.requestContext == nil {
+		return context.Background()
+	}
+	return client.requestContext
+}
+func (client *Client) waitForRetry(delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	ctx := client.RequestContext() // fetch ONCE — SetRequestContext may swap mid-wait
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

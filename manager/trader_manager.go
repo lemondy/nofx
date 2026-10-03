@@ -100,12 +100,18 @@ func (tm *TraderManager) StartAll() {
 
 // StopAll stops all traders
 func (tm *TraderManager) StopAll() {
-	for _, t := range tm.GetAllTraders() {
-		t.Stop()
+	traders := tm.GetAllTraders()
+	for _, t := range traders {
+		t.SignalStop()
 	}
+	var wg sync.WaitGroup
+	for _, t := range traders {
+		wg.Add(1)
+		go func(t *trader.AutoTrader) { defer wg.Done(); t.Stop() }(t)
+	}
+	wg.Wait()
 }
 
-// AutoStartRunningTraders automatically starts traders marked as running in the database
 func (tm *TraderManager) AutoStartRunningTraders(st *store.Store) {
 	// Get all trader configurations (single query)
 	traderList, err := st.Trader().ListAll()
@@ -115,10 +121,10 @@ func (tm *TraderManager) AutoStartRunningTraders(st *store.Store) {
 	}
 
 	// Build set of running trader IDs
-	runningTraderIDs := make(map[string]bool)
+	runningTraderIDs := make(map[string]uint64)
 	for _, traderCfg := range traderList {
 		if traderCfg.IsRunning {
-			runningTraderIDs[traderCfg.ID] = true
+			runningTraderIDs[traderCfg.ID] = traderCfg.RunVersion
 		}
 	}
 
@@ -129,8 +135,8 @@ func (tm *TraderManager) AutoStartRunningTraders(st *store.Store) {
 
 	startedCount := 0
 	for id, t := range tm.GetAllTraders() {
-		if runningTraderIDs[id] {
-			if err := t.Start(); err != nil {
+		if version, desired := runningTraderIDs[id]; desired {
+			if err := t.StartIfDesired(version); err != nil {
 				if !errors.Is(err, trader.ErrAlreadyRunning) {
 					logger.Errorf("Auto-restore %s: %v", id, err)
 				}
@@ -775,7 +781,7 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	logger.Infof("✓ Trader '%s' (%s + %s/%s) loaded to memory", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ExchangeType, exchangeCfg.AccountName)
 
 	if traderCfg.IsRunning {
-		if err := at.Start(); err != nil {
+		if err := at.StartIfDesired(traderCfg.RunVersion); err != nil {
 			return err
 		}
 	}
