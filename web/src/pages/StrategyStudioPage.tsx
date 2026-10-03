@@ -29,6 +29,7 @@ import {
   Download,
   Upload,
   Globe,
+  History,
 } from 'lucide-react'
 import type { Strategy, StrategyConfig, AIModel } from '../types'
 import { confirmToast, notify } from '../lib/notify'
@@ -42,6 +43,7 @@ import {
   defaultGridConfig,
 } from '../components/strategy/GridConfigEditor'
 import { TokenEstimateBar } from '../components/strategy/TokenEstimateBar'
+import { VersionsPanel } from '../components/strategy/VersionsPanel'
 import { DeepVoidBackground } from '../components/common/DeepVoidBackground'
 import { t } from '../i18n/translations'
 import { riskControl, ts } from '../i18n/strategy-translations'
@@ -94,9 +96,9 @@ export function StrategyStudioPage() {
   })
 
   // Right panel states
-  const [activeRightTab, setActiveRightTab] = useState<'prompt' | 'test'>(
-    'prompt'
-  )
+  const [activeRightTab, setActiveRightTab] = useState<
+    'prompt' | 'test' | 'versions'
+  >('prompt')
   const [promptPreview, setPromptPreview] = useState<{
     system_prompt: string
     user_prompt?: string
@@ -1202,11 +1204,36 @@ export function StrategyStudioPage() {
               <Play className="w-4 h-4" />
               {tr('aiTestRun')}
             </button>
+            <button
+              onClick={() => setActiveRightTab('versions')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                activeRightTab === 'versions'
+                  ? 'border-b-2 border-nofx-gold text-nofx-gold'
+                  : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
+              }`}
+            >
+              <History className="w-4 h-4" />
+              {t('strategyVersions.tab', language)}
+            </button>
           </div>
 
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto">
-            {activeRightTab === 'prompt' ? (
+            {activeRightTab === 'versions' ? (
+              selectedStrategy ? (
+                <VersionsPanel
+                  strategyId={selectedStrategy.id}
+                  token={token}
+                  language={language}
+                  refreshKey={selectedStrategy.updated_at}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-nofx-text-muted">
+                  <History className="w-10 h-10 mb-2 opacity-30" />
+                  <p className="text-sm">{tr('selectOrCreate')}</p>
+                </div>
+              )
+            ) : activeRightTab === 'prompt' ? (
               /* Prompt Preview Tab */
               <div className="p-3 space-y-3">
                 {/* Controls */}

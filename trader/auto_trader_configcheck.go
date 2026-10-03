@@ -58,6 +58,15 @@ func (at *AutoTrader) checkConfigDrift() {
 	if dbHash == at.loadedConfigHash {
 		return
 	}
+	// Version history (2026-10-04): a drift means the config changed outside
+	// the UI save path (backend script / raw SQL / another writer). Record it
+	// so the version timeline shows WHO-WROTE-WHAT-WHEN even for writes that
+	// never went through the API. Hash-deduped; best-effort.
+	if loadedJSON, err := json.Marshal(at.config.StrategyConfig); err == nil {
+		if err := at.store.Strategy().RecordConfigChange(at.strategyID, string(loadedJSON), 0, strategy.Config, "external"); err != nil {
+			logger.Warnf("⚠️ [%s] failed to record external config version: %v", at.name, err)
+		}
+	}
 	_, push := at.gateNotifyRecord("cfgdrift", time.Now())
 	logger.Warnf("⚠️ [%s] CONFIG DRIFT: strategy %s risk_control in the DB differs from what this process loaded at start (db %s ≠ loaded %s) — the process keeps enforcing its loaded values until restarted",
 		at.name, at.strategyID, dbHash, at.loadedConfigHash)

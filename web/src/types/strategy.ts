@@ -288,3 +288,50 @@ export interface RiskControlConfig {
   // (0 = default 1, negative = disabled) (CODE ENFORCED)
   max_vendor_divergence_pct?: number
 }
+
+// ── Config version history (策略版本迭代) ──
+
+// One changed leaf path in a version diff. Old/New are JSON-encoded values
+// ("" = field absent on that side); long strings are truncated server-side.
+export interface StrategyConfigDiffEntry {
+  path: string
+  old: string
+  new: string
+}
+
+// Realized performance of trades entered during a version's active window
+// (net of fees — same caliber as the journal stats).
+export interface StrategyVersionStats {
+  trades: number
+  wins: number
+  losses: number
+  win_rate: number
+  net_pnl: number
+  avg_win: number
+  avg_loss: number
+  profit_factor: number
+  avg_r: number
+  r_count: number
+}
+
+export interface StrategyConfigVersion {
+  id: number
+  config_hash: string
+  risk_hash: string
+  // create | duplicate | baseline | save | external
+  source: string
+  changed_at: number // Unix ms UTC
+  summary: StrategyConfigDiffEntry[]
+  stats: StrategyVersionStats
+  risk_control?: Partial<RiskControlConfig>
+  coin_source?: Partial<CoinSourceConfig>
+}
+
+export interface StrategyVersionsResponse {
+  strategy_id: string
+  trader_ids: string[]
+  current_hash: string
+  updated_at: string
+  versions: StrategyConfigVersion[]
+  version_count: number
+}

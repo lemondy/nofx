@@ -858,7 +858,12 @@ func (c *StrategyConfig) EffectiveStatsWindowDays() int {
 
 func (s *StrategyStore) initTables() error {
 	// AutoMigrate will add missing columns without dropping existing data
-	return s.db.AutoMigrate(&Strategy{})
+	if err := s.db.AutoMigrate(&Strategy{}); err != nil {
+		return err
+	}
+	// Append-only config version history (2026-10-04: strategy iteration
+	// traceability — see store/strategy_version.go).
+	return s.initVersionTables()
 }
 
 func (s *StrategyStore) initDefaultData() error {

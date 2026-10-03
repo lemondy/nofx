@@ -213,6 +213,11 @@ func (s *Server) handleCreateStrategy(c *gin.Context) {
 		SafeInternalError(c, "Failed to create strategy", err)
 		return
 	}
+	// Version history (2026-10-04): anchor version 1 so the iteration
+	// timeline starts at creation, not at the first later save.
+	if err := s.store.Strategy().RecordInitialVersion(strategy.ID, string(configJSON), "create", 0); err != nil {
+		logger.Warnf("⚠️ Failed to record initial config version for %s: %v", strategy.ID, err)
+	}
 
 	// Validate configuration and collect warnings
 	warnings := validateStrategyConfig(req.Config)
@@ -377,6 +382,13 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		return
 	}
 
+	// Version history (2026-10-04): every persisted save becomes an
+	// append-only snapshot with a field-level diff against the previous
+	// version. Hash-deduped, so a no-op save records nothing.
+	if err := s.store.Strategy().RecordConfigChange(strategyID, existing.Config, existing.UpdatedAt.UnixMilli(), string(configJSON), "save"); err != nil {
+		logger.Warnf("⚠️ Failed to record config version for %s: %v", strategyID, err)
+	}
+
 	// Validate merged configuration and collect warnings
 	warnings := validateStrategyConfig(&mergedConfig)
 
@@ -482,6 +494,12 @@ func (s *Server) handleDuplicateStrategy(c *gin.Context) {
 	if err := s.store.Strategy().Duplicate(userID, sourceID, newID, req.Name); err != nil {
 		SafeInternalError(c, "Failed to duplicate strategy", err)
 		return
+	}
+	// Version history: the duplicate's timeline starts from its copied config.
+	if source, err := s.store.Strategy().Get(userID, sourceID); err == nil {
+		if err := s.store.Strategy().RecordInitialVersion(newID, source.Config, "duplicate", 0); err != nil {
+			logger.Warnf("⚠️ Failed to record initial version for duplicate %s: %v", newID, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -819,4 +837,96 @@ func (s *Server) handleEntryQualityStats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"trader_id": traderID, "buckets": stats})
+}
+
+// handleGetStrategyVersions serves the config iteration timeline for one
+// strategy: every persisted config snapshot (append-only) with its field-
+// level diff against the previous version, joined with the realized trade
+// performance of trades ENTERED during that version's active window.
+//
+// Lazy self-heal on read: a strategy with no recorded history gets a
+// baseline anchor from its current config, and a current config whose hash
+// differs from the newest row (a direct DB write no other path captured)
+// is recorded as an "external" change before listing. Trades are attributed
+// across ALL of the user's traders bound to this strategy; the stats window
+// is each version's [changed_at, next.changed_at).
+func (s *Server) handleGetStrategyVersions(c *gin.Context) {
+	userID := c.GetString("user_id")
+	strategyID := c.Param("id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	strategy, err := s.store.Strategy().Get(userID, strategyID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Strategy not found"})
+		return
+	}
+
+	// Self-heal: anchor + backfill missing versions (lazy, once per change).
+	if err := s.store.Strategy().EnsureConfigVersionBaseline(strategyID, strategy.Config, "baseline", strategy.UpdatedAt.UnixMilli()); err != nil {
+		logger.Warnf("⚠️ versions: baseline anchor failed for %s: %v", strategyID, err)
+	}
+	currentHash := store.HashConfigJSON(strategy.Config)
+	if latest, err := s.store.Strategy().LatestConfigVersion(strategyID); err == nil && latest.ConfigHash != currentHash {
+		if err := s.store.Strategy().RecordConfigChange(strategyID, latest.Config, latest.ChangedAt, strategy.Config, "external"); err != nil {
+			logger.Warnf("⚠️ versions: external-change backfill failed for %s: %v", strategyID, err)
+		}
+	}
+
+	versions, err := s.store.Strategy().ListConfigVersions(strategyID)
+	if err != nil {
+		SafeInternalError(c, "Failed to list config versions", err)
+		return
+	}
+
+	// All of this user's traders running this strategy — trades from any of
+	// them count toward the version's realized performance.
+	traders, _ := s.store.Trader().List(userID)
+	traderIDs := make([]string, 0, len(traders))
+	for _, t := range traders {
+		if t.StrategyID == strategyID {
+			traderIDs = append(traderIDs, t.ID)
+		}
+	}
+
+	out := make([]gin.H, 0, len(versions))
+	for i, v := range versions {
+		var windowEnd int64
+		if i+1 < len(versions) {
+			windowEnd = versions[i+1].ChangedAt
+		}
+		stats, err := s.store.TradeJournal().StatsForWindow(traderIDs, v.ChangedAt, windowEnd)
+		if err != nil {
+			logger.Warnf("⚠️ versions: stats for %s@%d failed: %v", strategyID, v.ChangedAt, err)
+			stats = &store.VersionStats{}
+		}
+		var summary []store.ConfigDiffEntry
+		_ = json.Unmarshal([]byte(v.Summary), &summary)
+
+		var cfg store.StrategyConfig
+		_ = json.Unmarshal([]byte(v.Config), &cfg)
+
+		out = append(out, gin.H{
+			"id":           v.ID,
+			"config_hash":  v.ConfigHash,
+			"risk_hash":    v.RiskHash,
+			"source":       v.Source,
+			"changed_at":   v.ChangedAt,
+			"summary":      summary,
+			"stats":        stats,
+			"risk_control": cfg.RiskControl,
+			"coin_source":  cfg.CoinSource,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"strategy_id":   strategyID,
+		"trader_ids":    traderIDs,
+		"current_hash":  currentHash,
+		"updated_at":    strategy.UpdatedAt,
+		"versions":      out,
+		"version_count": len(out),
+	})
 }
