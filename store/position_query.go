@@ -42,7 +42,8 @@ func (s *PositionStore) GetPositionStats(traderID string) (map[string]interface{
 	var r result
 
 	err := s.db.Model(&TraderPosition{}).
-		Select("COUNT(*) as total, SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) as wins, COALESCE(SUM(realized_pnl), 0) as total_pnl, COALESCE(SUM(fee), 0) as total_fee").
+		// 2026-10-03 review: NET caliber (dead code today, kept consistent).
+		Select("COUNT(*) as total, SUM(CASE WHEN realized_pnl - fee > 0 THEN 1 ELSE 0 END) as wins, COALESCE(SUM(realized_pnl - fee), 0) as total_pnl, COALESCE(SUM(fee), 0) as total_fee").
 		Where("trader_id = ? AND status = ?", traderID, "CLOSED").
 		Scan(&r).Error
 	if err != nil {

@@ -101,7 +101,8 @@ func (s *PositionStore) GetHistorySummary(traderID string, initialEquity float64
 	s.db.Where("trader_id = ? AND status = ?", traderID, "CLOSED").
 		Order("exit_time DESC").Limit(20).Find(&recent)
 	for _, pos := range recent {
-		summary.RecentPnL += pos.RealizedPnL
+		// 2026-10-03 review: NET caliber consistency.
+		summary.RecentPnL += pos.RealizedPnL - pos.Fee
 		if pos.RealizedPnL > 0 {
 			summary.RecentWinRate++
 		}

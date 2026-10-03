@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -171,7 +172,7 @@ func (s *TradeJournalStore) SyncFromPositions(traderID string) (int, error) {
 
 		if err := s.db.Create(entry).Error; err != nil {
 			// Unique index race (concurrent sync): skip silently
-			if err.Error() == "UNIQUE constraint failed: trade_journal.trader_id, trade_journal.position_id" {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 				continue
 			}
 			return created, fmt.Errorf("failed to create journal entry: %w", err)
@@ -280,12 +281,14 @@ func calculateJournalPnLPct(pos TraderPosition) float64 {
 	if notional <= 0 {
 		return 0
 	}
-	// Margin = notional / leverage; PnL% relative to margin
+	// Margin = notional / leverage; PnL% relative to margin.
+	// 2026-10-03 review: NET the fee so the percentage matches the net-USDT
+	// figure rendered beside it (gross/net mixed rows confused the review).
 	margin := notional
 	if pos.Leverage > 1 {
 		margin = notional / float64(pos.Leverage)
 	}
-	return pos.RealizedPnL / margin * 100
+	return (pos.RealizedPnL - pos.Fee) / margin * 100
 }
 
 // enrichFromDecisions finds the AI open decision matching this position and
@@ -404,7 +407,20 @@ func (s *TradeJournalStore) UpdateReview(traderID string, id int64, update *jour
 	entry.ReviewStatus = "reviewed"
 	entry.ReviewedAt = time.Now().UTC().UnixMilli()
 	entry.UpdatedAt = entry.ReviewedAt
-	if err := s.db.Save(entry).Error; err != nil {
+	// 2026-10-03 review: Save wrote the WHOLE row — a concurrent sync could
+	// land trade facts between the Get and the Save and get overwritten with
+	// stale copies. Persist only the review-owned columns.
+	if err := s.db.Model(&TradeJournalDB{}).Where("id = ? AND trader_id = ?", id, traderID).Updates(map[string]interface{}{
+		"executed_as_plan": entry.ExecutedAsPlan,
+		"deviation_note":   entry.DeviationNote,
+		"emotions":         entry.Emotions,
+		"mistake_category": entry.MistakeCategory,
+		"strategy_tag":     entry.StrategyTag,
+		"lesson":           entry.Lesson,
+		"review_status":    entry.ReviewStatus,
+		"reviewed_at":      entry.ReviewedAt,
+		"updated_at":       entry.UpdatedAt,
+	}).Error; err != nil {
 		return nil, err
 	}
 	return entry, nil

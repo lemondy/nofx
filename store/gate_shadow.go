@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -18,16 +19,16 @@ import (
 
 type GateShadowBlock struct {
 	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID     string    `gorm:"column:trader_id;index:idx_gshadow_key" json:"trader_id"`
-	Symbol       string    `gorm:"column:symbol;index:idx_gshadow_key" json:"symbol"`
-	Direction    string    `gorm:"column:direction;size:8;index:idx_gshadow_key" json:"direction"` // long / short
+	TraderID     string    `gorm:"column:trader_id;index:idx_gshadow_key;uniqueIndex:uniq_gshadow_open" json:"trader_id"`
+	Symbol       string    `gorm:"column:symbol;index:idx_gshadow_key;uniqueIndex:uniq_gshadow_open" json:"symbol"`
+	Direction    string    `gorm:"column:direction;size:8;index:idx_gshadow_key;uniqueIndex:uniq_gshadow_open" json:"direction"` // long / short
+	HorizonHours int       `gorm:"column:horizon_hours;uniqueIndex:uniq_gshadow_open" json:"horizon_hours"`
 	CycleNumber  int       `gorm:"column:cycle_number" json:"cycle_number"`
 	BlockedCodes string    `gorm:"column:blocked_codes;size:256" json:"blocked_codes"` // comma-joined machine codes
 	EntryPrice   float64   `gorm:"column:entry_price" json:"entry_price"`
 	StopPrice    float64   `gorm:"column:stop_price" json:"stop_price"`
 	TakeProfit   float64   `gorm:"column:take_profit" json:"take_profit"`
 	PlanRR       float64   `gorm:"column:plan_rr" json:"plan_rr"` // |tp-entry|/|entry-sl|
-	HorizonHours int       `gorm:"column:horizon_hours" json:"horizon_hours"`
 	CreatedAt    time.Time `gorm:"column:created_at;index" json:"created_at"`
 	Outcome      string    `gorm:"column:outcome;size:16;index" json:"outcome"` // "" | tp_first | sl_first | timeout | no_data
 	ExitPrice    float64   `gorm:"column:exit_price" json:"exit_price"`
@@ -68,7 +69,16 @@ func (s *GateShadowStore) CreateIfIdle(rec *GateShadowBlock) (bool, error) {
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, err
 	}
-	return true, s.db.Create(rec).Error
+	if err := s.db.Create(rec).Error; err != nil {
+		// 2026-10-03 review: two cycles racing the same key+horizon — the
+		// unique index now makes the loser a benign "not idle" instead of
+		// a duplicate open row.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // ListMatured returns unevaluated rows whose horizon has passed.
