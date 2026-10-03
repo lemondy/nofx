@@ -57,7 +57,7 @@ func orphanedRows(rows []*store.TraderPosition, live map[string]bool, now time.T
 		}
 		openedMs := row.EntryTime
 		if openedMs <= 0 {
-			openedMs = row.UpdatedAt
+			openedMs = row.UpdatedAt // legacy rows without entry_time
 		}
 		if openedMs <= 0 || now.Sub(time.UnixMilli(openedMs)) < minAge {
 			continue
@@ -147,7 +147,7 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 			// under a dedicated close reason so audits can find them.
 			rowAge := now.Sub(time.UnixMilli(row.EntryTime))
 			if row.EntryTime <= 0 {
-				rowAge = now.Sub(time.UnixMilli(row.CreatedAt))
+				rowAge = now.Sub(time.UnixMilli(row.UpdatedAt)) // same fallback as orphanedRows
 			}
 			if rowAge > orphanStaleRowAge {
 				if err := at.store.Position().ClosePositionFully(row.ID, row.EntryPrice, "", now.UnixMilli(), row.RealizedPnL, row.Fee, "netting_reconcile_stale"); err != nil {

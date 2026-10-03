@@ -17,6 +17,9 @@ import (
 
 // runCycle runs one trading cycle (using AI full decision-making)
 func (at *AutoTrader) runCycle() error {
+	mu := at.executionMutex()
+	mu.Lock()
+	defer mu.Unlock()
 	at.runtimeMu.Lock()
 	at.callCount++
 	at.runtimeMu.Unlock()
@@ -137,7 +140,18 @@ func (at *AutoTrader) runCycle() error {
 
 	// 5. Use strategy engine to call AI for decision
 	logger.Infof("🤖 Requesting AI analysis and decision... [Strategy Engine]")
-	aiDecision, err := kernel.GetFullDecisionWithStrategy(ctx, at.mcpClient, at.strategyEngine, "balanced")
+	aiDecision, err := withoutExecutionLock(mu, func() (*kernel.FullDecision, error) {
+		return kernel.GetFullDecisionWithStrategy(ctx, at.mcpClient, at.strategyEngine, "balanced")
+	})
+	at.isRunningMutex.RLock()
+	stopped := !at.isRunning
+	at.isRunningMutex.RUnlock()
+	if stopped {
+		return nil
+	}
+	if err := at.refreshExecutionAccount(ctx); err != nil {
+		return err
+	}
 
 	if aiDecision != nil && aiDecision.AIRequestDurationMs > 0 {
 		record.AIRequestDurationMs = aiDecision.AIRequestDurationMs
@@ -380,9 +394,12 @@ func (at *AutoTrader) runCycle() error {
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s succeeded", d.Symbol, d.Action))
 			// Fill notification is handled centrally by the order-sync layer
-			// (covers exchange-side stops and manual closes too).
-			// Brief delay after successful execution
-			time.Sleep(1 * time.Second)
+			// (covers exchange-side stops and manual closes too). The old 1s
+			// inter-decision sleep ran under the ACCOUNT execution mutex and
+			// queued the 30s protection monitor behind N decisions
+			// (2026-10-03 review) — the confirmation polling inside
+			// recordAndConfirmOrder already paces rapid re-orders, so the
+			// unconditional sleep is dropped.
 		}
 
 		record.Decisions = append(record.Decisions, actionRecord)

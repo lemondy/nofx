@@ -18,6 +18,10 @@ import (
 // placed → filled (SL/TP placed at the exact limit price) | expired (N cycles
 // unfilled → cancelled) | invalidated (price crossed the SL before entry) |
 // replaced (a newer decision for the same symbol and side).
+// pendingEntry is the in-memory limit-entry plan. Concurrency contract:
+// MAP MEMBERSHIP is guarded by pendingEntriesMu; FIELD MUTATIONS (Cycles,
+// ExecutedQty/ProtectedQty watermark) happen only under the account
+// execution mutex (cycle, protection monitor, Stop sweep, reconcile).
 type pendingEntry struct {
 	Symbol       string
 	Side         string // "long" / "short"

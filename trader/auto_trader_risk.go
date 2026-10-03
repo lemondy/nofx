@@ -1568,6 +1568,23 @@ func (at *AutoTrader) sweepOrphanedProtection(positions []map[string]interface{}
 	}
 }
 
+// watchdogTPQty sizes the watchdog's TP repair: a split-TP position's repair
+// must re-place the FRACTION, not the full position quantity — the old full-
+// qty repair silently upgraded a trend runner to "close everything at TP"
+// (2026-10-03 review P2).
+func (at *AutoTrader) watchdogTPQty(symbol, side string) float64 {
+	qty, qtyOK := at.positionQty(symbol, side)
+	if !qtyOK {
+		return 0
+	}
+	if mode := at.ExitModeFor(symbol, side); mode != "" {
+		if q := qty * tpFractionForMode(mode, at.effectiveTPCloseFraction()); q > 0 {
+			return q
+		}
+	}
+	return qty
+}
+
 func (at *AutoTrader) processProtectionWatchdog() {
 	if at.config.StrategyConfig == nil {
 		return
@@ -1667,10 +1684,12 @@ func (at *AutoTrader) processProtectionWatchdog() {
 					// quantity — qty=0 is closePosition on Binance but a
 					// hard reject on OKX/Bybit/Bitget, so the TP repair was
 					// a silent no-op there. Unreadable size → alert.
-					qty, qtyOK := at.positionQty(symbol, side)
-					if !qtyOK {
+					// 2026-10-03 review: watchdogTPQty also re-applies the
+					// split-TP fraction (the old full-qty repair upgraded a
+					// trend runner to close-everything-at-TP).
+					if _, qtyOK := at.positionQty(symbol, side); !qtyOK {
 						at.alertUnprotectedPosition(symbol, side, "live position quantity unreadable — TP re-place skipped")
-					} else if err := at.trader.SetTakeProfit(symbol, positionSide, qty, tp); err == nil {
+					} else if err := at.trader.SetTakeProfit(symbol, positionSide, at.watchdogTPQty(symbol, side), tp); err == nil {
 						repaired = append(repaired, fmt.Sprintf("TP %.6g", tp))
 					} else {
 						logger.Infof("⚠️ [%s] Protection watchdog: TP re-place failed for %s: %v", at.name, symbol, err)
@@ -2167,8 +2186,14 @@ func (at *AutoTrader) anchorDailyBaseline(equity float64) {
 	// the non-durable anchor for one pass (and leaving a crash window where
 	// the registry said "anchored" but the store did not).
 	if at.store != nil {
+		// 2026-10-03 review P2: on a store ERROR (transient busy) do NOT
+		// publish this pass's equity into the process registry — a same-
+		// account peer would inherit a non-durable anchor. Keep it
+		// instance-local and let the next cycle retry the durable write.
 		if anchored, err := at.store.RiskState().AnchorDayBaseline(key, today, equity); err == nil && anchored > 0 {
 			equity = anchored
+		} else if err != nil {
+			logger.Warnf("⚠️ [%s] day-anchor durable write failed: %v — anchor kept instance-local this cycle", at.name, err)
 		}
 	}
 	dailyBaselineRegMu.Lock()
@@ -2413,6 +2438,14 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		// from the account breaker).
 		if strings.HasPrefix(d.Action, "open_") {
 			entryPx := d.Price
+			// 2026-10-03 review: an unpriceable decision (Price=0) fell
+			// through the account-cap gate with ZERO reservation. Fall back
+			// to this cycle's market data before declaring it unpriceable.
+			if entryPx <= 0 {
+				if md := ctx.MarketDataMap[d.Symbol]; md != nil && md.CurrentPrice > 0 {
+					entryPx = md.CurrentPrice
+				}
+			}
 			if gs, ok := at.cycleGateStates[market.Normalize(d.Symbol)]; ok && gs != nil {
 				basis := gs.LongEntryPrice
 				if strings.Contains(d.Action, "short") {
@@ -2522,7 +2555,9 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				if trend == "up" {
 					logger.Warnf("🛡️ [%s] GATE BLOCKED open_short %s: 1d trend is up (counter-trend short protection)", at.name, d.Symbol)
 					notify.Notify("ALERT", at.name, fmt.Sprintf("<b>🛡️ 已拦截做空 %s</b>\n1d 趋势向上，禁止逆势做空\n<i>%s</i>", notify.Escape(d.Symbol), notify.Escape(d.Reasoning)))
-					at.setFilterReason(d, "entry timing gate (sub-hour trend misaligned)")
+					// 2026-10-03 review P2: this was a copy-paste of the timing
+					// gate's reason — the Telegram CoT mislabeled the block.
+					at.setFilterReason(d, "1d trend is up (counter-trend short protection)")
 					continue
 				}
 			}
