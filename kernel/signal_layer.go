@@ -1142,29 +1142,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	sig.LimitEntryOffsetPct = AnchorOffsetPct(anchorATRPct, offsetCfg)
 	sig.LimitBuyPrice = data.CurrentPrice * (1 - sig.LimitEntryOffsetPct/100)
 	sig.LimitSellPrice = data.CurrentPrice * (1 + sig.LimitEntryOffsetPct/100)
-	// ⑬ Breakout-retest long anchor (user design 2026-10-01, "保留突破,改入场
-	// 方式"): a confirmed LONG breakout does NOT chase the extension — the
-	// limit anchor moves to the BROKEN level (old resistance → support) so
-	// the fill lands on the retest, and the stop plan / RR below compute from
-	// that anchor (structural stop under the level → short distance → honest
-	// RR; a close back under it demotes the state to fake_break and the
-	// anchor disappears with the state — no crossed-anchor market fallback
-	// into a failed retest). Evidence badges ride along.
-	sig.LongPullback = buildLongPullbackPlan(sig, data, opt)
-	if sig.LongPullback != nil && sig.LongPullback.Active {
-		sig.LimitBuyPrice = sig.LongPullback.Entry
-	}
 
-	// ① Anchor cross-validation (user review 2026-09-07): the pre-computed
-	// limit anchors are checked against the same supply-zone rule the trader
-	// enforces at execution — an anchor with no breathing room is ZEROED so
-	// the model never sees a tradable price that would be rejected. The
-	// breathing threshold scales with the EXECUTION TF's ATR (spec 2026-09-09
-	// step 4: 0.5×ATR(执行周期)) — the check means "the fill must not land
-	// right under a ceiling", so the yardstick is fill-site noise, not the
-	// deep 1h corridor; the trader's gate applies the same formula to fresh
-	// data. EXACT-TF lookup (B2): missing execution TF → 0 → AnchorBreathingPct's
-	// fixed fallback, matching the trader side — never a silently different scale.
 	execATRPct := 0.0
 	if tExec, ok := sig.Timeframes[opt.PrimaryTF]; ok && tExec != nil {
 		execATRPct = tExec.ATRPct
@@ -1173,6 +1151,27 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		breathing := AnchorBreathingPct(execATRPct, offsetCfg, opt.SupplyZonePct)
 		suppressAnchorsAgainstStructure(sig, data, breathing)
 	}
+
+	// ⑫⑬ Breakout state + retest anchor (user design 2026-10-01, "保留突破,改入场
+	// 方式"): a confirmed LONG breakout does NOT chase the extension — the
+	// limit anchor moves to the BROKEN level (old resistance → support) so
+	// the fill lands on the retest, and the stop plan / RR below compute from
+	// that anchor (structural stop under the level → short distance → honest
+	// RR). MUST run AFTER sig.Breakout is assigned (2026-10-03 P0 review: the
+	// block originally sat before computeBreakoutState and read a nil
+	// Breakout — the whole feature was dead in production while its
+	// builder-level tests passed) and AFTER suppressAnchorsAgainstStructure,
+	// which must NOT zero this anchor: it intentionally sits at the broken
+	// level, and the pivots just above it are the breakout's own extension,
+	// not overhead supply (the plan carries the geometry for the executor's
+	// supply exemption via GateState.LongPullback*).
+	sig.Breakout = computeBreakoutState(data, sig)
+	sig.LongPullback = buildLongPullbackPlan(sig, data, opt)
+	if sig.LongPullback != nil && sig.LongPullback.Active {
+		sig.LimitBuyPrice = sig.LongPullback.Entry
+	}
+	sig.BBRide = computeBBRide(data)
+	sig.ShortRide = computeBBShortRide(data)
 
 	// Entry / exit heuristic rules — deterministic, computed so the model sees
 	// the program's verdict and can agree or disagree with reasoning.
@@ -1190,13 +1189,6 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 			(primary.RSI14 != nil && *primary.RSI14 > 80) ||
 			(primary.Trend == "down" && primary.LastClosedCandle == "bearish")
 	}
-
-	// ⑫ Breakout state vs the 1h structure level, in the direction the 1h
-	// trend implies — the model reads one verdict instead of assembling
-	// price/levels/volume/OI itself.
-	sig.Breakout = computeBreakoutState(data, sig)
-	sig.BBRide = computeBBRide(data)
-	sig.ShortRide = computeBBShortRide(data)
 
 	// Loss-streak circuit breaker: the trader computes the ban from the
 	// closed-trade record; the signal only mirrors the verdict so the model

@@ -5,6 +5,7 @@ import (
 	"math"
 	"nofx/kernel"
 	"nofx/logger"
+	"nofx/market"
 	"nofx/store"
 	notify "nofx/telegram/notify"
 	"nofx/trader/types"
@@ -28,6 +29,7 @@ type pendingEntry struct {
 	OrderID      string
 	PlacedAt     time.Time
 	Cycles       int
+	ExecutedQty  float64 // cumulative observed fill, independent of verified coverage
 	ProtectedQty float64 // executed size already carrying SL/TP (partial-fill watermark)
 	ExitMode     string  // exit template carried to the position on fill (trend|range|quick; '' = trend)
 }
@@ -35,6 +37,7 @@ type pendingEntry struct {
 func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
 
 func (at *AutoTrader) setPendingEntry(pe *pendingEntry) {
+	registerAccountTrader(at)
 	at.pendingEntriesMu.Lock()
 	defer at.pendingEntriesMu.Unlock()
 	if at.pendingEntries == nil {
@@ -66,17 +69,19 @@ func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) {
 		return
 	}
 	err := at.store.PendingEntry().Upsert(&store.PendingEntryDB{
-		TraderID:   at.id,
-		Symbol:     pe.Symbol,
-		Side:       pe.Side,
-		Price:      pe.Price,
-		Quantity:   pe.Quantity,
-		StopLoss:   pe.StopLoss,
-		TakeProfit: pe.TakeProfit,
-		Leverage:   pe.Leverage,
-		OrderID:    pe.OrderID,
-		PlacedAt:   pe.PlacedAt,
-		ExitMode:   pe.ExitMode,
+		TraderID:     at.id,
+		Symbol:       pe.Symbol,
+		Side:         pe.Side,
+		Price:        pe.Price,
+		Quantity:     pe.Quantity,
+		StopLoss:     pe.StopLoss,
+		TakeProfit:   pe.TakeProfit,
+		Leverage:     pe.Leverage,
+		OrderID:      pe.OrderID,
+		PlacedAt:     pe.PlacedAt,
+		ExitMode:     pe.ExitMode,
+		ProtectedQty: pe.ProtectedQty,
+		ExecutedQty:  pe.ExecutedQty,
 	})
 	if err != nil {
 		logger.Infof("⚠️ [%s] persist pending entry %s (order %s) failed: %v — restart would orphan it until the tag-scan drops it",
@@ -298,7 +303,14 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 			// — recomputed on fresh data so the gate and the pre-filter can
 			// never disagree about what "no room" means.
 			threshold := kernel.AnchorBreathingPct(sig.ExecutionATRPct(), offsetCfg, rc.OpenRejectSupplyPct)
-			if blocked, reason := entrySupplyZoneBlocks(sig, side, decision.Price, threshold); blocked {
+			// Breakout-retest exemption (2026-10-03 review): the decision price
+			// at the pullback level must not die on the breakout's own extension
+			// pivots — the level comes from the cycle's captured gate state.
+			pullbackLevel := 0.0
+			if gs := at.cycleGateStates[market.Normalize(decision.Symbol)]; gs != nil && gs.LongPullbackActive {
+				pullbackLevel = gs.LongPullbackLevel
+			}
+			if blocked, reason := entrySupplyZoneBlocks(sig, side, decision.Price, threshold, pullbackLevel); blocked {
 				return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", decision.Action, decision.Symbol, reason)
 			}
 		}
@@ -464,7 +476,7 @@ func (at *AutoTrader) processPendingEntries() {
 			// its degraded-setup alert because the gates validated RR at that
 			// same planned price.
 			at.reportFilledRR(pe, statusFloat(status, "avgPrice"))
-			at.markAIManaged(pe.Symbol, pe.Side)
+			at.markAIManaged(pe.Symbol, pe.Side, pe.OrderID)
 			// R2 (2026-09-26 review): the full-quantity plan placement here
 			// DOUBLE-BOOKED protection on top of protectExecutedSlice —
 			// 0.5-TP fraction placed twice (半仓目标变全仓) and prices mixed
@@ -475,7 +487,7 @@ func (at *AutoTrader) processPendingEntries() {
 			// once the slice is ACTUALLY protected — a failed leg used to
 			// delete the row behind a "保护单已挂" notify, losing the retry
 			// plan entirely.
-			if executed := statusFloat(status, "executedQty"); executed > 0 && pe.ProtectedQty+1e-9 < executed {
+			if executed := statusFloat(status, "executedQty"); !pendingProtectionComplete(pe, status) {
 				logger.Infof("⚠️ [%s] Limit entry FILLED %s %s but protection incomplete (%.6g/%.6g protected) — pending row KEPT, legs retried next cycle", at.name, pe.Symbol, pe.Side, pe.ProtectedQty, executed)
 				notify.Notify("ALERT", at.name, fmt.Sprintf(
 					"<b>⚠️ 限价成交保护未完成 %s</b>\n<i>%s 已成交 %.6g,已保护 %.6g —— 恢复计划保留,下周期重试补挂;若持续失败请人工核查</i>",
@@ -489,6 +501,9 @@ func (at *AutoTrader) processPendingEntries() {
 			// Residual protection (P1 2026-09-25): a cancel/expiry after a
 			// partial fill must not strand the executed slice on ATR-fallback.
 			at.protectExecutedSlice(pe, status)
+			if !pendingProtectionComplete(pe, status) {
+				continue
+			}
 			at.dropPendingEntry(pe.Symbol, pe.Side)
 			logger.Infof("📌 [%s] Limit entry %s %s externally (%s) — state dropped (executed slice protected if any)", at.name, pe.Symbol, st, st)
 		case "PARTIALLY_FILLED":
@@ -604,11 +619,22 @@ func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
 	// executed slice BEFORE dropping the plan (protectExecutedSlice is
 	// idempotent on the watermark). On Binance a cancel of a fully-filled
 	// order errors → early return above → the FILLED branch handles it.
-	if status, err := at.trader.GetOrderStatus(pe.Symbol, pe.OrderID); err == nil {
-		at.protectExecutedSlice(pe, status)
+	status, err := at.trader.GetOrderStatus(pe.Symbol, pe.OrderID)
+	if err != nil {
+		return fmt.Errorf("cancel accepted, final fill unknown: %w", err)
+	}
+	st, _ := status["status"].(string)
+	switch strings.ToUpper(st) {
+	case "CANCELED", "EXPIRED", "REJECTED", "FILLED":
+	default:
+		return fmt.Errorf("cancel not terminal: %s", st)
+	}
+	at.protectExecutedSlice(pe, status)
+	if !pendingProtectionComplete(pe, status) {
+		return fmt.Errorf("cancel accepted, residual protection incomplete")
 	}
 	at.dropPendingEntry(pe.Symbol, pe.Side)
-	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价单已撤销 %s</b>\n<i>%s @ %.6g 未成交,撤销重评</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
+	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>限价单终态已确认 %s</b>\n已成交 %.6g，残量保护已核验", notify.Escape(pe.Symbol), statusFloat(status, "executedQty")))
 	return nil
 }
 
@@ -663,19 +689,26 @@ func statusFloat(status map[string]interface{}, key string) float64 {
 // protected-qty watermark in the pending entry. Returns the reanchored stop
 // that was recorded (0 = nothing placed).
 func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]interface{}) float64 {
-	executed := statusFloat(status, "executedQty")
-	avg := statusFloat(status, "avgPrice")
-	if executed <= 0 || avg <= 0 {
+	executed, avg, valid := fillReceipt(status)
+	if !valid || executed <= 0 || avg <= 0 || executed+1e-9 < pe.ExecutedQty {
 		return 0
 	}
-	if executed <= pe.ProtectedQty {
-		return 0 // already protected up to this size
-	}
+	previouslyExecuted := pe.ExecutedQty
+	pe.ExecutedQty = executed
+	previouslyProtected := pe.ProtectedQty
+	// Confirmed coverage is revocable: an exchange-side cancel after an earlier
+	// slice must not let the old watermark clean up an unprotected terminal fill.
+	pe.ProtectedQty = 0
+	defer func() {
+		if pe.ProtectedQty == 0 && (previouslyProtected > 0 || pe.ExecutedQty != previouslyExecuted) {
+			at.persistPendingEntry(pe)
+		}
+	}()
 	newSL, newTP := reanchorToFill(pe.Side, pe.Price, avg, pe.StopLoss, pe.TakeProfit)
 	if newSL <= 0 || newTP <= 0 {
 		return 0
 	}
-	at.markAIManaged(pe.Symbol, pe.Side)
+	at.markAIManaged(pe.Symbol, pe.Side, pe.OrderID)
 	posKey := pe.Symbol + "_" + pe.Side
 	if at.GetRecordedStopLoss(pe.Symbol, pe.Side) <= 0 {
 		// First slice of this entry: the 1R anchor and the recorded stop are
@@ -690,7 +723,7 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 	if pe.Side == "short" {
 		positionSide = "SHORT"
 	}
-	slice := executed - pe.ProtectedQty
+	slice := executed // reconcile cumulative coverage, including prior partial fills
 	// R2: the watermark advances ONLY when both legs actually placed — a
 	// failed placement must not mark the slice protected (the same size
 	// would be skipped forever). F01 (2026-10-01 review): that now includes
@@ -707,10 +740,63 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 		return 0
 	}
 	pe.ProtectedQty = executed
+	at.persistPendingEntry(pe)
+	if executed <= previouslyProtected {
+		return newSL
+	}
 	logger.Infof("📌 [%s] Partial-fill protection: %s %s executed %.6g @ %.6g — SL %.6g / TP %.6g re-anchored to the actual fill",
 		at.name, pe.Symbol, pe.Side, executed, avg, newSL, newTP)
 	notify.Notify("ORDER", at.name, fmt.Sprintf(
 		"<b>📌 部分成交保护 %s</b>\n<i>已成交 %.6g @ %.6g,SL/TP 已按实际成交价重锚(%.6g / %.6g)</i>",
 		notify.Escape(pe.Symbol), executed, avg, newSL, newTP))
 	return newSL
+}
+
+func pendingProtectionComplete(pe *pendingEntry, status map[string]interface{}) bool {
+	executed, _, valid := fillReceipt(status)
+	if !valid || executed+1e-9 < pe.ExecutedQty {
+		return false
+	}
+	st, _ := status["status"].(string)
+	switch strings.ToUpper(st) {
+	case "CANCELED", "EXPIRED", "REJECTED", "FILLED":
+	default:
+		return false
+	}
+	if executed == 0 {
+		return !strings.EqualFold(st, "FILLED")
+	}
+	return pe.ProtectedQty+1e-9 >= executed
+}
+
+// Distinguish a real zero fill from a missing, malformed or non-finite receipt.
+func fillReceipt(status map[string]interface{}) (quantity, average float64, valid bool) {
+	number := func(key string) (float64, bool) {
+		var n float64
+		switch v := status[key].(type) {
+		case float64:
+			n = v
+		case string:
+			var err error
+			n, err = strconv.ParseFloat(v, 64)
+			if err != nil {
+				return 0, false
+			}
+		default:
+			return 0, false
+		}
+		return n, !math.IsNaN(n) && !math.IsInf(n, 0) && n >= 0
+	}
+	var ok bool
+	quantity, ok = number("executedQty")
+	if !ok {
+		return 0, 0, false
+	}
+	if quantity > 0 {
+		average, ok = number("avgPrice")
+		if !ok || average <= 0 {
+			return quantity, 0, false
+		}
+	}
+	return quantity, average, true
 }

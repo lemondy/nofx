@@ -245,6 +245,14 @@ type GateState struct {
 	// ZEC against the plan and the executor rejected the whole output).
 	LongStopPlanPrice  float64
 	ShortStopPlanPrice float64
+	// LongPullbackActive/Level: the breakout-retest anchor exemption for the
+	// executor's supply-zone gate (2026-10-03 review) — the retest anchor
+	// intentionally sits at the just-broken level, and the pivots a few
+	// tenths above it are the breakout's own extension, not overhead supply.
+	// The pending-path supply check skips when the decision price ≈ the
+	// pullback level.
+	LongPullbackActive bool
+	LongPullbackLevel  float64
 	// TP menus per direction (user directive 2026-09-29): the qualifying
 	// structural targets the model picks between (Decision.TPOption,
 	// 1-based). Option 1 IS the legacy first_rr_ge_target;

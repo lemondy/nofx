@@ -131,7 +131,7 @@ func TestEntrySupplyZoneBlocks(t *testing.T) {
 
 	t.Run("SOL prototype: long anchor just under 15m resistance blocked", func(t *testing.T) {
 		// Anchor 106.76, nearest overhead 106.89 → 0.12% < 0.5%.
-		blocked, reason := entrySupplyZoneBlocks(sig, "long", 106.76, threshold)
+		blocked, reason := entrySupplyZoneBlocks(sig, "long", 106.76, threshold, 0)
 		if !blocked {
 			t.Fatal("anchor 0.12% under resistance must be blocked")
 		}
@@ -142,14 +142,14 @@ func TestEntrySupplyZoneBlocks(t *testing.T) {
 
 	t.Run("long anchor with clean air above allowed", func(t *testing.T) {
 		// Anchor 106.0 → nearest overhead 106.89 = 0.82% away > 0.5%.
-		if blocked, _ := entrySupplyZoneBlocks(sig, "long", 106.0, threshold); blocked {
+		if blocked, _ := entrySupplyZoneBlocks(sig, "long", 106.0, threshold, 0); blocked {
 			t.Fatal("anchor 0.82% under resistance must pass")
 		}
 	})
 
 	t.Run("short anchor just above 15m support blocked", func(t *testing.T) {
 		// Anchor 105.80, support 105.61 → 0.18% above support < 0.5%.
-		blocked, _ := entrySupplyZoneBlocks(sig, "short", 105.80, threshold)
+		blocked, _ := entrySupplyZoneBlocks(sig, "short", 105.80, threshold, 0)
 		if !blocked {
 			t.Fatal("anchor 0.18% above support must be blocked")
 		}
@@ -157,7 +157,7 @@ func TestEntrySupplyZoneBlocks(t *testing.T) {
 
 	t.Run("short anchor with clean air below allowed", func(t *testing.T) {
 		// Anchor 106.4 → support 105.61 = 0.74% below > 0.5%.
-		if blocked, _ := entrySupplyZoneBlocks(sig, "short", 106.4, threshold); blocked {
+		if blocked, _ := entrySupplyZoneBlocks(sig, "short", 106.4, threshold, 0); blocked {
 			t.Fatal("anchor 0.74% above support must pass")
 		}
 	})
@@ -166,13 +166,13 @@ func TestEntrySupplyZoneBlocks(t *testing.T) {
 		empty := &kernel.SymbolSignal{Timeframes: map[string]*kernel.TFSignal{
 			"15m": {Support: []float64{}, Resistance: []float64{}},
 		}}
-		if blocked, _ := entrySupplyZoneBlocks(empty, "long", 106.76, threshold); blocked {
+		if blocked, _ := entrySupplyZoneBlocks(empty, "long", 106.76, threshold, 0); blocked {
 			t.Fatal("no-level signal must fail open")
 		}
-		if blocked, _ := entrySupplyZoneBlocks(sig, "long", 106.76, 0); blocked {
+		if blocked, _ := entrySupplyZoneBlocks(sig, "long", 106.76, 0, 0); blocked {
 			t.Fatal("disabled threshold must fail open")
 		}
-		if blocked, _ := entrySupplyZoneBlocks(nil, "long", 106.76, threshold); blocked {
+		if blocked, _ := entrySupplyZoneBlocks(nil, "long", 106.76, threshold, 0); blocked {
 			t.Fatal("nil signal must fail open")
 		}
 	})

@@ -1771,6 +1771,14 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 					gs.LongFailed = sig.HardGate.Long.Failed
 					gs.LongMarketException = sig.HardGate.Long.MarketException
 					gs.LongLimitAllowed = sig.HardGate.Long.LimitAllowed
+					// Breakout-retest exemption plumbing (2026-10-03 review):
+					// the executor's supply-zone check skips when the decision
+					// price ≈ the pullback level — the pivots above it are the
+					// breakout's own extension, not supply.
+					if sig.LongPullback != nil && sig.LongPullback.Active {
+						gs.LongPullbackActive = true
+						gs.LongPullbackLevel = sig.LongPullback.Level
+					}
 					if sig.HardGate.Long.RR != nil {
 						gs.LongTakeProfit = sig.HardGate.Long.RR.FirstRRGeTarget
 						gs.LongTPMenu = sig.HardGate.Long.RR.Options

@@ -2,6 +2,7 @@ package trader
 
 import (
 	"fmt"
+	"math"
 	"nofx/kernel"
 	"nofx/market"
 	"time"
@@ -147,9 +148,19 @@ func closeRejectBreakoutBlocks(side string, entryPrice float64, v *closeGateView
 // into supply with no room; a short limit just above support sells into the
 // bounce zone. Fail-open on missing data. side: "long"/"short";
 // anchorPrice: the limit price about to be placed.
-func entrySupplyZoneBlocks(sig *kernel.SymbolSignal, side string, anchorPrice, thresholdPct float64) (bool, string) {
+// entrySupplyZoneBlocks rejects a limit anchor that would fill inside a
+// supply/demand zone — within thresholdPct of the nearest opposite-side
+// structure. pullbackLevel (0 = none) exempts a breakout-retest anchor: the
+// retest INTENTIONALLY fills at the just-broken level, and the pivots a few
+// tenths above it are the breakout's own extension, not overhead supply
+// (2026-10-03 review — without the exemption every retest placement whose
+// extension pivots sit close above the level dies in a placement loop).
+func entrySupplyZoneBlocks(sig *kernel.SymbolSignal, side string, anchorPrice, thresholdPct, pullbackLevel float64) (bool, string) {
 	if sig == nil || anchorPrice <= 0 || thresholdPct <= 0 {
 		return false, ""
+	}
+	if pullbackLevel > 0 && math.Abs(anchorPrice-pullbackLevel)/pullbackLevel < 0.001 {
+		return false, "" // breakout-retest anchor: fill-at-level is the design
 	}
 	level := nearestOppositeLevel(sig, side, anchorPrice)
 	if level <= 0 {
