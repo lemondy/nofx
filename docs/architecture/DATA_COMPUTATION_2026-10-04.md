@@ -123,4 +123,103 @@
 
 ---
 
+## 九、做多 / 做空标的与入场方案(方向详解)
+
+### 9.1 做多(标的来源 → 入场路径 → 门 → 出场)
+
+**多头标的宇宙**:AI500、piggy 突破榜(方向=breakout)、mixed 多源、static 清单;BTC 过滤器(`btc_filter_long`,默认开)要求 BTC 4h 非下跌趋势且币 24h 涨幅 ≥ BTC。
+
+**三条入场路径**(按优先级,程序预计算 `hard_entry_gate.long`):
+
+| 路径 | 触发条件 | 入场价 | 止损 | 说明 |
+|---|---|---|---|---|
+| ① 突破回踩限价(设计首选) | 1h 突破 `confirmed/retest_hold`,旧阻仍在现价下方 | **被破阻力位**(旧阻转支撑) | 止损计划按位下结构生成,带 [1.5×ATR(1h), max(2×ATR(4h),8%)] | `long_pullback` 块携带证据;延伸 pivots 不算供给;收盘跌回位下→fake_break 锚消失;**EMA20_STRETCH 豁免**(等回踩=设计出口) |
+| ② 常规回撤限价(非突破币) | 锚未被供给区抑制(≥0.5×ATR(执行TF) 呼吸空间) | 现价 − ATRMult×ATR(1h)(clamp 到配置带) | 同上 | 常规路径;限价在 15m regime 线正确一侧才放行 |
+| ③ 市价例外(两条,均需 `marketExceptionEvidence`) | a) 15m 布林**上轨骑行** `bb_ride.ride=true`;b) 突破 confirmed+量≥1.5×+OI 顺向+score≥80 | 现价(滑点熔断 100bps 告警 / `max_entry_slippage_bps` 可配熔断) | 同① | 费率年化 ≤50% 才允许(多头拥挤侧);EXTENDED_PUMP_UNCONFIRMED 时另需 pump 确认+confidence≥80 |
+
+**多头专属门**(任一失败即拦,码进 failed 可引用):
+
+| 码 | 条件 |
+|---|---|
+| EXTENDED_PUMP_UNCONFIRMED | 4h 五根闭合 K 窗口涨幅 ≥20% 且回踩未确认(确认=15m 收回 EMA20 上+更高 swing low) |
+| EMA20_STRETCH_x_GT_y | 现价高于 4h EMA20 超过 12%(默认),**仅追涨路径**(回踩锚豁免) |
+| BTC_4H_DOWNTREND / BTC_WEAK_LONG_x_VS_y | BTC 4h EMA20<EMA50 且价在 EMA20 下 / 币 24h 弱于 BTC |
+| WIDE_STOP_x_GT_y | 止损计划距离 >10%(bstock 豁免) |
+| MICRO_TREND_NOT_LONG | 最细子小时趋势非 up/pullback(时点门开时) |
+| RR_MAX / DATA_INSUFFICIENT / MIN_SIZE_DEAD_ZONE / VENDOR_DIVERGENCE / POOR_HISTORY / LOSS_STREAK_BANNED / CONSENSUS_OPPOSED / NEG_EDGE_* / STOCK_WEEKEND | 通用(见 §5/§8) |
+
+**多头证据徽章**(加分不拦):`long_squeeze.detected`(费率 ≤−5% 年化+多空比<1+机构净流入>0)、`funding_not_overheated`(年化≤50%)、`volume_confirmation`+`oi_confirmation`(突破量能/OI)、trend regime ADX 确认。
+
+**时点**:最细子小时 TF 须 up/pullback;pullback 时 15m regime 慢线必须守住——**限价按锚位评估**(回踩锚在线上方即合法,实时 tick 短暂下穿不拒)。
+
+### 9.2 做空(标的来源 → 姿态 → 入场路径 → 门)
+
+**空头标的宇宙**(全部来自做空扫描,自带九维加权分):
+
+| 宇宙 | 进入逻辑 | 专属豁免/门 |
+|---|---|---|
+| short_scan(24h 涨幅榜) | 六维+费率+OI 评分,分级 strong≥70 / medium≥55 / weak≥40(**未确认的 strong 降级 medium**——顶部确认是做空的生命线) | 费率拥挤二选一(见下);**near_high 豁免费率条件**(磨顶币费率已正常化,确认信号=4h 顶背离) |
+| slowtop 磨顶 near_high | 距 90 日高点 <5% + 4h 顶背离,30min 刷新,$30M/日预筛 | 豁免 OI 地板(量能预筛替代);缓存 2×TTL 丢弃 |
+| breakdown 破位 | 24h 跌幅榜 + 4h 趋势向下 | 顺势反弹做空;榜内是入选原因非结论 |
+| hist_gainer 历史涨幅池 | 近 7 天日涨幅 Top20 快照合并 | 冲高回落期标的,仍看各维确认 |
+| 美股时段加权 | 美东周一至五 09:30–16:00,EQUITY 代币 short_scan 得分 ×1.2 | 加权改排序不改门 |
+
+**默认姿态(稳定规则,勿逐次重判)**:short_scan 按涨幅入选,1h/4h 结构天然偏多——scanner 说可空、结构说多头是**常态而非冲突**。规则:顶部确认信号(顶背离/假突破/破 EMA20/费率 rollover)+ `execution_filter.short_allowed=true`(15m 微趋势已转 down/rally)**两条同时成立**才允许做空;仅确认而 15m 仍 up → `wait + wait_bias=short`,触发条件写"15m 转 down + RECHECK_ALL_HARD_GATES"。
+
+**入场路径**:
+
+| 路径 | 触发条件 | 入场价 | 说明 |
+|---|---|---|---|
+| ① 限价锚(默认) | 锚通过供给区检查 | 现价 + ATRMult×ATR(1h)(clamp) | 时点:down/rally;rally 时 regime 慢线按锚位守 |
+| ② 市价例外 a:15m **下轨骑行** `short_ride.ride=true` | + 费率不拥挤(空头侧年化 ≥−50%) | 现价 | 与 bb_ride 对称 |
+| ③ 市价例外 b:confirmed **breakdown** 突破+量≥1.5×+OI 顺向+score≤−80 | | 现价 | breakdown 方向匹配才可借用 |
+
+**空头专属门**:
+
+| 码 | 条件 |
+|---|---|
+| MICRO_TREND_NOT_SHORT | 最细子小时趋势非 down/rally |
+| 费率拥挤二选一(策略规定,支撑证据非必要) | ① 衍生品费率年化 >32.9%(8h 口径每期 >0.0300%,按真实结算间隔换算);② `funding_rollover.detected=true`(前 3 期高+当前回落;hint 里的"费率回落"字样禁用)——两者皆不满足时不要仅因费率理由做空 |
+| CONSENSUS_OPPOSED_x | 方向分 ≥+50(多头共识 ≥50 对抗做空) |
+| block_short_1d_uptrend | bstock 1d 趋势 up(可配) |
+| STOCK_WEEKEND | bstock 美东周末 |
+| 其余通用码 | 同 §5/§8 |
+
+**空头证据九维**(short_scan 权重,调参器可动):structure 0.15、crowding 0.15、overbought/parabolic/rejection/volume_fade/stretch/divergence/extension 各 0.10;`NearHighAlso` 碰撞标记穿越全链路。
+
+### 9.3 方向对称性对照(多头 ↔ 空头镜像关系)
+
+| 空头纪律 | 多头对应 | 状态 |
+|---|---|---|
+| 费率拥挤/rollover | 费率不过热(年化≤50%)+ long_squeeze 加分 | ✅ 双向落地 |
+| 4h 顶背离/假突破 | 突破+OI 增+放量(OI增+价涨=偏多推断) | ✅ 双向落地 |
+| 磨顶豁免(near_high) | 不追已偏离 EMA20 的币(EMA20_STRETCH 帽) | ✅ 10-01 落地 |
+| 暴涨延伸门 | EXTENDED_PUMP_UNCONFIRMED(同门共用) | ✅ 原有 |
+| 15m 微趋势时点 | 同门(方向条件镜像) | ✅ 原有 |
+| BTC regime | BTC_4H_DOWNTREND/BTC_WEAK_LONG(仅拦多,不拦空) | ✅ 10-01 落地 |
+| 突破回踩入场 | 空头侧对称路径(breakdown retest)**未实现**——当前空头只有追破位市价例外,回踩锚仅多头 | ⏳ 待排(用户拍板) |
+
+### 9.4 出场体系(方向共用,程序阶梯独立于 AI 规划)
+
+**仓位公式**(唯一):notional = equity × risk%(2.0)÷ stop_distance%,夹 [min 策略+交易所双下限, 价值帽];confidence 只决定开不开。
+
+**exit_mode 模板**(开仓时选,持仓中不可改):
+- `trend`(默认):结构位止盈只平**当时剩余的 50%**,剩余由 2×ATR 跟踪跑单;
+- `range`:到目标位全平,不跑单;
+- `quick`:到目标全平 + 开仓超 4h 仍浮亏程序时间止损。
+
+**程序阶梯(CODE ENFORCED,独立于 AI,不占 75% partial 上限)**:
+1. **0.5R**(breakeven_arm_r,实盘 0.5):浮盈达 0.5R → 止损移至开仓价 **+0.20R**(不减仓,锁微利防噪声);
+2. **1.2R**(profit_lock 锁利档,与杠杆无关):市价减仓 **1/3**(一次);执行前必须先把止损收紧到保本或更好;
+3. **1R**:无新增动作(止损已在 0.5R 档移至 +0.20R);
+4. **ROE 档**(legacy,tp_trim_profit_pct 实盘 15%):R 档未配时回退;
+5. **2×ATR 跟踪**:arm 于 1.5× 初始止损距离,只紧不松(≥0.1% 改进才动);
+6. **TP-runner 转换**:强趋势冲破 TP 位后固定 TP 转趋势跑单;
+7. **回撤保护**:峰值回吐阈值平仓(交易所 SL/TP 与回撤保护不走 AI close 门)。
+
+**AI 平仓门**(串联 AND,任一拦即 hold):min-hold 15 分钟;不足 4h 需 ≥2 根逆势 1h 收盘;浮亏时最近反向结构位 <1.0% 且 15m 未破=不给平("给突破留空间");手动仓一律 hands-off。
+
+
+---
+
 *整理基线:10-04 工作区;常量逐条对码核验(methodStopBuffer 0.4/0.5、UnprotectedWorstCase 8%、MarketException score 80/funding 50%、PumpGuard 20%、EMA20 帽 12%、WIDE_STOP 10%、降权 10 分/FNG 70、piggy TTL 12min、slowtop $30M/30min/90d/5%)。配套文档:`MODULE_REVIEW_2026-10-04.md`(审查与修复台账)。*
