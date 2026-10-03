@@ -1856,6 +1856,14 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			if !negativeEdgeAligned(sig, isLong) {
 				add("NEG_EDGE_TREND_MISALIGNED")
 			}
+			// NEG_EDGE_RR: rr_scan absent (SLMinATRMult=0 disables the
+			// stop-plan machinery) leaves RR nil ⇒ the condition is UNKNOWN
+			// ⇒ house convention (funding_rollover/vendor precedent):
+			// 按不满足处理 → fires NEG_EDGE_RR_0.00. Fail-closed is
+			// deliberate — NEG_EDGE demands exceptional EVIDENCE, and absent
+			// evidence cannot demonstrate it (2026-10-03: considered making
+			// this lenient, reverted for convention consistency; strategies
+			// running SLMinATRMult=0 + NEG_EDGE will all-wait by design).
 			if opt.NegativeEdgeMinRR > 0 {
 				firstRR := 0.0
 				if g.RR != nil {

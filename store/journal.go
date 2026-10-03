@@ -76,7 +76,7 @@ func (s *TradeJournalStore) initTables() error {
 		var tableExists int64
 		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trade_journal'`).Scan(&tableExists)
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &TradeJournalDB{})
 		}
 	}
 	if err := s.db.AutoMigrate(&TradeJournalDB{}); err != nil {

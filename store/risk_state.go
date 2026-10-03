@@ -71,3 +71,15 @@ func (s *RiskStateStore) AnchorDayBaseline(accountKey, day string, equity float6
 	}
 	return equity, nil
 }
+
+// Peak is monotonic across reloads and processes; SQL guards concurrent updates.
+func (s *RiskStateStore) UpdatePeak(accountKey string, equity float64) (float64, error) {
+	if _, err := s.AnchorDayBaseline(accountKey, "__peak__", equity); err != nil {
+		return 0, err
+	}
+	if err := s.db.Model(&RiskBaseline{}).Where("account_key = ? AND day = ? AND day_start_equity < ?", accountKey, "__peak__", equity).Update("day_start_equity", equity).Error; err != nil {
+		return 0, err
+	}
+	peak, _, err := s.DayBaseline(accountKey, "__peak__")
+	return peak, err
+}

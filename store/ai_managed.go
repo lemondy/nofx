@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ============================================================================
@@ -20,11 +21,12 @@ import (
 // ============================================================================
 
 type AIManagedPosition struct {
-	ID        int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID  string    `gorm:"column:trader_id;not null;index:idx_ai_managed_key,unique" json:"trader_id"`
-	Symbol    string    `gorm:"column:symbol;not null;index:idx_ai_managed_key,unique" json:"symbol"`
-	Side      string    `gorm:"column:side;not null;index:idx_ai_managed_key,unique" json:"side"` // long / short
-	CreatedAt time.Time `gorm:"column:created_at" json:"created_at"`
+	ID           int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraderID     string    `gorm:"column:trader_id;not null;index:idx_ai_managed_key,unique" json:"trader_id"`
+	Symbol       string    `gorm:"column:symbol;not null;index:idx_ai_managed_key,unique" json:"symbol"`
+	Side         string    `gorm:"column:side;not null;index:idx_ai_managed_key,unique" json:"side"` // long / short
+	EntryOrderID string    `gorm:"column:entry_order_id;not null;default:''" json:"entry_order_id"`
+	CreatedAt    time.Time `gorm:"column:created_at" json:"created_at"`
 }
 
 func (AIManagedPosition) TableName() string { return "ai_managed_positions" }
@@ -38,13 +40,66 @@ func NewAIManagedStore(db *gorm.DB) *AIManagedStore {
 }
 
 func (s *AIManagedStore) initTables() error {
-	return s.db.AutoMigrate(&AIManagedPosition{})
+	return s.db.AutoMigrate(&AIManagedPosition{}, &AIEntryOrder{})
 }
 
 // Mark records the (trader, symbol, side) triple as AI-opened. Idempotent.
 func (s *AIManagedStore) Mark(traderID, symbol, side string) error {
-	return s.db.Where(AIManagedPosition{TraderID: traderID, Symbol: symbol, Side: side}).
-		FirstOrCreate(&AIManagedPosition{TraderID: traderID, Symbol: symbol, Side: side, CreatedAt: time.Now()}).Error
+	return s.mark(traderID, symbol, side, "")
+}
+
+// Durable order provenance survives clearing the live position registry.
+type AIEntryOrder struct {
+	TraderID string `gorm:"primaryKey"`
+	OrderID  string `gorm:"primaryKey"`
+	Symbol   string
+	Side     string
+}
+
+func (AIEntryOrder) TableName() string { return "ai_entry_orders" }
+
+func (s *AIManagedStore) MarkEntry(traderID, symbol, side, orderID string) error {
+	return s.mark(traderID, symbol, side, orderID)
+}
+func (s *AIManagedStore) mark(traderID, symbol, side, orderID string) error {
+	side = strings.ToLower(side)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		if orderID != "" {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&AIEntryOrder{TraderID: traderID, OrderID: orderID, Symbol: symbol, Side: side}).Error; err != nil {
+				return err
+			}
+		}
+		mark := AIManagedPosition{TraderID: traderID, Symbol: symbol, Side: side, CreatedAt: now}
+		if err := tx.Where(AIManagedPosition{TraderID: traderID, Symbol: symbol, Side: side}).FirstOrCreate(&mark).Error; err != nil {
+			return err
+		}
+		if orderID != "" {
+			if err := tx.Model(&mark).Update("entry_order_id", orderID).Error; err != nil {
+				return err
+			}
+		}
+		q := tx.Model(&TraderPosition{}).Where("trader_id = ? AND symbol = ? AND LOWER(side) = ? ", traderID, symbol, side)
+		if orderID != "" {
+			q = q.Where("entry_order_id = ?", orderID)
+		} else {
+			q = q.Where("status = ? AND created_at <= ?", "OPEN", mark.CreatedAt.UnixMilli())
+		}
+		return q.Update("ai_managed", true).Error
+	})
+}
+func (s *AIManagedStore) OwnsEntry(traderID, symbol, side, orderID string) bool {
+	if orderID == "" {
+		return false
+	}
+	var count int64
+	s.db.Model(&AIEntryOrder{}).Where("trader_id = ? AND order_id = ? AND symbol = ? AND LOWER(side) = ?", traderID, orderID, symbol, strings.ToLower(side)).Count(&count)
+	if count > 0 {
+		return true
+	}
+	// Resting AI plans are persisted before fills reach the syncer.
+	s.db.Model(&PendingEntryDB{}).Where("trader_id = ? AND order_id = ? AND symbol = ? AND LOWER(side) = ?", traderID, orderID, symbol, strings.ToLower(side)).Count(&count)
+	return count > 0
 }
 
 // Unmark removes the mark (position fully closed).
@@ -59,6 +114,14 @@ func (s *AIManagedStore) IsMarked(traderID, symbol, side string) bool {
 	s.db.Model(&AIManagedPosition{}).
 		Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, side).
 		Count(&n)
+	return n > 0
+}
+
+// IsLegacyMarked supports marks made before entry order provenance was recorded.
+// A live mark with a known order must not claim unrelated manual entry orders.
+func (s *AIManagedStore) IsLegacyMarked(traderID, symbol, side string) bool {
+	var n int64
+	s.db.Model(&AIManagedPosition{}).Where("trader_id = ? AND symbol = ? AND side = ? AND entry_order_id = ''", traderID, symbol, strings.ToLower(side)).Count(&n)
 	return n > 0
 }
 
@@ -79,7 +142,7 @@ func (s *AIManagedStore) List(traderID string) ([]AIManagedPosition, error) {
 // being stamped AI by the close-time re-check and reset the loss streak).
 func (s *AIManagedStore) MarkedAfter(traderID, symbol, side string, at time.Time) bool {
 	var mark AIManagedPosition
-	err := s.db.Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, strings.ToLower(side)).
+	err := s.db.Where("trader_id = ? AND symbol = ? AND side = ? AND entry_order_id = ''", traderID, symbol, strings.ToLower(side)).
 		First(&mark).Error
 	if err != nil {
 		return false

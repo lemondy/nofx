@@ -1001,13 +1001,14 @@ func (s *StrategyStore) Update(strategy *Strategy, expectedUpdatedAt ...time.Tim
 	if len(expectedUpdatedAt) > 0 {
 		query = query.Where("updated_at = ?", expectedUpdatedAt[0])
 	}
+	writtenAt := time.Now().UTC()
 	result := query.Updates(map[string]interface{}{
 		"name":           strategy.Name,
 		"description":    strategy.Description,
 		"config":         strategy.Config,
 		"is_public":      strategy.IsPublic,
 		"config_visible": strategy.ConfigVisible,
-		"updated_at":     time.Now().UTC(),
+		"updated_at":     writtenAt,
 	})
 	if result.Error != nil {
 		return result.Error
@@ -1015,6 +1016,7 @@ func (s *StrategyStore) Update(strategy *Strategy, expectedUpdatedAt ...time.Tim
 	if result.RowsAffected != 1 {
 		return ErrStrategyConflict
 	}
+	strategy.UpdatedAt = writtenAt
 	return nil
 }
 

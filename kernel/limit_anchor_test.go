@@ -133,20 +133,22 @@ func TestCorrectLimitAnchorsSetsWaitBias(t *testing.T) {
 }
 
 // Cross-scanner conflict detection (audit 2026-09-12 #11): short_scan(short)
-// vs piggy_dash(up) on the same symbol must flag; aligned or single-scanner
-// cases must not.
+// vs piggy_dash(breakout = up) on the same symbol must flag; aligned or
+// single-scanner cases must not. Production literals are breakout/breakdown
+// (breakout.DirUp/DirDown) — 2026-10-03: the detector compared "up" and was
+// dead since launch.
 func TestHasScannerConflict(t *testing.T) {
 	both := []string{"short_scan", "piggy_dash"}
-	if !hasScannerConflict(both, "up") {
-		t.Fatal("short_scan + piggy up = conflict")
+	if !hasScannerConflict(both, "breakout") {
+		t.Fatal("short_scan + piggy breakout(up) = conflict")
 	}
-	if hasScannerConflict(both, "down") {
-		t.Fatal("piggy down agrees with short_scan — no conflict")
+	if hasScannerConflict(both, "breakdown") {
+		t.Fatal("piggy breakdown agrees with short_scan — no conflict")
 	}
-	if hasScannerConflict([]string{"piggy_dash"}, "up") {
+	if hasScannerConflict([]string{"piggy_dash"}, "breakout") {
 		t.Fatal("piggy alone cannot conflict")
 	}
-	if hasScannerConflict([]string{"short_scan", "ai500"}, "up") {
+	if hasScannerConflict([]string{"short_scan", "ai500"}, "breakout") {
 		t.Fatal("short_scan without piggy cannot conflict")
 	}
 }

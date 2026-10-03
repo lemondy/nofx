@@ -17,16 +17,20 @@ import (
 
 // GridLevelInfo represents a single grid level's current state
 type GridLevelInfo struct {
-	Index         int     `json:"index"`          // Level index (0 = lowest)
-	Price         float64 `json:"price"`          // Target price for this level
-	State         string  `json:"state"`          // "empty", "pending", "filled"
-	Side          string  `json:"side"`           // "buy" or "sell"
-	OrderID       string  `json:"order_id"`       // Current order ID (if pending)
-	OrderQuantity float64 `json:"order_quantity"` // Order quantity
-	PositionSize  float64 `json:"position_size"`  // Position size (if filled)
-	PositionEntry float64 `json:"position_entry"` // Entry price (if filled)
-	AllocatedUSD  float64 `json:"allocated_usd"`  // USD allocated to this level
-	UnrealizedPnL float64 `json:"unrealized_pnl"` // Unrealized P&L (if filled)
+	ExitOrderID          string  `json:"exit_order_id,omitempty"`
+	ExitExecutedQuantity float64 `json:"exit_executed_quantity,omitempty"`
+	ExitRealizedPnL      float64 `json:"exit_realized_pnl,omitempty"`
+	ExecutedQuantity     float64 `json:"executed_quantity"`
+	Index                int     `json:"index"`          // Level index (0 = lowest)
+	Price                float64 `json:"price"`          // Target price for this level
+	State                string  `json:"state"`          // "empty", "pending", "filled"
+	Side                 string  `json:"side"`           // "buy" or "sell"
+	OrderID              string  `json:"order_id"`       // Current order ID (if pending)
+	OrderQuantity        float64 `json:"order_quantity"` // Order quantity
+	PositionSize         float64 `json:"position_size"`  // Position size (if filled)
+	PositionEntry        float64 `json:"position_entry"` // Entry price (if filled)
+	AllocatedUSD         float64 `json:"allocated_usd"`  // USD allocated to this level
+	UnrealizedPnL        float64 `json:"unrealized_pnl"` // Unrealized P&L (if filled)
 }
 
 // GridContext contains all information needed for AI grid decision making

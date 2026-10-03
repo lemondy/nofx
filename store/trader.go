@@ -19,6 +19,7 @@ func NewTraderStore(db *gorm.DB) *TraderStore {
 
 // Trader trader configuration
 type Trader struct {
+	RunVersion          uint64    `gorm:"column:run_version;not null;default:0" json:"run_version"`
 	ID                  string    `gorm:"primaryKey" json:"id"`
 	UserID              string    `gorm:"column:user_id;not null;default:default;index" json:"user_id"`
 	Name                string    `gorm:"column:name;not null" json:"name"`
@@ -96,7 +97,7 @@ func (s *TraderStore) List(userID string) ([]*Trader, error) {
 func (s *TraderStore) UpdateStatus(userID, id string, isRunning bool) error {
 	return s.db.Model(&Trader{}).
 		Where("id = ? AND user_id = ?", id, userID).
-		Update("is_running", isRunning).Error
+		Updates(map[string]interface{}{"is_running": isRunning, "run_version": gorm.Expr("run_version + 1")}).Error
 }
 
 // UpdateShowInCompetition updates trader competition visibility
@@ -314,4 +315,8 @@ func (s *TraderStore) ListByAIModelID(userID, aiModelID string) ([]*Trader, erro
 		return nil, err
 	}
 	return traders, nil
+}
+
+func (s *TraderStore) StopIfVersion(userID, id string, version uint64) error {
+	return s.db.Model(&Trader{}).Where("user_id = ? AND id = ? AND run_version = ?", userID, id, version).Updates(map[string]interface{}{"is_running": false, "run_version": gorm.Expr("run_version + 1")}).Error
 }

@@ -930,6 +930,12 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				c.ShortReasons = meta.ShortReasons
 				c.ShortFundingAnn = meta.ShortFundingAnn
 				c.ShortUniverse = meta.ShortUniverse
+				// 2026-10-03 review P1: the mixed collapse dropped
+				// NearHighAlso (the 09-17 gainer-vs-grinding-top OI exemption
+				// died again for collision coins — mixed is the production
+				//主力 source) and ShortScanAtMs (generated_at_utc vanished).
+				c.NearHighAlso = meta.NearHighAlso
+				c.ShortScanAtMs = meta.ShortScanAtMs
 			}
 			if meta, ok := piggyMeta[symbol]; ok && meta.ScannerDirection != "" {
 				c.ScannerDirection = meta.ScannerDirection
@@ -949,7 +955,11 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 // short; piggy_dash "up" against it is a SCANNER_VS_SCANNER conflict the
 // model must resolve explicitly (audit 2026-09-12 #11).
 func hasScannerConflict(sources []string, piggyDirection string) bool {
-	if piggyDirection != "up" {
+	// 2026-10-03 review P1: piggy ScannerDirection carries the production
+	// literals "breakout"(=up)/"breakdown"(=down) (breakout.DirUp/DirDown) —
+	// comparing against "up" made this conflict detector dead since launch.
+	// Only an UP-direction piggy read contradicts the short scanner.
+	if piggyDirection != "breakout" {
 		return false
 	}
 	var shortScan, piggy bool

@@ -446,13 +446,17 @@ func (s *PositionStore) ClosePositionFully(id int64, exitPrice float64, exitOrde
 		quantity = pos.EntryQuantity
 	}
 
+	// 2026-10-03 review P1: accumulate PnL/fee via SQL — the read-then-
+	// absolute-write let a concurrent close leg (sync × orphan reconcile
+	// landing between the First and the Updates) overwrite the base and lose
+	// one leg's PnL/fee entirely.
 	return s.db.Model(&TraderPosition{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"quantity":      quantity,
 		"exit_price":    exitPrice,
 		"exit_order_id": exitOrderID,
 		"exit_time":     exitTimeMs,
-		"realized_pnl":  totalRealizedPnL,
-		"fee":           totalFee,
+		"realized_pnl":  gorm.Expr("realized_pnl + ?", totalRealizedPnL),
+		"fee":           gorm.Expr("fee + ?", totalFee),
 		"status":        "CLOSED",
 		"close_reason":  closeReason,
 		"updated_at":    time.Now().UTC().UnixMilli(),

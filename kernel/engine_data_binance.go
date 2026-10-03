@@ -238,8 +238,13 @@ func binanceLongShortMetrics(symbol string) (longShortMetrics, error) {
 
 var (
 	btcClosesMu      sync.Mutex
-	btcClosesCache   []float64
+	btcClosesCache   []float64 // 1h closes ONLY
 	btcClosesFetched time.Time
+	// 2026-10-03 review P0: the 4h helper originally shared this cache with
+	// no interval tag — a cache hit returned 1h rows as "4h" (or vice versa)
+	// depending on which helper fetched last. Separate storage per interval.
+	btc4hClosesCache   []float64
+	btc4hClosesFetched time.Time
 )
 
 // binanceBTC1hCloses returns the last `limit` closed 1h BTC closes (cached 5 min).
@@ -720,8 +725,8 @@ func binanceOrderBookSpreadPct(symbol string) float64 {
 // predicate — instead of phase-arbitrary 1h aggregates (2026-10-03 review).
 func binanceBTC4hCloses(limit int) []float64 {
 	btcClosesMu.Lock()
-	if len(btcClosesCache) >= limit && time.Since(btcClosesFetched) < 5*time.Minute {
-		out := btcClosesCache[len(btcClosesCache)-limit:]
+	if len(btc4hClosesCache) >= limit && time.Since(btc4hClosesFetched) < 5*time.Minute {
+		out := btc4hClosesCache[len(btc4hClosesCache)-limit:]
 		btcClosesMu.Unlock()
 		return out
 	}
@@ -742,8 +747,8 @@ func binanceBTC4hCloses(limit int) []float64 {
 		}
 	}
 	btcClosesMu.Lock()
-	btcClosesCache = closes
-	btcClosesFetched = time.Now()
+	btc4hClosesCache = closes
+	btc4hClosesFetched = time.Now()
 	btcClosesMu.Unlock()
 	out := closes
 	if len(out) > limit {

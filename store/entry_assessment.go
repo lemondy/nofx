@@ -1,8 +1,8 @@
 package store
 
 import (
-	"strings"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -147,11 +147,16 @@ func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat
 			consumed[j.ID] = true
 			_ = ji
 			stats[bi].Traded++
-			if j.RealizedPnL > 0 {
+			// NET caliber (2026-10-03 review P1): every other aggregate nets
+			// the fee — this calibration dataset (quality bucket → real win
+			// rate) still classified and summed on gross, systematically
+			// flattering the high-quality buckets.
+			net := j.RealizedPnL - j.Fee
+			if net > 0 {
 				stats[bi].Wins++
 			}
 			stats[bi].AvgPnLPct += j.PnLPct
-			stats[bi].TotalPnL += j.RealizedPnL
+			stats[bi].TotalPnL += net
 			break
 		}
 	}
