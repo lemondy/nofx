@@ -88,8 +88,8 @@
 | 宇宙 | 进入逻辑 | 打分/加权 | 专属门 |
 |---|---|---|---|
 | **AI500** | 流动性排名 | 通用分 | min-OI 15M USD(可配) |
-| **piggy_dash 突破** | 成交量 top + 热门/涨幅/跌幅三榜并集,5min 扫描 | 六维 + BTC regime 调分 + extended ×0.65(单次截面) | 板块 12min TTL(超龄同步刷,仍超龄源停用) |
-| **short_scan 涨幅榜做空** | 24h 涨幅榜 | 六维加权(overbought/structure/stretch/parabolic/rejection/volume_fade/crowding/divergence/extension);**美股盘中 +20%** | 费率拥挤二选一(near_high 豁免)+ 15m 微趋势转向(默认姿态) |
+| **piggy_dash 突破** | 成交量 top + 热门/涨幅/跌幅三榜并集,5min 扫描 | 六维(Price .25/Volume .20/Flow .20/OI .15/Funding .10/Momentum .10;1h×0.65+15m×0.35 合成+共振奖 5)+BTC regime 调分+extended ×0.65(单次截面) | 板块 12min TTL(超龄同步刷,仍超龄源停用) |
+| **short_scan 涨幅榜做空** | 24h 涨幅榜 | 九维加权(stretch/overbought/rejection/volume_fade/extension/crowding/parabolic/divergence/structure,默认 0.10×7+structure/crowding 0.15,归一化,调参器可动;**美股盘中 +20%** | 费率拥挤二选一(near_high 豁免)+ 15m 微趋势转向(默认姿态) |
 | **slowtop 磨顶 near_high** | 90 日高点 5% 内 + 4h 顶背离,30min 刷新 | — | $30M/日量能预筛替代 OI 地板;缓存 2×TTL 丢弃;碰撞盖 NearHighAlso |
 | **hist_gainer 历史涨幅池** | 近 7 天日涨幅 Top20 合并去重 | — | 回落是入选原因非做空结论 |
 | **breakdown 破位** | 24h 跌幅榜 + 4h 趋势向下 | — | 顺势反弹做空,仍看结构确认 |
