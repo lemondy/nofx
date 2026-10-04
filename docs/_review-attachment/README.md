@@ -1,22 +1,21 @@
 # 做多/做空标的筛选 · 代码核对包(2026-10-04)
 
-> ⚠️ **本包是修复前快照**(2026-10-04 审查底稿)。同日修复批次已取代其中
-> 八处行为,核对时以下列为准(详见 10f8e85d 之后的修复提交):
-> 1. computeTF age 改「首次穿越」——held/Confirmed 不再恒真,confirmPenalty 复活,
->    retested 不再计入交叉棒;
-> 2. DirDown room 修复——做空 RoomATR 不再恒 3.0;
-> 3. scheduler regime 改用 shortscan 同款 4h-EMA 分类器(btcRegimePenalty),
->    调分后 Grade 重算、Percentile 按终序;
-> 4. 候选池质量下限——piggy 过滤 noise+approach,short_scan 过滤 noise;
-> 5. shortscan 分级统一走 finalizeShortGrade——BTC 折扣不再绕过未确认 strong 帽;
->    slow-top 先合并后吃折扣;
-> 6. FakeBreakout 要求现价仍在位下;
-> 7. Crowding 三源独立+权重重归一,fundPart 按结算间隔年化(中心 50/宽 40),
->    clamp100 挡 NaN;
-> 8. kernel computeBreakoutState 改固定前高(排除最近 8 根的 30 根极值)——
->    fake_break/retest_hold/extended 可达,回踩锚成为真实回踩位;
->    OIConfirm 阈值 >0 → >0.3%;NEG_EDGE_SCORE 改带方向比较。
-> 混合源 `piggyCoins, piggyErr :=` 遮蔽(engine.go)已修。
+> ⚠️ **本包是修复前快照**(2026-10-04 审查底稿)。同日两个修复批次已取代其中
+> 行为,核对时以下列为准(11ee538c + 6817bf8d):
+> 批次1: ①computeTF age 改「首次穿越」——held/Confirmed 不再恒真,confirmPenalty 复活,
+>    retested 不再计入交叉棒;②DirDown room 修复(不再恒 3.0);③scheduler regime 改用
+>    shortscan 同款 4h-EMA 分类器,调分后 Grade 重算、Percentile 按终序;④候选池质量下限
+>    (piggy 滤 noise+approach,short_scan 滤 noise);⑤分级统一 finalizeShortGrade,
+>    BTC 折扣不丢未确认帽,slow-top 先合并后吃折扣;⑥FakeBreakout 要求现价仍在位下;
+>    ⑦Crowding 三源独立+重归一,fundPart 年化,clamp100 挡 NaN;⑧kernel computeBreakoutState
+>    固定前高——fake_break/retest_hold/extended 可达;OI 阈值 >0.3%;NEG_EDGE 带方向;
+>    mixed `:=` 遮蔽修复。
+> 批次2: ⑨BTC4hRegime 共享分类器(scheduler/shortscan/kernel 同一定义,60 根收敛门槛);
+>    ⑩SHORT_TOP_CONFIRM_MISSING(默认开,short_scan 候选需顶部确认,无证据候选不拦);
+>    ⑪BTC_4H_STRONGBULL(默认关,btc_filter_short 显式开);⑫费率拥挤二选一**有意不门化**
+>    (提示词定位是支撑证据非必要条件);⑬piggy 缺数维度剔除+重归一,α 缺数取 1.0;
+>    ⑭computeBreakoutState/suppressAnchors 改 ClosedKlines(now) 时间判定式。
+> 实证:磨顶门槛 45 次 skipped(分 30-33) vs 0 次入选——磨顶宇宙从未进池,待拍板。
 
 直接可读的源文件副本(与工作区同版本),按核对动线排列。核心函数在
 signal_layer.go 内的行号(便于跳转):
