@@ -266,16 +266,24 @@ type ExecutionFilter struct {
 	Reason       string `json:"reason,omitempty"`
 }
 
+// Breakout-state geometry: the fixed pre-push level is the extreme of the
+// boLevelWindow closed bars BEFORE the recent boCrossWindow-bar cross window
+// (see computeBreakoutState — review 2026-10-04 C1).
+const (
+	boCrossWindow = 8
+	boLevelWindow = 30
+)
+
 // BreakoutState is the precomputed breakout verdict vs the 1h structure
 // level in the direction the 1h trend implies (⑫): the model should read one
 // field instead of assembling price/levels/volume/OI itself.
 type BreakoutState struct {
-	Status        string  `json:"status"`              // below | approach | broken_unconfirmed | confirmed | fake_break | retest_hold
+	Status        string  `json:"status"`              // below | approach | broken_unconfirmed | confirmed | fake_break | retest_hold | extended
 	Direction     string  `json:"direction"`           // breakout (long) | breakdown (short)
-	Level         float64 `json:"level"`               // the structure level being tested
+	Level         float64 `json:"level"`               // the structure level being tested (fixed pre-push extreme)
 	DistancePct   float64 `json:"distance_pct"`        // price vs level, % (positive = beyond)
 	VolumeConfirm bool    `json:"volume_confirmation"` // breakout bars carry ≥1.5× volume
-	OIConfirm     bool    `json:"oi_confirmation"`     // OI expanded in the breakout direction (1h)
+	OIConfirm     bool    `json:"oi_confirmation"`     // OI expanded in the breakout direction (1h, beyond noise)
 }
 
 // DataQuality separates "the fetch worked" from "there is enough history for
@@ -1849,10 +1857,15 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		if opt.NegativeEdge {
 			// effectiveScore carries the sentiment deweight for longs —
 			// greed raises the evidence bar for longs symmetrically.
+			// Signed comparison (review 2026-10-04 C4): a LONG needs score
+			// ≥ min, a SHORT score ≤ −min — the old math.Abs let a long
+			// pass on the strength of |−70| of OPPOSING evidence whenever
+			// the configured min sat below the CONSENSUS_OPPOSED ±50 net.
 			score := effectiveScore
-			if opt.NegativeEdgeMinScore > 0 && math.Abs(float64(score)) < opt.NegativeEdgeMinScore {
-				add(fmt.Sprintf("NEG_EDGE_SCORE_%+d_LT_%.0f", score, opt.NegativeEdgeMinScore))
-			}
+			minScore := int(opt.NegativeEdgeMinScore)
+			if minScore > 0 && !directionScoreAtLeastScore(score, isLong, minScore) {
+			add(fmt.Sprintf("NEG_EDGE_SCORE_%+d_LT_%.0f", score, opt.NegativeEdgeMinScore))
+		}
 			if !negativeEdgeAligned(sig, isLong) {
 				add("NEG_EDGE_TREND_MISALIGNED")
 			}
@@ -2995,10 +3008,19 @@ func roundSignificant(v float64, n int) float64 {
 }
 
 // computeBreakoutState derives the breakout verdict (⑫) from the 1h closed
-// bars and the 1h structure level, in the direction the 1h trend implies:
+// bars and a FIXED pre-push structure level, in the direction the 1h trend
+// implies:
 //
-//	up   → breakout  vs structure_high (approach/broken/confirmed/fake/retest)
-//	down → breakdown vs structure_low  (mirror)
+//	up   → breakout  vs the pre-push structure high (approach/broken/confirmed/fake/retest/extended)
+//	down → breakdown vs the pre-push structure low  (mirror)
+//
+// The level is the extreme of the 30 closed bars BEFORE the recent 8-bar
+// cross window — NOT a rolling window that includes the newest bars. The old
+// rolling max trailed the price: no closed bar's high could ever exceed it,
+// so cross detection never fired, fake_break/retest_hold/extended were
+// unreachable, and the retest anchor only ever activated during the single
+// hour the live price was printing a rolling 30-bar high — at which point
+// the "anchor" was a chase just under the fresh high (review 2026-10-04 C1).
 //
 // Status semantics:
 //
@@ -3006,11 +3028,14 @@ func roundSignificant(v float64, n int) float64 {
 //	approach            within 1×ATR(1h)% of the level
 //	broken_unconfirmed  beyond the level but without volume/OI confirmation
 //	confirmed           beyond the level WITH volume + OI confirmation
-//	fake_break          crossed within the last 8 bars but closed back inside
-//	retest_hold         crossed >8 bars ago, pulled back to the level and held
+//	fake_break          crossed within the last 8 bars but the last close is back inside
+//	retest_hold         crossed earlier, pulled back to the level within the last 8 bars and held
+//	extended            crossed earlier and never retested (chase context)
 //
 // Best-effort: any missing input (no 1h bars, no structure level, no ATR)
-// returns nil — the model falls back to reading the raw levels.
+// returns nil — the model falls back to reading the raw levels. A series too
+// short to carve out a prior window falls back to the TF's rolling
+// structure extreme (degraded but non-nil).
 func computeBreakoutState(data *market.Data, sig *SymbolSignal) *BreakoutState {
 	if data == nil || sig == nil || sig.Price <= 0 {
 		return nil
@@ -3032,6 +3057,46 @@ func computeBreakoutState(data *market.Data, sig *SymbolSignal) *BreakoutState {
 	}
 	if level <= 0 {
 		return nil
+	}
+
+	// Closed 1h bars + the fixed prior-window level.
+	bars, haveBars := func() ([]market.KlineBar, bool) {
+		tfData, ok := data.TimeframeData["1h"]
+		if !ok || tfData == nil || len(tfData.Klines) < 16 {
+			return nil, false
+		}
+		return tfData.Klines[:len(tfData.Klines)-1], true // drop the forming candle
+	}()
+	if haveBars {
+		n := len(bars)
+		end := n - boCrossWindow
+		start := end - boLevelWindow
+		if start < 0 {
+			start = 0
+		}
+		if end-start >= 10 {
+			if isLong {
+				hi := math.Inf(-1)
+				for _, b := range bars[start:end] {
+					if b.High > hi {
+						hi = b.High
+					}
+				}
+				if hi > 0 && !math.IsInf(hi, -1) {
+					level = hi
+				}
+			} else {
+				lo := math.Inf(1)
+				for _, b := range bars[start:end] {
+					if b.Low > 0 && b.Low < lo {
+						lo = b.Low
+					}
+				}
+				if lo > 0 && !math.IsInf(lo, 1) {
+					level = lo
+				}
+			}
+		}
 	}
 
 	dist := 0.0
@@ -3067,15 +3132,14 @@ func computeBreakoutState(data *market.Data, sig *SymbolSignal) *BreakoutState {
 		// OI expanding IN the break direction = new positions driving the
 		// move (longs on a breakout, shorts on a breakdown). The old `< 0`
 		// for shorts confirmed liquidation-driven declines — inverted
-		// (audit 2026-09-11).
-		st.OIConfirm = *sig.Derivatives.OIChange1hPct > 0
+		// (audit 2026-09-11). The raw `> 0` confirmed ~half of all hours —
+		// require the same meaningful expansion the piggy OI dim centers
+		// its sigmoid on (0.3%/1h), review 2026-10-04 C2.
+		st.OIConfirm = *sig.Derivatives.OIChange1hPct > 0.3
 	}
 
 	// Cross recency + retest/fake detection from the closed 1h bars.
-	tfData, ok := data.TimeframeData["1h"]
-	if ok && tfData != nil && len(tfData.Klines) >= 16 {
-		bars := tfData.Klines
-		bars = bars[:len(bars)-1] // drop the forming candle
+	if haveBars {
 		n := len(bars)
 		crossedIdx := -1
 		for i := n - 1; i >= n-8 && i >= 0; i-- {

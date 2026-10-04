@@ -276,8 +276,11 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 	// Annualization uses the FORWARD rate (what the next settlement charges,
 	// same figure the signal block shows) and the symbol's REAL settlement
 	// interval — a fixed 3×/day assumption understates 1h/4h-interval listings
-	// by 3-8×.
+	// by 3-8×. The crowding fundPart scores the SAME annualized figure
+	// (review 2026-10-04 #9: it used to score the raw per-settlement rate, so
+	// a 1h-settlement coin at 0.01%/h ≈ 876%/yr annualized read as mild).
 	fInfo, fiErr := ds.FundingInfo()
+	fundKnown := false
 	var cur float64
 	if fiErr == nil && fInfo != nil {
 		cur = fInfo.NextRate
@@ -286,11 +289,13 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 			settlePerDay = 1
 		}
 		sig.FundingAnnualPct = round2(cur * settlePerDay * 365 * 100)
+		fundKnown = true
 	}
 	if f, ferr := ds.FundingHistory(6); ferr == nil && len(f) > 0 {
-		if fiErr != nil || fInfo == nil {
+		if !fundKnown {
 			cur = f[len(f)-1].Rate
 			sig.FundingAnnualPct = round2(cur * 3 * 365 * 100)
+			fundKnown = true
 		}
 		if len(f) >= 4 {
 			prev := f[len(f)-4].Rate
@@ -301,26 +306,62 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 			// 3-settlement lookback, no divergent wording per source.
 			sig.FundingRollover = market.FundingRolloverDetected(prev, cur, 0.0001)
 		}
-		fundPart := clamp100(sigmoidScore(cur*100, 0.05, 0.04))
-		oiPart := 0.0
-		if oi, oerr := ds.OIHistory("5m", 288); oerr == nil && len(oi) >= 49 {
-			vals := oiValueSeries(oi)
-			sig.OIValueMillions = round2(vals[len(vals)-1] / 1_000_000)
-			oiChg := (vals[len(vals)-1] - vals[len(vals)-49]) / vals[len(vals)-49] * 100
+	}
+	// The three parts are fetched independently — a funding-history failure
+	// used to zero the WHOLE component, discarding working OI and L/S
+	// evidence with it (review 2026-10-04 #9). Missing data scores 0 (no
+	// crowding points awarded on absent evidence, the fail-closed side);
+	// available-part weights renormalize to keep the component on scale.
+	fundPart := 0.0
+	if fundKnown {
+		fundPart = clamp100(sigmoidScore(sig.FundingAnnualPct, 50, 40))
+	}
+	oiPart, oiKnown := 0.0, false
+	if oi, oerr := ds.OIHistory("5m", 288); oerr == nil && len(oi) >= 49 {
+		vals := oiValueSeries(oi)
+		sig.OIValueMillions = round2(vals[len(vals)-1] / 1_000_000)
+		if base := vals[len(vals)-49]; base > 0 {
+			oiChg := (vals[len(vals)-1] - base) / base * 100
 			oiPart = clamp100(sigmoidScore(oiChg, 5, 4))
-		}
-		lsPart := 0.0
-		if ls, lerr := ds.LongShortRatio("1h", 3); lerr == nil && len(ls) > 0 {
-			v := ls[len(ls)-1].Ratio
-			sig.LongShortRatio = &v
-			// 1.0 = balanced; ≥2 = accounts heavily skewed long.
-			lsPart = clamp100(sigmoidScore(v-1, 0.5, 0.35))
-		}
-		if sig.LongShortRatio == nil {
-			sig.Components.Crowding = clamp100(0.7*fundPart + 0.3*oiPart)
+			oiKnown = true
 		} else {
-			sig.Components.Crowding = clamp100(0.55*fundPart + 0.25*oiPart + 0.20*lsPart)
+			oiKnown = true // measured, unusable baseline — still "present"
 		}
+	}
+	lsPart, lsKnown := 0.0, false
+	if ls, lerr := ds.LongShortRatio("1h", 3); lerr == nil && len(ls) > 0 {
+		v := ls[len(ls)-1].Ratio
+		sig.LongShortRatio = &v
+		// 1.0 = balanced; ≥2 = accounts heavily skewed long.
+		lsPart = clamp100(sigmoidScore(v-1, 0.5, 0.35))
+		lsKnown = true
+	}
+	wFund, wOI, wLS := 0.55, 0.25, 0.20
+	if !lsKnown {
+		wFund, wOI, wLS = 0.70, 0.30, 0
+	}
+	wSum := 0.0
+	if fundKnown {
+		wSum += wFund
+	}
+	if oiKnown {
+		wSum += wOI
+	}
+	if lsKnown {
+		wSum += wLS
+	}
+	if wSum > 0 {
+		crowd := 0.0
+		if fundKnown {
+			crowd += wFund / wSum * fundPart
+		}
+		if oiKnown {
+			crowd += wOI / wSum * oiPart
+		}
+		if lsKnown {
+			crowd += wLS / wSum * lsPart
+		}
+		sig.Components.Crowding = clamp100(crowd)
 	}
 
 	// ── 7. Parabolic pump: 5d magnitude + acceleration + BTC outperformance ──
@@ -369,6 +410,7 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 
 	// ── 9. Structure: failed breakout above the prior swing high / fresh EMA20 break ──
 	if len(k1h) >= 53 {
+		lastClose := c1h[len(c1h)-1]
 		for i := len(k1h) - 5; i < len(k1h); i++ {
 			swing := 0.0
 			for j := i - 48; j < i; j++ {
@@ -376,7 +418,12 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 					swing = k1h[j].High
 				}
 			}
-			if swing > 0 && k1h[i].High > swing && k1h[i].Close < swing {
+			// The CURRENT close must still sit below the broken swing: a fake
+			// from 4 hours ago that has since been reclaimed and held is trend
+			// continuation, not a top (review 2026-10-04 #8 — the flag used to
+			// stick to any recent spike-and-recover regardless of where price
+			// was now).
+			if swing > 0 && k1h[i].High > swing && k1h[i].Close < swing && lastClose < swing {
 				sig.FakeBreakout = true
 				break
 			}
@@ -424,16 +471,39 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 		sig.Score = round2(sig.Score * 0.8)
 	}
 
-	sig.Grade = shortGradeOf(sig.Score)
-	// Audit 2026-09-12 #5: without a topping confirmation, extension-cluster
-	// dimensions alone can stack 70+ — that is a coin that "looks overbought",
-	// NOT a strong short. Hard-cap unconfirmed candidates at medium; the
-	// narrow ×0.8 momentum-trap discount above stays for ranking.
-	if !sig.Confirmed && sig.Grade == "strong" {
-		sig.Grade = "medium"
-	}
+	sig.Grade = finalizeShortGrade(sig.Score, sig.Confirmed)
 	sig.Reasons = shortReasons(sig, rsi1h, rsi4h, ext)
 	return sig, nil
+}
+
+// finalizeShortGrade is the SINGLE grading exit for short signals: the
+// threshold map plus the unconfirmed strong→medium cap. Every score mutation
+// after AnalyzeShort (the BTC-bull haircut in ScanShorts) must re-grade
+// THROUGH this helper — re-deriving with shortGradeOf alone used to let an
+// unconfirmed raw-84 signal discounted to 71.4 flip back to strong, bypassing
+// the cap (review 2026-10-04 #5).
+func finalizeShortGrade(score float64, confirmed bool) string {
+	g := shortGradeOf(score)
+	if !confirmed && g == "strong" {
+		return "medium"
+	}
+	return g
+}
+
+// applyShortBtcRegime applies the BTC 4h regime haircut to a ranked short
+// board and re-grades through the capped helper. Applied AFTER the slow-top
+// merge so grinding-top candidates take the same haircut as gainers (they
+// used to slip in post-discount and short BTC-strong coins unpenalized).
+func applyShortBtcRegime(out []ShortSignal, mult float64, regime string) {
+	for i := range out {
+		if mult != 1.0 {
+			out[i].Score = round2(clamp100(out[i].Score * mult))
+			out[i].Grade = finalizeShortGrade(out[i].Score, out[i].Confirmed)
+		}
+		if regime != "" {
+			out[i].BtcRegime = regime
+		}
+	}
 }
 
 // divScore maps the price/RSI high comparison to a component score: strict
@@ -728,26 +798,23 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 	if len(out) == 0 {
 		return nil, time.Time{}, fmt.Errorf("short scan produced no analyzable symbols")
 	}
+	// Merge the slow-top universe FIRST (grinding tops near their 90d high
+	// with 4h bearish divergence — invisible to a 24h-gainer screen), then
+	// apply the BTC regime haircut to the merged board: the slow-top entries
+	// used to slip in after the discount and short coins unpenalized in a
+	// strong BTC uptrend (review 2026-10-04 #5). Gainer results win symbol
+	// collisions (they ranked on the live 24h board), but a colliding coin
+	// carries NearHighAlso: it equally passed the grinding-top screen, so the
+	// pool cut must not re-impose the gainer-side OI floor the slow-top
+	// universe is exempt from (user audit 2026-09-17 — the exemption used to
+	// die silently on exactly this collision).
+	out = mergeShortScans(out, slowTopSnapshot())
 	// BTC macro gate: in a strong BTC uptrend every altcoin short carries
 	// systematic squeeze risk — one global haircut instead of manual vetting.
-	// A confirmed BTC breakdown mildly BOOSTS short scores (mirror tailwind).
+	// Mirror regimes pass through at 1.0, labelled for context only (the old
+	// "breakdown mildly BOOSTS scores" comment never matched the code).
 	mult, regime := btcRegimePenalty(btc4h)
-	if mult != 1.0 {
-		for i := range out {
-			out[i].Score = round2(clamp100(out[i].Score * mult))
-			out[i].Grade = shortGradeOf(out[i].Score)
-			out[i].BtcRegime = regime
-		}
-	}
-
-	// Merge the slow-top universe (grinding tops near their 90d high with 4h
-	// bearish divergence — invisible to a 24h-gainer screen). Gainer results
-	// win symbol collisions (they ranked on the live 24h board), but a
-	// colliding coin carries NearHighAlso: it equally passed the grinding-top
-	// screen, so the pool cut must not re-impose the gainer-side OI floor the
-	// slow-top universe is exempt from (user audit 2026-09-17 — the exemption
-	// used to die silently on exactly this collision).
-	out = mergeShortScans(out, slowTopSnapshot())
+	applyShortBtcRegime(out, mult, regime)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	n := len(out)
 	for i := range out {
@@ -804,6 +871,12 @@ func bandFade(v, lo, hi float64) float64 {
 }
 
 func clamp100(v float64) float64 {
+	// NaN fails both comparisons and would flow straight through into the
+	// weighted score (review 2026-10-04 #9: a zero OI baseline propagated
+	// NaN through the OI delta). Absent/unusable evidence scores 0.
+	if math.IsNaN(v) {
+		return 0
+	}
 	if v < 0 {
 		return 0
 	}

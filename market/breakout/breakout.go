@@ -65,7 +65,6 @@ const extendedPenalty = 0.65
 const (
 	crossWindowBars = 8  // primary breakout window (recent cross)
 	holdWindowBars  = 24 // extended window: breakout-then-hold / retest continuation
-	confirmBand     = 0.003
 	retestBandATR   = 0.25 // how close a pullback must come to the level to count as a retest
 )
 
@@ -106,7 +105,7 @@ type TFReport struct {
 	RawScore     float64   `json:"raw_score"`
 	Score        float64   `json:"score"` // raw × α × β (× confirm penalty)
 	Confirmed    bool      `json:"confirmed"`
-	CrossAgeBars int       `json:"cross_age_bars"` // bars since the last close on the far side; -1 = no cross
+	CrossAgeBars int       `json:"cross_age_bars"` // bars since the FIRST close beyond the level in the hold window; -1 = no cross
 	Pattern      string    `json:"pattern"`        // breakout / retest_hold / extended / approach
 	Confluence   int       `json:"confluence"`     // independent level sources clustered at the trigger level
 	RoomATR      float64   `json:"room_atr"`       // distance to the next opposing level (ATR units)
@@ -460,14 +459,24 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		if lv.Price <= 0 {
 			continue
 		}
+		// Age = bars since the FIRST close beyond the level inside the hold
+		// window. The old definition ("bars since the most recent far-side
+		// close") made every later close tautologically on-side: held and
+		// Confirmed were always true, confirmPenalty was dead code, and a
+		// break-lose-rebreak coin was re-aged as a pristine fresh breakout
+		// (review 2026-10-04 #1).
 		var age int
 		var crossed bool
+		start := n - holdWindowBars
+		if start < 0 {
+			start = 0
+		}
 		if dir == DirUp {
 			if price <= lv.Price {
 				continue
 			}
-			for i := n - 1; i >= n-holdWindowBars && i >= 0; i-- {
-				if c[i] < lv.Price {
+			for i := start; i < n; i++ {
+				if c[i] > lv.Price {
 					age = n - 1 - i
 					crossed = true
 					break
@@ -477,8 +486,8 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 			if price >= lv.Price {
 				continue
 			}
-			for i := n - 1; i >= n-holdWindowBars && i >= 0; i-- {
-				if c[i] > lv.Price {
+			for i := start; i < n; i++ {
+				if c[i] < lv.Price {
 					age = n - 1 - i
 					crossed = true
 					break
@@ -521,12 +530,18 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		rep.ATRStrength = beyond / atrNow
 		rep.Dims.Price = sigmoidScore(rep.ATRStrength, params.PriceATRCenter, params.PriceATRWidth)
 
+		// held = every close since the cross stayed beyond the level — the
+		// real "did the break survive" test (reachable now that age anchors
+		// on the FIRST cross). Retest scan starts AFTER the cross bar: the
+		// crossing bar's low sits at/below the level by construction (it
+		// opened near the prior far-side close) and counting it made almost
+		// every break grade as retest_hold.
 		held := true
 		crossBar := n - 1 - rep.CrossAgeBars
 		retested := false
 		for j := crossBar + 1; j < n; j++ {
 			if dir == DirUp {
-				if c[j] < rep.Level {
+				if c[j] <= rep.Level {
 					held = false
 					break
 				}
@@ -534,7 +549,7 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 					retested = true
 				}
 			} else {
-				if c[j] > rep.Level {
+				if c[j] >= rep.Level {
 					held = false
 					break
 				}
@@ -547,14 +562,13 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		switch {
 		case rep.CrossAgeBars < crossWindowBars:
 			rep.Pattern = PatternBreakout
-			// Pullback confirmation: price must still hold the far side (±0.3% band).
-			if dir == DirUp {
-				rep.Confirmed = price >= rep.Level*(1-confirmBand)
-			} else {
-				rep.Confirmed = price <= rep.Level*(1+confirmBand)
-			}
+			// Confirmation = closes since the cross all held beyond the level.
+			// The old live-price band check was tautological (candidates
+			// already require price strictly beyond), so it confirmed
+			// everything; held is the discriminating fact.
+			rep.Confirmed = held
 			if !rep.Confirmed {
-				rep.Notes = append(rep.Notes, "回踩确认失败：价格跌回关键位下方（插针/假突破）")
+				rep.Notes = append(rep.Notes, "突破后曾收盘跌回关键位下方（假突破/拉锯），按确认失败计")
 			}
 		case retested && held:
 			rep.Pattern = PatternRetestHold
@@ -572,6 +586,9 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 			// report so the entry-quality caveat stays visible downstream.
 			rep.Notes = append(rep.Notes, "突破后持续延伸且未回踩(追高形态,综合分在截面统一折价 ×0.65)")
 		default:
+			// Held for ≥ crossWindowBars, then lost the level, price back
+			// beyond now — a failed break being re-attempted. Reachable since
+			// the age anchors on the first cross.
 			rep.Pattern = PatternExtended
 			rep.Confirmed = false
 			rep.Notes = append(rep.Notes, "突破后曾失守关键位，形态质量低")
@@ -587,9 +604,15 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 
 		// Room-to-run: distance from the current price to the nearest opposing
 		// level ahead. A breakout right under a ceiling is worth much less than
-		// one with open space.
+		// one with open space. DirDown used to init nextLv at +Inf with a
+		// condition that could never fire — breakdowns never measured the
+		// room below and the ×0.75/×0.9 Price discounts were long-only
+		// (review 2026-10-04 #2).
 		room := 3.0
 		nextLv := math.Inf(1)
+		if dir == DirDown {
+			nextLv = math.Inf(-1)
+		}
 		for _, lv := range levels {
 			if lv.Price <= 0 {
 				continue
@@ -597,7 +620,7 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 			if dir == DirUp && lv.Price > price && lv.Price < nextLv {
 				nextLv = lv.Price
 			}
-			if dir == DirDown && lv.Price < price && lv.Price > nextLv*-1 && (math.IsInf(nextLv, -1) || lv.Price > nextLv) {
+			if dir == DirDown && lv.Price < price && lv.Price > nextLv {
 				nextLv = lv.Price
 			}
 		}

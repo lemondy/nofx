@@ -328,42 +328,20 @@ func (s *Scheduler) runOnce(onDone func()) {
 
 	results := AnalyzeMany(symbols, s.Concurrent)
 
-	// BTC market regime: alt breakouts against the BTC direction fail more.
+	// BTC market regime — the SAME 4h-EMA classifier the short pipeline uses
+	// (btcRegimePenalty), so both scanners label the market identically.
+	// Review 2026-10-04 #3: the old "BTC's own piggy score ≥ medium" read
+	// said btc_bull exactly when BTC itself was the strongest breaker — a
+	// momentum echo, not a regime — and fell back to chop (uniform ×0.95,
+	// no relative differentiation) most of the time. Failure to fetch BTC
+	// 4h bars keeps the old chop default.
 	regime := "chop"
-	for _, r := range results {
-		if r.Symbol != "BTCUSDT" {
-			continue
-		}
-		if r.Direction == DirUp && r.Score >= GetParams().MediumThreshold {
-			regime = "btc_bull"
-		} else if r.Direction == DirDown && r.Score >= GetParams().MediumThreshold {
-			regime = "btc_bear"
+	if btc4h, berr := NewBinanceDS("BTCUSDT").Klines("4h", 84); berr == nil && len(btc4h) >= 30 {
+		if _, r := btcRegimePenalty(btc4h); r != "" {
+			regime = r
 		}
 	}
-
-	// Cross-sectional percentile + regime factor.
-	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-	n := len(results)
-	for i := range results {
-		results[i].Percentile = round2(float64(n-i) / float64(n) * 100)
-		if results[i].Symbol == "BTCUSDT" {
-			continue
-		}
-		switch {
-		case regime == "btc_bull" && results[i].Direction == DirDown,
-			regime == "btc_bear" && results[i].Direction == DirUp:
-			results[i].Score = round2(results[i].Score * 0.85)
-			results[i].Regime = regime
-		case regime == "chop":
-			results[i].Score = round2(results[i].Score * 0.95)
-			results[i].Regime = regime
-		default:
-			results[i].Regime = regime
-		}
-	}
-
-	// Re-sort after adjustment.
-	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	applyRegimeAdjustment(results, regime)
 
 	s.mu.Lock()
 	s.snapshot = results
@@ -394,6 +372,37 @@ func (s *Scheduler) runOnce(onDone func()) {
 	}
 }
 
+// applyRegimeAdjustment applies the regime haircuts, then re-grades and
+// re-ranks. Pure so the ordering contract is unit-testable. Review
+// 2026-10-04 #3: the Score haircut used to leave the Grade at its
+// pre-adjustment band (a strong alt discounted to 72 kept its "strong"
+// label) and Percentile was stamped from the pre-haircut order — both now
+// derive from the FINAL scores.
+func applyRegimeAdjustment(results []ScanResult, regime string) {
+	for i := range results {
+		if results[i].Symbol == "BTCUSDT" {
+			continue // the regime driver itself is never haircut
+		}
+		switch {
+		case regime == "btc_bull" && results[i].Direction == DirDown,
+			regime == "btc_bear" && results[i].Direction == DirUp:
+			results[i].Score = round2(results[i].Score * 0.85)
+			results[i].Regime = regime
+		case regime == "chop":
+			results[i].Score = round2(results[i].Score * 0.95)
+			results[i].Regime = regime
+		default:
+			results[i].Regime = regime
+		}
+		results[i].Grade = gradeOf(results[i].Score)
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	n := len(results)
+	for i := range results {
+		results[i].Percentile = round2(float64(n-i) / float64(n) * 100)
+	}
+}
+
 // Snapshot returns the current top list and its timestamp (may be empty before
 // the first run completes).
 func (s *Scheduler) Snapshot() ([]ScanResult, time.Time) {
@@ -416,10 +425,17 @@ func (s *Scheduler) ShortSnapshot() ([]ShortSignal, time.Time) {
 
 // TopSymbols returns up to limit symbols from the snapshot, strongest first,
 // optionally filtered by direction ("breakout" / "breakdown" / "" for both).
-// SymbolDirection pairs a snapshot symbol with its selected direction.
+// SymbolDirection pairs a snapshot symbol with its selected direction plus
+// the scan-time quality facts (score/grade/pattern) — the candidate pool
+// needs the direction for cross-scanner conflict detection and the grade/
+// pattern for its quality floor (review 2026-10-04 #4: the snapshot is a
+// ranking, not a filter).
 type SymbolDirection struct {
 	Symbol    string
-	Direction string // "up" | "down"
+	Direction string  // "up" | "down"
+	Score     float64
+	Grade     string  // strong / medium / weak / noise (scan-time, post-regime)
+	Pattern   string  // breakout / retest_hold / extended / approach
 }
 
 // TopSymbolsWithDirection is TopSymbols plus each symbol's selected
@@ -437,7 +453,7 @@ func (s *Scheduler) TopSymbolsWithDirection(limit int, direction string) []Symbo
 		if direction != "" && r.Direction != direction {
 			continue
 		}
-		out = append(out, SymbolDirection{Symbol: r.Symbol, Direction: r.Direction})
+		out = append(out, SymbolDirection{Symbol: r.Symbol, Direction: r.Direction, Score: r.Score, Grade: r.Grade, Pattern: r.Pattern})
 		if len(out) >= limit {
 			break
 		}
@@ -463,7 +479,7 @@ func (s *Scheduler) TopSymbolsWithDirectionAge(limit int, direction string) ([]S
 		if direction != "" && r.Direction != direction {
 			continue
 		}
-		out = append(out, SymbolDirection{Symbol: r.Symbol, Direction: r.Direction})
+		out = append(out, SymbolDirection{Symbol: r.Symbol, Direction: r.Direction, Score: r.Score, Grade: r.Grade, Pattern: r.Pattern})
 		if len(out) >= limit {
 			break
 		}
@@ -558,4 +574,14 @@ func (s *Scheduler) TopByGrade(limit int) []ScanResult {
 // StartDefault starts the process-wide scheduler once.
 func StartDefault() {
 	defaultScheduler.once.Do(func() { defaultScheduler.Start() })
+}
+
+// SetSnapshotForTest seeds the snapshot buffer so downstream fan-in tests
+// (kernel mixed-pool assembly) can exercise piggy-dash reads without a
+// Binance round-trip. updatedAt is stamped "now" so staleness gates pass.
+func (s *Scheduler) SetSnapshotForTest(results []ScanResult) {
+	s.mu.Lock()
+	s.snapshot = results
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
 }

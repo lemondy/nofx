@@ -8,12 +8,13 @@ import (
 // mockDS serves per-interval synthetic series, padding at the FRONT so the
 // tail (the scenario candles) always stays at the end.
 type mockDS struct {
-	series  map[string][]Kline // interval -> candles (tail = scenario)
-	spot    []Kline
-	depth   *DepthSnapshot
-	oi      []OIPoint
-	funding []FundingPoint
-	ls      []LongShortPoint
+	series            map[string][]Kline // interval -> candles (tail = scenario)
+	spot              []Kline
+	depth             *DepthSnapshot
+	oi                []OIPoint
+	funding           []FundingPoint
+	fundingInfoHours  float64 // FundingInfo settlement interval override (0 = 8h)
+	ls                []LongShortPoint
 }
 
 func (m *mockDS) Klines(interval string, limit int) ([]Kline, error) {
@@ -99,7 +100,11 @@ func (m *mockDS) FundingInfo() (*FundingInfo, error) {
 	if len(m.funding) == 0 {
 		return nil, fmt.Errorf("no funding")
 	}
-	return &FundingInfo{NextRate: m.funding[len(m.funding)-1].Rate, IntervalHours: 8}, nil
+	hours := m.fundingInfoHours
+	if hours <= 0 {
+		hours = 8
+	}
+	return &FundingInfo{NextRate: m.funding[len(m.funding)-1].Rate, IntervalHours: hours}, nil
 }
 
 func (m *mockDS) FundingHistory(limit int) ([]FundingPoint, error) {

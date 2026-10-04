@@ -880,7 +880,13 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			// Single fetch per cycle (2026-10-03 review): the stale-snapshot
 			// path pays a synchronous refresh — calling getPiggyDashCoins
 			// twice (fan-in + piggyMeta below) doubled that cost on failure.
-			piggyCoins, piggyErr := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
+			// 2026-10-04 review #6: this used to be `piggyCoins, piggyErr := …`
+			// — := redeclared BOTH names inside the if-block, the outer
+			// piggyCoins stayed nil, piggyMeta below stayed empty, and
+			// ScannerDirection/SCANNER_VS_SCANNER never fired in mixed (the
+			// production主力 source). Declare the error outside, assign with =.
+			var piggyErr error
+			piggyCoins, piggyErr = e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
 			if piggyErr != nil {
 				logger.Infof("⚠️  Failed to get Piggy Dash coins: %v", piggyErr)
 			} else {
@@ -1037,12 +1043,15 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 		limit = 5
 	}
 	scheduler := breakout.DefaultScheduler()
-	symbols, age := scheduler.TopSymbolsWithDirectionAge(limit, direction)
+	// Over-fetch 3× so the quality floor can decline weak rows and still
+	// fill the configured slot count from the rest of the ranking.
+	fetch := limit * 3
+	symbols, age := scheduler.TopSymbolsWithDirectionAge(fetch, direction)
 	// 2026-10-03 review P2: distinguish "empty board" from "direction has no
 	// match on a FRESH board" — the old condition re-ran a full synchronous
 	// scan every cycle just to confirm the direction filter still matches
 	// nothing. Refresh only on staleness or a genuinely empty board.
-	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(limit, "")
+	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(fetch, "")
 	directionEmpty := len(anyCount) == 0
 	if directionEmpty || age > piggyDashMaxAge {
 		if !directionEmpty && len(symbols) == 0 {
@@ -1055,7 +1064,7 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 			logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")
 		}
 		scheduler.RefreshNow(60 * time.Second)
-		symbols, age = scheduler.TopSymbolsWithDirectionAge(limit, direction)
+		symbols, age = scheduler.TopSymbolsWithDirectionAge(fetch, direction)
 	}
 	if len(symbols) == 0 {
 		return nil, fmt.Errorf("piggy-dash scan produced no signals (Binance data unavailable)")
@@ -1065,9 +1074,28 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 		// cycle rather than minting candidates off a dead board.
 		return nil, fmt.Errorf("piggy-dash snapshot stale (%s old, refresh failed) — source halted this cycle", age.Round(time.Second))
 	}
-	logger.Infof("🐷 Piggy-dash source: %d symbols (direction=%q) %v", len(symbols), direction, symbols)
-	var candidates []CandidateCoin
+	// Quality floor (review 2026-10-04 #4): the snapshot is a RANKING, not a
+	// filter — in a dead market noise-graded rows and not-yet-crossed
+	// approach patterns filled every slot. weak+ grade on a real cross
+	// pattern only; an empty result is an ERROR (the source halts for the
+	// cycle and the kernel's regime-skip synthesizes the wait) — never a
+	// quiet backfill of weak rows.
+	picked := make([]breakout.SymbolDirection, 0, limit)
 	for _, row := range symbols {
+		if row.Grade == "noise" || row.Pattern == "" || row.Pattern == breakout.PatternApproach {
+			continue
+		}
+		picked = append(picked, row)
+		if len(picked) >= limit {
+			break
+		}
+	}
+	if len(picked) == 0 {
+		return nil, fmt.Errorf("piggy-dash: %d rows on the board, none above the weak+cross floor — pool empty this cycle", len(symbols))
+	}
+	logger.Infof("🐷 Piggy-dash source: %d symbols (direction=%q, floor %d/%d rows)", len(picked), direction, len(picked), len(symbols))
+	var candidates []CandidateCoin
+	for _, row := range picked {
 		candidates = append(candidates, CandidateCoin{
 			Symbol:           row.Symbol,
 			Sources:          []string{"piggy_dash"},
@@ -1111,6 +1139,7 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	var candidates []CandidateCoin
 	var bestNearHigh *CandidateCoin // strongest grinding-top setup, reserved a slot
 	var skipped []string
+	var floorSkipped []string
 	for _, sig := range signals {
 		// The near_high universe passed a $30M/day liquidity prefilter at
 		// scan time; its OI is structurally lower (low OI = less squeeze
@@ -1123,6 +1152,15 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 			if bestNearHigh == nil || c.ShortScore > bestNearHigh.ShortScore {
 				bestNearHigh = &c
 			}
+			continue
+		}
+		// Quality floor (review 2026-10-04 #4): the scan is a ranking — in a
+		// dead market noise-graded rows (score < 40) filled slots and the AI
+		// faced only weak evidence. weak+ only; the near_high slot above has
+		// its own ≥55 bar. Applies to every universe (gainer/hist/breakdown)
+		// — a sub-noise breakdown signal is not a continuation setup either.
+		if sig.Grade == "noise" {
+			floorSkipped = append(floorSkipped, fmt.Sprintf("%s(%.0f)", sig.Symbol, sig.Score))
 			continue
 		}
 		// OI data unavailable (0) can't be judged — keep, matching the
@@ -1196,6 +1234,10 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	if len(skipped) > 0 {
 		logger.Infof("🩸 Short-scan OI filter (< %.1fM): skipped %d low-liquidity candidates %v",
 			minOIMillions, len(skipped), skipped)
+	}
+	if len(floorSkipped) > 0 {
+		logger.Infof("🩸 Short-scan quality floor (grade=noise): skipped %d candidates %v",
+			len(floorSkipped), floorSkipped)
 	}
 	var syms []string
 	for _, c := range candidates {

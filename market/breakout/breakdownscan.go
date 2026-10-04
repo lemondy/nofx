@@ -95,12 +95,10 @@ func analyzeBreakdownShort(symbol string, chg24 float64, btc4h []Kline, ds DataS
 		bkwFundingHealth*fundingHealth
 
 	sig.Score = round2(score)
-	sig.Grade = shortGradeOf(sig.Score)
 	// Same discipline as the pump side: no printed confirmation → never
 	// strong (a weak-looking coin is "looks weak", not a confirmed short).
-	if !sig.Confirmed && sig.Grade == "strong" {
-		sig.Grade = "medium"
-	}
+	// Routed through the single capped grading exit (review 2026-10-04 #5).
+	sig.Grade = finalizeShortGrade(sig.Score, sig.Confirmed)
 	sig.Universe = "breakdown"
 	sig.Reasons = append(sig.Reasons,
 		fmt.Sprintf("破位宇宙:24h跌幅%.1f%%,4h趋势向下", chg24),

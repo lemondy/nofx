@@ -92,7 +92,10 @@ func TestPumpGuardBlocksUnconfirmedExtendedPump(t *testing.T) {
 		return sig
 	}
 
-	hasCode := func(g *DirectionGate, code string) bool {
+	// Local helper (renamed: a literal "hasCode" here shadowed the package
+	// test helper in long_pullback_test.go — the exact class of bug the
+	// 2026-10-04 shadow-vet pass targets).
+	hasGateCode := func(g *DirectionGate, code string) bool {
 		for _, c := range g.Failed {
 			if strings.Contains(c, code) {
 				return true
@@ -109,10 +112,10 @@ func TestPumpGuardBlocksUnconfirmedExtendedPump(t *testing.T) {
 	if sig.PumpGuard.Confirmed {
 		t.Fatalf("unconfirmed pullback marked confirmed: %+v", sig.PumpGuard)
 	}
-	if !hasCode(sig.HardGate.Long, "EXTENDED_PUMP_UNCONFIRMED") {
+	if !hasGateCode(sig.HardGate.Long, "EXTENDED_PUMP_UNCONFIRMED") {
 		t.Fatalf("long gate missing EXTENDED_PUMP_UNCONFIRMED: %v (pump_guard=%+v)", sig.HardGate.Long.Failed, sig.PumpGuard)
 	}
-	if hasCode(sig.HardGate.Short, "EXTENDED_PUMP_UNCONFIRMED") {
+	if hasGateCode(sig.HardGate.Short, "EXTENDED_PUMP_UNCONFIRMED") {
 		t.Fatal("guard must be long-side only")
 	}
 
@@ -122,7 +125,7 @@ func TestPumpGuardBlocksUnconfirmedExtendedPump(t *testing.T) {
 	if sigOK.PumpGuard == nil || !sigOK.PumpGuard.Extended || !sigOK.PumpGuard.Confirmed {
 		t.Fatalf("confirmed pullback misjudged: %+v", sigOK.PumpGuard)
 	}
-	if hasCode(sigOK.HardGate.Long, "EXTENDED_PUMP_UNCONFIRMED") {
+	if hasGateCode(sigOK.HardGate.Long, "EXTENDED_PUMP_UNCONFIRMED") {
 		t.Fatalf("confirmed long still blocked: %v", sigOK.HardGate.Long.Failed)
 	}
 
@@ -154,7 +157,7 @@ func TestPumpGuardBlocksUnconfirmedExtendedPump(t *testing.T) {
 	if sigFlat.PumpGuard == nil || sigFlat.PumpGuard.Extended || !sigFlat.PumpGuard.Confirmed {
 		t.Fatalf("dormant guard wrong: %+v", sigFlat.PumpGuard)
 	}
-	if hasCode(sigFlat.HardGate.Long, "EXTENDED_PUMP_UNCONFIRMED") {
+	if hasGateCode(sigFlat.HardGate.Long, "EXTENDED_PUMP_UNCONFIRMED") {
 		t.Fatal("dormant guard must not block")
 	}
 
