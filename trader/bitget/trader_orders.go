@@ -523,7 +523,9 @@ func (t *BitgetTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pending orders unknown: %w", err)
 	}
-	if err == nil && data != nil {
+	// err is provably nil here (returned above) — the old `err == nil &&`
+	// was a dead condition (shadow-vet flagged the block; review 2026-10-04).
+	if data != nil {
 		var orders struct {
 			EntrustedList []struct {
 				OrderId   string `json:"orderId"`

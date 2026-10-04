@@ -618,6 +618,39 @@ func shortReasons(sig *ShortSignal, rsi1h, rsi4h, ext float64) []string {
 	return rs
 }
 
+// BTC4hRegime is the SINGLE shared BTC 4h trend classifier — it drives the
+// short-scan haircut, the scheduler's regime label and the kernel's BTC
+// entry filters (review 2026-10-04 #3: the pipeline used to carry three
+// divergent definitions — BTC's own piggy score, an EMA+RSI read here, and
+// the kernel's EMA-only shape — that could contradict each other on the
+// same bar). Predicates: bullStructure = EMA20>EMA50 with the last close
+// above EMA20; bearStructure mirrors; strongBull adds RSI(14) ≥ 60 (only
+// the BULL side needs the momentum check — that is what makes shorts
+// systematically dangerous). known=false below 60 closes: the EMA50 is not
+// converged enough to classify on (kernel fetches 300, the scanners 84 —
+// both clear it).
+func BTC4hRegime(closes []float64) (regime string, strongBull bool, downtrend bool, known bool) {
+	n := len(closes)
+	if n < 60 {
+		return "", false, false, false
+	}
+	e20 := ema(closes, 20)
+	e50 := ema(closes, 50)
+	last := closes[n-1]
+	bullStruct := e20[n-1] > e50[n-1] && last > e20[n-1]
+	bearStruct := e20[n-1] < e50[n-1] && last < e20[n-1]
+	rsi := rsiLast(closes, 14)
+	switch {
+	case bullStruct && rsi >= 60:
+		return "btc_bull", true, false, true
+	case bearStruct:
+		// Regime label mirrors for context; no bear-side score boost.
+		return "btc_bear", false, true, true
+	default:
+		return "chop", false, false, true
+	}
+}
+
 // btcRegimePenalty classifies BTC's own 4h trend and returns the global
 // multiplier for short candidates: in a strong BTC uptrend (EMA20>EMA50,
 // close above both, RSI strong) altcoin shorts are systematically lower
@@ -628,21 +661,14 @@ func btcRegimePenalty(btc4h []Kline) (float64, string) {
 	if len(btc4h) < 30 {
 		return 1.0, ""
 	}
-	c := closes(btc4h)
-	e20 := ema(c, 20)
-	e50 := ema(c, 50)
-	n := len(c)
-	rsi := rsiLast(c, 14)
-	bullStruct := e20[n-1] > e50[n-1] && c[n-1] > e20[n-1]
-	bearStruct := e20[n-1] < e50[n-1] && c[n-1] < e20[n-1]
-	switch {
-	case bullStruct && rsi >= 60:
-		return 0.85, "btc_bull"
-	case bearStruct && rsi <= 40:
-		return 1.0, "btc_bear" // labelled for context — no unconfirmed boost
-	default:
-		return 1.0, "chop"
+	regime, strongBull, _, known := BTC4hRegime(closes(btc4h))
+	if !known {
+		return 1.0, ""
 	}
+	if strongBull {
+		return 0.85, regime
+	}
+	return 1.0, regime
 }
 
 // ScanShorts ranks the top `limit` 24h gainers by short suitability, plus

@@ -546,6 +546,20 @@ type RiskControlConfig struct {
 	// BTCFilterLong: nil/true = altcoin longs need coin 24h return ≥ BTC's
 	// and BTC 4h closes not declining (BTC_WEAK_LONG).
 	BTCFilterLong *bool `json:"btc_filter_long,omitempty"`
+	// BTCFilterShort: nil/false = OFF. true = open_short is blocked while
+	// the shared BTC 4h classifier reads strongBull (EMA20>EMA50, close
+	// above, RSI≥60 → BTC_4H_STRONGBULL). Deliberately opt-in: the playbook
+	// handles BTC strength for shorts at the SCAN level (btc_bull ×0.85
+	// haircut, same shared classifier), so a hard gate default-on would
+	// contradict §9.2 — flip it on to hard-pause alt shorts in BTC bulls.
+	BTCFilterShort *bool `json:"btc_filter_short,omitempty"`
+	// ShortTopConfirmGate: nil/true = open_short on a short_scan candidate
+	// requires the scanner's topping confirmation (顶背离/假突破/破EMA20/
+	// 费率回落 — the playbook's 默认姿态, previously prompt-only; now the
+	// program cites SHORT_TOP_CONFIRM_MISSING). Candidates WITHOUT short_scan
+	// evidence (piggy breakdown, model-initiated) are not gated — the 15m
+	// MICRO_TREND gate still applies to them. false = off.
+	ShortTopConfirmGate *bool `json:"short_top_confirm_gate,omitempty"`
 	// SentimentLongDeweightPts: directional-score penalty for LONGS while
 	// crypto FNG ≥ SentimentLongDeweightFNG. 0 = default 10; negative = off.
 	SentimentLongDeweightPts int `json:"sentiment_long_deweight_pts"`
@@ -747,6 +761,18 @@ func (r RiskControlConfig) EffectiveLongMaxEMA20DistPct() float64 {
 // return ≥ BTC's AND BTC's 4h closes not in a declining sequence. false = off.
 func (r RiskControlConfig) EffectiveBTCFilterLong() bool {
 	return r.BTCFilterLong == nil || *r.BTCFilterLong
+}
+
+// EffectiveBTCFilterShort: nil/false = OFF (opt-in hard gate — see the field
+// comment: the playbook treats BTC strength for shorts at scan level).
+func (r RiskControlConfig) EffectiveBTCFilterShort() bool {
+	return r.BTCFilterShort != nil && *r.BTCFilterShort
+}
+
+// EffectiveShortTopConfirmGate: nil/true = the playbook's 默认姿态
+// (topping confirmation required for short_scan shorts) is program-enforced.
+func (r RiskControlConfig) EffectiveShortTopConfirmGate() bool {
+	return r.ShortTopConfirmGate == nil || *r.ShortTopConfirmGate
 }
 
 // DefaultSentimentLongDeweightPts: while crypto FNG reads ≥ the threshold,

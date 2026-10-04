@@ -3,6 +3,7 @@ package kernel
 import (
 	"math"
 	"testing"
+	"time"
 
 	"nofx/market"
 )
@@ -27,11 +28,12 @@ func boBars(n int, fn func(i int) (h, l, c float64)) []market.KlineBar {
 	return bars
 }
 
-// boSignal wraps bars (treated as closed; one forming bar is appended) into
-// the minimal SymbolSignal/Data computeBreakoutState needs. StructureHigh/
-// Low are the ROLLING extremes over all closed bars (as computeTFSignal
-// would report them).
-func boSignal(trend string, bars []market.KlineBar, price float64, volRatio float64, oi1h float64) (*SymbolSignal, *market.Data) {
+// boSignal wraps bars (treated as closed; one forming candle — timestamped
+// to still be forming at the returned now — is appended) into the minimal
+// SymbolSignal/Data computeBreakoutState needs. StructureHigh/Low are the
+// ROLLING extremes over all closed bars (as computeTFSignal would report
+// them). Returns now so callers pass the same settlement instant.
+func boSignal(trend string, bars []market.KlineBar, price float64, volRatio float64, oi1h float64) (*SymbolSignal, *market.Data, time.Time) {
 	sh, sl := 0.0, 1e18
 	for _, b := range bars {
 		if b.High > sh {
@@ -55,11 +57,18 @@ func boSignal(trend string, bars []market.KlineBar, price float64, volRatio floa
 		oi := oi1h
 		sig.Derivatives.OIChange1hPct = &oi
 	}
-	klines := append(append([]market.KlineBar{}, bars...), market.KlineBar{Time: 9_999, Open: price, High: price, Low: price, Close: price})
+	// Closed bars anchored 1h apart; the appended forming candle's window
+	// ends after `now` so ClosedKlines drops it.
+	base := int64(1_700_000_000_000)
+	for i := range bars {
+		bars[i].Time = base + int64(i)*3_600_000
+	}
+	now := time.UnixMilli(base + int64(len(bars))*3_600_000)
+	klines := append(append([]market.KlineBar{}, bars...), market.KlineBar{Time: base + int64(len(bars))*3_600_000, Open: price, High: price, Low: price, Close: price})
 	data := &market.Data{Symbol: "TESTUSDT", CurrentPrice: price, TimeframeData: map[string]*market.TimeframeSeriesData{
 		"1h": {Timeframe: "1h", Klines: klines},
 	}}
-	return sig, data
+	return sig, data, now
 }
 
 // Fresh cross inside the last 8 bars (outside the level window) with volume
@@ -75,8 +84,8 @@ func TestBreakoutStateConfirmedFixedLevel(t *testing.T) {
 		}
 		return 102.5, 102.0, 102.2
 	})
-	sig, data := boSignal("up", bars, 102.8, 1.8, 0.5)
-	st := computeBreakoutState(data, sig)
+	sig, data, now := boSignal("up", bars, 102.8, 1.8, 0.5)
+	st := computeBreakoutState(data, sig, now)
 	if st == nil {
 		t.Fatal("state = nil")
 	}
@@ -103,8 +112,8 @@ func TestBreakoutStateFakeBreak(t *testing.T) {
 		}
 		return 102.5, 102.0, 102.2
 	})
-	sig, data := boSignal("up", bars, 100.8, 1.8, 0.5) // live poking back above intrabar
-	st := computeBreakoutState(data, sig)
+	sig, data, now := boSignal("up", bars, 100.8, 1.8, 0.5) // live poking back above intrabar
+	st := computeBreakoutState(data, sig, now)
 	if st.Status != "fake_break" {
 		t.Fatalf("status = %q, want fake_break", st.Status)
 	}
@@ -135,8 +144,8 @@ func boRetestBars(touch bool) []market.KlineBar {
 // last 8 bars → retest_hold: the state the retest entry path was designed
 // around and could never reach.
 func TestBreakoutStateRetestHold(t *testing.T) {
-	sig, data := boSignal("up", boRetestBars(true), 102.5, 0, 0)
-	st := computeBreakoutState(data, sig)
+	sig, data, now := boSignal("up", boRetestBars(true), 102.5, 0, 0)
+	st := computeBreakoutState(data, sig, now)
 	if st.Level != 101.5 {
 		t.Fatalf("level = %.2f, want 101.5 (window excluding the last 8 bars)", st.Level)
 	}
@@ -147,8 +156,8 @@ func TestBreakoutStateRetestHold(t *testing.T) {
 
 // Crossed, still beyond, no touch in the recent window → extended.
 func TestBreakoutStateExtended(t *testing.T) {
-	sig, data := boSignal("up", boRetestBars(false), 102.5, 0, 0)
-	if st := computeBreakoutState(data, sig); st.Status != "extended" {
+	sig, data, now := boSignal("up", boRetestBars(false), 102.5, 0, 0)
+	if st := computeBreakoutState(data, sig, now); st.Status != "extended" {
 		t.Fatalf("status = %q, want extended (chase context)", st.Status)
 	}
 }
@@ -169,10 +178,10 @@ func TestBreakoutStateMirrorSymmetry(t *testing.T) {
 	for i, b := range long {
 		short[i] = market.KlineBar{Time: b.Time, Open: 200 - b.Open, High: 200 - b.Low, Low: 200 - b.High, Close: 200 - b.Close, Volume: b.Volume}
 	}
-	sigL, dataL := boSignal("up", long, 102.8, 1.8, 0.5)
-	sigS, dataS := boSignal("down", short, 97.2, 1.8, 0.5)
-	stL := computeBreakoutState(dataL, sigL)
-	stS := computeBreakoutState(dataS, sigS)
+	sigL, dataL, nowL := boSignal("up", long, 102.8, 1.8, 0.5)
+	sigS, dataS, nowS := boSignal("down", short, 97.2, 1.8, 0.5)
+	stL := computeBreakoutState(dataL, sigL, nowL)
+	stS := computeBreakoutState(dataS, sigS, nowS)
 	if stL.Status != "confirmed" || stS.Status != "confirmed" {
 		t.Fatalf("mirror statuses: long=%q short=%q, want confirmed/confirmed", stL.Status, stS.Status)
 	}
@@ -187,8 +196,8 @@ func TestBreakoutStateShortSeriesFallsBack(t *testing.T) {
 	bars := boBars(15, func(i int) (h, l, c float64) {
 		return 100.2, 99.8, 100.0
 	})
-	sig, data := boSignal("up", bars, 101.0, 2.0, 1.0)
-	st := computeBreakoutState(data, sig)
+	sig, data, now := boSignal("up", bars, 101.0, 2.0, 1.0)
+	st := computeBreakoutState(data, sig, now)
 	if st == nil {
 		t.Fatal("short series must fall back to the rolling level, not nil")
 	}
@@ -233,5 +242,69 @@ func TestNegativeEdgeScoreSignedNotAbsolute(t *testing.T) {
 	g2 := computeHardEntryGate(sig2, opt)
 	if !hasCode(g2.Long, "NEG_EDGE_SCORE_+45_LT_60") {
 		t.Fatalf("aligned-but-weak long must still cite its score, failed=%v", g2.Long.Failed)
+	}
+}
+
+// ── review 2026-10-04 batch-2: the two short-side gates ──
+func TestBTCFilterShortGateOptIn(t *testing.T) {
+	rising := make([]float64, 80)
+	base := 100.0
+	for i := range rising {
+		rising[i] = base
+		base *= 1.005
+	}
+	short := lpSig(100, 99, 105)
+	opt := lpOpt()
+	opt.BtcTrendCloses = rising
+	// Default OFF — the playbook treats BTC strength for shorts at scan
+	// level (×0.85 haircut off the same classifier); the hard pause is
+	// opt-in via btc_filter_short.
+	if g := computeHardEntryGate(short, opt); hasCode(g.Short, "BTC_4H_STRONGBULL") {
+		t.Fatalf("opt-in gate must be OFF by default, failed=%v", g.Short.Failed)
+	}
+	opt.BTCFilterShort = true
+	g := computeHardEntryGate(short, opt)
+	if !hasCode(g.Short, "BTC_4H_STRONGBULL") {
+		t.Fatalf("strong BTC bull must block the short when enabled, failed=%v", g.Short.Failed)
+	}
+	if hasCode(g.Long, "BTC_4H_STRONGBULL") {
+		t.Fatal("the short-side filter must not touch the long gate")
+	}
+	// Missing BTC data → gate stays silent (fail-open like the long side).
+	opt.BtcTrendCloses = make([]float64, 40)
+	if g := computeHardEntryGate(short, opt); hasCode(g.Short, "BTC_4H_STRONGBULL") {
+		t.Fatal("unclassifiable BTC data must not fire the gate")
+	}
+}
+
+func TestShortTopConfirmGate(t *testing.T) {
+	no, yes := false, true
+	short := lpSig(100, 99, 105)
+	mk := func(gate bool, confirmed *bool) *DirectionGate {
+		opt := lpOpt()
+		opt.ShortTopConfirmGate = gate
+		opt.ShortScanConfirmed = confirmed
+		return computeHardEntryGate(short, opt).Short
+	}
+	if !hasCode(mk(true, &no), "SHORT_TOP_CONFIRM_MISSING") {
+		t.Fatal("short_scan candidate without topping confirmation must be blocked (默认姿态 program-enforced)")
+	}
+	if hasCode(mk(true, &yes), "SHORT_TOP_CONFIRM_MISSING") {
+		t.Fatal("confirmed short_scan candidate must pass")
+	}
+	// No short_scan evidence (piggy breakdown / model-initiated) → not gated.
+	if hasCode(mk(true, nil), "SHORT_TOP_CONFIRM_MISSING") {
+		t.Fatal("candidates without short_scan evidence must not be gated")
+	}
+	// Config off → never fires.
+	if hasCode(mk(false, &no), "SHORT_TOP_CONFIRM_MISSING") {
+		t.Fatal("gate disabled must not fire")
+	}
+	// The long gate never reads the short confirmation.
+	optL := lpOpt()
+	optL.ShortTopConfirmGate = true
+	optL.ShortScanConfirmed = &no
+	if g := computeHardEntryGate(lpSig(100, 101, 95), optL); hasCode(g.Long, "SHORT_TOP_CONFIRM_MISSING") {
+		t.Fatal("the confirmation gate must not touch the long side")
 	}
 }

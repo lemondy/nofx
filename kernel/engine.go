@@ -72,6 +72,7 @@ type CandidateCoin struct {
 	// Short-side metadata (short_scan sourced candidates only):
 	ShortScore      float64  `json:"short_score,omitempty"`       // 0-100 short suitability
 	ShortGrade      string   `json:"short_grade,omitempty"`       // strong / medium / weak
+	ShortConfirmed  bool     `json:"short_confirmed,omitempty"`   // scanner topping confirmation (顶背离/假突破/破EMA20/费率回落) — feeds SHORT_TOP_CONFIRM_MISSING
 	ShortReasons    []string `json:"short_reasons,omitempty"`     // topping confirmations printed
 	ShortFundingAnn float64  `json:"short_funding_ann,omitempty"` // funding annualized % AT SCAN TIME
 	ShortScanAtMs   int64    `json:"short_scan_at_ms,omitempty"`  // when the scanner snapshot was taken
@@ -933,6 +934,10 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			if meta, ok := shortMeta[symbol]; ok {
 				c.ShortScore = meta.ShortScore
 				c.ShortGrade = meta.ShortGrade
+				// 2026-10-04 batch-2: the top-confirmation gate reads this —
+				// dropping it here would silently gate every mixed-pool
+				// short into SHORT_TOP_CONFIRM_MISSING.
+				c.ShortConfirmed = meta.ShortConfirmed
 				c.ShortReasons = meta.ShortReasons
 				c.ShortFundingAnn = meta.ShortFundingAnn
 				c.ShortUniverse = meta.ShortUniverse
@@ -1259,6 +1264,7 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 		ScannerDirection: "short",
 		ShortScore:       sig.Score,
 		ShortGrade:       sig.Grade,
+		ShortConfirmed:   sig.Confirmed,
 		ShortFundingAnn:  sig.FundingAnnualPct,
 		ShortScanAtMs:    scanAt.UnixMilli(),
 		ShortUniverse:    sig.Universe,

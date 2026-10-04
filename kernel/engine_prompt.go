@@ -248,7 +248,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString("\n")
 	}
 	sb.WriteString("> scanner_hint / 扫描评分 / patterns 均为程序化扫描的辅助证据,不是交易结论,且为扫描时刻的快照(见 generated_at_utc)。方向、时机、是否交易由你综合全部数据独立判断——可以采信、质疑或推翻扫描结果,但必须在推理中给出自己的依据。资金费率尤其如此:暴涨币的 funding 可能在几分钟内漂移数倍,当前状态以各币 Structured Signal 的 derivatives.funding_annualized_pct 为准(程序已按该币真实结算间隔 funding_settle_hours 年化,无需自行换算;与 hint 数字冲突时以 Structured Signal 为准)。\n")
-	sb.WriteString("> **short_scan 候选的默认姿态(稳定规则,勿逐次重判)**: short_scan 按涨幅大入选,候选的 1h/4h 结构天然还是多头——scanner 说可空、结构说多头不是偶发冲突,是该引擎的常态。默认姿态: 顶部确认信号(顶背离/假突破/破 EMA20/费率回落——后者只认 derivatives.funding_rollover.detected)之外,**还必须 execution_filter.short_allowed=true(15m 微趋势已转)才允许做空**;仅凭确认信号而 15m 仍 up → 输出 wait + wait_bias=short(wait_state 由程序按 wait_bias 派生,勿输出),触发事件写\"15m 微趋势转 down + RECHECK_ALL_HARD_GATES\"(转 down 只是重评条件,届时 RR/锚点/资金费率等一切硬门重新全过)。entry_timing_gate 开启时这同时是硬规则(15m 逆势 open_short 会被程序拒单)\n\n")
+	sb.WriteString("> **short_scan 候选的默认姿态(稳定规则,勿逐次重判)**: short_scan 按涨幅大入选,候选的 1h/4h 结构天然还是多头——scanner 说可空、结构说多头不是偶发冲突,是该引擎的常态。默认姿态: 顶部确认信号(顶背离/假突破/破 EMA20/费率回落——后者只认 derivatives.funding_rollover.detected)之外,**还必须 execution_filter.short_allowed=true(15m 微趋势已转)才允许做空**;仅凭确认信号而 15m 仍 up → 输出 wait + wait_bias=short(wait_state 由程序按 wait_bias 派生,勿输出),触发事件写\"15m 微趋势转 down + RECHECK_ALL_HARD_GATES\"(转 down 只是重评条件,届时 RR/锚点/资金费率等一切硬门重新全过)。entry_timing_gate 开启时这同时是硬规则(15m 逆势 open_short 会被程序拒单);顶部确认部分同样已被程序强制——short_scan 候选缺确认时 hard_entry_gate.failed 给出 SHORT_TOP_CONFIRM_MISSING,直接引用,不要试图用 hint 里的确认字样推翻(2026-10-04)\n\n")
 
 	// 8. Custom Prompt
 	if e.config.CustomPrompt != "" {
@@ -1587,6 +1587,12 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		LongPullbackEntry:          e.config.RiskControl.EffectiveLongPullbackEntry(),
 		LongMaxEMA20DistPct:        e.config.RiskControl.EffectiveLongMaxEMA20DistPct(),
 		BTCFilterLong:              e.config.RiskControl.EffectiveBTCFilterLong(),
+		// Short-side mirrors (2026-10-04 batch-2): the BTC strong-bull hard
+		// pause is OPT-IN (the scan-side ×0.85 haircut off the same shared
+		// classifier stays the default treatment); the top-confirmation gate
+		// program-enforces the playbook's 默认姿态 for short_scan candidates.
+		BTCFilterShort:             e.config.RiskControl.EffectiveBTCFilterShort(),
+		ShortTopConfirmGate:        e.config.RiskControl.EffectiveShortTopConfirmGate(),
 		SentimentLongDeweightPts:   e.config.RiskControl.EffectiveSentimentLongDeweightPts(),
 		SentimentLongDeweightArmed: sentimentGreedy(e.config.RiskControl.EffectiveSentimentLongDeweightFNG()),
 		BtcTrendCloses:             binanceBTC1hCloses(300),
@@ -1628,6 +1634,10 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		for _, src := range coin.Sources {
 			if src == "short_scan" && coin.ShortScore > 0 {
 				opt.ScannerBias = "short"
+				// The top-confirmation gate consumes the scanner's own
+				// confirmation verdict (2026-10-04 batch-2).
+				conf := coin.ShortConfirmed
+				opt.ShortScanConfirmed = &conf
 				break
 			}
 		}

@@ -7,6 +7,25 @@ import (
 	"nofx/store"
 )
 
+// The two short-side gate defaults (2026-10-04 batch-2): top-confirmation
+// ON (the playbook's 默认姿态), BTC strong-bull OFF (opt-in hard pause).
+func TestShortGateConfigDefaults(t *testing.T) {
+	var rc store.RiskControlConfig
+	if !rc.EffectiveShortTopConfirmGate() {
+		t.Fatal("short_top_confirm_gate nil must default ON (playbook 默认姿态)")
+	}
+	if rc.EffectiveBTCFilterShort() {
+		t.Fatal("btc_filter_short nil must default OFF (opt-in hard pause)")
+	}
+	yes, no := true, false
+	if (store.RiskControlConfig{ShortTopConfirmGate: &no}).EffectiveShortTopConfirmGate() {
+		t.Fatal("explicit false must disable the confirmation gate")
+	}
+	if !(store.RiskControlConfig{BTCFilterShort: &yes}).EffectiveBTCFilterShort() {
+		t.Fatal("explicit true must enable the BTC short filter")
+	}
+}
+
 // ── review 2026-10-04 #6 + #4: the mixed piggy fan-in ──
 //
 // The mixed branch used `piggyCoins, piggyErr := …` inside the if-block: :=

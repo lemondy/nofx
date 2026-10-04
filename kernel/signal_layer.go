@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"nofx/market"
+	"nofx/market/breakout"
 	"nofx/provider/openbb"
 )
 
@@ -465,7 +466,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU, WIDE_STOP_x_GT_y, BTC_4H_DOWNTREND, BTC_WEAK_LONG_x_VS_y, EMA20_STRETCH_x_GT_y, BTC_4H_STRONGBULL, SHORT_TOP_CONFIRM_MISSING
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -649,6 +650,21 @@ type SignalOptions struct {
 	// BTCFilterLong: altcoin longs need coin 24h return ≥ BTC's and BTC 4h
 	// closes not declining; failure emits BTC_WEAK_LONG.
 	BTCFilterLong bool
+	// BTCFilterShort: opt-in hard gate (nil config = OFF — the playbook
+	// handles BTC strength for shorts at scan level). While on, open_short
+	// is blocked when the SHARED BTC 4h classifier reads strongBull
+	// (BTC_4H_STRONGBULL), mirroring the long side's market-level filter.
+	BTCFilterShort bool
+	// ShortTopConfirmGate: the playbook's 默认姿态 program-enforced — a
+	// short_scan candidate may only open short with the scanner's topping
+	// confirmation (顶背离/假突破/破EMA20/费率回落); missing confirmation
+	// emits SHORT_TOP_CONFIRM_MISSING. Candidates without short_scan
+	// evidence (ShortScanConfirmed == nil) are not gated — the 15m
+	// MICRO_TREND gate still applies to them.
+	ShortTopConfirmGate bool
+	// ShortScanConfirmed carries the short_scan candidate's topping
+	// confirmation (nil = this candidate has no short_scan evidence).
+	ShortScanConfirmed *bool
 	// SentimentLongDeweightPts / SentimentLongDeweightArmed: while ARMED
 	// (engine-side: crypto FNG ≥ threshold), a LONG's directional score loses
 	// this many points at the gate reads (CONSENSUS_OPPOSED / NEG_EDGE_SCORE
@@ -1162,7 +1178,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	}
 	if opt.SupplyZonePct > 0 {
 		breathing := AnchorBreathingPct(execATRPct, offsetCfg, opt.SupplyZonePct)
-		suppressAnchorsAgainstStructure(sig, data, breathing)
+		suppressAnchorsAgainstStructure(sig, data, breathing, now)
 	}
 
 	// ⑫⑬ Breakout state + retest anchor (user design 2026-10-01, "保留突破,改入场
@@ -1178,7 +1194,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// level, and the pivots just above it are the breakout's own extension,
 	// not overhead supply (the plan carries the geometry for the executor's
 	// supply exemption via GateState.LongPullback*).
-	sig.Breakout = computeBreakoutState(data, sig)
+	sig.Breakout = computeBreakoutState(data, sig, now)
 	sig.LongPullback = buildLongPullbackPlan(sig, data, opt)
 	if sig.LongPullback != nil && sig.LongPullback.Active {
 		sig.LimitBuyPrice = sig.LongPullback.Entry
@@ -1599,22 +1615,23 @@ func ema20Stretch4hPct(sig *SymbolSignal) float64 {
 	return 0
 }
 
-// btc4hShape reads the TRUE 4h BTC closes (shared cached fetch, same
-// convention as the short scan's bull predicate — 2026-10-03 review: the
-// 1h-aggregate version had phase-arbitrary buckets that drifted hourly) and
-// reports (a) the downtrend verdict — 4h EMA20 < EMA50 AND the last 4h close
-// below its EMA20 — and (b) BTC's 24h return (6 bars). known=false when
-// fewer than 60 4h closes exist (EMA50 not converged).
+// btc4hShape reads the TRUE 4h BTC closes through the SHARED classifier
+// (breakout.BTC4hRegime — same EMA20/50+RSI definition the short-scan
+// haircut and the scheduler regime label use, review 2026-10-04 #3: the
+// 1h-aggregate version had phase-arbitrary buckets that drifted hourly, and
+// an EMA-only kernel variant could contradict the scanners on the same bar)
+// and reports the downtrend verdict and BTC's 24h return (6 bars). known =
+// ≥60 4h closes (EMA50 converged).
 func btc4hShape(closes4h []float64) (down bool, ret24 float64, known bool) {
 	n := len(closes4h)
 	if n < 60 {
 		return false, 0, false
 	}
-	e20 := emaOf(closes4h, 20)
-	e50 := emaOf(closes4h, 50)
-	last := closes4h[n-1]
-	down = e20 < e50 && last < e20
-	ret24 = (last - closes4h[n-7]) / closes4h[n-7] * 100
+	_, _, down, known = breakout.BTC4hRegime(closes4h)
+	if !known {
+		return false, 0, false
+	}
+	ret24 = (closes4h[n-1] - closes4h[n-7]) / closes4h[n-7] * 100
 	return down, ret24, true
 }
 
@@ -1817,6 +1834,23 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			for _, code := range btcWeakLongCodes(sig, opt) {
 				add(code)
 			}
+		}
+		// Short-side market filter (OPT-IN — BTCFilterShort, nil config =
+		// off): the shared BTC 4h classifier's strongBull read blocks
+		// altcoin shorts market-wide. The scan side already haircuts shorts
+		// ×0.85 off the SAME classifier; this is the hard pause switch.
+		if !isLong && opt.BTCFilterShort {
+			if _, strongBull, _, known := breakout.BTC4hRegime(opt.BtcTrendCloses); known && strongBull {
+				add("BTC_4H_STRONGBULL")
+			}
+		}
+		// Short top-confirmation gate (playbook 默认姿态, was prompt-only —
+		// review 2026-10-04 C3): a short_scan candidate needs the scanner's
+		// topping confirmation (顶背离/假突破/破EMA20/费率回落). Candidates
+		// WITHOUT short_scan evidence (piggy breakdown, model-initiated) are
+		// not gated here — the 15m MICRO_TREND gate still applies to them.
+		if !isLong && opt.ShortTopConfirmGate && opt.ShortScanConfirmed != nil && !*opt.ShortScanConfirmed {
+			add("SHORT_TOP_CONFIRM_MISSING")
 		}
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
 			add(fmt.Sprintf("RR_MAX_%.2f", g.RR.BestRR))
@@ -3036,7 +3070,7 @@ func roundSignificant(v float64, n int) float64 {
 // returns nil — the model falls back to reading the raw levels. A series too
 // short to carve out a prior window falls back to the TF's rolling
 // structure extreme (degraded but non-nil).
-func computeBreakoutState(data *market.Data, sig *SymbolSignal) *BreakoutState {
+func computeBreakoutState(data *market.Data, sig *SymbolSignal, now time.Time) *BreakoutState {
 	if data == nil || sig == nil || sig.Price <= 0 {
 		return nil
 	}
@@ -3059,13 +3093,20 @@ func computeBreakoutState(data *market.Data, sig *SymbolSignal) *BreakoutState {
 		return nil
 	}
 
-	// Closed 1h bars + the fixed prior-window level.
+	// Closed 1h bars + the fixed prior-window level. Settlement is
+	// time-based (ClosedKlines — the SAME convention as computeTFSignal):
+	// the old unconditional [:len-1] drop silently lost one closed bar
+	// whenever the feed lagged, review 2026-10-04 C2.
 	bars, haveBars := func() ([]market.KlineBar, bool) {
 		tfData, ok := data.TimeframeData["1h"]
-		if !ok || tfData == nil || len(tfData.Klines) < 16 {
+		if !ok || tfData == nil {
 			return nil, false
 		}
-		return tfData.Klines[:len(tfData.Klines)-1], true // drop the forming candle
+		kl := ClosedKlines(tfData, now, tfDuration("1h"))
+		if len(kl) < 16 {
+			return nil, false
+		}
+		return kl, true
 	}()
 	if haveBars {
 		n := len(bars)
@@ -3205,15 +3246,19 @@ func computeBreakoutState(data *market.Data, sig *SymbolSignal) *BreakoutState {
 // (0.3-1.2%) every 15m minor pivot inside the pullback corridor zeroed the
 // anchor — 63% suppression and a whole day without a single open (2026-09-10).
 // 15m minors are noise at this scale; the curated 15m/1h arrays stay in.
-func suppressAnchorsAgainstStructure(sig *SymbolSignal, data *market.Data, thresholdPct float64) {
+func suppressAnchorsAgainstStructure(sig *SymbolSignal, data *market.Data, thresholdPct float64, now time.Time) {
 	nearestAbove, nearestBelow := 0.0, 0.0
 	for _, tfName := range []string{"1h"} {
 		tfData, ok := data.TimeframeData[tfName]
-		if !ok || tfData == nil || len(tfData.Klines) < 8 {
+		if !ok || tfData == nil {
 			continue
 		}
-		bars := tfData.Klines
-		bars = bars[:len(bars)-1] // closed bars only
+		// Time-based settlement, same convention as computeTFSignal (C2):
+		// the unconditional [:len-1] drop lost one closed bar on laggy feeds.
+		bars := ClosedKlines(tfData, now, tfDuration(tfName))
+		if len(bars) < 8 {
+			continue
+		}
 		highs, lows := swingPivots(bars, 2)
 		for _, h := range highs {
 			if h > sig.LimitBuyPrice && (nearestAbove == 0 || h < nearestAbove) {

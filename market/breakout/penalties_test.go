@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// BTC regime classification from synthetic 4h bars.
+// BTC regime classification from synthetic 4h closes (the shared
+// BTC4hRegime classifier — 60+ bars required for the EMA50 to converge).
 func TestBtcRegimePenalty(t *testing.T) {
-	build := func(rising bool, rsiHigh bool) []Kline {
-		k := make([]Kline, 40)
+	build := func(rising bool) []Kline {
+		k := make([]Kline, 90)
 		price := 100.0
 		for i := range k {
 			if rising {
@@ -19,21 +20,31 @@ func TestBtcRegimePenalty(t *testing.T) {
 			}
 			h := price * 1.005
 			l := price * 0.995
-			_ = rsiHigh
 			k[i] = Kline{OpenTime: int64(i), Open: price * 0.999, High: h, Low: l, Close: price}
 		}
 		return k
 	}
-	mult, regime := btcRegimePenalty(build(true, true))
+	mult, regime := btcRegimePenalty(build(true))
 	if regime != "btc_bull" || mult != 0.85 {
 		t.Fatalf("strong uptrend: want (0.85, btc_bull), got (%.2f, %s)", mult, regime)
 	}
-	mult, regime = btcRegimePenalty(build(false, false))
+	mult, regime = btcRegimePenalty(build(false))
 	if regime != "btc_bear" || mult != 1.0 {
 		t.Fatalf("downtrend: want (1.0, btc_bear) — labelled, no boost; got (%.2f, %s)", mult, regime)
 	}
 	if _, regime := btcRegimePenalty(nil); regime != "" {
 		t.Fatalf("nil klines must fail open, got %s", regime)
+	}
+	// Below the 60-close convergence bar the shared classifier refuses to
+	// label (known=false) — the haircut fails open instead of guessing.
+	if _, _, _, known := BTC4hRegime(make([]float64, 40)); known {
+		t.Fatal("40 closes must not classify (EMA50 unconverged)")
+	}
+	if _, strong, down, known := BTC4hRegime(closes(build(true))); !known || !strong || down {
+		t.Fatalf("rising closes: known=%v strongBull=%v downtrend=%v, want true/true/false", known, strong, down)
+	}
+	if _, strong, down, known := BTC4hRegime(closes(build(false))); !known || strong || !down {
+		t.Fatalf("falling closes: known=%v strongBull=%v downtrend=%v, want true/false/true", known, strong, down)
 	}
 }
 

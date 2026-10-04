@@ -722,8 +722,13 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 	rep.Dims.Flow = sFlow
 
 	// ── Dimension 4: open interest (15%) + quality factor α ──
-	rep.Alpha = alphaNeutral
+	// α defaults to 1.0 when OI is UNMEASURED: the 0.8 alphaNeutral is the
+	// "measured roughly flat" verdict — evidence-based, and charging it on
+	// top of the renormalized weights below would double-punish a Binance
+	// data outage (review 2026-10-04 #10).
+	rep.Alpha = 1.0
 	if sh.oiChg1h != nil {
+		rep.Alpha = alphaNeutral
 		rep.Dims.OI = sigmoidScore(*sh.oiChg1h, 0.3, 0.3)
 		// Price-OI matrix: both "OI increasing" rows are healthy.
 		priceBars := 4
@@ -791,8 +796,25 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 	rep.Dims.Momentum = sMom
 
 	// ── Composite ──
-	rep.RawScore = wPrice*rep.Dims.Price + wVolume*rep.Dims.Volume + wFlow*rep.Dims.Flow +
-		wOI*rep.Dims.OI + wFunding*rep.Dims.Funding + wMomentum*rep.Dims.Momentum
+	// Missing-data convention unified with the short scanner (review
+	// 2026-10-04 #10): an unmeasured dim drops out WITH its weight and the
+	// measured rest renormalize — a data outage no longer masquerades as a
+	// neutral 50/100 that silently out-scores fully-measured symbols. The
+	// dim blocks above still display 中性 50 with their 数据不可用 notes;
+	// only the math changes. Price/Volume/Flow/Momentum are always measured
+	// (computed from the klines), so wsum ≥ their weight sum.
+	wsum := wPrice + wVolume + wFlow + wMomentum
+	raw := wPrice*rep.Dims.Price + wVolume*rep.Dims.Volume + wFlow*rep.Dims.Flow +
+		wMomentum*rep.Dims.Momentum
+	if sh.oiChg1h != nil {
+		raw += wOI * rep.Dims.OI
+		wsum += wOI
+	}
+	if sh.fundPct != nil && sh.fundRate != nil {
+		raw += wFunding * rep.Dims.Funding
+		wsum += wFunding
+	}
+	rep.RawScore = raw / wsum
 	score := rep.RawScore * rep.Alpha * rep.Beta
 	if rep.CrossAgeBars >= 0 && !rep.Confirmed {
 		score *= confirmPenalty
