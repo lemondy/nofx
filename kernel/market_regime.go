@@ -40,6 +40,14 @@ func withRequiredRegimeTimeframes(timeframes []string) []string {
 // horizon with ATR(1d), so their prompt path must always fetch 1d instead of
 // silently falling back to the crypto 1h/4h scale. Intraday frames remain in
 // place for entry timing, including weekday pre/after-market trading.
+// WithRequiredSymbolTimeframes is the exported form — the trader's pending
+// recheck must expand its timeframe list exactly like the AI cycle does
+// (incident 2026-10-07: divergent expansion fed DataQuality a different bar
+// map than the decision was approved with).
+func WithRequiredSymbolTimeframes(timeframes []string, symbol string) []string {
+	return withRequiredSymbolTimeframes(timeframes, symbol)
+}
+
 func withRequiredSymbolTimeframes(timeframes []string, symbol string) []string {
 	out := withRequiredRegimeTimeframes(timeframes)
 	if !market.IsBStockSymbol(symbol) {

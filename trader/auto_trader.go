@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"nofx/kernel"
+	"nofx/market"
 	"nofx/logger"
 	"nofx/mcp"
 	_ "nofx/mcp/provider"
@@ -135,6 +136,9 @@ type AutoTrader struct {
 	cycleGateStates            map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
 	protectionFailures         map[string]int
 	protectionFaults           map[string]string // guarded by runtimeMu; blocks new account risk until reconciled
+	// recheckDataFn, when set (tests), replaces the strategy-scoped fetch the
+	// pending-direction recheck uses; nil = live getMarketTimeframes path.
+	recheckDataFn func(symbol string) (*market.Data, error)
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)

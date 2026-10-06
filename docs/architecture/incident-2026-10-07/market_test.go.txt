@@ -1,0 +1,32 @@
+package market
+
+import (
+	"encoding/json"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestIncident07ExecutionFixture(t *testing.T) {
+	now := time.Date(2026, 10, 6, 22, 0, 0, 0, time.UTC)
+	mk := func(step time.Duration) []Kline {
+		bars := make([]Kline, 100)
+		for i := range bars {
+			p := 100 + float64(i)*0.01
+			bars[i] = Kline{OpenTime: now.Add(time.Duration(i-100) * step).UnixMilli(), Open: p, High: p + 0.3, Low: p - 0.3, Close: p + 0.02, Volume: 100}
+		}
+		return bars
+	}
+	data := &Data{Symbol: "XUSDT", CurrentPrice: 101, TimeframeData: executionTimeframeData(mk(3*time.Minute), mk(time.Hour), mk(4*time.Hour), mk(24*time.Hour))}
+	if n := len(data.TimeframeData["15m"].Klines); n != 20 {
+		t.Fatalf("15m count=%d", n)
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/private/tmp/nofx-incident-execution-fixture.json", raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("actual executionTimeframeData: 100x3m produces 20x15m; 1h/4h/1d each have 100 bars")
+}

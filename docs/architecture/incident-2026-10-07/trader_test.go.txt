@@ -1,0 +1,46 @@
+package trader
+
+import (
+	"encoding/json"
+	"nofx/kernel"
+	"nofx/market"
+	"nofx/store"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestIncident07PendingCancellation(t *testing.T) {
+	raw, err := os.ReadFile("/private/tmp/nofx-incident-execution-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data market.Data
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	incident07MarketData = func(string) (*market.Data, error) { return &data, nil }
+	defer func() { incident07MarketData = nil }()
+	off := false
+	for _, timing := range []bool{false, true} {
+		for _, side := range []string{"long", "short"} {
+			m := &audit05Mock{flat: true, cancelTerminal: true, status: map[string]interface{}{"status": "NEW", "executedQty": 0.0, "avgPrice": 0.0}}
+			at := riskTestTrader(store.RiskControlConfig{EntryTimingGate: timing, BTCFilterLong: &off, BTCFilterShort: &off, ShortTopConfirmGate: &off})
+			at.config.StrategyConfig.Indicators.Klines.SelectedTimeframes = []string{"1h", "4h", "15m", "1d"}
+			at.trader = m
+			at.cycleGateStates = map[string]*kernel.GateState{"XUSDT": {LongAllowed: true, ShortAllowed: true}}
+			pe := &pendingEntry{Symbol: "XUSDT", Side: side, Price: 100, Quantity: 1, StopLoss: 98, TakeProfit: 103, OrderID: "mock-order", PlacedAt: time.Now()}
+			reason := at.pendingDirectionBlocked(pe)
+			if reason == "" || (!timing && reason != "pending fresh gate: DATA_INSUFFICIENT") || !strings.HasPrefix(reason, "pending fresh gate:") {
+				t.Fatalf("timing=%v side=%s reason=%s", timing, side, reason)
+			}
+			at.setPendingEntry(pe)
+			at.processPendingEntries()
+			if m.cancelCalls != 1 || at.getPendingEntry(pe.Symbol, pe.Side) != nil || m.status["status"] != "CANCELED" {
+				t.Fatalf("pending survived: timing=%v side=%s cancelCalls=%d status=%v", timing, side, m.cancelCalls, m.status)
+			}
+			t.Logf("timing=%v side=%s previous gate allowed=true; pending age <1s; cancelled with %s, no fill", timing, side, reason)
+		}
+	}
+}

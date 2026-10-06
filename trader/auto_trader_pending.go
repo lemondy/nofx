@@ -482,6 +482,13 @@ func (at *AutoTrader) processPendingEntries() {
 		st, _ := status["status"].(string)
 		if strings.EqualFold(st, "NEW") || strings.EqualFold(st, "PARTIALLY_FILLED") {
 			if reason := at.pendingDirectionBlocked(pe); reason != "" {
+				// Incident 2026-10-07: successful cancels used to be silent —
+				// only the FAILURE path logged. Without this line the 29
+				// same-second cancellations could not be attributed to their
+				// first triggering code per order.
+				age := time.Since(pe.PlacedAt).Round(time.Second)
+				logger.Infof("🗑️ [%s] Cancelling limit entry %s %s (id %s, age %s): %s",
+					at.name, pe.Side, pe.Symbol, pe.OrderID, age, reason)
 				if err := at.cancelPending(pe); err != nil {
 					logger.Warnf("%s: %v", reason, err)
 				}

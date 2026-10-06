@@ -1,0 +1,28 @@
+Production source: 74a5daae0c5a8c74029e46eeeb3237713a492c16
+Synthetic fixtures only; no live trading calls
+
+PACKAGE: market; EXIT: 0
+=== RUN   TestIncident07ExecutionFixture
+    incident_overlay_20261007_test.go:24: actual executionTimeframeData: 100x3m produces 20x15m; 1h/4h/1d each have 100 bars
+--- PASS: TestIncident07ExecutionFixture (0.00s)
+PASS
+ok  	nofx/market	0.455s
+
+PACKAGE: kernel; EXIT: 0
+=== RUN   TestIncident07PendingDataInsufficient
+    incident_overlay_20261007_test.go:21: long: allowed=false failed=[MICRO_TREND_NOT_LONG DATA_INSUFFICIENT]
+    incident_overlay_20261007_test.go:21: short: allowed=false failed=[MICRO_TREND_NOT_SHORT DATA_INSUFFICIENT CONSENSUS_OPPOSED_100]
+    incident_overlay_20261007_test.go:23: quality shortfall: [15m: 20 bars < 60 minimum — long-window indicators (EMA50/MACD) are unstable]
+--- PASS: TestIncident07PendingDataInsufficient (0.56s)
+PASS
+ok  	nofx/kernel	0.968s
+
+PACKAGE: trader; EXIT: 0
+=== RUN   TestIncident07PendingCancellation
+    incident_overlay_20261007_test.go:33: timing=false side=long previous gate allowed=true; pending age <1s; cancelled with pending fresh gate: DATA_INSUFFICIENT, no fill
+    incident_overlay_20261007_test.go:33: timing=false side=short previous gate allowed=true; pending age <1s; cancelled with pending fresh gate: DATA_INSUFFICIENT, no fill
+    incident_overlay_20261007_test.go:33: timing=true side=long previous gate allowed=true; pending age <1s; cancelled with pending fresh gate: MICRO_TREND_NOT_LONG, no fill
+    incident_overlay_20261007_test.go:33: timing=true side=short previous gate allowed=true; pending age <1s; cancelled with pending fresh gate: MICRO_TREND_NOT_SHORT, no fill
+--- PASS: TestIncident07PendingCancellation (0.59s)
+PASS
+ok  	nofx/trader	1.536s

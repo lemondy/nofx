@@ -145,11 +145,24 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		}
 	}
 	if at.config.StrategyConfig != nil {
-		md, err := at.getMarketData(pe.Symbol)
+		// Incident 2026-10-07 (29/29 limit entries cancelled within seconds):
+		// this recheck used the generic getMarketData path — 100×3m bars
+		// aggregated into ~20 15m bars — while ComputeSymbolSignals validates
+		// DataQuality at the strategy's 60-bars-per-timeframe minimum. The
+		// gap was structural: DATA_INSUFFICIENT fired on EVERY recheck and
+		// the monitor cancelled every resting entry moments after placement.
+		// The recheck now fetches the SAME strategy-scoped series the AI
+		// analysis ran on (selected/primary timeframes × primary count), so
+		// a healthy placement passes the same gates it was approved by.
+		md, err := at.recheckMarketData(pe.Symbol)
 		if err != nil {
-			return "pending direction data unavailable"
+			return "pending direction data unavailable: " + err.Error()
 		}
 		rc := at.config.StrategyConfig.RiskControl
+		primaryTF := at.config.StrategyConfig.Indicators.Klines.PrimaryTimeframe
+		if primaryTF == "" {
+			primaryTF = "15m"
+		}
 		if pe.Side == "short" && rc.BlockShort1dUptrend && kernel.TimeframeTrend(md, "1d") == "up" {
 			return "pending short: 1d trend is up"
 		}
@@ -161,11 +174,11 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 			}
 		}
 		sig, err := kernel.ComputeSymbolSignals(pe.Symbol, md, kernel.SignalOptions{
-			Now: time.Now(), PrimaryTF: "15m", CurrentPrice: md.CurrentPrice,
+			Now: time.Now(), PrimaryTF: primaryTF, CurrentPrice: md.CurrentPrice,
 			EntryTimingGate: rc.EntryTimingGate, PumpGuard4hPct: kernel.PumpGuard4h(&rc),
 			BTCFilterLong: rc.EffectiveBTCFilterLong(), BTCFilterShort: rc.EffectiveBTCFilterShort(), BtcTrendCloses: btc,
 			LongMaxEMA20DistPct: rc.EffectiveLongMaxEMA20DistPct(), LongPullbackEntry: rc.EffectiveLongPullbackEntry(),
-			ConfiguredTimeframes: at.config.StrategyConfig.Indicators.Klines.SelectedTimeframes,
+			ConfiguredTimeframes: at.recheckConfiguredTimeframes(pe.Symbol),
 		})
 		if err != nil || sig == nil || sig.HardGate == nil {
 			return "pending fresh gate unavailable"
@@ -215,4 +228,45 @@ func (at *AutoTrader) entryExecutionBlocked(symbol, side string) error {
 func (at *AutoTrader) reservedProtectionFailure(symbol, side, reason string) {
 	at.setProtectionFault("pending:"+symbol+"_"+side, reason)
 	at.protectionFailure(symbol, side, reason)
+}
+
+// recheckMarketData fetches the strategy-configured timeframes for a pending
+// recheck — the SAME series shape the AI analysis validated the decision on
+// (selected timeframes × primary count), NOT the generic 3m-aggregated quote.
+// Field seam so tests can serve synthetic series without a Binance round-trip.
+func (at *AutoTrader) recheckMarketData(symbol string) (*market.Data, error) {
+	if at.recheckDataFn != nil {
+		return at.recheckDataFn(symbol)
+	}
+	kcfg := at.config.StrategyConfig.Indicators.Klines
+	primary := kcfg.PrimaryTimeframe
+	if primary == "" {
+		primary = "15m"
+	}
+	count := kcfg.PrimaryCount
+	if count <= 0 {
+		count = 60
+	}
+	tfs := at.recheckConfiguredTimeframes(symbol)
+	if len(tfs) == 0 {
+		tfs = []string{primary}
+	}
+	return at.getMarketTimeframes(symbol, tfs, primary, count)
+}
+
+// recheckConfiguredTimeframes expands the strategy's timeframe list the same
+// way the AI cycle does (selected + primary/longer + symbol-required) so the
+// recheck's DataQuality bar map matches the decision's exactly.
+func (at *AutoTrader) recheckConfiguredTimeframes(symbol string) []string {
+	kcfg := at.config.StrategyConfig.Indicators.Klines
+	tfs := kcfg.SelectedTimeframes
+	if len(tfs) == 0 {
+		if p := kcfg.PrimaryTimeframe; p != "" {
+			tfs = append(tfs, p)
+		}
+		if l := kcfg.LongerTimeframe; l != "" {
+			tfs = append(tfs, l)
+		}
+	}
+	return kernel.WithRequiredSymbolTimeframes(tfs, symbol)
 }

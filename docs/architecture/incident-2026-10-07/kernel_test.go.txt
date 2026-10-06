@@ -1,0 +1,42 @@
+package kernel
+
+import (
+	"encoding/json"
+	"nofx/market"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestIncident07PendingDataInsufficient(t *testing.T) {
+	raw, err := os.ReadFile("/private/tmp/nofx-incident-execution-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data market.Data
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 6, 22, 0, 0, 0, time.UTC)
+	opt := SignalOptions{Now: now, PrimaryTF: "15m", CurrentPrice: data.CurrentPrice, EntryTimingGate: true, ConfiguredTimeframes: []string{"1h", "4h", "15m", "1d"}}
+	sig, err := ComputeSymbolSignals("XUSDT", &data, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sig.DataQuality.Sufficient || sig.DataQuality.AvailableBars["15m"] != 20 || sig.DataQuality.MinimumBars["15m"] != 60 {
+		t.Fatalf("unexpected data quality: %+v", sig.DataQuality)
+	}
+	for side, g := range map[string]*DirectionGate{"long": sig.HardGate.Long, "short": sig.HardGate.Short} {
+		found := false
+		for _, code := range g.Failed {
+			if code == "DATA_INSUFFICIENT" {
+				found = true
+			}
+		}
+		if !found || g.Allowed {
+			t.Fatalf("%s gate: %+v", side, g)
+		}
+		t.Logf("%s: allowed=%v failed=%v", side, g.Allowed, g.Failed)
+	}
+	t.Logf("quality shortfall: %v", sig.DataQuality.Shortfall)
+}
