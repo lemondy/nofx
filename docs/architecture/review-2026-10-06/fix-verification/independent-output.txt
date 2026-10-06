@@ -1,0 +1,121 @@
+Source: 74a5daae0c5a8c74029e46eeeb3237713a492c16
+Overlay first batch, exit 0
+=== RUN   TestVerify06ShortRepairReadbackClearsFault
+    verify_overlay_20261006_test.go:44: short qty=-1 heldSL=0: gap=1 repaired, readback sufficient, prior fault cleared, second round healthy
+    verify_overlay_20261006_test.go:44: short qty=-1 heldSL=0.4: gap=0.6 repaired, readback sufficient, prior fault cleared, second round healthy
+--- PASS: TestVerify06ShortRepairReadbackClearsFault (0.00s)
+=== RUN   TestVerify06ShortExitReconciliationClearsFault
+10-06 22:40:50 [INFO] trader/auto_trader_risk.go:453 ✅ Emergency close short position succeeded, order ID: <nil>
+    verify_overlay_20261006_test.go:62: negative-quantity short crossed stop: exit sent; flat readback cleared fault
+--- PASS: TestVerify06ShortExitReconciliationClearsFault (0.00s)
+PASS
+ok  	nofx/trader	0.753s
+=== RUN   TestVerify06ParentPanicAllowsNextScan
+10-06 22:40:50 [ERRO] breakout/scheduler.go:291 🐷 Breakout scan panicked (recovered): verify06 parent panic
+goroutine 20 [running]:
+runtime/debug.Stack()
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/debug/stack.go:26 +0x64
+nofx/market/breakout.(*Scheduler).runOnce.func2()
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:291 +0x44
+panic({0x102dff820?, 0x102e8cf10?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/panic.go:783 +0x120
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan.func2(0x103210a78?)
+	/Users/zhangyun/workspace/nofx/market/breakout/verify_overlay_20261006_test.go:19 +0x3c
+nofx/market/breakout.fix06Transport.RoundTrip(0x1400010e4b8?, 0x102e8f8a0?)
+	/Users/zhangyun/workspace/nofx/market/breakout/review_fixes_20261006_test.go:23 +0x28
+net/http.send(0x1400019a3c0, {0x102e8f8a0, 0x14000118820}, {0x102c5db68?, 0x8?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:259 +0x478
+net/http.(*Client).send(0x14000117710, 0x1400019a3c0, {0x1400010e768?, 0x102beb61c?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:180 +0x88
+net/http.(*Client).do(0x14000117710, 0x1400019a3c0)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:729 +0x710
+net/http.(*Client).Do(...)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:587
+net/http.(*Client).Get(0x14000117710, {0x14000138480?, 0x1400010e9a8?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:484 +0x74
+nofx/market/breakout.fetchJSON({0x14000138480?, 0x102d37b4b?}, {0x102df8bc0, 0x140001221c8})
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:301 +0x4c
+nofx/market/breakout.TopVolumeSymbols(0x1)
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:365 +0x84
+nofx/market/breakout.(*Scheduler).runOnce(0x14000125790, 0x14000199f00)
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:299 +0xa0
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan(0x14000100700)
+	/Users/zhangyun/workspace/nofx/market/breakout/verify_overlay_20261006_test.go:21 +0x130
+testing.tRunner(0x14000100700, 0x102e8b4e8)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1997 +0x364
+
+10-06 22:40:50 [ERRO] breakout/scheduler.go:291 🐷 Breakout scan panicked (recovered): verify06 parent panic
+goroutine 20 [running]:
+runtime/debug.Stack()
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/debug/stack.go:26 +0x64
+nofx/market/breakout.(*Scheduler).runOnce.func2()
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:291 +0x44
+panic({0x102dff820?, 0x102e8cf10?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/panic.go:783 +0x120
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan.func2(0x103210a78?)
+	/Users/zhangyun/workspace/nofx/market/breakout/verify_overlay_20261006_test.go:19 +0x3c
+nofx/market/breakout.fix06Transport.RoundTrip(0x1400002f418?, 0x102e8f8a0?)
+	/Users/zhangyun/workspace/nofx/market/breakout/review_fixes_20261006_test.go:23 +0x28
+net/http.send(0x1400019a500, {0x102e8f8a0, 0x14000118820}, {0x102c5db68?, 0x8?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:259 +0x478
+net/http.(*Client).send(0x14000117710, 0x1400019a500, {0x1400002f6c8?, 0x102beb61c?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:180 +0x88
+net/http.(*Client).do(0x14000117710, 0x1400019a500)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:729 +0x710
+net/http.(*Client).Do(...)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:587
+net/http.(*Client).Get(0x14000117710, {0x140001384b0?, 0x1400002f908?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:484 +0x74
+nofx/market/breakout.fetchJSON({0x140001384b0?, 0x102d37b4b?}, {0x102df8bc0, 0x140001221f8})
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:301 +0x4c
+nofx/market/breakout.TopVolumeSymbols(0x1)
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:365 +0x84
+nofx/market/breakout.(*Scheduler).runOnce(0x14000125790, 0x0)
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:299 +0xa0
+nofx/market/breakout.(*Scheduler).RefreshNow(0x14000125790, 0x3b9aca00)
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:544 +0x1b0
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan(0x14000100700)
+	/Users/zhangyun/workspace/nofx/market/breakout/verify_overlay_20261006_test.go:27 +0x140
+testing.tRunner(0x14000100700, 0x102e8b4e8)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1997 +0x364
+
+    verify_overlay_20261006_test.go:31: parent panic recovered; callback ran once after reset; next RefreshNow reached upstream again
+--- PASS: TestVerify06ParentPanicAllowsNextScan (0.00s)
+=== RUN   TestVerify06CallbackOrderingResidual
+=== RUN   TestVerify06CallbackOrderingResidual/normal
+10-06 22:40:50 [INFO] breakout/scheduler.go:325 🐷 Second universe: +0 board symbols (hot 0, gain 0, lose 0), scan set 0
+10-06 22:40:50 [INFO] breakout/scheduler.go:363 🐷 Breakout snapshot updated: 0 symbols in 0s (regime: chop)
+10-06 22:40:50 [WARN] breakout/scheduler.go:371 ⚠️ Short scan failed: short scan produced no analyzable symbols
+    verify_overlay_20261006_test.go:73: residual: normal callback sees scanning=true; final scanning=false; callback RefreshNow calls=0 waited=0s
+=== RUN   TestVerify06CallbackOrderingResidual/error
+10-06 22:40:50 [WARN] breakout/scheduler.go:301 ⚠️ Breakout scheduler: failed to list symbols: request failed: Get "https://fapi.binance.com/fapi/v1/ticker/24hr": verify06 ticker unavailable
+    verify_overlay_20261006_test.go:73: residual: error callback sees scanning=true; final scanning=false; callback RefreshNow calls=0 waited=301.032875ms
+--- PASS: TestVerify06CallbackOrderingResidual (0.30s)
+    --- PASS: TestVerify06CallbackOrderingResidual/normal (0.00s)
+    --- PASS: TestVerify06CallbackOrderingResidual/error (0.30s)
+=== RUN   TestVerify06WorkerRecoveryEvidence
+    verify_overlay_20261006_test.go:115: analyze: three worker panics logged symbol and stack, semaphore/waitgroup drained, process survived
+    verify_overlay_20261006_test.go:115: shorts: three worker panics logged symbol and stack, semaphore/waitgroup drained, process survived
+--- PASS: TestVerify06WorkerRecoveryEvidence (0.01s)
+PASS
+ok  	nofx/market/breakout	0.939s
+=== RUN   TestRecheck06BBRideDropsClosedTail
+    verify_overlay_20261006_test.go:28: same closed history: no forming tail -> ride=true windows=4; with forming tail -> ride=false windows=0
+--- PASS: TestRecheck06BBRideDropsClosedTail (0.00s)
+=== RUN   TestRecheck06BTCPhaseBiasDirection
+    verify_overlay_20261006_test.go:56: BTC_just_rose: closedBTC=1% liveBTC=5% coin=3% actualWeakBlock=false desiredLiveWeakBlock=true
+    verify_overlay_20261006_test.go:56: BTC_just_fell: closedBTC=5% liveBTC=1% coin=3% actualWeakBlock=true desiredLiveWeakBlock=false
+--- PASS: TestRecheck06BTCPhaseBiasDirection (0.00s)
+PASS
+ok  	nofx/kernel	0.530s
+
+Additional account peer test, exit 0
+=== RUN   TestVerify06HealthyShortAllowsAccountPeers
+    verify_overlay_20261006_test.go:44: healthy negative-quantity short permits account peer execution, pending, and decision gates
+--- PASS: TestVerify06HealthyShortAllowsAccountPeers (0.00s)
+PASS
+ok  	nofx/trader	0.609s

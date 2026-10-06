@@ -1,0 +1,91 @@
+package trader
+
+import (
+	"nofx/kernel"
+	"nofx/store"
+	"nofx/trader/types"
+	"testing"
+)
+
+// Unlike fix06Mock, this exchange publishes the repaired stop to readback.
+type verify06Exchange struct{ fix06Mock }
+
+func (m *verify06Exchange) SetStopLoss(symbol, side string, qty, price float64) error {
+	m.slCalls++
+	m.lastSLQty = qty
+	m.orders = append(m.orders, types.OpenOrder{Symbol: symbol, Type: "STOP_MARKET", PositionSide: side, Side: "BUY", StopPrice: price, Quantity: qty})
+	return nil
+}
+
+func TestVerify06HealthyShortAllowsAccountPeers(t *testing.T) {
+	m := &fix06Mock{audit05Mock: audit05Mock{mark: 100, orders: []types.OpenOrder{
+		{Type: "STOP_MARKET", PositionSide: "SHORT", Side: "BUY", StopPrice: 105, Quantity: 1},
+		{Type: "TAKE_PROFIT_MARKET", PositionSide: "SHORT", Side: "BUY", StopPrice: 90, Quantity: 1},
+	}}, symbol: "XUSDT", side: "short", qty: -1}
+	at, peer := riskTestTrader(store.RiskControlConfig{}), riskTestTrader(store.RiskControlConfig{})
+	at.userID, at.exchangeID, at.trader = "verify06", "mock-account", m
+	peer.userID, peer.exchangeID, peer.trader = at.userID, at.exchangeID, m
+	at.positionInitialStopLoss = map[string]float64{}
+	registerAccountTrader(at)
+	registerAccountTrader(peer)
+	defer unregisterAccountTrader(at)
+	defer unregisterAccountTrader(peer)
+	at.processProtectionWatchdog()
+	if err := peer.entryExecutionBlocked("YUSDT", "long"); err != nil {
+		t.Fatal(err)
+	}
+	if reason := peer.pendingAccountHaltReason(); reason != "" {
+		t.Fatal(reason)
+	}
+	d := kernel.Decision{Symbol: "YUSDT", Action: "open_long", Confidence: 100}
+	if got := peer.applyHardRiskGates([]kernel.Decision{d}, &kernel.Context{}); len(got) != 1 {
+		t.Fatalf("healthy short still filtered peer decision: %v", got)
+	}
+	t.Log("healthy negative-quantity short permits account peer execution, pending, and decision gates")
+}
+
+func TestVerify06ShortRepairReadbackClearsFault(t *testing.T) {
+	for _, held := range []float64{0, 0.4} {
+		m := &verify06Exchange{fix06Mock: fix06Mock{audit05Mock: audit05Mock{mark: 100, orders: []types.OpenOrder{
+			{Type: "STOP_MARKET", PositionSide: "SHORT", Side: "BUY", StopPrice: 105, Quantity: held},
+			{Type: "TAKE_PROFIT_MARKET", PositionSide: "SHORT", Side: "BUY", StopPrice: 90, Quantity: 1},
+		}}, symbol: "XUSDT", side: "short", qty: -1}}
+		at := riskTestTrader(store.RiskControlConfig{})
+		at.trader = m
+		at.positionInitialStopLoss = map[string]float64{}
+		at.SetRecordedStopLoss("XUSDT", "short", 105)
+		at.setProtectionFault("XUSDT_short", "previous signed-quantity fault")
+		at.processProtectionWatchdog()
+		if m.slCalls != 1 || m.lastSLQty != 1-held {
+			t.Fatalf("held=%g calls=%d repairQty=%g", held, m.slCalls, m.lastSLQty)
+		}
+		if !enoughProtection(m.orders, "SHORT", "SL", 105, 1) || at.protectionFaultReason() != "" {
+			t.Fatalf("readback did not clear fault: held=%g reason=%s", held, at.protectionFaultReason())
+		}
+		if err := at.entryExecutionBlocked("YUSDT", "short"); err != nil {
+			t.Fatal(err)
+		}
+		at.processProtectionWatchdog()
+		if m.slCalls != 1 || at.protectionFaultReason() != "" {
+			t.Fatalf("second watchdog repeated repair/fault: calls=%d reason=%s", m.slCalls, at.protectionFaultReason())
+		}
+		t.Logf("short qty=-1 heldSL=%g: gap=%g repaired, readback sufficient, prior fault cleared, second round healthy", held, m.lastSLQty)
+	}
+}
+
+func TestVerify06ShortExitReconciliationClearsFault(t *testing.T) {
+	m := &fix06Mock{audit05Mock: audit05Mock{mark: 110, flatOnClose: true}, symbol: "XUSDT", side: "short", qty: -1}
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.trader = m
+	at.positionInitialStopLoss = map[string]float64{}
+	at.SetRecordedStopLoss("XUSDT", "short", 105)
+	at.processProtectionWatchdog()
+	if m.closeShorts != 1 || at.protectionFaultReason() == "" {
+		t.Fatalf("exit/awaiting reconciliation: calls=%d reason=%s", m.closeShorts, at.protectionFaultReason())
+	}
+	at.processProtectionWatchdog()
+	if at.protectionFaultReason() != "" {
+		t.Fatal(at.protectionFaultReason())
+	}
+	t.Log("negative-quantity short crossed stop: exit sent; flat readback cleared fault")
+}

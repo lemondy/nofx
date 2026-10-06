@@ -1,0 +1,117 @@
+package breakout
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestVerify06ParentPanicAllowsNextScan(t *testing.T) {
+	old := binanceHTTP
+	defer func() { binanceHTTP = old }()
+	calls, done := 0, 0
+	binanceHTTP = &http.Client{Transport: fix06Transport(func(*http.Request) (*http.Response, error) { calls++; panic("verify06 parent panic") })}
+	s := &Scheduler{scanning: true, Symbols: 1}
+	s.runOnce(func() {
+		done++
+		if s.scanning {
+			t.Error("panic callback preceded cleanup")
+		}
+	})
+	s.RefreshNow(time.Second)
+	if s.scanning || done != 1 || calls != 2 {
+		t.Fatalf("scanning=%v done=%d calls=%d", s.scanning, done, calls)
+	}
+	t.Log("parent panic recovered; callback ran once after reset; next RefreshNow reached upstream again")
+}
+
+// This is a residual-behavior reproduction, not a passing regression gate.
+func TestVerify06CallbackOrderingResidual(t *testing.T) {
+	for _, mode := range []string{"normal", "error"} {
+		t.Run(mode, func(t *testing.T) {
+			old := binanceHTTP
+			defer func() { binanceHTTP = old }()
+			oldPath := gainerHistPath
+			setGainerHistoryPath(filepath.Join(t.TempDir(), "gainers.json"))
+			defer setGainerHistoryPath(oldPath)
+			calls := 0
+			binanceHTTP = &http.Client{Transport: fix06Transport(func(*http.Request) (*http.Response, error) {
+				calls++
+				if mode == "error" {
+					return nil, errors.New("verify06 ticker unavailable")
+				}
+				return fix06Response(`[]`)
+			})}
+			s := &Scheduler{scanning: true, Symbols: 1}
+			observed, done, innerCalls := false, 0, 0
+			var waited time.Duration
+			s.runOnce(func() {
+				done++
+				s.mu.RLock()
+				observed = s.scanning
+				s.mu.RUnlock()
+				if mode == "error" {
+					before := calls
+					started := time.Now()
+					s.RefreshNow(time.Millisecond)
+					waited = time.Since(started)
+					innerCalls = calls - before
+				}
+			})
+			if !observed || s.scanning || done != 1 {
+				t.Fatalf("callbackScanning=%v finalScanning=%v done=%d", observed, s.scanning, done)
+			}
+			if mode == "error" && (innerCalls != 0 || waited < 200*time.Millisecond) {
+				t.Fatalf("callback refresh: calls=%d waited=%s", innerCalls, waited)
+			}
+			t.Logf("residual: %s callback sees scanning=true; final scanning=false; callback RefreshNow calls=%d waited=%s", mode, innerCalls, waited)
+		})
+	}
+}
+
+func TestVerify06WorkerRecoveryEvidence(t *testing.T) {
+	if mode := os.Getenv("NOFX_VERIFY06_WORKER"); mode != "" {
+		setGainerHistoryPath(filepath.Join(t.TempDir(), "gainers.json"))
+		ticker := `[{"symbol":"XUSDT","lastPrice":"100","priceChangePercent":"10","quoteVolume":"20000000","count":100},{"symbol":"YUSDT","lastPrice":"100","priceChangePercent":"9","quoteVolume":"20000000","count":100},{"symbol":"ZUSDT","lastPrice":"100","priceChangePercent":"8","quoteVolume":"20000000","count":100}]`
+		binanceHTTP = &http.Client{Transport: fix06Transport(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/ticker/24hr") {
+				return fix06Response(ticker)
+			}
+			if sym := r.URL.Query().Get("symbol"); sym == "XUSDT" || sym == "YUSDT" || sym == "ZUSDT" {
+				panic("verify06 worker panic " + mode)
+			}
+			return fix06Response(`[]`)
+		})}
+		if mode == "analyze" {
+			out := AnalyzeMany([]string{"XUSDT", "YUSDT", "ZUSDT"}, 1)
+			if len(out) != 0 {
+				t.Fatalf("failed workers published results: %+v", out)
+			}
+		} else {
+			out, _, err := ScanShorts(ShortScanUniverse, -1, -1)
+			if len(out) != 0 || err == nil {
+				t.Fatalf("all-panic scan should return no analyzable symbols: out=%v err=%v", out, err)
+			}
+		}
+		fmt.Println("VERIFY06_WORKER_SURVIVED_" + mode)
+		return
+	}
+	for _, mode := range []string{"analyze", "shorts"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestVerify06WorkerRecoveryEvidence$", "-test.v")
+		cmd.Env = append(os.Environ(), "NOFX_VERIFY06_WORKER="+mode)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s child died: %v\n%s", mode, err, out)
+		}
+		if strings.Count(string(out), "(worker recovered)") != 3 || !strings.Contains(string(out), "runtime/debug.Stack") || !strings.Contains(string(out), "VERIFY06_WORKER_SURVIVED_"+mode) {
+			t.Fatalf("%s missing per-worker recovery/stack/return evidence:\n%s", mode, out)
+		}
+		t.Logf("%s: three worker panics logged symbol and stack, semaphore/waitgroup drained, process survived", mode)
+	}
+}
