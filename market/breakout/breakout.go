@@ -985,15 +985,19 @@ func minOf(xs []float64) float64 {
 
 // volSlotMultiple compares the last closed candle's volume with the average of
 // the same time-of-day candles on the previous days (slot step in bars).
+// Callers pass ALL-CLOSED series (F10: fetchKlines drops the forming bar), so
+// the last closed candle is k[n-1] — reading k[n-2] was a F10 leftover that
+// measured one bar stale on live data while the backtest (always closed)
+// shifted a bar too (review 2026-10-06 P3-1).
 func volSlotMultiple(k []Kline, step int) float64 {
 	n := len(k)
 	if n < step+2 {
 		return 1
 	}
-	v := k[n-2].Volume
+	v := k[n-1].Volume
 	var slots []float64
 	for d := 1; d <= 3; d++ {
-		idx := n - 2 - d*step
+		idx := n - 1 - d*step
 		if idx >= 0 {
 			slots = append(slots, k[idx].Volume)
 		}

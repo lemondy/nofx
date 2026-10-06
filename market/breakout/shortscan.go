@@ -728,8 +728,9 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 	}
 	// Persist today's board into the gainer history pool (历史涨幅池) BEFORE
 	// analysis — the record is the durable asset; a failed analysis run must
-	// not lose the day's snapshot.
-	recordGainerHistory(board, time.Now())
+	// not lose the day's snapshot. The resolved window travels with the call
+	// so retention matches what consumers may read (P3-4).
+	recordGainerHistory(board, time.Now(), histDays)
 
 	// Work items: the live gainer board plus, when enabled, history-pool
 	// symbols that pumped within the window but already fell off today's

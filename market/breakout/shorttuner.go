@@ -186,23 +186,26 @@ func RunShortTuner(now time.Time) {
 			logger.Errorf("🩸 Short tuner panicked (recovered): %v", r)
 		}
 	}()
+	// P3-3 (review 2026-10-06): the lock used to span up to 50 samples × 2
+	// sequential HTTP calls (~25 min worst case) — journaling and param-path
+	// callers blocked behind it. Three phases now: collect DUE samples under
+	// the lock, run the HTTP labelling with NO lock held, then re-lock and
+	// MERGE results by (TS, Symbol) into a FRESH read (concurrent appends
+	// during labelling must survive — never write back a stale snapshot).
 	shortTunerMu.Lock()
-	defer shortTunerMu.Unlock()
 	samples := readSamples()
-	if len(samples) == 0 {
-		return
+	type dueItem struct {
+		sample shortSample
 	}
-
-	// Labels are historical +24h prices, never the scheduler's current quote.
-	// Legacy current-ticker labels are invalidated and rebuilt on restart.
-	changed := false
+	var due []dueItem
+	legacyInvalidated := false
 	evaluatedThisRun := 0
 	for i := range samples {
 		s := &samples[i]
 		if s.Evaluated && s.LabelVersion != 2 {
 			s.Evaluated = false
 			s.Unpriceable = false
-			changed = true
+			legacyInvalidated = true
 		}
 		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
 			continue
@@ -211,29 +214,71 @@ func RunShortTuner(now time.Time) {
 			break
 		}
 		evaluatedThisRun++
+		due = append(due, dueItem{sample: *s})
+	}
+	shortTunerMu.Unlock()
+
+	// Lock-free labelling: historical +24h prices, never the scheduler's
+	// current quote. Each result is keyed by (TS, Symbol) for the merge.
+	type labelResult struct {
+		price, funding    float64
+		labelAt           int64
+		errMsg                  string
+		failed                  bool
+	}
+	results := make(map[[2]interface{}]labelResult, len(due))
+	for _, d := range due {
+		s := d.sample
+		res := labelResult{}
 		if s.Price <= 0 || math.IsNaN(s.Price) || math.IsInf(s.Price, 0) || s.TS <= 0 {
-			s.Unpriceable = true
-			s.MissingReason = "invalid sample price/time"
-			s.Evaluated = true
-			s.LabelVersion = 2
-			changed = true
+			res.failed, res.errMsg = true, "invalid sample price/time"
+		} else {
+			price, labelAt, funding, err := historicalShortLabel(s)
+			if err != nil {
+				res.failed, res.errMsg = true, err.Error()
+			} else {
+				res.price, res.labelAt, res.funding = price, labelAt, funding
+			}
+		}
+		results[[2]interface{}{s.TS, s.Symbol}] = res
+	}
+
+	shortTunerMu.Lock()
+	defer shortTunerMu.Unlock()
+	// Fresh read: samples appended while we were labelling stay in the slice.
+	samples = readSamples()
+	changed := legacyInvalidated
+	for i := range samples {
+		s := &samples[i]
+		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
 			continue
 		}
-		price, labelAt, funding, err := historicalShortLabel(*s)
-		if err != nil {
+		res, ok := results[[2]interface{}{s.TS, s.Symbol}]
+		if !ok {
+			continue // not due in this run (cap) or appended mid-labelling
+		}
+		if res.failed {
+			if res.errMsg == "invalid sample price/time" {
+				s.Unpriceable = true
+				s.MissingReason = res.errMsg
+				s.Evaluated = true
+				s.LabelVersion = 2
+				changed = true
+				continue
+			}
 			s.Unpriceable = true
-			s.MissingReason = err.Error()
+			s.MissingReason = res.errMsg
 			s.LabelAttempts++
 			retry := time.Hour * time.Duration(1<<min(s.LabelAttempts, 4))
 			s.NextRetryAt = now.Add(retry).UnixMilli()
 			changed = true
 			continue // transient/delisting gaps are observable and retryable
 		}
-		s.Outcome = (s.Price-price)/s.Price*100 + funding - btCostRoundTrip
-		s.LabelAt = labelAt
+		s.Outcome = (s.Price-res.price)/s.Price*100 + res.funding - btCostRoundTrip
+		s.LabelAt = res.labelAt
 		s.LabelVersion = 2
 		s.EvaluatedAt = now.UnixMilli()
-		s.FundingPct = funding
+		s.FundingPct = res.funding
 		s.CostPct = btCostRoundTrip
 		s.Evaluated = true
 		s.Unpriceable = false

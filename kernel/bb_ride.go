@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"math"
+	"time"
 
 	"nofx/market"
 )
@@ -50,7 +51,7 @@ type BBShortRide struct {
 // closed 15m bar; bandOf computes that bar's own last-20-close band. A
 // non-qualifying bar or a doji stops the count; volume surge = any counted
 // bar trading ≥1.5× the average volume of its own prior 20 bars.
-func bbRideWalk(data *market.Data, barQualifies func(b market.KlineBar, band float64) bool, bandOf func([]float64) float64) (int, bool, float64) {
+func bbRideWalk(data *market.Data, now time.Time, barQualifies func(b market.KlineBar, band float64) bool, bandOf func([]float64) float64) (int, bool, float64) {
 	windows := 0
 	surge := false
 	band := 0.0
@@ -58,7 +59,10 @@ func bbRideWalk(data *market.Data, barQualifies func(b market.KlineBar, band flo
 	if !ok || tf == nil || len(tf.Klines) < 8 {
 		return windows, surge, band
 	}
-	bars := tf.Klines[:len(tf.Klines)-1] // closed bars only — the forming bar never counts
+	// Time-based settlement (review 2026-10-06 P2-1): the unconditional drop
+	// silently lost a real closed bar on laggy feeds — and this walk licenses
+	// MARKET orders via marketExceptionEvidence, so a stale "ride" matters.
+	bars := ClosedKlines(tf, now, tfDuration("15m"))
 	// Current band from the most recent `period` closed closes.
 	if n := len(bars); n >= int(bbRidePeriod) {
 		band = bandOf(closesOf(bars[n-int(bbRidePeriod):]))
@@ -86,14 +90,14 @@ func bbRideWalk(data *market.Data, barQualifies func(b market.KlineBar, band flo
 	return windows, surge, band
 }
 
-func computeBBRide(data *market.Data) *BBRide {
+func computeBBRide(data *market.Data, now time.Time) *BBRide {
 	if data == nil {
 		return nil
 	}
 	if tf, ok := data.TimeframeData["15m"]; !ok || tf == nil || len(tf.Klines) < 8 {
 		return nil
 	}
-	w, surge, band := bbRideWalk(data, func(b market.KlineBar, upper float64) bool {
+	w, surge, band := bbRideWalk(data, now, func(b market.KlineBar, upper float64) bool {
 		return b.Close > b.Open && b.High >= upper
 	}, bollUpper)
 	return &BBRide{
@@ -104,14 +108,14 @@ func computeBBRide(data *market.Data) *BBRide {
 	}
 }
 
-func computeBBShortRide(data *market.Data) *BBShortRide {
+func computeBBShortRide(data *market.Data, now time.Time) *BBShortRide {
 	if data == nil {
 		return nil
 	}
 	if tf, ok := data.TimeframeData["15m"]; !ok || tf == nil || len(tf.Klines) < 8 {
 		return nil
 	}
-	w, surge, band := bbRideWalk(data, func(b market.KlineBar, lower float64) bool {
+	w, surge, band := bbRideWalk(data, now, func(b market.KlineBar, lower float64) bool {
 		return b.Close < b.Open && b.Low <= lower
 	}, bollLower)
 	return &BBShortRide{

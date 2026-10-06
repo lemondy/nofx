@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"nofx/kernel"
+	"nofx/trader/types"
 	"nofx/store"
 	"sync"
 )
@@ -188,6 +189,25 @@ func (at *AutoTrader) refreshExecutionAccount(ctx *kernel.Context) error {
 	}
 	fresh := []kernel.PositionInfo{}
 	margin := 0.0
+	// P2-7: one GetOpenOrders per unique SYMBOL up front — hedge mode puts
+	// LONG+SHORT rows of the same symbol in this loop and the per-row call
+	// doubled the request on exactly those. A failed fetch fails the pass
+	// (fail-closed) exactly as the per-row call did.
+	openOrdersBySymbol := make(map[string][]types.OpenOrder, len(positions))
+	for _, p := range positions {
+		symbol, _ := p["symbol"].(string)
+		if symbol == "" {
+			continue
+		}
+		if _, done := openOrdersBySymbol[symbol]; done {
+			continue
+		}
+		orders, err := at.trader.GetOpenOrders(symbol)
+		if err != nil {
+			return fmt.Errorf("execution protective orders unknown: %w", err)
+		}
+		openOrdersBySymbol[symbol] = orders
+	}
 	for _, p := range positions {
 		symbol, _ := p["symbol"].(string)
 		side, _ := p["side"].(string)
@@ -212,10 +232,7 @@ func (at *AutoTrader) refreshExecutionAccount(ctx *kernel.Context) error {
 			row.MarkPrice = mark
 		}
 		// Exposure uses the current exchange protection, never the prompt's old stop.
-		orders, err := at.trader.GetOpenOrders(symbol)
-		if err != nil {
-			return fmt.Errorf("execution protective orders unknown: %w", err)
-		}
+		orders := openOrdersBySymbol[symbol]
 		stop := protectionPrice(orders, side, "SL")
 		if !enoughProtection(orders, side, "SL", stop, row.Quantity) {
 			stop = 0

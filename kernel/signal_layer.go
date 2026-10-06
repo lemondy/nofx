@@ -523,12 +523,17 @@ func computePumpGuard(sig *SymbolSignal, data *market.Data, thresholdPct float64
 	if t15 := sig.Timeframes["15m"]; t15 != nil && t15.EMAFast != nil && t15.LastClose > 0 {
 		pg.FastRecovered = t15.LastClose > *t15.EMAFast
 	}
-	if tfd := data.TimeframeData["15m"]; tfd != nil && len(tfd.Klines) > 8 {
-		bars := tfd.Klines
-		bars = bars[:len(bars)-1] // closed bars only (same convention as the anchor suppression)
-		_, lows := swingPivots(bars, 2)
-		if len(lows) >= 2 {
-			pg.HigherLow = lows[len(lows)-1] > lows[len(lows)-2]
+	if tfd := data.TimeframeData["15m"]; tfd != nil {
+		// Closed-bar settlement is time-based (C2 convention — the comment
+		// used to cite the anchor-suppression unconditional drop, which this
+		// same batch moved to ClosedKlines). A laggy feed whose newest bar is
+		// already closed must not lose a pivot (review 2026-10-06 P2-1).
+		bars := ClosedKlines(tfd, now, tfDuration("15m"))
+		if len(bars) > 8 {
+			_, lows := swingPivots(bars, 2)
+			if len(lows) >= 2 {
+				pg.HigherLow = lows[len(lows)-1] > lows[len(lows)-2]
+			}
 		}
 	}
 	pg.Confirmed = pg.FastRecovered && pg.HigherLow
@@ -1203,8 +1208,8 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	if sig.LongPullback != nil && sig.LongPullback.Active {
 		sig.LimitBuyPrice = sig.LongPullback.Entry
 	}
-	sig.BBRide = computeBBRide(data)
-	sig.ShortRide = computeBBShortRide(data)
+	sig.BBRide = computeBBRide(data, now)
+	sig.ShortRide = computeBBShortRide(data, now)
 
 	// Entry / exit heuristic rules — deterministic, computed so the model sees
 	// the program's verdict and can agree or disagree with reasoning.
@@ -1658,12 +1663,22 @@ func emaOf(vals []float64, n int) float64 {
 // data gap must not freeze every altcoin long.
 func btcWeakLongCodes(sig *SymbolSignal, opt SignalOptions) []string {
 	var codes []string
-	down, ret24, known := btc4hShape(opt.BtcTrendCloses)
+	down, closedRet24, known := btc4hShape(opt.BtcTrendCloses)
 	if !known {
 		return codes
 	}
 	if down {
 		codes = append(codes, "BTC_4H_DOWNTREND")
+	}
+	// Compare like with like (review 2026-10-06 P2-5): the coin side is a LIVE
+	// rolling-24h ticker — BTC's 24h now comes from the SAME fapi ticker batch
+	// instead of a window truncated at the last 4h settlement (0-4h stale).
+	// Direction of the residual error before this fix: BTC pumping → weak-mid
+	// coins WRONGLY PASSED; BTC dumping → strong-mid coins WRONGLY BANNED.
+	// Missing ticker falls back to the closed-bar computation (old behavior).
+	ret24, ok := binanceBTC24hLivePct()
+	if !ok {
+		ret24 = closedRet24
 	}
 	if sig.Derivatives != nil && sig.Derivatives.PriceChange24hLivePct != nil {
 		coin24 := *sig.Derivatives.PriceChange24hLivePct
@@ -1844,8 +1859,21 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		// altcoin shorts market-wide. The scan side already haircuts shorts
 		// ×0.85 off the SAME classifier; this is the hard pause switch.
 		if !isLong && opt.BTCFilterShort {
-			if _, strongBull, _, known := breakout.BTC4hRegime(opt.BtcTrendCloses); known && strongBull {
-				add("BTC_4H_STRONGBULL")
+			// The hard pause is OPT-IN: the user explicitly asked "no shorts
+			// while BTC reads strongBull". Missing BTC data cannot demonstrate
+			// "not strong bull" — house convention (funding_rollover /
+			// VENDOR_DIVERGENCE / NEG_EDGE_RR): absent evidence = 按不满足处理.
+			// This also aligns the kernel gate with the executor's pending
+			// recompute, which already fail-closes on the same state (P2-2:
+			// the two layers used to disagree on identical input). The LONG
+			// side keeps its documented fail-open — btcWeakLongCodes says a
+			// data gap must not freeze every altcoin long.
+			if _, strongBull, _, known := breakout.BTC4hRegime(opt.BtcTrendCloses); known {
+				if strongBull {
+					add("BTC_4H_STRONGBULL")
+				}
+			} else {
+				add("BTC_REGIME_UNKNOWN")
 			}
 		}
 		// Short top-confirmation gate (playbook 默认姿态, was prompt-only —

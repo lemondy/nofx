@@ -104,11 +104,16 @@ func sliceClosed(bars []Kline, t time.Time, barDur time.Duration) []Kline {
 // RunBacktest replays the scorer over historical 15m klines for the given
 // symbols and returns the signal outcomes. Scores carry the ONLINE penalty
 // layers that are kline-replayable (extended-pattern ×0.65, BTC-regime
-// haircut; α/β/confirm already live in the TF score) so threshold selection
-// happens on the same distribution shape Analyze() produces online (A2) —
-// the crowd penalty is NOT replayable (no funding/OI/LS history) and stays
-// out, a direction-uniform limitation. Forward returns are NET of
-// btCostRoundTrip.
+// haircut — those two match applyRegimeAdjustment exactly) and the OI/Funding
+// dims drop out of the renormalized composite with their weights. The replay
+// therefore has NO α (price-OI matrix) or β (funding percentile) and a
+// composite scale that EXCLUDES wOI+wFunding (~25% of the online mass):
+// replay scores are systematically HIGHER than live scores for OI-weak and
+// crowded symbols, so threshold selection on this distribution is biased
+// relative to live grading. This is exactly why proposeWalkForward's
+// LIVE PUBLICATION BLOCKED lock must stay — do not feed these thresholds to
+// the live scanners without a replayable OI/funding history. Forward returns
+// are NET of btCostRoundTrip.
 func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 	total := 0
 	var all []BTSignal

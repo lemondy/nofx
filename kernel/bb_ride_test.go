@@ -12,7 +12,11 @@ import (
 // bbRideSeries builds n closed 15m bars: `up` consecutive rising bars hugging
 // a rising band at the tail, preceded by flat bars.
 func bbRideSeries(n, up int) []market.KlineBar {
-	base := time.Now().Add(-time.Duration(n+1) * 15 * time.Minute)
+	// Mirror the REAL feed shape: the last bar is still FORMING (its 15m
+	// window ends after now), so time-based settlement drops it exactly as
+	// Binance data does. The old fixed -30min tail made the last bar look
+	// closed and only matched the pre-C2 unconditional drop.
+	base := time.Now().Add(-time.Duration(n)*15*time.Minute + 5*time.Minute)
 	bars := make([]market.KlineBar, 0, n)
 	p := 100.0
 	for i := 0; i < n; i++ {
@@ -40,7 +44,7 @@ func TestComputeBBRide(t *testing.T) {
 	data := &market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{
 		"15m": {Klines: bbRideSeries(30, 5)},
 	}}
-	r := computeBBRide(data)
+	r := computeBBRide(data, time.Now())
 	if r == nil {
 		t.Fatal("nil ride for valid 15m data")
 	}
@@ -61,13 +65,27 @@ func TestComputeBBRide(t *testing.T) {
 	broken := bbRideSeries(30, 5)
 	last := broken[len(broken)-1]
 	broken[len(broken)-1] = market.KlineBar{Time: last.Time, Open: last.Open, High: last.Open * 1.0005, Low: last.Open * 0.995, Close: last.Open, Volume: 40}
-	r2 := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: broken}}})
+	r2 := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: broken}}}, time.Now())
 	if r2.Windows != 4 {
 		t.Fatalf("red tail bar must stop the streak at 4, windows = %d", r2.Windows)
 	}
 
+	// A CLOSED red tail bar (not forming) must likewise terminate the streak:
+	// the ride is over once the newest closed candle closes back inside.
+	closedRed := bbRideSeries(30, 5)
+	lastClosed := closedRed[len(closedRed)-1]
+	// Shift the whole series back one slot so the tail bar is CLOSED.
+	for i := range closedRed {
+		closedRed[i].Time -= 15 * 60 * 1000
+	}
+	closedRed[len(closedRed)-1] = market.KlineBar{Time: lastClosed.Time - 15*60*1000, Open: lastClosed.Open, High: lastClosed.Open * 1.0005, Low: lastClosed.Open * 0.995, Close: lastClosed.Open, Volume: 40}
+	r2c := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: closedRed}}}, time.Now())
+	if r2c.Windows != 0 {
+		t.Fatalf("a CLOSED red tail bar must end the streak (windows=0), got %d", r2c.Windows)
+	}
+
 	// Only 2 qualifying bars → below the ≥3 threshold → not a ride.
-	short := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: bbRideSeries(30, 2)}}})
+	short := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: bbRideSeries(30, 2)}}}, time.Now())
 	if short.Windows >= 3 || short.Ride {
 		t.Fatalf("2 qualifying bars must not ride: windows = %d, ride = %v", short.Windows, short.Ride)
 	}
@@ -77,12 +95,12 @@ func TestComputeBBRide(t *testing.T) {
 	for i := range quiet {
 		quiet[i].Volume = 10
 	}
-	r3 := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: quiet}}})
+	r3 := computeBBRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: quiet}}}, time.Now())
 	if r3.VolumeSurge || r3.Ride {
 		t.Fatal("no volume surge → ride false")
 	}
 
-	if computeBBRide(nil) != nil {
+	if computeBBRide(nil, time.Now()) != nil {
 		t.Fatal("nil data → nil ride")
 	}
 }
@@ -124,7 +142,7 @@ func TestComputeBBShortRide(t *testing.T) {
 	data := &market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{
 		"15m": {Klines: bbShortSeries(30, 5)},
 	}}
-	r := computeBBShortRide(data)
+	r := computeBBShortRide(data, time.Now())
 	if r == nil {
 		t.Fatal("nil short ride for valid 15m data")
 	}
@@ -140,13 +158,13 @@ func TestComputeBBShortRide(t *testing.T) {
 	srcBroken := bbRideSeries(30, 5)
 	last := srcBroken[len(srcBroken)-1]
 	srcBroken[len(srcBroken)-1] = market.KlineBar{Time: last.Time, Open: last.Open, High: last.Open * 1.0005, Low: last.Open * 0.995, Close: last.Open * 1.001, Volume: 40}
-	r2 := computeBBShortRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: invertSeries(srcBroken)}}})
+	r2 := computeBBShortRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: invertSeries(srcBroken)}}}, time.Now())
 	if r2.Windows != 4 {
 		t.Fatalf("green tail bar must stop the streak at 4, windows = %d", r2.Windows)
 	}
 
 	// Only 2 qualifying bars → below the ≥3 threshold.
-	short := computeBBShortRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: bbShortSeries(30, 2)}}})
+	short := computeBBShortRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: bbShortSeries(30, 2)}}}, time.Now())
 	if short.Windows >= 3 || short.Ride {
 		t.Fatalf("2 qualifying bars must not ride: %+v", short)
 	}
@@ -157,12 +175,12 @@ func TestComputeBBShortRide(t *testing.T) {
 		quietSrc[i].Volume = 10
 	}
 	quiet := invertSeries(quietSrc)
-	r3 := computeBBShortRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: quiet}}})
+	r3 := computeBBShortRide(&market.Data{Symbol: "T", TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: quiet}}}, time.Now())
 	if r3.VolumeSurge || r3.Ride {
 		t.Fatalf("no surge → no ride: %+v", r3)
 	}
 
-	if computeBBShortRide(nil) != nil {
+	if computeBBShortRide(nil, time.Now()) != nil {
 		t.Fatal("nil data → nil ride")
 	}
 }

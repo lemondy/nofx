@@ -114,7 +114,7 @@ func setGainerHistoryPath(p string) { gainerHistPath = p }
 // recordGainerHistory merges the live gainer board into the daily pool and
 // persists it. Best-effort: a failure logs and keeps trading. Only the
 // first gainerHistBoardKeep rows (the day's nominal Top-20) feed the pool.
-func recordGainerHistory(board []GainerQuote, now time.Time) {
+func recordGainerHistory(board []GainerQuote, now time.Time, historyDays int) {
 	if len(board) == 0 {
 		return
 	}
@@ -143,10 +143,15 @@ func recordGainerHistory(board []GainerQuote, now time.Time) {
 		entries = entries[:gainerHistPerDayCap]
 	}
 	hist.Days[day] = entries
-	// Prune past the window (+buffer). Fixed at the default window — the
-	// file's retention is data hygiene shared by all strategies; which days
-	// are USED is per-call (A4).
+	// Prune past the window (+buffer). Retention follows the LARGEST window
+	// any caller uses — the old hard-coded default (7+2) silently truncated
+	// strategies configured with short_scan_history > 7 (review 2026-10-06
+	// P3-4: the knob promised 30 days, the file held 9). Which days are USED
+	// stays per-call (A4).
 	keep := DefaultShortScanHistoryDays
+	if historyDays > keep {
+		keep = historyDays
+	}
 	cutoff := now.UTC().AddDate(0, 0, -(keep + gainerHistKeepBuffer - 1)).Format("2006-01-02")
 	for d := range hist.Days {
 		if d < cutoff {

@@ -136,3 +136,40 @@ func TestFix06PositiveQtyMirrorAndAbsQuantity(t *testing.T) {
 		t.Fatalf("SL placement quantity = %v, want absolute 1", m.lastSLQty)
 	}
 }
+
+
+// P2-7: the watchdog must issue ONE GetOpenOrders per unique symbol per pass
+// — hedge mode puts LONG+SHORT rows of the same symbol in the loop and the
+// per-row call doubled the request on exactly those.
+func TestFix3WatchdogDedupesOpenOrdersBySymbol(t *testing.T) {
+	m := &fix06MultiMock{}
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.trader = m
+	at.positionInitialStopLoss = map[string]float64{}
+	at.processProtectionWatchdog()
+	if m.orderCalls != 1 {
+		t.Fatalf("GetOpenOrders called %d times for one symbol with two sides, want 1", m.orderCalls)
+	}
+}
+
+type fix06MultiMock struct {
+	audit05Mock
+	orderCalls int
+}
+
+func (m *fix06MultiMock) GetPositions() ([]map[string]interface{}, error) {
+	return []map[string]interface{}{
+		{"symbol": "XUSDT", "side": "long", "positionAmt": 1.0, "entryPrice": 100.0, "markPrice": 100.0, "leverage": 2.0},
+		{"symbol": "XUSDT", "side": "short", "positionAmt": -1.0, "entryPrice": 100.0, "markPrice": 100.0, "leverage": 2.0},
+	}, nil
+}
+
+func (m *fix06MultiMock) GetOpenOrders(string) ([]types.OpenOrder, error) {
+	m.orderCalls++
+	return []types.OpenOrder{
+		{Type: "STOP_MARKET", PositionSide: "LONG", Side: "SELL", StopPrice: 95, Quantity: 1},
+		{Type: "TAKE_PROFIT_MARKET", PositionSide: "LONG", Side: "SELL", StopPrice: 110, Quantity: 1},
+		{Type: "STOP_MARKET", PositionSide: "SHORT", Side: "BUY", StopPrice: 105, Quantity: 1},
+		{Type: "TAKE_PROFIT_MARKET", PositionSide: "SHORT", Side: "BUY", StopPrice: 90, Quantity: 1},
+	}, nil
+}

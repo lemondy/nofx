@@ -321,6 +321,7 @@ func getSchemaPromptZH() string {
 	prompt += "- **BTC_4H_DOWNTREND**: BTC 4h 处于下跌趋势(EMA20<EMA50 且价在 EMA20 下)——山寨多头整体暂停\n"
 	prompt += "- **BTC_WEAK_LONG_x_VS_y**: 该币 24h 涨幅(x%)弱于 BTC(y%)——不接弱势跟跌的多头\n"
 	prompt += "- **BTC_4H_STRONGBULL**: BTC 4h 强势上行(EMA20>EMA50、价在 EMA20 上、RSI≥60)且策略开启了 btc_filter_short——山寨空头整体暂停(扫描层同源分类器已对空头 ×0.85,此为硬停开关)\n"
+	prompt += "- **BTC_REGIME_UNKNOWN**: 策略开启了 btc_filter_short 但 BTC 4h 数据不足(无法证明「非强牛」)——按不满足处理,空头等待;数据恢复后自动重评\n"
 	prompt += "- **SHORT_TOP_CONFIRM_MISSING**: short_scan 候选缺少顶部确认(顶背离/假突破/破EMA20/费率回落)——策略默认姿态的程序强制;等确认打印或 15m 转向后 RECHECK;无 short_scan 证据的候选不受此码约束\n"
 	prompt += "- **WIDE_STOP_x_GT_y**: 止损计划距离 x% 超过上限 y%——币的波动结构不配 2% 风险的仓位几何,直接放弃该标的\n"
 
@@ -373,6 +374,7 @@ func getSchemaPromptEN() string {
 	prompt += "- **BTC_4H_DOWNTREND**: BTC 4h is in a downtrend (EMA20<EMA50 and price below EMA20) — altcoin longs pause market-wide\n"
 	prompt += "- **BTC_WEAK_LONG_x_VS_y**: the coin's 24h return (x%) lags BTC's (y%) — no longs on weak laggards\n"
 	prompt += "- **BTC_4H_STRONGBULL**: BTC 4h is in a strong uptrend (EMA20>EMA50, price above, RSI≥60) AND btc_filter_short is enabled — altcoin shorts pause market-wide (the scan layer already haircuts shorts ×0.85 off the same shared classifier; this is the hard pause switch)\n"
+	prompt += "- **BTC_REGIME_UNKNOWN**: btc_filter_short is enabled but BTC 4h data is insufficient (cannot demonstrate \"not strong bull\") — treated as not satisfied, shorts wait; re-evaluated automatically once data recovers\n"
 	prompt += "- **SHORT_TOP_CONFIRM_MISSING**: a short_scan candidate lacks a topping confirmation (bearish divergence / fake breakout / EMA20 break / funding rollover) — the program-enforced default stance; wait for a confirmation to print or the 15m trend to turn, then RECHECK; candidates WITHOUT short_scan evidence are not subject to this code\n"
 	prompt += "- **WIDE_STOP_x_GT_y**: the stop-plan distance (x%) exceeds the cap (y%) — the coin's volatility structure doesn't fit 2%-risk sizing geometry; skip the symbol entirely\n"
 

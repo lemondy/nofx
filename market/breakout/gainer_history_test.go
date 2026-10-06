@@ -46,7 +46,7 @@ func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		board = append(board, GainerQuote{Symbol: string(rune('V'+i)) + "USDT", ChgPct: float64(35 - i), Price: 1})
 	}
-	recordGainerHistory(board, now)
+	recordGainerHistory(board, now, DefaultShortScanHistoryDays)
 
 	// Second snapshot the same day: FADESUSDT faded 60 → 12 — the peak (60)
 	// must survive; NEWUSDT is a fresh top-20 entrant.
@@ -54,7 +54,7 @@ func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 		{Symbol: "FADESUSDT", ChgPct: 12, Price: 2},
 		{Symbol: "NEWUSDT", ChgPct: 55, Price: 3},
 	}
-	recordGainerHistory(board2, now)
+	recordGainerHistory(board2, now, DefaultShortScanHistoryDays)
 
 	hist := readGainerHistoryFile(t)
 	day := hist.Days[now.UTC().Format("2006-01-02")]
@@ -97,7 +97,7 @@ func TestRecordGainerHistoryPrune(t *testing.T) {
 	if err := saveGainerHistoryLocked(hist); err != nil {
 		t.Fatal(err)
 	}
-	recordGainerHistory([]GainerQuote{{Symbol: "NEWUSDT", ChgPct: 40, Price: 1}}, now)
+	recordGainerHistory([]GainerQuote{{Symbol: "NEWUSDT", ChgPct: 40, Price: 1}}, now, DefaultShortScanHistoryDays)
 	hist2 := readGainerHistoryFile(t)
 	if _, ok := hist2.Days[now.UTC().AddDate(0, 0, -8).Format("2006-01-02")]; !ok {
 		t.Fatal("buffer-edge day must survive")

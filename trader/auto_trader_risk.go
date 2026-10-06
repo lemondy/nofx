@@ -1479,7 +1479,7 @@ func orphanProtectiveOrder(o types.OpenOrder, live map[string]bool) bool {
 // position at a stale price. Scoped to symbols the system has tracked (AI
 // marks, pending entries, first-seen keys); candidates with a live position
 // on the matching side are skipped.
-func (at *AutoTrader) sweepOrphanedProtection(positions []map[string]interface{}) {
+func (at *AutoTrader) sweepOrphanedProtection(positions []map[string]interface{}, prefetched map[string][]types.OpenOrder) {
 	if at.config.StrategyConfig != nil && at.config.StrategyConfig.StrategyType == "grid_trading" {
 		return // grid keeps its own order books
 	}
@@ -1525,8 +1525,11 @@ func (at *AutoTrader) sweepOrphanedProtection(positions []map[string]interface{}
 		CancelProtectiveOrdersForSide(symbol, positionSide string) error
 	})
 	for symbol := range symbols {
-		orders, err := at.trader.GetOpenOrders(symbol)
-		if err != nil || len(orders) == 0 {
+		orders, cached := prefetched[symbol]
+		if !cached {
+			orders, _ = at.trader.GetOpenOrders(symbol)
+		}
+		if len(orders) == 0 {
 			continue
 		}
 		for _, o := range orders {
@@ -1595,6 +1598,27 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		}
 	}
 	at.clearProtectionFaults(live)
+	// P2-7: one GetOpenOrders per unique SYMBOL for the whole pass — hedge
+	// mode produces LONG+SHORT rows for the same symbol and the old per-row
+	// call doubled the request on exactly those. Failed fetches are cached
+	// per symbol so the per-position error handling below stays intact.
+	ordersBySymbol := make(map[string][]types.OpenOrder, len(positions))
+	orderErrs := make(map[string]error, len(positions))
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		if symbol == "" || orderErrs[symbol] != nil {
+			continue
+		}
+		if _, done := ordersBySymbol[symbol]; done {
+			continue
+		}
+		orders, err := at.trader.GetOpenOrders(symbol)
+		if err != nil {
+			orderErrs[symbol] = err
+			continue
+		}
+		ordersBySymbol[symbol] = orders
+	}
 	for _, pos := range positions {
 		symbol, _ := pos["symbol"].(string)
 		side, _ := pos["side"].(string)
@@ -1617,10 +1641,10 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			at.setProtectionFault(key, "live mark or quantity unavailable")
 			continue
 		}
-		orders, err := at.trader.GetOpenOrders(symbol)
-		if err != nil {
+		orders, ordersErr := ordersBySymbol[symbol], orderErrs[symbol]
+		if ordersErr != nil {
 			at.protectionFailure(symbol, side, "protective orders unavailable")
-			at.alertUnprotectedPosition(symbol, side, err.Error())
+			at.alertUnprotectedPosition(symbol, side, ordersErr.Error())
 			continue
 		}
 		positionSide := strings.ToUpper(side)
@@ -1687,7 +1711,7 @@ func (at *AutoTrader) processProtectionWatchdog() {
 			at.protectionVerified(symbol, side)
 		}
 	}
-	at.sweepOrphanedProtection(positions)
+	at.sweepOrphanedProtection(positions, ordersBySymbol)
 }
 
 // placeComputedProtection: the naked-position fallback (09-19 user directive
