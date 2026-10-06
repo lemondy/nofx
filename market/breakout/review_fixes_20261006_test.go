@@ -38,12 +38,16 @@ func TestFix06RunOncePanicClearsScanningAndFiresOnDone(t *testing.T) {
 	})}
 	s := &Scheduler{scanning: true, Symbols: 1}
 	done := 0
-	s.runOnce(func() { done++ })
+	sawScanning := true
+	s.runOnce(func() { done++; sawScanning = s.scanning })
 	if s.scanning {
 		t.Fatal("recovered panic left scanning=true — the board stays wedged until restart")
 	}
 	if done != 1 {
 		t.Fatalf("onDone fired %d times after a panic, want exactly 1", done)
+	}
+	if sawScanning {
+		t.Fatal("panic path: onDone observed scanning=true — callback ran before the cleanup defer")
 	}
 	// The next synchronous refresh must complete without wedging on a stale
 	// flag (pre-fix: RefreshNow spun to its deadline while scanning stayed
@@ -54,7 +58,9 @@ func TestFix06RunOncePanicClearsScanningAndFiresOnDone(t *testing.T) {
 	}
 }
 
-// onDone must fire exactly once on the NORMAL path too.
+// onDone must fire exactly once on the NORMAL path too — and only AFTER
+// scanning is cleared (fix-recheck 2026-10-06: the body used to fire the
+// callback before the defer reset the flag).
 func TestFix06RunOnceNormalPathFiresOnDoneOnce(t *testing.T) {
 	old := binanceHTTP
 	defer func() { binanceHTTP = old }()
@@ -63,9 +69,36 @@ func TestFix06RunOnceNormalPathFiresOnDoneOnce(t *testing.T) {
 	})}
 	s := &Scheduler{scanning: true, Symbols: 1}
 	done := 0
-	s.runOnce(func() { done++ })
+	sawScanning := true
+	s.runOnce(func() { done++; sawScanning = s.scanning })
 	if done != 1 || s.scanning {
 		t.Fatalf("normal path: done=%d scanning=%v, want 1/false", done, s.scanning)
+	}
+	if sawScanning {
+		t.Fatal("normal path: onDone observed scanning=true — callback ran before the cleanup defer")
+	}
+}
+
+// The ERROR path (top-volume listing fails) must behave identically: callback
+// fires exactly once, and only after scanning is cleared.
+func TestFix06RunOnceErrorPathOnDoneAfterCleanup(t *testing.T) {
+	old := binanceHTTP
+	defer func() { binanceHTTP = old }()
+	binanceHTTP = &http.Client{Transport: fix06Transport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 500, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})}
+	s := &Scheduler{scanning: true, Symbols: 1}
+	called := 0
+	sawScanning := true
+	s.runOnce(func() { called++; sawScanning = s.scanning })
+	if called != 1 {
+		t.Fatalf("error path: onDone fired %d times, want exactly 1", called)
+	}
+	if sawScanning {
+		t.Fatal("error path: onDone observed scanning=true — callback ran before the cleanup defer")
+	}
+	if s.scanning {
+		t.Fatal("error path left scanning=true")
 	}
 }
 
