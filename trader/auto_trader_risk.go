@@ -1600,11 +1600,20 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		side, _ := pos["side"].(string)
 		mark, _ := pos["markPrice"].(float64)
 		qty, _ := pos["positionAmt"].(float64)
+		// Binance keeps SHORT positionAmt NEGATIVE (futures_positions.go) —
+		// the drawdown monitor at :190 applies the same abs normalization.
+		// Before it, the `qty <= 0` guard below classified EVERY AI-managed
+		// short as "quantity unavailable": a permanent per-symbol protection
+		// fault that blocked ALL new account risk and skipped the position's
+		// own stop repair / crossed-stop exit (review 2026-10-06 P0-1,
+		// reproduced by a short mirror test; F05/F08 short paths depend on
+		// this normalization too).
+		qty = math.Abs(qty)
 		if symbol == "" || side == "" || !at.isAIManaged(symbol, side) {
 			continue
 		}
 		key := symbol + "_" + side
-		if mark <= 0 || qty <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) || math.IsNaN(qty) || math.IsInf(qty, 0) {
+		if mark <= 0 || qty == 0 || math.IsNaN(mark) || math.IsInf(mark, 0) || math.IsNaN(qty) || math.IsInf(qty, 0) {
 			at.setProtectionFault(key, "live mark or quantity unavailable")
 			continue
 		}

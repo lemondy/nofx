@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -272,21 +273,33 @@ func (s *Scheduler) runOnce(onDone func()) {
 	// 2026-10-03 review: the ONLY scan entry without a recover — a panic in
 	// AnalyzeMany/ScanShorts ran on the background ticker goroutine (or a
 	// RefreshNow caller's goroutine) and took the whole process down.
+	//
+	// 2026-10-06 review P2-11 (independently reproduced): the recover logged
+	// but never reset `scanning` — after a recovered panic the 5-min ticker
+	// skipped every cycle (`if s.scanning { continue }`) and RefreshNow spun
+	// to its deadline, freezing both boards until restart. The cleanup is now
+	// owned by THIS defer alone: scanning is always cleared and onDone fires
+	// exactly once whether the body returns, errors, or panics.
+	var onDoneOnce sync.Once
+	fireOnDone := func() {
+		if onDone != nil {
+			onDoneOnce.Do(onDone)
+		}
+	}
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Errorf("🐷 Breakout scan panicked (recovered): %v", r)
+			logger.Errorf("🐷 Breakout scan panicked (recovered): %v\n%s", r, debug.Stack())
 		}
+		s.mu.Lock()
+		s.scanning = false
+		s.mu.Unlock()
+		fireOnDone()
 	}()
 	start := time.Now()
 	symbols, err := TopVolumeSymbols(s.Symbols)
 	if err != nil {
 		logger.Warnf("⚠️ Breakout scheduler: failed to list symbols: %v", err)
-		s.mu.Lock()
-		s.scanning = false
-		s.mu.Unlock()
-		if onDone != nil {
-			onDone()
-		}
+		fireOnDone()
 		return
 	}
 	// Second universe: 热门/涨幅/跌幅榜 union minus the primary top-volume
@@ -364,12 +377,9 @@ func (s *Scheduler) runOnce(onDone func()) {
 		logger.Infof("🩸 Short scan updated: %d candidates in %v", len(shorts), time.Since(start).Round(time.Millisecond))
 	}
 
-	s.mu.Lock()
-	s.scanning = false
-	s.mu.Unlock()
-	if onDone != nil {
-		onDone()
-	}
+	// scanning reset and onDone fire live in the entry defer (panic-safe,
+	// exactly-once) — nothing to do here.
+	fireOnDone()
 }
 
 // applyRegimeAdjustment applies the regime haircuts, then re-grades and
@@ -432,10 +442,10 @@ func (s *Scheduler) ShortSnapshot() ([]ShortSignal, time.Time) {
 // ranking, not a filter).
 type SymbolDirection struct {
 	Symbol    string
-	Direction string  // "up" | "down"
+	Direction string // "up" | "down"
 	Score     float64
-	Grade     string  // strong / medium / weak / noise (scan-time, post-regime)
-	Pattern   string  // breakout / retest_hold / extended / approach
+	Grade     string // strong / medium / weak / noise (scan-time, post-regime)
+	Pattern   string // breakout / retest_hold / extended / approach
 }
 
 // TopSymbolsWithDirection is TopSymbols plus each symbol's selected

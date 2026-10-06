@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"nofx/market"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -785,6 +786,16 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 		wg.Add(1)
 		go func(idx int, symbol string, chg float64) {
 			defer wg.Done()
+			// Same rationale as AnalyzeMany's worker recover (2026-10-06
+			// P2-11): ScanShorts runs on caller goroutines that pass through
+			// runOnce OR straight into the kernel's candidate path — a panic
+			// here killed the process. Recover per worker, keep symbol and
+			// stack; results[idx] stays zero and the symbol drops out.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("🩸 Short scan panicked for %s (worker recovered): %v\n%s", symbol, r, debug.Stack())
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 

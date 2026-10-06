@@ -3,9 +3,12 @@ package breakout
 import (
 	"fmt"
 	"math"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
+
+	"nofx/logger"
 )
 
 // Direction of the monitored event.
@@ -63,8 +66,8 @@ const (
 const extendedPenalty = 0.65
 
 const (
-	crossWindowBars = 8  // primary breakout window (recent cross)
-	holdWindowBars  = 24 // extended window: breakout-then-hold / retest continuation
+	crossWindowBars = 8    // primary breakout window (recent cross)
+	holdWindowBars  = 24   // extended window: breakout-then-hold / retest continuation
 	retestBandATR   = 0.25 // how close a pullback must come to the level to count as a retest
 )
 
@@ -343,6 +346,17 @@ func AnalyzeMany(symbols []string, concurrency int) []ScanResult {
 		wg.Add(1)
 		go func(i int, sym string) {
 			defer wg.Done()
+			// The runOnce recover lives on the CALLER's goroutine and cannot
+			// catch a panic here — a worker panic used to kill the whole
+			// process (independently reproduced 2026-10-06: exit status 2
+			// through the real runOnce path). Recover per worker, keep the
+			// failed symbol and stack; results[i] stays zero and the symbol
+			// drops out of the board like any failed analysis.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("🐷 Breakout analyze panicked for %s (worker recovered): %v\n%s", sym, r, debug.Stack())
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			rep, err := Analyze(sym, NewBinanceDS(sym))
