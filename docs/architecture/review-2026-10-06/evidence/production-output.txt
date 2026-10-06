@@ -1,0 +1,29 @@
+Recorded during independent recheck, 2026-10-06 Asia/Shanghai
+Read-only process observation:
+PID 67272 / started 2026-10-05 17:07:44 / command ./nofx
+lsof txt: /Users/zhangyun/workspace/nofx/nofx
+Binary mtime: 2026-10-05T17:07:17.736652+08:00
+Binary build metadata (filtered):
+nofx: go1.25.3
+	build	vcs=git
+	build	vcs.revision=4cf16c408c31b9e58127f358b884872a9db4869a
+	build	vcs.time=2026-10-04T01:38:04Z
+	build	vcs.modified=true
+
+Static binary fingerprint presence (not full source reconstruction):
+nofx/trader.(*AutoTrader).processProtectionWatchdog: True
+nofx/trader.(*AutoTrader).protectionFaultReason: False
+nofx/trader.(*AutoTrader).actualFillRisk: False
+nofx/trader.(*AutoTrader).entryExecutionBlocked: False
+live mark or quantity unavailable: False
+
+Console log event counts; report commit cutoff 10-06 19:54:37:
+10-05 17:07:44 -> 10-06 19:54:37: skipped=191, reserved=0
+10-06 00:00:00 -> 10-06 19:54:37: skipped=130, reserved=0
+10-06 13:25:00 -> 10-06 19:54:37: skipped=44, reserved=0
+SHORT_TOP_CONFIRM_MISSING: 0 matching log lines (not proof of no eligible candidates)
+BTC_4H_STRONGBULL: 0 matching log lines (not proof of no eligible candidates)
+10-05 17:08:14 [INFO] kernel/engine.go:1244 🩸 Short-scan quality floor (grade=noise): skipped 76 candidates
+10-05 17:08:14 [INFO] kernel/engine.go:1101 🐷 Piggy-dash source: 6 symbols (direction="", floor 6/24 rows)
+10-06 13:25:16 [INFO] kernel/engine.go:1244 🩸 Short-scan quality floor (grade=noise): skipped 69 candidates
+10-06 13:25:16 [INFO] kernel/engine.go:1101 🐷 Piggy-dash source: 8 symbols (direction="", floor 8/24 rows)

@@ -1,0 +1,46 @@
+package api
+
+import (
+	"github.com/gin-gonic/gin"
+	"net/http/httptest"
+	"nofx/market/breakout"
+	"testing"
+	"time"
+)
+
+func TestRecheck06PublicScanHasCacheLockAndRateLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	old := scanCache
+	defer func() { scanCache = old }()
+	scanCache = &struct {
+		results []breakout.ScanResult
+		expires time.Time
+	}{make([]breakout.ScanResult, 30), time.Now().Add(time.Hour)}
+	r := gin.New()
+	r.Use(requestLimits())
+	r.GET("/api/breakout/scan", (&Server{}).handleBreakoutScan)
+	for i := 0; i < 121; i++ {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/breakout/scan?limit=5", nil))
+		want := 200
+		if i == 120 {
+			want = 429
+		}
+		if w.Code != want {
+			t.Fatalf("attempt=%d status=%d want=%d", i+1, w.Code, want)
+		}
+	}
+	t.Log("120 unauthenticated cached responses; request 121 is rate-limited")
+	r2 := gin.New()
+	r2.GET("/api/breakout/scan", (&Server{}).handleBreakoutScan)
+	func() {
+		scanComputeMu.Lock()
+		defer scanComputeMu.Unlock()
+		w := httptest.NewRecorder()
+		r2.ServeHTTP(w, httptest.NewRequest("GET", "/api/breakout/scan", nil))
+		if w.Code != 503 || w.Header().Get("Retry-After") != "5" {
+			t.Fatalf("scan lock did not reject: %d", w.Code)
+		}
+	}()
+	t.Log("concurrent scan is rejected with 503 and Retry-After=5")
+}

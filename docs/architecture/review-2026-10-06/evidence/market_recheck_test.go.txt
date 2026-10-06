@@ -1,0 +1,74 @@
+package breakout
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+type recheck06Transport func(*http.Request) (*http.Response, error)
+
+func (f recheck06Transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func recheck06Response(body string) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+func TestRecheck06RunOncePanicLeavesScanning(t *testing.T) {
+	old := binanceHTTP
+	defer func() { binanceHTTP = old }()
+	calls := 0
+	binanceHTTP = &http.Client{Transport: recheck06Transport(func(*http.Request) (*http.Response, error) {
+		calls++
+		panic("recheck06 parent panic")
+	})}
+	s := &Scheduler{scanning: true, Symbols: 1}
+	done := false
+	s.runOnce(func() { done = true })
+	s.RefreshNow(time.Millisecond)
+	if !s.scanning || done || calls != 1 {
+		t.Fatalf("scanning=%v done=%v calls=%d", s.scanning, done, calls)
+	}
+	t.Logf("recovered parent panic: scanning=%v onDone=%v refreshUpstreamCalls=%d", s.scanning, done, calls-1)
+}
+
+// A subprocess is necessary: a worker panic would kill this test process.
+func TestRecheck06WorkerPanicEscapesOuterRecover(t *testing.T) {
+	if mode := os.Getenv("NOFX_RECHECK06_WORKER"); mode != "" {
+		gainerHistPath = filepath.Join(t.TempDir(), "gainers.json")
+		binanceHTTP = &http.Client{Transport: recheck06Transport(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/fapi/v1/ticker/24hr" {
+				return recheck06Response(`[{"symbol":"XUSDT","lastPrice":"100","priceChangePercent":"10","quoteVolume":"20000000","count":100}]`)
+			}
+			if r.URL.Query().Get("symbol") == "XUSDT" {
+				panic("recheck06 worker panic " + mode)
+			}
+			return recheck06Response(`[]`)
+		})}
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("OUTER_RECOVERED %v\n", r)
+			}
+		}()
+		if mode == "AnalyzeMany" {
+			(&Scheduler{scanning: true, Symbols: 1, Concurrent: 1}).runOnce(nil)
+		} else {
+			ScanShorts(1, -1, 0)
+		}
+		return
+	}
+	for _, mode := range []string{"AnalyzeMany", "ScanShorts"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRecheck06WorkerPanicEscapesOuterRecover$", "-test.v")
+		cmd.Env = append(os.Environ(), "NOFX_RECHECK06_WORKER="+mode)
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "panic: recheck06 worker panic "+mode) || strings.Contains(string(out), "OUTER_RECOVERED") {
+			t.Fatalf("%s: err=%v output=%s", mode, err, out)
+		}
+		t.Logf("%s worker terminated subprocess (%v); outer recover did not run", mode, err)
+	}
+}

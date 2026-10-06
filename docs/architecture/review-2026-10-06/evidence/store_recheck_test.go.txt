@@ -1,0 +1,16 @@
+package store
+
+import "testing"
+
+func TestRecheck06CostFieldConfigDiff(t *testing.T) {
+	old := map[string]interface{}{"risk_control": map[string]interface{}{"entry_round_trip_cost_bps": 20.0}}
+	next := map[string]interface{}{"risk_control": map[string]interface{}{"entry_round_trip_cost_bps": 30.0}}
+	diff := diffConfigs(old, next)
+	if len(diff) != 1 || diff[0].Path != "risk_control.entry_round_trip_cost_bps" || diff[0].Old != "20" || diff[0].New != "30" {
+		t.Fatalf("diff=%+v", diff)
+	}
+	if len(diffConfigs(old, old)) != 0 {
+		t.Fatal("unchanged config must not produce a diff")
+	}
+	t.Logf("explicit config change is visible: %+v; code-only default change creates no config diff", diff[0])
+}

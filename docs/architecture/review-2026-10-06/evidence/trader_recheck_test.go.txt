@@ -1,0 +1,82 @@
+package trader
+
+import (
+	"nofx/kernel"
+	"nofx/store"
+	"nofx/trader/types"
+	"strings"
+	"testing"
+)
+
+type recheck06Trader struct {
+	Trader
+	side  string
+	qty   float64
+	reads int
+}
+
+func (m *recheck06Trader) GetPositions() ([]map[string]interface{}, error) {
+	return []map[string]interface{}{{"symbol": "XUSDT", "side": m.side, "positionAmt": m.qty, "entryPrice": 100.0, "markPrice": 100.0, "leverage": 2.0}}, nil
+}
+func (m *recheck06Trader) GetOpenOrders(string) ([]types.OpenOrder, error) {
+	m.reads++
+	ps, exit, sl, tp := "LONG", "SELL", 95.0, 110.0
+	if m.side == "short" {
+		ps, exit, sl, tp = "SHORT", "BUY", 105, 90
+	}
+	return []types.OpenOrder{
+		{OrderID: "sl", Type: "STOP_MARKET", PositionSide: ps, Side: exit, StopPrice: sl, Quantity: 1, Status: "NEW"},
+		{OrderID: "tp", Type: "TAKE_PROFIT_MARKET", PositionSide: ps, Side: exit, StopPrice: tp, Quantity: 1, Status: "NEW"},
+	}, nil
+}
+
+// These tests assert the defective baseline behavior, not the desired fix.
+func TestRecheck06WatchdogSignedQuantity(t *testing.T) {
+	for _, tc := range []struct {
+		name, side string
+		qty        float64
+		fault      bool
+	}{
+		{"long", "long", 1, false},
+		{"binance_short", "short", -1, true},
+		{"unsigned_short", "short", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &recheck06Trader{side: tc.side, qty: tc.qty}
+			at := riskTestTrader(store.RiskControlConfig{})
+			at.trader = m
+			at.positionInitialStopLoss = map[string]float64{}
+			for i := 0; i < 2; i++ {
+				at.processProtectionWatchdog()
+			}
+			reason := at.protectionFaultReason()
+			if (reason != "") != tc.fault {
+				t.Fatalf("unexpected fault: %q", reason)
+			}
+			if tc.fault && (!strings.Contains(reason, "quantity unavailable") || at.GetRecordedStopLoss("XUSDT", tc.side) != 0) {
+				t.Fatalf("negative short did not skip SL verification: reason=%q sl=%v", reason, at.GetRecordedStopLoss("XUSDT", tc.side))
+			}
+			t.Logf("side=%s qty=%g fault=%q recordedSL=%g orderReads=%d", tc.side, tc.qty, reason, at.GetRecordedStopLoss("XUSDT", tc.side), m.reads)
+		})
+	}
+}
+
+func TestRecheck06ShortFaultBlocksAccountPeers(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.userID, at.exchangeID, at.trader = "recheck06", "mock-account", &recheck06Trader{side: "short", qty: -1}
+	peer := riskTestTrader(store.RiskControlConfig{})
+	peer.userID, peer.exchangeID = at.userID, at.exchangeID
+	registerAccountTrader(at)
+	registerAccountTrader(peer)
+	defer unregisterAccountTrader(at)
+	defer unregisterAccountTrader(peer)
+	at.processProtectionWatchdog()
+	if peer.entryExecutionBlocked("YUSDT", "long") == nil || peer.pendingAccountHaltReason() == "" {
+		t.Fatal("peer did not halt")
+	}
+	d := kernel.Decision{Symbol: "YUSDT", Action: "open_long", Confidence: 100}
+	if len(peer.applyHardRiskGates([]kernel.Decision{d}, &kernel.Context{})) != 0 {
+		t.Fatal("decision was not filtered")
+	}
+	t.Log("negative short fault reaches account peer's execution, pending, and decision gates")
+}

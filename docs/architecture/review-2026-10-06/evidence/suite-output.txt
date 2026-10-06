@@ -1,0 +1,16 @@
+Go 1.25.3 darwin/arm64
+Baseline: abba5978; report: 113bbb39
+go build ./...: exit 0 (no output)
+
+Command: go test ./trader ./market/breakout ./kernel ./store ./api ./trader/kucoin ./trader/gate ./trader/hyperliquid ./trader/bybit ./trader/aster ./trader/okx -count=1
+ok  	nofx/trader	3.538s
+ok  	nofx/market/breakout	0.429s
+ok  	nofx/kernel	45.717s
+ok  	nofx/store	0.702s
+ok  	nofx/api	0.791s
+ok  	nofx/trader/kucoin	0.487s
+ok  	nofx/trader/gate	0.349s
+ok  	nofx/trader/hyperliquid	0.402s
+ok  	nofx/trader/bybit	0.343s
+ok  	nofx/trader/aster	0.506s
+?   	nofx/trader/okx	[no test files]

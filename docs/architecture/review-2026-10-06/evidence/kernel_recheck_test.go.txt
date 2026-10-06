@@ -1,0 +1,58 @@
+package kernel
+
+import (
+	"nofx/market"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRecheck06BBRideDropsClosedTail(t *testing.T) {
+	bars := bbRideSeries(30, 5)
+	last := &bars[len(bars)-1]
+	last.Close = last.Open // fully closed doji invalidates the current streak
+	data := &market.Data{TimeframeData: map[string]*market.TimeframeSeriesData{"15m": {Klines: bars}}}
+	if len(ClosedKlines(data.TimeframeData["15m"], time.Now(), 15*time.Minute)) != len(bars) {
+		t.Fatal("fixture must have all closed bars")
+	}
+	ride := computeBBRide(data)
+	if !ride.Ride || ride.Windows != 4 {
+		t.Fatalf("unexpected baseline: %+v", ride)
+	}
+	forming := market.KlineBar{Time: time.Now().Truncate(15 * time.Minute).UnixMilli()}
+	data.TimeframeData["15m"].Klines = append(bars, forming)
+	current := computeBBRide(data)
+	if current.Ride || current.Windows != 0 {
+		t.Fatalf("closed doji should stop the ride: %+v", current)
+	}
+	t.Logf("same closed history: no forming tail -> ride=%v windows=%d; with forming tail -> ride=%v windows=%d", ride.Ride, ride.Windows, current.Ride, current.Windows)
+}
+
+func TestRecheck06BTCPhaseBiasDirection(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		closedBTC, liveBTC, coin float64
+		weakCode                 bool
+	}{
+		{"BTC_just_rose", 1, 5, 3, false},
+		{"BTC_just_fell", 5, 1, 3, true},
+	} {
+		closes := make([]float64, 60)
+		for i := range closes {
+			closes[i] = 100
+		}
+		closes[len(closes)-1] = 100 * (1 + tc.closedBTC/100)
+		coin := tc.coin
+		codes := btcWeakLongCodes(&SymbolSignal{Derivatives: &DerivSignal{PriceChange24hLivePct: &coin}}, SignalOptions{BtcTrendCloses: closes})
+		weak := false
+		for _, c := range codes {
+			if strings.HasPrefix(c, "BTC_WEAK_LONG_") {
+				weak = true
+			}
+		}
+		if weak != tc.weakCode {
+			t.Fatalf("%s: codes=%v", tc.name, codes)
+		}
+		t.Logf("%s: closedBTC=%g%% liveBTC=%g%% coin=%g%% actualWeakBlock=%v desiredLiveWeakBlock=%v", tc.name, tc.closedBTC, tc.liveBTC, tc.coin, weak, tc.coin < tc.liveBTC)
+	}
+}

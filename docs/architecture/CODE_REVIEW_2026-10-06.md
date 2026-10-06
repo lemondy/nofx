@@ -1,5 +1,20 @@
 # 全局深度审查（第五轮）· 2026-10-06
 
+> ## ⚠️ 勘误（同日独立复核，以 [CODE_REVIEW_2026-10-06_RECHECK.md](CODE_REVIEW_2026-10-06_RECHECK.md) 为准）
+>
+> 本报告经独立单线复核后，以下结论被推翻或修正（原文保留为历史记录，不原地改写）：
+>
+> 1. **P0-1 成立但影响面收窄**：触发条件是 **AI 管理的负数量非零空头仓**（典型 Binance），不是"所有适配器的任何空头"；故障阻断新增风险+可撤存量入场挂单+跳过受影响空头的保护恢复/紧急退出——已有保护单不失效、平仓入口不封锁，"启动即自锁"仅适用于已有此类持仓时。镜像用例（long +1 / short −1 / short +1）已复现。
+> 2. **P2×11 拆解**：6 条成立（1 C2 残留、2 BTC 双层分歧、5 窗口不对称、6 缓存静默窗、7 调用放大、11 panic 缺口）；**5 条被推翻或降级**——P2-3（我漏读了 `requestLimits` 120/min/IP 桶 + `scanComputeMu.TryLock` 串行 + 2min 缓存三层防护，且扫描集固定 `TopVolumeSymbols(30)`，"limit×~6" 描述错误）、P2-4（QUANT_FIXES §2 已写明 20bps 与新公式，"未标注"不成立）、P2-8（72 = 100/lev×0.9×0.8，出处在我漏读的 validateOpenRisk :681-688 注释）、P2-9（工作区事项非代码缺陷）、P2-10（reset-password 实为 410 禁用，无恢复流程）。
+> 3. **P2-5 我把方向写反了**：比较是 `coin_live < btc_closed → 拦`，BTC 刚上涨时是**误放**中间强度币、刚回落时**误拦**——复核有数值复现。
+> 4. **§4.1 的"并发合流"撤回**：`binanceBTC4hCloses` 锁内判断后解锁再发 HTTP（:731-748），无 singleflight/inflight——那是 agent 报告未经验证的结论，我未核实就收录。
+> 5. **F01–F16 裁决改写**："15 项无条件合格"应为主要修复成立；F04 明确失败（符号回归），F05/F08 的负数量空头路径依赖同一修复，只能条件裁决。
+> 6. **生产事实修正**：`go version -m` 显示 vcs.revision=4cf16c40 且 **vcs.modified=true**——应表述为"以 4cf16c40 为版本元数据的脏工作树构建"，不能等同纯净 4cf16c40；方法名探测支持 F04/F09 未进入该二进制。
+> 7. **数据口径修正**：磨顶 45/0 缺统计窗口，复核按窗口给出 10-05 17:07→10-06 19:54 = **191 skipped / 0 入选**（当日 130/0），且是日志事件计数非独立交易机会；"13:25 skipped 66"应为 10-05 17:08:14 skipped 76（piggy floor 6/24）、10-06 13:25:16 skipped 69（8/24）。
+> 8. panic recover 的引入提交实为 `6edb7f454`（10-04 06:51），代码注释写"10-03 review"系审查日期与提交日期混淆；"工程质量高于以往任何一轮"无评价指标，仅为主观判断。
+>
+> 可重跑证据见 [review-2026-10-06/evidence/](review-2026-10-06/evidence/README.md)。
+
 - **基线**：`dev` @ `abba5978`（F01–F16 修复批次，10-06 19:26 提交，提交信息 "update code"）
 - **生产进程**：PID 67272，二进制构建于 **10-05 17:07** —— **不含 `abba5978`**（F01–F16 修复写入于 10-05 20:30–21:43）。生产当前 = `4cf16c40`（含 10-04 两批审查修复），即本报告 §3 的 P0 在生产上**尚未生效**，采纳修复后重启才会带入（也会带入本 P0，必须先修）。
 - **方法**：7 个领域并行审查（kernel 信号计算 / kernel 引擎与提示词契约 / trader 执行风控 / market 扫描回测 / 交易所适配器 / store-api-security 基建 / web 前端），全部发现经人工逐条读码核实后收录。受并发配额限制，适配器、基建、web、kernel-diff、trader-diff 由主线人工完成并已在文中标注。
@@ -80,13 +95,13 @@ if mark <= 0 || qty <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) || math.IsNa
 | 项 | 裁决 | 依据（人工读码核实） |
 | --- | --- | --- |
 | F01 滑点方向反 | ✅ 修复合格 | `adverseSlippageBps` 多空镜像修正（orders.go:376-390）；长/短两条执行路径对称 |
-| F02 BTC 门用 1h 数据 | ✅ 修复合格 | `BtcTrendCloses: binanceBTC4hCloses(300)`；BTC4hTrendCloses 供执行端同源；30s 失败节流见 P2-1 |
+| F02 BTC 门用 1h 数据 | ✅ 修复合格 | `BtcTrendCloses: binanceBTC4hCloses(300)`；BTC4hTrendCloses 供执行端同源；30s 失败节流见 P2-6 |
 | F03 禁开码未覆盖市价 | ✅ 修复合格 | `entryExecutionBlocked` 挂入市价/限价两条执行路径；absoluteBanCode 语义经由 GateStates 穿线（本轮抽查 entryExecutionBlocked 的 failed 匹配逻辑一致） |
-| F04 看门狗足额保护 | ⚠️ **方向对，引入 P0-1** | 覆盖核验（状态/方向/触发价/数量/去重）语义正确（protection.go:1-50）；`qty <= 0` 符号回归见 §1 |
-| F05 越过止损只告警 | ✅ 修复合格 | protectionFailure 3 次预算 → markCloseIntent + emergencyClose；fault 保留至快照证实 |
+| F04 看门狗足额保护 | ❌ **失败（引入 P0-1，复核镜像用例复现）** | 覆盖核验（状态/方向/触发价/数量/去重）语义正确（protection.go:1-50）；`qty <= 0` 符号回归见 §1 |
+| F05 越过止损只告警 | ⚠️ 条件裁决：负数量空头路径被 P0-1 跳过 | protectionFailure 3 次预算 → markCloseIntent + emergencyClose；fault 保留至快照证实 |
 | F06 熔断后挂单仍可成交 | ✅ 修复合格 | cancelAccountPendingRisk：活跃策略+停用策略持久行+网格预留全覆盖；撤后查成交、残量保护、未确认终态保持 fault（pending_risk.go:51-120） |
 | F07 多所保护回读契约 | ✅ 修复合格 | KuCoin（乘数换算+avgDealPrice 优先+done 细分+closeOrder:false 且 lots≤0 守卫兜底）、Gate（Rule 1/2 修正+圆整拒绝+cancel 只动 reduce-only）、Bybit（positionIdx 推导+closeOnTrigger 并入）、Aster（ReduceOnly/ClosePosition 补齐）、Hyperliquid（FrontendOpenOrders+未识别触发 fail-closed）逐个核过 |
-| F08 裸仓 ATR 零数量 | ✅ 修复合格 | watchdog 恢复读真实 qty；SL 先落库后 TP（风险敞口先闭环）——注意其中 qty 符号同样依赖 §1 修复 |
+| F08 裸仓 ATR 零数量 | ⚠️ 条件裁决：同 P0-1 符号依赖 | watchdog 恢复读真实 qty；SL 先落库后 TP——负数量空头路径依赖 §1 修复 |
 | F09 成交平移破坏结构 | ✅ 修复合格 | reanchorProtectivePrices 整体删除；结构 SL/TP 保留，actualFillRisk 复核不合格→撤余量+退出；RecoveryReason 持久化（store 迁移幂等已核，启动 AutoMigrate 自动加列） |
 | F10 未闭合 K 线进确认 | ✅ 修复合格（已复核） | 仅 fetchKlines 改：`closeTime >= now → skip` 对 Binance openTime+dur−1ms 无 off-by-one；全包 6 条 kline 摄入路径均经它；残留 volSlot 滞后一根见 P3-1（且顺带消除 live-vs-replay 分歧） |
 | F11 回测 1h 柱不对齐 | ✅ 修复合格（已复核） | resample1h 仅 UTC 整点对齐的 15m 开盘 + 0/15/30/45m 严格连续性 + 丢弃尾桶；信号 bar 标签非连续即跳过 |
@@ -114,10 +129,10 @@ if mark <= 0 || qty <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) || math.IsNa
 
 ## 5. 已上线效果验证（批次 1+2，生产 10-05 17:07 起）
 
-- 候选池质量下限立即生效：13:25 首扫 `Short-scan quality floor (grade=noise): skipped 66 candidates`（当日 8/74 过线，市场极淡——下限按设计工作）；`Piggy-dash source: floor 8/24 rows`（3× 超采+过滤正常）。
+- 候选池质量下限生效（勘误后口径，复核窗口核对）：10-05 17:08:14 首扫 `Short-scan quality floor: skipped 76`（piggy floor 6/24）；10-06 13:25:16 skipped 69（piggy floor 8/24）——下限按设计工作；批次 2 门码在该窗口日志未见匹配（仅能证明"该日志中未见"，不作为无候选的证明）。
 - 10-04 诊断的"池空跳周期"根因（网络抖动三源全空）在 10-04 13:16 已自愈；此现象与代码无关。
 - SHORT_TOP_CONFIRM_MISSING / BTC_4H_STRONGBULL 尚无线上拦截样本（10-05 以来无符合条件的候选），gate_shadow_blocks 积累后再校准阈值。
-- 磨顶宇宙（#7 遗留）生产实证维持：45 次 `Grinding-top reserved slot skipped`（分数 30-33）vs 0 次入选——**待拍板**：独立评分 vs 降门槛 vs 砍宇宙。
+- 磨顶宇宙（#7 遗留）生产实证维持（勘误后口径）：10-05 17:07→10-06 19:54 窗口 **191 次 skipped / 0 次入选**（10-06 当日 130/0）——日志事件计数，含同候选反复扫描，非独立交易机会。**待拍板**：独立评分 vs 降门槛 vs 砍宇宙。
 
 ## 6. 跨切面主题
 
@@ -137,7 +152,7 @@ if mark <= 0 || qty <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) || math.IsNa
 | --- | --- | --- |
 | trader 执行/风控（F01-F09 diff + 常规） | 人工 | diff 全量逐 hunk；常规面抽查（并发 map、order 语义、fail-open 清点） |
 | kernel signal_layer.go 全文 | agent 全文审查 + 人工复核 | ✅ 完成：3 项发现（P2-1/2/5）+ §4.1 验证记录；结论已逐条核实 |
-| kernel engine/prompt/schema/契约 | 人工 diff + agent（进行中） | F02/F10/F14/F15/F16 hunks 全量；契约抽查 |
+| kernel engine/prompt/schema/契约 | 人工 diff + agent 全文审查（完成，勘误节第 4 条修正其一处结论） | F02/F10/F14/F15/F16 hunks 全量；契约抽查；"并发合流"结论错误已撤回 |
 | market/breakout（F10-F15 diff + 常规） | 人工 diff + agent 全文审查 | ✅ 完成：11 项发现全核实；研究→live 权重全路径、打标/重试/prune、原子写、回测对齐、F10 closeTime、10-04 修复互洽全部验证 |
 | 交易所适配器（F07 + 常规） | 人工 | kucoin/gate/bybit/aster/hyperliquid hunks 全量；binance 仓位符号链路 |
 | store/api/security/manager | 人工 | 迁移幂等、路由保护面、SSRF 守卫（前轮已审）、stash 内容 |
