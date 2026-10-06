@@ -147,6 +147,7 @@ type LiquiditySignal struct {
 
 // SymbolSignal is the complete per-symbol block injected into the prompt.
 type SymbolSignal struct {
+	rrCostBps      float64
 	Symbol         string  `json:"symbol"`
 	TimestampUTC   string  `json:"timestamp_utc"`
 	Price          float64 `json:"price"`
@@ -397,6 +398,7 @@ type MinSizeCheck struct {
 // picks. first_rr_ge_target is the level the TP rule demands: the nearest
 // target whose RR clears min_rr — the model adopts it instead of re-deriving.
 type RRScan struct {
+	CostBps         float64   `json:"round_trip_cost_bps,omitempty"`
 	Direction       string    `json:"direction"`                    // long | short
 	EntryPrice      float64   `json:"entry_price"`                  // the anchor the scan assumed
 	EntryBasis      string    `json:"entry_basis"`                  // limit_anchor | live_price
@@ -548,9 +550,10 @@ type BiasBlock struct {
 // timeframe, and the quant layer's true 1h OI change. All indicator features
 // are self-computed from closed bars — no display toggles involved.
 type SignalOptions struct {
-	Now       time.Time // zero falls back to time.Now()
-	PrimaryTF string
-	OI1hPct   *float64
+	EntryRoundTripCostBps float64   // disclosed cost estimate; raw research callers may pass zero
+	Now                   time.Time // zero falls back to time.Now()
+	PrimaryTF             string
+	OI1hPct               *float64
 	// CurrentPrice is the live ticker price used as the support/resistance
 	// anchor (which pivot levels count as above/below). Zero falls back to
 	// data.CurrentPrice, then to each timeframe's last closed close.
@@ -722,6 +725,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	}
 
 	sig := &SymbolSignal{
+		rrCostBps:    opt.EntryRoundTripCostBps,
 		Symbol:       strings.ToUpper(symbol),
 		TimestampUTC: now.UTC().Format(time.RFC3339),
 		Price:        data.CurrentPrice,
@@ -1234,7 +1238,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		}
 	}
 
-	// Min-position-size feasibility: notional = equity×risk% ÷ stop%, so the
+	// Min-position-size feasibility: notional = equity×risk% ÷ (stop%+cost%), so the
 	// widest stop the rules allow must still satisfy equity×risk%/stop ≥
 	// min_position_size. The binding constraint is the NOISE FLOOR
 	// (SLMinATRMult×ATR(1h)) — if even that floor overshoots, no permitted
@@ -1259,8 +1263,8 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 					f.StepSize, f.MinQty, exch, sig.Price)
 			}
 		}
-		// Stop distance d (in %) at which notional exactly equals the minimum.
-		maxStopPct := riskUSD / minSize * 100
+		// Remaining stop-distance budget after round-trip costs at the minimum.
+		maxStopPct := riskUSD/minSize*100 - opt.EntryRoundTripCostBps/100
 		ms := &MinSizeCheck{
 			Feasible:           floorPct <= maxStopPct,
 			MinPositionSizeUsd: math.Round(minSize*100) / 100,
@@ -1898,8 +1902,8 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			score := effectiveScore
 			minScore := int(opt.NegativeEdgeMinScore)
 			if minScore > 0 && !directionScoreAtLeastScore(score, isLong, minScore) {
-			add(fmt.Sprintf("NEG_EDGE_SCORE_%+d_LT_%.0f", score, opt.NegativeEdgeMinScore))
-		}
+				add(fmt.Sprintf("NEG_EDGE_SCORE_%+d_LT_%.0f", score, opt.NegativeEdgeMinScore))
+			}
 			if !negativeEdgeAligned(sig, isLong) {
 				add("NEG_EDGE_TREND_MISALIGNED")
 			}
@@ -1952,9 +1956,9 @@ func scanRR(entry float64, basis string, stopPct float64, stopPrice float64, tfs
 func scanRRForSymbol(sig *SymbolSignal, entry float64, basis string, stopPct float64, stopPrice float64, isLong bool, minRR float64) *RRScan {
 	var out *RRScan
 	if market.IsBStockSymbol(sig.Symbol) {
-		out = scanRRWindow(entry, basis, stopPct, stopPrice, sig.Timeframes, isLong, minRR, 4*time.Hour, 24*time.Hour)
+		out = scanRRWindowWithCost(entry, basis, stopPct, stopPrice, sig.Timeframes, isLong, minRR, 4*time.Hour, 24*time.Hour, sig.rrCostBps)
 	} else {
-		out = scanRR(entry, basis, stopPct, stopPrice, sig.Timeframes, isLong, minRR)
+		out = scanRRWindowWithCost(entry, basis, stopPct, stopPrice, sig.Timeframes, isLong, minRR, 15*time.Minute, 4*time.Hour, sig.rrCostBps)
 	}
 	// Touch counts (user directive 09-29): neutral "price has been here"
 	// evidence per menu option — closed bars whose range reached the level
@@ -1997,6 +2001,9 @@ func touchCount(highs, lows []float64, level float64, isLongTarget bool) int {
 // rule-mandated pick (nearest qualifying level); best_rr is the definitive
 // upper bound used to declare the RR gate structurally failed.
 func scanRRWindow(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64, minTF, maxTF time.Duration) *RRScan {
+	return scanRRWindowWithCost(entry, basis, stopPct, stopPrice, tfs, isLong, minRR, minTF, maxTF, 0)
+}
+func scanRRWindowWithCost(entry float64, basis string, stopPct float64, stopPrice float64, tfs map[string]*TFSignal, isLong bool, minRR float64, minTF, maxTF time.Duration, costBps float64) *RRScan {
 	type tfLevels struct {
 		name string
 		tf   *TFSignal
@@ -2088,6 +2095,7 @@ func scanRRWindow(entry float64, basis string, stopPct float64, stopPrice float6
 		stopPct = math.Abs(stopPrice-entry) / entry * 100
 	}
 	out := &RRScan{
+		CostBps:         costBps,
 		Direction:       direction,
 		EntryPrice:      entry,
 		EntryBasis:      basis,
@@ -2123,7 +2131,8 @@ func scanRRWindow(entry float64, basis string, stopPct float64, stopPrice float6
 		if !isLong {
 			dist = (entry - t) / entry * 100
 		}
-		v := dist / stopPct
+		costPct := math.Max(0, costBps) / 100
+		v := (dist - costPct) / (stopPct + costPct)
 		if v > best {
 			best, bestT = v, t
 		}

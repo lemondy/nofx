@@ -11,13 +11,9 @@ import (
 	"nofx/logger"
 )
 
-// The backtest harness replays the scorer over historical klines and measures
-// NET forward returns (round-trip taker fees + slippage) of every signal.
-// The tuner selects cutoffs on a TRAIN segment and applies them only when
-// they verify on the held-out TEST segment (temporal walk-forward) —
-// in-sample argmax was rejected by the 2026-09-22 quant review (E2/A2).
-// Known non-replayable layers, uniform for all candidates: the crowd
-// penalty (no funding/OI/LS history) stays out of the replay score.
+// This harness measures net signal forward returns. It does not simulate
+// order fills, portfolio limits, SL/TP or trailing exits. Its output is a
+// research proposal and must never publish live trading parameters.
 
 const (
 	btForwardBars1h  = 4  // 15m bars ≈ 1h
@@ -71,11 +67,14 @@ type BacktestSummary struct {
 	// selected on the TRAIN segment must verify on the held-out TEST segment
 	// (bucket edge positive AND above the test-wide average) or they are
 	// rejected, not applied.
-	CostRoundTripPct float64  `json:"cost_round_trip_pct"`
-	TrainSignals     int      `json:"train_signals"`
-	TestSignals      int      `json:"test_signals"`
-	Verified         []string `json:"verified,omitempty"`
-	Rejected         []string `json:"rejected,omitempty"`
+	CandidateParams  *TunableParams `json:"candidate_params,omitempty"`
+	Applied          bool           `json:"applied"`
+	EvaluationScope  string         `json:"evaluation_scope"`
+	CostRoundTripPct float64        `json:"cost_round_trip_pct"`
+	TrainSignals     int            `json:"train_signals"`
+	TestSignals      int            `json:"test_signals"`
+	Verified         []string       `json:"verified,omitempty"`
+	Rejected         []string       `json:"rejected,omitempty"`
 }
 
 const backtestPath = "data/breakout_backtest.json"
@@ -142,16 +141,26 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 		// signals saw highs/lows/VPVR that had not formed yet (lookahead
 		// bias). Levels now rebuild at most once per UTC day from data
 		// SLICED to the signal time; a signal can never see a future bar.
-		now0 := time.UnixMilli(k15[btWarmupBars].OpenTime)
-		currentDay := now0.UTC().Format("2006-01-02")
+		if len(k15) <= btWarmupBars+btForwardBars24h {
+			logger.Warnf("Backtest %s: insufficient closed candles (%d)", sym, len(k15))
+			continue
+		}
+		now0 := time.UnixMilli(k15[btWarmupBars].OpenTime).Add(15 * time.Minute)
+		currentDay := now0.UTC().Truncate(time.Hour)
 		levels := buildLevels(sliceClosed(d1, now0, 24*time.Hour), sliceClosed(k1h, now0, time.Hour))
 
 		end := len(k15) - btForwardBars24h
 		for i := btWarmupBars; i < end; i += 3 { // stride 3 keeps cost sane
+			// Fixed-horizon labels cannot count through missing candles.
+			if k15[i+btForwardBars1h].OpenTime != k15[i].OpenTime+time.Hour.Milliseconds() ||
+				k15[i+btForwardBars4h].OpenTime != k15[i].OpenTime+4*time.Hour.Milliseconds() ||
+				k15[i+btForwardBars24h].OpenTime != k15[i].OpenTime+24*time.Hour.Milliseconds() {
+				continue
+			}
 			series := k15[:i+1]
 			barTime := time.UnixMilli(series[len(series)-1].OpenTime)
-			sigTime := barTime
-			if day := sigTime.UTC().Format("2006-01-02"); day != currentDay {
+			sigTime := barTime.Add(15 * time.Minute)
+			if day := sigTime.UTC().Truncate(time.Hour); day != currentDay {
 				currentDay = day
 				levels = buildLevels(sliceClosed(d1, sigTime, 24*time.Hour), sliceClosed(k1h, sigTime, time.Hour))
 			}
@@ -174,7 +183,7 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			if down.Score > up.Score {
 				dir, score = DirDown, down.Score
 			}
-			sigTime = time.UnixMilli(series[len(series)-1].OpenTime).UTC()
+			sigTime = time.UnixMilli(series[len(series)-1].OpenTime).Add(15 * time.Minute).UTC()
 			regime, regimeMult := regimeAt(regimeBars, sigTime, dir)
 			score *= regimeMult
 			// Online extended-pattern penalty (A2): Analyze() multiplies the
@@ -232,24 +241,16 @@ type btcRegimeTimelinePoint struct {
 // btcRegimeTimeline classifies every 4h bar of BTC history.
 func btcRegimeTimeline(btc4h []Kline) []btcRegimeTimelinePoint {
 	c := closes(btc4h)
-	if len(c) < 30 {
-		return nil
-	}
-	e20 := ema(c, 20)
-	e50 := ema(c, 50)
-	rsi := rsiSeries(c, 14)
 	out := make([]btcRegimeTimelinePoint, len(c))
 	for i := range c {
-		pt := btcRegimeTimelinePoint{openTimeMs: btc4h[i].OpenTime, upMult: 1.0, downMult: 1.0, regime: "chop"}
-		if i >= 20 && i < len(rsi) {
-			bull := e20[i] > e50[i] && c[i] > e20[i] && rsi[i] >= 60
-			bear := e20[i] < e50[i] && c[i] < e20[i] && rsi[i] <= 40
+		pt := btcRegimeTimelinePoint{openTimeMs: btc4h[i].OpenTime, upMult: 1, downMult: 1}
+		regime, bull, bear, known := BTC4hRegime(c[:i+1])
+		if known {
+			pt.regime = regime
 			switch {
 			case bull:
-				pt.regime = "btc_bull"
 				pt.downMult = 0.85
 			case bear:
-				pt.regime = "btc_bear"
 				pt.upMult = 0.85
 			default:
 				pt.upMult = 0.95
@@ -268,12 +269,17 @@ func regimeAt(tl []btcRegimeTimelinePoint, t time.Time, dir string) (string, flo
 		return "", 1.0
 	}
 	ms := t.UnixMilli()
-	pick := tl[0]
+	var pick btcRegimeTimelinePoint
+	found := false
 	for i := len(tl) - 1; i >= 0; i-- {
 		if tl[i].openTimeMs+4*3600*1000 <= ms {
 			pick = tl[i]
+			found = true
 			break
 		}
+	}
+	if !found {
+		return "", 1
 	}
 	if dir == DirDown {
 		return pick.regime, pick.downMult
@@ -300,8 +306,16 @@ func forwardReturn(k []Kline, i, bars int, dir string) float64 {
 // resample1h aggregates 15m candles into 1h candles.
 func resample1h(k []Kline) []Kline {
 	var out []Kline
-	for i := 0; i+3 < len(k); i += 4 {
+	for i := 0; i+3 < len(k); i++ {
+		if k[i].OpenTime%time.Hour.Milliseconds() != 0 {
+			continue
+		}
 		b := k[i : i+4]
+		if b[1].OpenTime != b[0].OpenTime+15*time.Minute.Milliseconds() ||
+			b[2].OpenTime != b[0].OpenTime+30*time.Minute.Milliseconds() ||
+			b[3].OpenTime != b[0].OpenTime+45*time.Minute.Milliseconds() {
+			continue
+		}
 		c := Kline{
 			OpenTime: b[0].OpenTime,
 			Open:     b[0].Open,
@@ -322,15 +336,15 @@ func resample1h(k []Kline) []Kline {
 			c.TakerBuyQty += x.TakerBuyQty
 		}
 		out = append(out, c)
+		i += 3
 	}
 	return out
 }
 
 // ── Tuner ──
 
-// TuneFromBacktest runs the backtest over the given symbols, computes outcome
-// stats, and micro-adjusts tunable parameters within hard bounds. Returns the
-// summary including a human-readable change list.
+// TuneFromBacktest persists a research proposal after a purged temporal
+// holdout and incumbent comparison. Persistence failures reach the scheduler.
 func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	signals, symbolCount, err := RunBacktest(symbols, 1400)
 	if err != nil {
@@ -365,7 +379,10 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	}
 
 	summary.CostRoundTripPct = btCostRoundTrip
-	changes, verified, rejected, trainN, testN := tuneWalkForward(signals)
+	changes, verified, rejected, trainN, testN, candidate := proposeWalkForward(signals)
+	summary.CandidateParams = candidate
+	summary.EvaluationScope = "signal_forward_returns_research_only"
+	summary.Params = GetParams()
 	summary.Changes = changes
 	summary.Verified = verified
 	summary.Rejected = rejected
@@ -378,10 +395,8 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	// summary is still persisted (observability), the error propagates.
 	if len(signals) < btMinSample {
 		summary.Changes = []string{fmt.Sprintf("STARVED: %d signals < %d minimum — no evaluation possible", len(signals), btMinSample)}
-		if data, err := json.MarshalIndent(summary, "", "  "); err == nil {
-			if err := atomicWriteJSON(backtestPath, data); err != nil {
-				logger.Errorf("⚠️ backtest summary persist FAILED: %v", err)
-			}
+		if err := persistBacktestSummary(summary); err != nil {
+			return nil, err
 		}
 		logger.Warnf("🐷 Backtest tuning STARVED: %d signals < %d minimum — retry scheduled, parameters untouched", len(signals), btMinSample)
 		return nil, fmt.Errorf("%w: %d signals < %d minimum", ErrStarved, len(signals), btMinSample)
@@ -390,39 +405,36 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	params := GetParams()
 	summary.Params = params
 
-	if data, err := json.MarshalIndent(summary, "", "  "); err == nil {
-		if err := atomicWriteJSON(backtestPath, data); err != nil {
-			logger.Errorf("⚠️ backtest summary persist FAILED: %v", err)
-		}
+	if err := persistBacktestSummary(summary); err != nil {
+		return nil, err
 	}
 
 	if len(changes) == 0 {
 		logger.Infof("🐷 Backtest tuning: %d signals analyzed (%d train / %d test), no verified change — parameters unchanged", len(signals), trainN, testN)
 	} else {
 		for _, ch := range changes {
-			logger.Infof("🐷 Backtest tuning: %s", ch)
+			logger.Infof("🐷 Backtest research proposal: %s", ch)
 		}
 	}
 	return summary, nil
 }
 
-// tuneWalkForward adjusts parameters with a temporal hold-out: cutoffs are
-// selected on the TRAIN segment (oldest 70%) and applied only when they
-// VERIFY on the TEST segment (newest 30%) — the bucket's net edge must be
-// positive AND above the test-wide average with enough samples. In-sample
-// argmax alone was the old protocol; it selected cutoffs on exactly the
-// window it was scored on (E2, QUANT_REVIEW 09-22).
-func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, trainN, testN int) {
+// No forward-return proxy may publish live execution parameters.
+func tuneWalkForward(signals []BTSignal) ([]string, []string, []string, int, int) {
+	changes, verified, rejected, trainN, testN, _ := proposeWalkForward(signals)
+	return changes, verified, rejected, trainN, testN
+}
+func proposeWalkForward(signals []BTSignal) (changes, verified, rejected []string, trainN, testN int, candidate *TunableParams) {
 	if len(signals) < btMinSample {
 		logger.Infof("🐷 Backtest tuning skipped: %d signals < %d minimum", len(signals), btMinSample)
-		return nil, nil, nil, 0, 0
+		return nil, nil, nil, 0, 0, nil
 	}
 	sorted := append([]BTSignal(nil), signals...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Time.Before(sorted[j].Time) })
 	split := int(float64(len(sorted)) * btTrainSplit)
 	if split < btMinSample || len(sorted)-split < btVerifySample {
 		logger.Infof("🐷 Backtest tuning skipped: split %d/%d too thin (train ≥ %d, test ≥ %d required)", split, len(sorted)-split, btMinSample, btVerifySample)
-		return nil, nil, nil, split, len(sorted) - split
+		return nil, nil, nil, split, len(sorted) - split, nil
 	}
 	train, test := sorted[:split], sorted[split:]
 	// F15 (2026-10-01 review): PURGE train samples whose 24h label window
@@ -440,7 +452,7 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 	}
 	if len(pruned) < btMinSample || len(test) < btVerifySample {
 		logger.Infof("🐷 Backtest tuning skipped after purge: %d/%d train (≥%d) / %d test (≥%d)", len(pruned), len(train), btMinSample, len(test), btVerifySample)
-		return nil, nil, nil, len(pruned), len(test)
+		return nil, nil, nil, len(pruned), len(test), nil
 	}
 	train = pruned
 	trainN, testN = len(train), len(test)
@@ -471,6 +483,15 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 			return false
 		}
 		edge := sum / float64(n)
+		incumbentCutoff := prev.StrongThreshold
+		if name == "medium_threshold" {
+			incumbentCutoff = prev.MediumThreshold
+		}
+		incumbentEdge, incumbentN := cutoffEdge(test, incumbentCutoff)
+		if incumbentN < btVerifySample || edge <= incumbentEdge+1e-9 {
+			rejected = append(rejected, fmt.Sprintf("%s %.0f: proxy does not outperform incumbent %.0f (edge %.2f%% vs %.2f%%, incumbent n=%d)", name, cutoff, incumbentCutoff, edge, incumbentEdge, incumbentN))
+			return false
+		}
 		if edge <= 0 || edge <= testOverall {
 			rejected = append(rejected, fmt.Sprintf("%s %.0f: test edge %.2f%% (overall %.2f%%) failed verification", name, cutoff, edge, testOverall))
 			return false
@@ -497,18 +518,14 @@ func tuneWalkForward(signals []BTSignal) (changes, verified, rejected []string, 
 	rejected = append(rejected, "centers: candidate drift not applied; full scorer replay required")
 
 	if len(changes) == 0 {
-		return nil, verified, rejected, trainN, testN
+		return nil, verified, rejected, trainN, testN, nil
 	}
 	next.UpdatedAt = time.Now()
 	next.BacktestAt = time.Now()
 	next.Samples = len(signals)
-	// P2 (2026-09-26 re-review): a persist failure must FAIL the tune — the
-	// scheduler would otherwise write the 7-day marker for a change that
-	// lives only in memory and dies on restart.
-	if err := ApplyParamsChecked(next); err != nil {
-		return append(changes, "PERSIST FAILED: "+err.Error()), verified, rejected, trainN, testN
-	}
-	return changes, verified, rejected, trainN, testN
+	rejected = append(rejected, "LIVE PUBLICATION BLOCKED: requires execution/portfolio replay, independent validation and rollback evidence")
+	candidate = &next
+	return changes, verified, rejected, trainN, testN, candidate
 }
 
 // avgRet returns the mean 24h net forward return of a signal set.
@@ -592,4 +609,28 @@ func LoadBacktestSummary() (*BacktestSummary, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+func cutoffEdge(signals []BTSignal, cutoff float64) (float64, int) {
+	sum, n := 0.0, 0
+	for _, s := range signals {
+		if s.Score >= cutoff {
+			sum += s.Ret24h
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, 0
+	}
+	return sum / float64(n), n
+}
+func persistBacktestSummary(s *BacktestSummary) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal backtest summary: %w", err)
+	}
+	if err := atomicWriteJSON(backtestPath, data); err != nil {
+		return fmt.Errorf("persist backtest summary: %w", err)
+	}
+	return nil
 }

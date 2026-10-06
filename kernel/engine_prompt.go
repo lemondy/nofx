@@ -113,18 +113,16 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// the params block (risk budget ÷ stop distance, then clamped). The old
 	// confidence-tier percentages of the Position Value Limit contradicted it
 	// (review 2026-09-07: two "mandatory" sizing methods → model picks either).
-	riskPctDefault := riskControl.RiskPerTradePct
-	if riskPctDefault <= 0 {
-		riskPctDefault = 1.5
-	}
+	riskPctDefault := riskControl.EffectiveRiskPerTradePct()
 	sb.WriteString("## Position Sizing (single formula, CODE ENFORCED)\n")
-	sb.WriteString(fmt.Sprintf("`position_size_usd` = notional value = equity × %.1f%% (risk budget) ÷ stop_distance%%, then clamped:\n", riskPctDefault))
+	sb.WriteString(fmt.Sprintf("`position_size_usd` = notional value = equity × %.1f%% (risk budget) ÷ (stop_distance%% + %.2f%% round-trip cost estimate), then clamped:\n", riskPctDefault, riskControl.EffectiveEntryRoundTripCostBps()/100))
 	sb.WriteString(fmt.Sprintf("- Lower bound: Min Position Size (%.0f USDT) — below it, skip the setup\n", minPosSize))
 	sb.WriteString("- Upper bound: the Position Value Limit above\n")
 	// Fixed-equity example keeps the prompt cacheable while retaining the
 	// configured risk percentage as the single source of sizing truth.
-	sb.WriteString(fmt.Sprintf("- Example only: equity %.0f, stop distance 6.48%% → %.0f × %.1f ÷ 6.48 ≈ %.1f USDT notional (risk at stop ≈ %.2f USDT);actual sizing uses current user-prompt equity\n",
-		exampleEquity, exampleEquity, riskPctDefault, exampleEquity*riskPctDefault/6.48, exampleEquity*riskPctDefault/100))
+	exampleCostPct := riskControl.EffectiveEntryRoundTripCostBps() / 100
+	sb.WriteString(fmt.Sprintf("- Example only: equity %.0f, stop distance 6.48%% + cost %.2f%% → %.0f × %.1f ÷ %.2f ≈ %.1f USDT notional (stop loss plus estimated costs ≈ %.2f USDT);actual sizing uses current user-prompt equity\n",
+		exampleEquity, exampleCostPct, exampleEquity, riskPctDefault, 6.48+exampleCostPct, exampleEquity*riskPctDefault/(6.48+exampleCostPct), exampleEquity*riskPctDefault/100))
 	sb.WriteString("- Wider stop → smaller position. `confidence` decides WHETHER to open, never a multiplier on position value — do NOT size from Position Value Limit percentages\n")
 	sb.WriteString(fmt.Sprintf("- Binance Hedge Mode: at most one LONG and one SHORT per symbol. Their combined gross stop-risk (including resting entries) must stay within the SAME %.1f%% equity risk budget; split that budget across sides, never count opposite risks as offsetting. Same-side orders merge on the exchange and are not separate isolated positions.\n", riskPctDefault))
 	sb.WriteString("- **DO NOT** just use available_balance as position_size_usd\n\n")
@@ -327,7 +325,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		} else {
 			params.WriteString("- 止损(手工方法论): 本策略未启用噪声下限,快照无 rr_scan/stop_plan——自行按 结构位(最近 support/resistance)外加 0.3-0.5×ATR(1h) 缓冲(空单取上半段 0.4-0.5,多单取下半段 0.3-0.4)定止损,距离 ≤ max(2×ATR(4h), 8%),结构位落在带外时放弃该设置\n")
 		}
-		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。最低RR=%.1f;后端对 TP 与 SL 使用同一 0.05%% 容差强制吸附到计划值\n", rc.MinRiskRewardRatio))
+		params.WriteString(fmt.Sprintf("- 仓位:使用前文唯一公式;min_size.feasible=false 时 wait。最低净RR=%.1f，净RR=(目标价差−往返成本)/(止损价差+往返成本)，往返成本估计 %.0fbps；菜单与执行端采用同一口径。后端对 TP 与 SL 使用同一 0.05%% 容差强制吸附到计划值\n", rc.MinRiskRewardRatio, rc.EffectiveEntryRoundTripCostBps()))
 		if TPMenuEnabled(&e.config.RiskControl) {
 			params.WriteString(fmt.Sprintf("- 止盈(菜单选择): rr_scan.tp_options 是程序预计算的止盈方案菜单(近/中/远结构位,各附 rr、touch_count=近30日触及次数、beyond_structure)。开仓时选一个编号填 tp_option(缺省=①最近合格位;偏离默认需在 reasoning 给出依据:趋势 regime、动能、上方结构强度),同时把所选 level 复制为 take_profit。usable=false 时引用 MAX_STRUCTURAL_RR=best_rr 并 wait,菜单为空同理\n"))
 			params.WriteString(fmt.Sprintf("- 出场模式(开仓必选,缺省 trend): exit_mode=trend 趋势模式(止盈只平一部分,剩余移动止损跑单,适合顺势延续行情)/exit_mode=range 震荡模式(到目标位全平,不跑单,适合区间震荡)/exit_mode=quick 快进快出(到目标位全平+开仓超过 %.0f 小时仍浮亏则程序时间止损,适合事件驱动/脉冲行情)。regime 定性判断由你做,参数由程序按模式执行;持仓中途不可改模式\n", float64(TimeStopHours(&e.config.RiskControl))))
@@ -1584,9 +1582,9 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// Long-side entry discipline (user design 2026-10-01): breakout
 		// retest anchors, the EMA20 chase cap, the BTC market filter and the
 		// greed deweight — all config-switchable via risk_control.
-		LongPullbackEntry:          e.config.RiskControl.EffectiveLongPullbackEntry(),
-		LongMaxEMA20DistPct:        e.config.RiskControl.EffectiveLongMaxEMA20DistPct(),
-		BTCFilterLong:              e.config.RiskControl.EffectiveBTCFilterLong(),
+		LongPullbackEntry:   e.config.RiskControl.EffectiveLongPullbackEntry(),
+		LongMaxEMA20DistPct: e.config.RiskControl.EffectiveLongMaxEMA20DistPct(),
+		BTCFilterLong:       e.config.RiskControl.EffectiveBTCFilterLong(),
 		// Short-side mirrors (2026-10-04 batch-2): the BTC strong-bull hard
 		// pause is OPT-IN (the scan-side ×0.85 haircut off the same shared
 		// classifier stays the default treatment); the top-confirmation gate
@@ -1595,7 +1593,8 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		ShortTopConfirmGate:        e.config.RiskControl.EffectiveShortTopConfirmGate(),
 		SentimentLongDeweightPts:   e.config.RiskControl.EffectiveSentimentLongDeweightPts(),
 		SentimentLongDeweightArmed: sentimentGreedy(e.config.RiskControl.EffectiveSentimentLongDeweightFNG()),
-		BtcTrendCloses:             binanceBTC1hCloses(300),
+		BtcTrendCloses:             binanceBTC4hCloses(300),
+		EntryRoundTripCostBps:      e.config.RiskControl.EffectiveEntryRoundTripCostBps(),
 		MaxStopDistancePct:         e.config.RiskControl.EffectiveMaxStopDistancePct(),
 	}
 	// DataQuality's bar requirements must match what fetchMarketDataWithStrategy
@@ -1693,11 +1692,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			if opt.MinPositionSizeUSDT <= 0 {
 				opt.MinPositionSizeUSDT = MinPositionSizeDefaultUSDT
 			}
-			riskPct := e.config.RiskControl.RiskPerTradePct
-			if riskPct <= 0 {
-				riskPct = 1.5
-			}
-			opt.RiskPct = riskPct
+			opt.RiskPct = e.config.RiskControl.EffectiveRiskPerTradePct()
 		}
 	}
 	// The stop noise floor is pure strategy config — independent of the

@@ -58,6 +58,23 @@ func (at *AutoTrader) executionMutex() *sync.Mutex {
 	return &at.executionStateMu
 }
 
+func (at *AutoTrader) accountPeers() []*AutoTrader {
+	peers := []*AutoTrader{at}
+	key := at.executionAccountKey()
+	if key == "" {
+		return peers
+	}
+	accountRegistry.Lock()
+	defer accountRegistry.Unlock()
+	if account := accountRegistry.accounts[key]; account != nil {
+		peers = nil
+		for peer := range account.traders {
+			peers = append(peers, peer)
+		}
+	}
+	return peers
+}
+
 // The caller owns executionMutex; pending map membership has its own mutex.
 func (at *AutoTrader) accountPendingEntries() map[string]*pendingEntry {
 	peers := []*AutoTrader{at}
@@ -190,6 +207,21 @@ func (at *AutoTrader) refreshExecutionAccount(ctx *kernel.Context) error {
 		row.Side = side
 		row.Quantity = math.Abs(qty)
 		row.EntryPrice = entry
+		mark, _ := p["markPrice"].(float64)
+		if mark > 0 {
+			row.MarkPrice = mark
+		}
+		// Exposure uses the current exchange protection, never the prompt's old stop.
+		orders, err := at.trader.GetOpenOrders(symbol)
+		if err != nil {
+			return fmt.Errorf("execution protective orders unknown: %w", err)
+		}
+		stop := protectionPrice(orders, side, "SL")
+		if !enoughProtection(orders, side, "SL", stop, row.Quantity) {
+			stop = 0
+		}
+		row.StopLossPrice = stop
+		row.TakeProfitPrice = protectionPrice(orders, side, "TP")
 		if entry <= 0 || math.IsNaN(entry) || math.IsInf(entry, 0) {
 			return fmt.Errorf("execution position price unknown")
 		}
@@ -197,7 +229,9 @@ func (at *AutoTrader) refreshExecutionAccount(ctx *kernel.Context) error {
 		if leverage <= 0 || math.IsNaN(leverage) || math.IsInf(leverage, 0) {
 			return fmt.Errorf("execution leverage unknown")
 		}
-		margin += math.Abs(qty) * entry / leverage
+		row.Leverage = int(leverage)
+		row.MarginUsed = math.Abs(qty) * entry / leverage
+		margin += row.MarginUsed
 		fresh = append(fresh, row)
 	}
 	ctx.Positions = fresh

@@ -696,11 +696,11 @@ func (at *AutoTrader) validateOpenRisk(decision *kernel.Decision, entryPrice, fl
 	// plan (SOL: decision RR 2.08 vs required 3.0, passed on a lower ticker).
 	if minRR > 0 && decision.TakeProfit > 0 {
 		if decision.Price > 0 {
-			if err := checkRR(decision, decision.Price, minRR); err != nil {
+			if err := checkNetRR(decision, decision.Price, minRR, at.config.StrategyConfig.RiskControl.EffectiveEntryRoundTripCostBps()); err != nil {
 				return err
 			}
 		}
-		if err := checkRR(decision, entryPrice, minRR); err != nil {
+		if err := checkNetRR(decision, entryPrice, minRR, at.config.StrategyConfig.RiskControl.EffectiveEntryRoundTripCostBps()); err != nil {
 			return err
 		}
 	}
@@ -787,22 +787,6 @@ func checkRR(decision *kernel.Decision, entryPrice, minRR float64) error {
 			decision.Action, decision.Symbol, rr, minRR, entryPrice, decision.StopLoss, decision.TakeProfit)
 	}
 	return nil
-}
-
-// reanchorProtectivePrices shifts the AI's SL/TP by the difference between
-// the actual fill and the price the RR gate validated at, so the PLANNED
-// stop/target distances survive market-order slippage.
-func reanchorProtectivePrices(decision *kernel.Decision, refPrice, fillPrice float64) {
-	if refPrice <= 0 || fillPrice <= 0 || decision.StopLoss <= 0 {
-		return
-	}
-	delta := fillPrice - refPrice
-	if decision.StopLoss > 0 {
-		decision.StopLoss += delta
-	}
-	if decision.TakeProfit > 0 {
-		decision.TakeProfit += delta
-	}
 }
 
 // ============================================================================
@@ -920,14 +904,16 @@ func atrPercentFromSeries(tf *market.TimeframeSeriesData) float64 {
 // stop-distance% — sizing derives from the stop, never the other way round
 // (framework: 单笔风险金额固定,止损越远仓位越小). Returns the capped size.
 func (at *AutoTrader) clampSizeToRisk(decision *kernel.Decision, sizeUSD, equity, livePrice float64) float64 {
-	riskPct := at.config.StrategyConfig.RiskControl.RiskPerTradePct
-	if riskPct <= 0 {
-		riskPct = 1.5 // default single-trade risk budget
-	}
+	riskPct := at.config.StrategyConfig.RiskControl.EffectiveRiskPerTradePct()
 	if equity <= 0 || livePrice <= 0 || decision.StopLoss <= 0 || sizeUSD <= 0 {
 		return sizeUSD
 	}
 	distPct := math.Abs(livePrice-decision.StopLoss) / livePrice * 100
+	costBps := at.config.StrategyConfig.RiskControl.EntryRoundTripCostBps
+	if costBps <= 0 {
+		costBps = 20
+	}
+	distPct += costBps / 100
 	if distPct <= 0 {
 		return sizeUSD
 	}
@@ -1246,14 +1232,7 @@ func stopMoveLocksProfit(side string, entryPrice, newSL float64) bool {
 // stopPriceForSide returns the stop trigger of the position-side's stop
 // order from the open-order list (0 when none).
 func stopPriceForSide(orders []types.OpenOrder, side string) float64 {
-	want := strings.ToUpper(side)
-	for _, o := range orders {
-		if strings.Contains(strings.ToUpper(o.Type), "STOP") &&
-			strings.ToUpper(o.PositionSide) == want && o.StopPrice > 0 {
-			return o.StopPrice
-		}
-	}
-	return 0
+	return protectionPrice(orders, side, "SL")
 }
 
 // exchangeStopPrice reads the position's current stop trigger from the
@@ -1477,6 +1456,13 @@ func missingProtection(orders []types.OpenOrder, positionSide string) (needSL, n
 // never protective and are excluded by the caller's type filter.
 func orphanProtectiveOrder(o types.OpenOrder, live map[string]bool) bool {
 	ps := strings.ToUpper(o.PositionSide)
+	if ps == "LONG" || ps == "SHORT" {
+		if !orderClosesSide(o, ps) {
+			return false
+		}
+	} else if !o.ReduceOnly && !o.ClosePosition {
+		return false
+	}
 	switch ps {
 	case "LONG":
 		return !live[strings.ToUpper(o.Symbol)+"_long"]
@@ -1589,125 +1575,109 @@ func (at *AutoTrader) processProtectionWatchdog() {
 	if at.config.StrategyConfig == nil {
 		return
 	}
+	at.invalidateExecutionCache()
 	positions, err := at.trader.GetPositions()
 	if err != nil {
+		at.setProtectionFault("account", "position snapshot unavailable")
 		return
 	}
+	live := map[string]bool{}
+	for _, p := range positions {
+		symbol, _ := p["symbol"].(string)
+		side, _ := p["side"].(string)
+		qty, ok := p["positionAmt"].(float64)
+		if symbol == "" || (side != "long" && side != "short") || !ok || math.IsNaN(qty) || math.IsInf(qty, 0) {
+			at.setProtectionFault("account", "malformed position snapshot")
+			return
+		}
+		if qty != 0 {
+			live[symbol+"_"+side] = true
+		}
+	}
+	at.clearProtectionFaults(live)
 	for _, pos := range positions {
 		symbol, _ := pos["symbol"].(string)
 		side, _ := pos["side"].(string)
-		markPrice, _ := pos["markPrice"].(float64)
-		if symbol == "" || side == "" || markPrice <= 0 {
+		mark, _ := pos["markPrice"].(float64)
+		qty, _ := pos["positionAmt"].(float64)
+		if symbol == "" || side == "" || !at.isAIManaged(symbol, side) {
 			continue
 		}
-		// Hands-off rule (user directive 2026-09-25): manual positions get no
-		// watchdog seeding, no repair, no computed protection, no alerts —
-		// the user owns their lifecycle entirely.
-		if !at.isAIManaged(symbol, side) {
+		key := symbol + "_" + side
+		if mark <= 0 || qty <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) || math.IsNaN(qty) || math.IsInf(qty, 0) {
+			at.setProtectionFault(key, "live mark or quantity unavailable")
 			continue
 		}
 		orders, err := at.trader.GetOpenOrders(symbol)
 		if err != nil {
-			continue // fail-open
-		}
-		needSL, needTP := missingProtection(orders, strings.ToUpper(side))
-		// State healing: the orders exist but the in-memory records were
-		// wiped by a restart — seed them from the exchange so trailing /
-		// breakeven / min-hold bypass keep working for pre-restart positions.
-		if !needSL && at.GetRecordedStopLoss(symbol, side) <= 0 {
-			if sp := at.exchangeStopPrice(symbol, side); sp > 0 {
-				at.SetRecordedStopLoss(symbol, side, sp)
-				// First sight of this position after a restart: freeze its
-				// stop as the 1R anchor (write-once) when none is persisted —
-				// the exchange stop predates any in-process tightening here.
-				at.SetInitialStopLoss(symbol, side, sp)
-				logger.Infof("🔧 [%s] Protection watchdog: seeded recorded SL %s %s = %.6g from exchange", at.name, symbol, side, sp)
-			}
-		}
-		if !needTP && at.getOpenTakeProfit(symbol, side) <= 0 {
-			for _, o := range orders {
-				if strings.Contains(strings.ToUpper(o.Type), "TAKE_PROFIT") && o.StopPrice > 0 {
-					at.recordOpenTakeProfit(symbol, side, o.StopPrice)
-					logger.Infof("🔧 [%s] Protection watchdog: seeded recorded TP %s %s = %.6g from exchange", at.name, symbol, side, o.StopPrice)
-					break
-				}
-			}
-		}
-		if !needSL && !needTP {
+			at.protectionFailure(symbol, side, "protective orders unavailable")
+			at.alertUnprotectedPosition(symbol, side, err.Error())
 			continue
 		}
-		positionSide := strings.ToUpper(side) // LONG / SHORT
-		posKey := symbol + "_" + side
-		var repaired []string
-		// 09-19 user directive: a NAKED position (no SL order AND no recorded
-		// stop) gets protected, not just lamented — SL = 1.5×ATR(1h) from
-		// mark, TP at 1:2 RR, both computed fresh this cycle. The legacy
-		// recorded-price repair below still handles the has-record case.
-		if needSL && at.GetRecordedStopLoss(symbol, side) <= 0 {
-			if at.placeComputedProtection(symbol, side, positionSide, markPrice) {
-				continue // both legs placed from the computed plan — done here
-			}
-			logger.Infof("⚠️ [%s] Protection watchdog: %s has no SL order and no recorded stop — computed-protection failed, manual check", at.name, symbol)
-			at.alertUnprotectedPosition(symbol, side, "no SL order, no recorded stop, and the computed protection failed to place")
-		} else if needSL {
-			if sl := at.GetRecordedStopLoss(symbol, side); sl > 0 {
-				valid := (side == "long" && sl < markPrice) || (side == "short" && sl > markPrice)
-				if valid {
-					// Real quantity (2026-09-25 P1 + R1 fix): resolve size
-					// FIRST — qty:"0" is rejected by Bybit/OKX, stranding the
-					// position. Unreadable size → alert, no placement.
-					qty, qtyOK := at.positionQty(symbol, side)
-					if !qtyOK {
-						at.alertUnprotectedPosition(symbol, side, "live position quantity unreadable — SL re-place skipped")
-					} else if err := at.trader.SetStopLoss(symbol, positionSide, qty, sl); err == nil {
-						repaired = append(repaired, fmt.Sprintf("SL %.6g", sl))
-					} else {
-						logger.Infof("⚠️ [%s] Protection watchdog: SL re-place failed for %s: %v", at.name, symbol, err)
-						at.alertUnprotectedPosition(symbol, side, fmt.Sprintf("SL re-place failed: %v", err))
-					}
-				} else {
-					logger.Infof("⚠️ [%s] Protection watchdog: %s recorded SL %.6g is on the wrong side of mark %.6g — not placed, manual check", at.name, symbol, sl, markPrice)
-					at.alertUnprotectedPosition(symbol, side, fmt.Sprintf("recorded SL %.6g is on the wrong side of mark %.6g", sl, markPrice))
-				}
-			} else {
-				logger.Infof("⚠️ [%s] Protection watchdog: %s has no SL order and no recorded stop — cannot auto-repair", at.name, symbol)
-				at.alertUnprotectedPosition(symbol, side, "no SL order on the exchange and no recorded stop to repair from")
+		positionSide := strings.ToUpper(side)
+		sl := at.GetRecordedStopLoss(symbol, side)
+		seenSL := protectionPrice(orders, positionSide, "SL")
+		if seenSL > 0 && (sl <= 0 || (side == "long" && seenSL > sl) || (side == "short" && seenSL < sl)) {
+			sl = seenSL
+			at.SetRecordedStopLoss(symbol, side, sl)
+			at.SetInitialStopLoss(symbol, side, sl)
+		}
+		tp := at.getOpenTakeProfit(symbol, side)
+		if tp <= 0 {
+			tp = protectionPrice(orders, positionSide, "TP")
+			if tp > 0 {
+				at.recordOpenTakeProfit(symbol, side, tp)
 			}
 		}
-		if needTP && !at.tpRunnerDone(posKey) {
-			// After the TP-runner converts the fixed TP into the trend-run,
-			// the trail owns the exit — re-placing a TP here would undo it.
-			if tp := at.getOpenTakeProfit(symbol, side); tp > 0 {
-				valid := (side == "long" && tp > markPrice) || (side == "short" && tp < markPrice)
-				if valid {
-					// F01e (2026-10-01 review): pass the REAL position
-					// quantity — qty=0 is closePosition on Binance but a
-					// hard reject on OKX/Bybit/Bitget, so the TP repair was
-					// a silent no-op there. Unreadable size → alert.
-					// 2026-10-03 review: watchdogTPQty also re-applies the
-					// split-TP fraction (the old full-qty repair upgraded a
-					// trend runner to close-everything-at-TP).
-					if _, qtyOK := at.positionQty(symbol, side); !qtyOK {
-						at.alertUnprotectedPosition(symbol, side, "live position quantity unreadable — TP re-place skipped")
-					} else if err := at.trader.SetTakeProfit(symbol, positionSide, at.watchdogTPQty(symbol, side), tp); err == nil {
-						repaired = append(repaired, fmt.Sprintf("TP %.6g", tp))
-					} else {
-						logger.Infof("⚠️ [%s] Protection watchdog: TP re-place failed for %s: %v", at.name, symbol, err)
-					}
-				} else {
-					logger.Infof("⚠️ [%s] Protection watchdog: %s recorded TP %.6g is on the wrong side of mark %.6g — not placed, manual check", at.name, symbol, tp, markPrice)
-				}
-			} else {
-				logger.Infof("⚠️ [%s] Protection watchdog: %s has no TP order and no recorded TP — cannot auto-repair", at.name, symbol)
+		if sl > 0 && ((side == "long" && mark <= sl) || (side == "short" && mark >= sl)) {
+			at.setProtectionFault(key, "stop crossed; emergency exit awaiting reconciliation")
+			at.markCloseIntent(symbol, side, "stop_loss_recovery")
+			if err := at.emergencyClosePosition(symbol, side); err != nil {
+				at.alertUnprotectedPosition(symbol, side, "stop crossed and emergency exit failed: "+err.Error())
+			}
+			continue
+		}
+		if sl <= 0 {
+			at.placeComputedProtection(symbol, side, positionSide, mark)
+			sl = at.GetRecordedStopLoss(symbol, side)
+			tp = at.getOpenTakeProfit(symbol, side)
+			orders, err = at.trader.GetOpenOrders(symbol)
+			if err != nil || sl <= 0 {
+				at.protectionFailure(symbol, side, "computed stop recovery failed")
+				at.alertUnprotectedPosition(symbol, side, "computed stop recovery failed")
+				continue
 			}
 		}
-		if len(repaired) > 0 {
-			logger.Infof("🛡️ [%s] Protection watchdog repaired %s: %s (plan prices)", at.name, symbol, strings.Join(repaired, " + "))
-			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🛡️ 保护单补挂 %s</b>\n<i>%s(按开仓计划价自动补挂)</i>", notify.Escape(symbol), strings.Join(repaired, " + ")))
+		tpQty := qty
+		if mode := at.ExitModeFor(symbol, side); mode != "" {
+			tpQty *= tpFractionForMode(mode, at.effectiveTPCloseFraction())
+		}
+		wantSL := !enoughProtection(orders, positionSide, "SL", sl, qty)
+		wantTP := !at.tpRunnerDone(key) && tp > 0 &&
+			((side == "long" && tp > mark) || (side == "short" && tp < mark)) &&
+			!enoughProtection(orders, positionSide, "TP", tp, tpQty)
+		var slErr error
+		if wantSL {
+			slErr = ensureProtectiveCoverage(at.trader, symbol, positionSide, "SL", sl, qty)
+		}
+		if wantTP {
+			if err := ensureProtectiveCoverage(at.trader, symbol, positionSide, "TP", tp, tpQty); err != nil {
+				logger.Warnf("TP recovery %s %s: %v", symbol, side, err)
+			}
+		}
+		if wantSL || wantTP {
+			verifiedSL, _ := at.verifyProtectiveLegs(&kernel.Decision{Symbol: symbol, StopLoss: sl, TakeProfit: tp}, positionSide, wantSL, wantTP, qty, tpQty)
+			if slErr == nil {
+				slErr = verifiedSL
+			}
+		}
+		if slErr != nil {
+			at.protectionFailure(symbol, side, "SL coverage recovery failed: "+slErr.Error())
+			at.alertUnprotectedPosition(symbol, side, slErr.Error())
+		} else {
+			at.protectionVerified(symbol, side)
 		}
 	}
-	// Per-cycle orphan sweep (user directive 2026-09-26): protective orders
-	// whose position has vanished are cancelled.
 	at.sweepOrphanedProtection(positions)
 }
 
@@ -1742,17 +1712,9 @@ func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string,
 		}
 	}
 
-	if err := at.trader.SetStopLoss(symbol, positionSide, 0, sl); err != nil {
-		logger.Infof("⚠️ [%s] Protection watchdog: computed SL place failed for %s: %v", at.name, symbol, err)
+	if !at.reconcileComputedProtection(symbol, side, sl, tp) {
 		return false
 	}
-	if err := at.trader.SetTakeProfit(symbol, positionSide, 0, tp); err != nil {
-		logger.Infof("⚠️ [%s] Protection watchdog: computed TP place failed for %s: %v", at.name, symbol, err)
-		return false
-	}
-	at.SetRecordedStopLoss(symbol, side, sl)
-	at.SetInitialStopLoss(symbol, side, sl)
-	at.recordOpenTakeProfit(symbol, side, tp)
 	logger.Infof("🛡️ [%s] Protection watchdog: %s naked — computed protection placed: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h) %.2f%% from mark %.6g)",
 		at.name, symbol, sl, tp, atrPct, markPrice)
 	notify.Notify("ORDER", at.name, fmt.Sprintf(
@@ -2257,7 +2219,8 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 func absoluteBanCode(code string) bool {
 	switch code {
 	case "DATA_INSUFFICIENT", "POOR_HISTORY", "BSTOCK_DAILY_DATA_UNAVAILABLE",
-		"LOSS_STREAK_BANNED", "STOCK_WEEKEND", "BTC_4H_DOWNTREND":
+		"LOSS_STREAK_BANNED", "STOCK_WEEKEND", "BTC_4H_DOWNTREND",
+		"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING":
 		return true
 	}
 	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
@@ -2281,6 +2244,12 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 	rc := at.config.StrategyConfig.RiskControl
 	filtered := make([]kernel.Decision, 0, len(decisions))
 	for _, d := range decisions {
+		if kernel.IsOpenDecision(d.Action) {
+			if reason := at.protectionFaultReason(); reason != "" {
+				at.setFilterReason(d, reason)
+				continue
+			}
+		}
 		if strings.HasPrefix(d.Action, "open_") && rc.MinConfidence > 0 && d.Confidence < rc.MinConfidence {
 			at.setFilterReason(d, fmt.Sprintf("confidence %d < minimum %d", d.Confidence, rc.MinConfidence))
 			logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: confidence %d < configured minimum %d",
@@ -2549,7 +2518,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 			}
 		}
 		switch d.Action {
-		case "open_short":
+		case "open_short", "open_short_limit":
 			if rc.BlockShort1dUptrend {
 				trend := kernel.TimeframeTrend(ctx.MarketDataMap[d.Symbol], "1d")
 				if trend == "up" {
@@ -2619,4 +2588,44 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		filtered = append(filtered, d)
 	}
 	return filtered
+}
+
+func checkNetRR(d *kernel.Decision, entry, minRR, costBps float64) error {
+	risk, reward := entry-d.StopLoss, d.TakeProfit-entry
+	if strings.HasPrefix(d.Action, "open_short") {
+		risk, reward = d.StopLoss-entry, entry-d.TakeProfit
+	}
+	cost := entry * costBps / 10000
+	if risk <= 0 || reward <= 0 || (reward-cost)/(risk+cost) < minRR {
+		return fmt.Errorf("net RR below %.2f at entry %.6g (SL %.6g TP %.6g; cost %.1fbps)", minRR, entry, d.StopLoss, d.TakeProfit, costBps)
+	}
+	return nil
+}
+
+// Separate recovery-leg reconciliation from indicator acquisition so the
+// quantity, independent commits and failed-leg retries can be verified.
+func (at *AutoTrader) reconcileComputedProtection(symbol, side string, sl, tp float64) bool {
+	qty, qtyOK := at.positionQty(symbol, side)
+	if !qtyOK || qty <= 0 {
+		return false
+	}
+	if err := ensureProtectiveCoverage(at.trader, symbol, strings.ToUpper(side), "SL", sl, qty); err != nil {
+		logger.Infof("⚠️ [%s] Protection watchdog: computed SL place failed for %s: %v", at.name, symbol, err)
+		return false
+	}
+	// Commit each recovery leg independently: a failed TP must not erase the
+	// successfully established SL plan or change the initial-R anchor later.
+	at.SetRecordedStopLoss(symbol, side, sl)
+	at.SetInitialStopLoss(symbol, side, sl)
+	at.recordOpenTakeProfit(symbol, side, tp)
+	tpQty := at.watchdogTPQty(symbol, side)
+	if err := ensureProtectiveCoverage(at.trader, symbol, strings.ToUpper(side), "TP", tp, tpQty); err != nil {
+		logger.Infof("⚠️ [%s] Protection watchdog: computed TP place failed for %s: %v", at.name, symbol, err)
+		return false
+	}
+	slErr, tpErr := at.verifyProtectiveLegs(&kernel.Decision{Symbol: symbol, StopLoss: sl, TakeProfit: tp}, strings.ToUpper(side), true, true, qty, tpQty)
+	if slErr != nil || tpErr != nil {
+		return false
+	}
+	return true
 }

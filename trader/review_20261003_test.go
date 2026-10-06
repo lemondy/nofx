@@ -84,6 +84,11 @@ func (m *review03Mock) GetOrderStatus(string, string) (map[string]interface{}, e
 	return m.status, m.statusErr
 }
 func review03Trader(m *review03Mock) *AutoTrader {
+	// Protection fixtures have a funded account; tests may explicitly change
+	// the balance afterwards to exercise unavailable equity.
+	if m.equity == 0 {
+		m.equity = 1000
+	}
 	at := riskTestTrader(store.RiskControlConfig{})
 	at.trader = m
 	at.positionInitialStopLoss = map[string]float64{}

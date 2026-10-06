@@ -3,6 +3,7 @@ package kernel
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"nofx/store"
@@ -60,6 +61,24 @@ func ParseRuleCondition(conditionJSON string) (*RuleCondition, error) {
 	case ">", ">=", "<", "<=", "==", "!=", "in":
 	default:
 		return nil, fmt.Errorf("unsupported operator: %s", cond.Op)
+	}
+	switch cond.Field {
+	case "symbol":
+		v, ok := cond.Value.(string)
+		if !ok || strings.TrimSpace(v) == "" || (cond.Op != "==" && cond.Op != "!=" && cond.Op != "in") {
+			return nil, fmt.Errorf("symbol requires a non-empty string and ==, != or in")
+		}
+	case "has_stop_loss", "has_take_profit":
+		if _, ok := cond.Value.(bool); !ok || (cond.Op != "==" && cond.Op != "!=") {
+			return nil, fmt.Errorf("%s requires a boolean and == or !=", cond.Field)
+		}
+	case "leverage", "position_size_usd", "position_value_pct", "stop_loss_pct", "take_profit_pct", "risk_reward", "confidence":
+		v, ok := cond.Value.(float64)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || cond.Op == "in" {
+			return nil, fmt.Errorf("%s requires a finite number and a numeric operator", cond.Field)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported condition field: %s", cond.Field)
 	}
 	return &cond, nil
 }
@@ -183,15 +202,22 @@ func evalCondition(cond *RuleCondition, c decisionContext) (bool, string) {
 		if !ok {
 			target = toFloat(cond.Value) != 0
 		}
-		return c.hasStopLoss == target, fmt.Sprintf("has_stop_loss=%v", c.hasStopLoss)
+		return evalBool(cond.Op, c.hasStopLoss, target), fmt.Sprintf("has_stop_loss=%v", c.hasStopLoss)
 	case "has_take_profit":
 		target, ok := cond.Value.(bool)
 		if !ok {
 			target = toFloat(cond.Value) != 0
 		}
-		return c.hasTakeProfit == target, fmt.Sprintf("has_take_profit=%v", c.hasTakeProfit)
+		return evalBool(cond.Op, c.hasTakeProfit, target), fmt.Sprintf("has_take_profit=%v", c.hasTakeProfit)
 	}
 	return false, ""
+}
+
+func evalBool(op string, actual, target bool) bool {
+	if op == "!=" {
+		return actual != target
+	}
+	return op == "==" && actual == target
 }
 
 func toFloat(v interface{}) float64 {
@@ -242,7 +268,13 @@ func CheckDecisionAgainstRules(rules []*store.TradingRuleDB, d Decision, equity 
 		case "hard":
 			cond, err := ParseRuleCondition(rule.ConditionJSON)
 			if err != nil {
-				continue // malformed rule: skip, never block trading on bad config
+				v := RuleViolation{RuleID: rule.ID, RuleName: rule.Name, RuleType: "hard", Action: rule.OnViolation, Symbol: d.Symbol, Decision: d.Action, Message: "invalid hard rule: " + err.Error(), Detail: "configuration invalid"}
+				if rule.OnViolation == "block" {
+					violations = append(violations, v)
+				} else {
+					warnings = append(warnings, v)
+				}
+				continue
 			}
 			matched, detail := evalCondition(cond, c)
 			if !matched {

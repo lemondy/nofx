@@ -1,0 +1,109 @@
+package trader
+
+import (
+	"errors"
+	"nofx/kernel"
+	"nofx/market"
+	"nofx/store"
+	"nofx/trader/types"
+	"testing"
+	"time"
+)
+
+func TestAudit05AdverseSlippageDirection(t *testing.T) {
+	for _, c := range []struct {
+		side       string
+		fill, want float64
+	}{{"long", 102, 200}, {"long", 98, 0}, {"short", 98, 200}, {"short", 102, 0}} {
+		if got := adverseSlippageBps(100, c.fill, c.side); got != c.want {
+			t.Errorf("side=%s fill=%.0f got=%.0fbps want=%.0fbps", c.side, c.fill, got, c.want)
+		}
+	}
+}
+
+func TestAudit05ShortBansMustReachMarketExecution(t *testing.T) {
+	for _, code := range []string{"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING"} {
+		at := riskTestTrader(store.RiskControlConfig{})
+		at.cycleGateStates = map[string]*kernel.GateState{"XUSDT": {ShortAllowed: false, ShortFailed: []string{code}}}
+		ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}}
+		d := kernel.Decision{Symbol: "XUSDT", Action: "open_short", Price: 100, StopLoss: 105, TakeProfit: 90, PositionSizeUSD: 100, Confidence: 90}
+		if got := at.applyHardRiskGates([]kernel.Decision{d}, ctx); len(got) != 0 {
+			t.Errorf("market short passed ban %s", code)
+		}
+	}
+}
+
+func TestAudit05DailyUptrendBanMustCoverLimitShort(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{BlockShort1dUptrend: true})
+	at.cycleGateStates = map[string]*kernel.GateState{"XUSDT": {ShortAllowed: true}}
+	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, MarketDataMap: map[string]*market.Data{"XUSDT": uptrend1dData()}}
+	if trend := kernel.TimeframeTrend(ctx.MarketDataMap["XUSDT"], "1d"); trend != "up" {
+		t.Fatalf("fixture trend=%s", trend)
+	}
+	d := kernel.Decision{Symbol: "XUSDT", Action: "open_short_limit", Price: 100, StopLoss: 105, TakeProfit: 90, PositionSizeUSD: 100, Confidence: 90}
+	if got := at.applyHardRiskGates([]kernel.Decision{d}, ctx); len(got) != 0 {
+		t.Error("limit short bypassed enabled 1d uptrend ban")
+	}
+}
+
+type audit05Mock struct {
+	Trader
+	orders                           []types.OpenOrder
+	mark                             float64
+	cancelCalls, closeCalls, slCalls int
+}
+
+func (m *audit05Mock) GetPositions() ([]map[string]interface{}, error) {
+	return []map[string]interface{}{{"symbol": "XUSDT", "side": "long", "positionAmt": 1.0, "entryPrice": 100.0, "markPrice": m.mark, "leverage": 2.0}}, nil
+}
+func (m *audit05Mock) GetOpenOrders(string) ([]types.OpenOrder, error)    { return m.orders, nil }
+func (m *audit05Mock) SetStopLoss(string, string, float64, float64) error { m.slCalls++; return nil }
+func (m *audit05Mock) CloseLong(string, float64) (map[string]interface{}, error) {
+	m.closeCalls++
+	return map[string]interface{}{}, nil
+}
+func (m *audit05Mock) CancelOrder(string, string) error { m.cancelCalls++; return nil }
+func (m *audit05Mock) GetOrderStatus(string, string) (map[string]interface{}, error) {
+	return map[string]interface{}{"status": "NEW", "executedQty": 0.0, "avgPrice": 0.0}, nil
+}
+func (m *audit05Mock) GetMarketPrice(string) (float64, error) {
+	return 0, errors.New("no network in audit mock")
+}
+
+func TestAudit05WatchdogMustRepairInsufficientSLCoverage(t *testing.T) {
+	m := &audit05Mock{mark: 100, orders: []types.OpenOrder{{Type: "STOP_MARKET", PositionSide: "LONG", Side: "SELL", StopPrice: 95, Quantity: 0.1}, {Type: "TAKE_PROFIT_MARKET", PositionSide: "LONG", Side: "SELL", StopPrice: 110, Quantity: 1}}}
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.trader = m
+	at.positionInitialStopLoss = map[string]float64{}
+	at.processProtectionWatchdog()
+	if m.slCalls == 0 {
+		t.Error("1-unit position has only 0.1-unit stop, watchdog did not repair")
+	}
+}
+
+func TestAudit05CrossedMissingStopMustExit(t *testing.T) {
+	m := &audit05Mock{mark: 90, orders: []types.OpenOrder{{Type: "TAKE_PROFIT_MARKET", PositionSide: "LONG", StopPrice: 110, Quantity: 1}}}
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.trader = m
+	at.positionInitialStopLoss = map[string]float64{}
+	at.SetRecordedStopLoss("XUSDT", "long", 95)
+	at.processProtectionWatchdog()
+	if m.closeCalls == 0 {
+		t.Error("mark 90 crossed recorded long SL 95, watchdog neither restores a valid SL nor exits")
+	}
+}
+
+func TestAudit05DailyHaltMustCancelPendingRisk(t *testing.T) {
+	m := &audit05Mock{}
+	at := riskTestTrader(store.RiskControlConfig{DailyMaxLossPct: 5})
+	at.trader = m
+	at.anchorDailyBaseline(1000)
+	if msg := at.dailyLossHaltBlocks(at.config.StrategyConfig.RiskControl, 900); msg == "" {
+		t.Fatal("fixture did not halt")
+	}
+	at.pendingEntries = map[string]*pendingEntry{"XUSDT|long": {Symbol: "XUSDT", Side: "long", Price: 100, Quantity: 1, StopLoss: 95, TakeProfit: 110, OrderID: "pending", PlacedAt: time.Now()}}
+	at.processPendingEntries()
+	if m.cancelCalls == 0 {
+		t.Error("daily halt active, existing NEW entry remains live")
+	}
+}

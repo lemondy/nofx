@@ -144,6 +144,9 @@ func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.Deci
 
 // executeOpenLongWithRecord executes open long position and records detailed information
 func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+	if err := at.entryExecutionBlocked(decision.Symbol, "long"); err != nil {
+		return err
+	}
 	logger.Infof("  📈 Open long: %s", decision.Symbol)
 
 	if marketData, err := at.getMarketData(decision.Symbol); err == nil {
@@ -275,6 +278,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 
 	fillPrice := orderFloat(order, "avgPrice")
 	if fillPrice <= 0 {
+		fillPrice = orderFloat(order, "fillPrice")
+	}
+	if fillPrice <= 0 {
 		// R3 (2026-09-26 review) — LONG side. The raw order response carries
 		// no avgPrice on Binance; without polling, the slippage reanchor
 		// silently no-opped on longs while shorts got it (the 09-26 review's
@@ -288,18 +294,26 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 		}
 	}
 	// F21c: configurable hard cap on adverse entry slippage (0 = disabled).
+	at.invalidateExecutionCache()
+	if filledQty, ok := at.positionQty(decision.Symbol, "long"); ok && filledQty > 0 {
+		quantity = filledQty
+		actionRecord.Quantity = filledQty
+	}
+	at.SetRecordedStopLoss(decision.Symbol, "long", decision.StopLoss)
+	at.SetInitialStopLoss(decision.Symbol, "long", decision.StopLoss)
+	at.recordOpenTakeProfit(decision.Symbol, "long", decision.TakeProfit)
 	if err := at.enforceEntrySlippageCap(decision, "long", marketData.CurrentPrice, fillPrice); err != nil {
 		return err
+	}
+	if err := at.actualFillRisk(decision, fillPrice, quantity, equity); err != nil {
+		return at.rejectMarketFill(decision, "long", quantity, err)
 	}
 	// F21d: the recorded action price is the ACTUAL fill, not the pre-fill
 	// ticker — plan/fill/protection prices must not blur into one number.
 	if fillPrice > 0 {
 		actionRecord.Price = fillPrice
 	}
-	// Reanchor BEFORE recording (2026-09-25 P2): the recorded stop and the
-	// write-once 1R anchor must describe the REAL opening risk at the actual
-	// fill, not the pre-slippage plan.
-	reanchorProtectivePrices(decision, marketData.CurrentPrice, fillPrice)
+	// Preserve absolute structure levels; fill risk has been revalidated.
 
 	// Record position opening time and stop-loss (drives the min-hold gate)
 	posKey := decision.Symbol + "_long"
@@ -319,6 +333,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// recorded stop/1R anchor are already written); the protection watchdog
 	// re-places from them next cycle.
 	if slErr != nil {
+		at.setProtectionFault(decision.Symbol+"_long", "entry SL coverage unverified")
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — position currently unprotected, watchdog will retry", decision.Action, decision.Symbol, fillPrice, slErr)
 	}
 	if tpErr != nil {
@@ -331,30 +346,24 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 // Below that a fast-market fill is routine and stays out of the alert channel.
 const fillSlippageAlertBps = 100
 
-// reportFillSlippage (B2-附, QUANT_REVIEW 09-22, observability only): a
-// market open validated RR at the pre-trade ticker but fills at avgPrice —
-// in a fast market the fill can be the far side of the move (the
-// crossed-anchor fallback is exactly such a moment).
-//
-// 09-28 review: the protective reanchor is a distance-preserving
-// translation (newSL = origSL + (fill−ref)), so realized RR at the fill
-// ALWAYS equals the planned RR — the old "realized RR < min_rr" alert was
-// structurally dead and could never fire. What a fill actually degrades is
-// ENTRY QUALITY: this now reports the fill-vs-checked slippage and alerts
-// when it crosses fillSlippageAlertBps. Returns the slippage in basis
-// points and whether it alerted (pure for tests; notify fires on alert).
+// reportFillSlippage reports adverse execution drift. Structure levels stay
+// fixed; actual-fill risk validation decides whether the position can remain.
 func (at *AutoTrader) reportFillSlippage(decision *kernel.Decision, checkedPrice, fillPrice float64) (float64, bool) {
 	if fillPrice <= 0 || checkedPrice <= 0 || fillPrice == checkedPrice {
 		return 0, false
 	}
-	slippageBps := math.Abs((fillPrice - checkedPrice) / checkedPrice * 10000)
+	side := "long"
+	if strings.HasPrefix(decision.Action, "open_short") {
+		side = "short"
+	}
+	slippageBps := adverseSlippageBps(checkedPrice, fillPrice, side)
 	if slippageBps < fillSlippageAlertBps {
 		return slippageBps, false
 	}
-	logger.Warnf("⚠️ [%s] %s %s filled @ %.6g (checked @ %.6g, %.0fbps away) — entry degraded by the fill; SL/TP re-anchored at the fill so risk/reward distances are intact",
+	logger.Warnf("⚠️ [%s] %s %s filled @ %.6g (checked @ %.6g, %.0fbps away) — adverse entry drift; structural SL/TP unchanged, actual-fill risk rechecked",
 		at.name, decision.Action, decision.Symbol, fillPrice, checkedPrice, slippageBps)
 	notify.Notify("ALERT", at.name, fmt.Sprintf(
-		"<b>⚠️ 市价成交滑点 %s</b>\n校验价 %.6g → 成交价 <code>%.6g</code>(滑点 <code>%.0f</code>bps)\nSL/TP 已按成交价重新锚定,风险回报距离不变;入场质量劣化,请知悉",
+		"<b>⚠️ 市价成交滑点 %s</b>\n校验价 %.6g → 成交价 <code>%.6g</code>(滑点 <code>%.0f</code>bps)\nSL/TP 保留原始结构价位，已复核实际成交风险与净盈亏比",
 		notify.Escape(decision.Symbol), checkedPrice, fillPrice, slippageBps))
 	return slippageBps, true
 }
@@ -367,9 +376,9 @@ func adverseSlippageBps(checkedPrice, fillPrice float64, side string) float64 {
 	}
 	var adverse float64
 	if side == "long" {
-		adverse = checkedPrice - fillPrice
-	} else {
 		adverse = fillPrice - checkedPrice
+	} else {
+		adverse = checkedPrice - fillPrice
 	}
 	if adverse <= 0 {
 		return 0
@@ -383,6 +392,9 @@ func adverseSlippageBps(checkedPrice, fillPrice float64, side string) float64 {
 // (0/negative) keeps the alert-only behavior. Called BEFORE any recorded
 // state is written, so a capped close leaves no stale recorded stop/anchor.
 func (at *AutoTrader) enforceEntrySlippageCap(decision *kernel.Decision, side string, checkedPrice, fillPrice float64) error {
+	if at.config.StrategyConfig == nil {
+		return nil
+	}
 	rc := at.config.StrategyConfig.RiskControl
 	if rc.MaxEntrySlippageBps <= 0 {
 		return nil
@@ -392,7 +404,11 @@ func (at *AutoTrader) enforceEntrySlippageCap(decision *kernel.Decision, side st
 		return nil
 	}
 	logger.Warnf("🛑 [%s] %s %s adverse slippage %.0fbps ≥ cap %dbps (checked %.6g → filled %.6g) — emergency closing", at.name, decision.Action, decision.Symbol, bps, rc.MaxEntrySlippageBps, checkedPrice, fillPrice)
+	at.setProtectionFault("recovery:"+decision.Symbol+"_"+side, "slippage cap exit pending confirmation")
 	if closeErr := at.emergencyClosePosition(decision.Symbol, side); closeErr != nil {
+		if qty, ok := at.positionQty(decision.Symbol, side); ok {
+			at.placeProtectiveOrders(decision, strings.ToUpper(side), qty, checkedPrice, fillPrice)
+		}
 		return fmt.Errorf("❌ [SLIPPAGE CAP] %s %s filled @ %.6g (%.0fbps adverse ≥ %dbps cap) and EMERGENCY CLOSE FAILED: %v — manual close required", decision.Action, decision.Symbol, fillPrice, bps, rc.MaxEntrySlippageBps, closeErr)
 	}
 	notify.Notify("ALERT", at.name, fmt.Sprintf(
@@ -403,6 +419,9 @@ func (at *AutoTrader) enforceEntrySlippageCap(decision *kernel.Decision, side st
 
 // executeOpenShortWithRecord executes open short position and records detailed information
 func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+	if err := at.entryExecutionBlocked(decision.Symbol, "short"); err != nil {
+		return err
+	}
 	logger.Infof("  📉 Open short: %s", decision.Symbol)
 
 	if marketData, err := at.getMarketData(decision.Symbol); err == nil {
@@ -538,6 +557,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 	fillPrice := orderFloat(order, "avgPrice")
 	if fillPrice <= 0 {
+		fillPrice = orderFloat(order, "fillPrice")
+	}
+	if fillPrice <= 0 {
 		// F21d: poll for ANY adapter's orderId shape, not just int64.
 		if id, ok := orderIDString(order); ok {
 			if avg, confirmed := at.confirmedFillPrice(decision.Symbol, id, marketData.CurrentPrice); confirmed {
@@ -546,14 +568,24 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 		}
 	}
 	// F21c: configurable hard cap on adverse entry slippage (0 = disabled).
+	at.invalidateExecutionCache()
+	if filledQty, ok := at.positionQty(decision.Symbol, "short"); ok && filledQty > 0 {
+		quantity = filledQty
+		actionRecord.Quantity = filledQty
+	}
+	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
+	at.SetInitialStopLoss(decision.Symbol, "short", decision.StopLoss)
+	at.recordOpenTakeProfit(decision.Symbol, "short", decision.TakeProfit)
 	if err := at.enforceEntrySlippageCap(decision, "short", marketData.CurrentPrice, fillPrice); err != nil {
 		return err
+	}
+	if err := at.actualFillRisk(decision, fillPrice, quantity, equity); err != nil {
+		return at.rejectMarketFill(decision, "short", quantity, err)
 	}
 	// F21d: record the ACTUAL fill price, not the pre-fill ticker.
 	if fillPrice > 0 {
 		actionRecord.Price = fillPrice
 	}
-	reanchorProtectivePrices(decision, marketData.CurrentPrice, fillPrice)
 
 	at.SetRecordedStopLoss(decision.Symbol, "short", decision.StopLoss)
 	at.SetInitialStopLoss(decision.Symbol, "short", decision.StopLoss) // 1R anchor — write-once, immune to later tighten
@@ -565,6 +597,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
 	// F01: same no-false-success contract as the long side above.
 	if slErr != nil {
+		at.setProtectionFault(decision.Symbol+"_"+strings.TrimPrefix(decision.Action, "open_"), "entry SL coverage unverified")
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — position currently unprotected, watchdog will retry", decision.Action, decision.Symbol, fillPrice, slErr)
 	}
 	if tpErr != nil {
@@ -577,8 +610,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 // price (R3, 2026-09-26 review): Binance's OpenLong/OpenShort response map
 // carries only orderId/status — avgPrice is always 0 there, so the old code
 // silently skipped the slippage reanchor (fillPrice==refPrice ⇒ no-op).
-// Bounded polling (5×400ms); ok=false → caller falls back to the checked
-// price with a warning.
+// Bounded polling (5×400ms); an unknown fill cannot pass actualFillRisk.
 func (at *AutoTrader) confirmedFillPrice(symbol, orderID string, checkedPrice float64) (float64, bool) {
 	if orderID == "" {
 		return checkedPrice, false
@@ -682,34 +714,46 @@ func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionS
 }
 
 func protectiveOrderMatches(o types.OpenOrder, side, kind string, price float64) bool {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return false
+	}
+	if o.Status != "" && !strings.EqualFold(o.Status, "NEW") && !strings.EqualFold(o.Status, "PARTIALLY_FILLED") {
+		return false
+	}
 	typ := strings.ToUpper(o.Type)
 	match := strings.Contains(typ, "TAKE_PROFIT")
 	if kind == "SL" {
 		match = strings.Contains(typ, "STOP") && !strings.Contains(typ, "TAKE_PROFIT")
 	}
-	matchesSide := strings.EqualFold(o.PositionSide, side)
-	if o.PositionSide == "" || strings.EqualFold(o.PositionSide, "BOTH") {
-		matchesSide = o.Side == "" || (strings.EqualFold(side, "LONG") && strings.EqualFold(o.Side, "SELL")) || (strings.EqualFold(side, "SHORT") && strings.EqualFold(o.Side, "BUY"))
-	}
-	return match && matchesSide && o.StopPrice > 0 && math.Abs(o.StopPrice-price)/price < 0.001
+	return match && orderClosesSide(o, side) && o.StopPrice > 0 && math.Abs(o.StopPrice-price)/price < 0.001
 }
 
 func protectiveCoverage(orders []types.OpenOrder, side, kind string, price float64) float64 {
 	qty := 0.0
+	seen := map[string]bool{}
 	for _, o := range orders {
 		if !protectiveOrderMatches(o, side, kind, price) {
 			continue
 		}
+		if o.OrderID != "" {
+			id := fmt.Sprintf("%t:%s", o.Algo, o.OrderID)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+		}
 		if o.ClosePosition {
 			return math.Inf(1)
 		}
-		qty += math.Max(0, o.Quantity)
+		if !math.IsNaN(o.Quantity) && !math.IsInf(o.Quantity, 0) {
+			qty += math.Max(0, o.Quantity)
+		}
 	}
 	return qty
 }
 
 func ensureProtectiveCoverage(t Trader, symbol, side, kind string, price, quantity float64) error {
-	if price <= 0 || quantity <= 0 {
+	if price <= 0 || quantity <= 0 || math.IsNaN(price) || math.IsInf(price, 0) || math.IsNaN(quantity) || math.IsInf(quantity, 0) {
 		return fmt.Errorf("invalid %s protection price/quantity", kind)
 	}
 	orders, err := t.GetOpenOrders(symbol)

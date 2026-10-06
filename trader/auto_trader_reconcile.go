@@ -198,7 +198,8 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 // pendingEntryFromRow rebuilds the in-memory plan from a durable shadow row.
 func pendingEntryFromRow(row *store.PendingEntryDB) pendingEntry {
 	return pendingEntry{
-		Symbol: row.Symbol, Side: row.Side, Price: row.Price,
+		RecoveryReason: row.RecoveryReason,
+		Symbol:         row.Symbol, Side: row.Side, Price: row.Price,
 		Quantity: row.Quantity, StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,
 		Leverage: row.Leverage, OrderID: row.OrderID, PlacedAt: row.PlacedAt,
 		ExitMode:    row.ExitMode,

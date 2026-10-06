@@ -325,10 +325,13 @@ func (t *GateTrader) SetStopLoss(symbol string, positionSide string, quantity, s
 		return err
 	}
 
-	quantoMultiplier, _ := strconv.ParseFloat(contract.QuantoMultiplier, 64)
-	size := int64(quantity / quantoMultiplier)
+	quantoMultiplier, parseErr := strconv.ParseFloat(contract.QuantoMultiplier, 64)
+	if parseErr != nil || quantoMultiplier <= 0 || quantity < quantoMultiplier {
+		return fmt.Errorf("protective quantity/multiplier invalid")
+	}
+	size := int64(quantity/quantoMultiplier + 1e-9)
 	if size <= 0 {
-		size = 1
+		return fmt.Errorf("protective quantity rounds to zero")
 	}
 
 	// For long position, stop loss means sell when price drops
@@ -345,18 +348,18 @@ func (t *GateTrader) SetStopLoss(symbol string, positionSide string, quantity, s
 			Price:      "0", // Market order
 			Tif:        "ioc",
 			ReduceOnly: true,
-			Close:      true,
+			Close:      false,
 		},
 		Trigger: gateapi.FuturesPriceTrigger{
 			StrategyType: 0, // Close position
 			PriceType:    0, // Latest price
 			Price:        fmt.Sprintf("%.8f", stopPrice),
-			Rule:         1, // Price <= trigger price
+			Rule:         2, // Price <= trigger price
 		},
 	}
 
 	if strings.ToUpper(positionSide) == "SHORT" {
-		trigger.Trigger.Rule = 2 // Price >= trigger price for short stop loss
+		trigger.Trigger.Rule = 1 // Price >= trigger price for short stop loss
 	}
 
 	_, _, err = t.client.FuturesApi.CreatePriceTriggeredOrder(t.ctx, "usdt", trigger)
@@ -377,10 +380,13 @@ func (t *GateTrader) SetTakeProfit(symbol string, positionSide string, quantity,
 		return err
 	}
 
-	quantoMultiplier, _ := strconv.ParseFloat(contract.QuantoMultiplier, 64)
-	size := int64(quantity / quantoMultiplier)
+	quantoMultiplier, parseErr := strconv.ParseFloat(contract.QuantoMultiplier, 64)
+	if parseErr != nil || quantoMultiplier <= 0 || quantity < quantoMultiplier {
+		return fmt.Errorf("protective quantity/multiplier invalid")
+	}
+	size := int64(quantity/quantoMultiplier + 1e-9)
 	if size <= 0 {
-		size = 1
+		return fmt.Errorf("protective quantity rounds to zero")
 	}
 
 	// For long position, take profit means sell when price rises
@@ -396,18 +402,18 @@ func (t *GateTrader) SetTakeProfit(symbol string, positionSide string, quantity,
 			Price:      "0", // Market order
 			Tif:        "ioc",
 			ReduceOnly: true,
-			Close:      true,
+			Close:      false,
 		},
 		Trigger: gateapi.FuturesPriceTrigger{
 			StrategyType: 0, // Close position
 			PriceType:    0, // Latest price
 			Price:        fmt.Sprintf("%.8f", takeProfitPrice),
-			Rule:         2, // Price >= trigger price for long take profit
+			Rule:         1, // Price >= trigger price for long take profit
 		},
 	}
 
 	if strings.ToUpper(positionSide) == "SHORT" {
-		trigger.Trigger.Rule = 1 // Price <= trigger price for short take profit
+		trigger.Trigger.Rule = 2 // Price <= trigger price for short take profit
 	}
 
 	_, _, err = t.client.FuturesApi.CreatePriceTriggeredOrder(t.ctx, "usdt", trigger)
@@ -443,11 +449,22 @@ func (t *GateTrader) cancelTriggerOrders(symbol string, orderType string) error 
 	}
 
 	for _, order := range orders {
-		// Determine if it's stop loss or take profit based on trigger rule and position
-		// For simplicity, cancel all matching symbol orders
-		_, _, err := t.client.FuturesApi.CancelPriceTriggeredOrder(t.ctx, "usdt", fmt.Sprintf("%d", order.Id))
+		if !order.Initial.ReduceOnly && !order.Initial.IsReduceOnly && !order.Initial.Close && !order.Initial.IsClose && order.Initial.AutoSize == "" {
+			continue
+		}
+		_, kind, err := gateTriggerIdentity(order)
 		if err != nil {
-			logger.Warnf("  [Gate] Failed to cancel trigger order %d: %v", order.Id, err)
+			return err
+		}
+		if orderType == "stop_loss" && kind != "STOP_MARKET" {
+			continue
+		}
+		if orderType == "take_profit" && kind != "TAKE_PROFIT_MARKET" {
+			continue
+		}
+		_, _, err = t.client.FuturesApi.CancelPriceTriggeredOrder(t.ctx, "usdt", fmt.Sprintf("%d", order.Id))
+		if err != nil {
+			return fmt.Errorf("cancel trigger %d: %w", order.Id, err)
 		}
 	}
 
@@ -590,12 +607,14 @@ func (t *GateTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	// Get quanto_multiplier to convert contracts to actual quantity
 	quantoMultiplier := 1.0
 	contract, err := t.getContract(symbol)
-	if err == nil && contract != nil {
-		qm, _ := strconv.ParseFloat(contract.QuantoMultiplier, 64)
-		if qm > 0 {
-			quantoMultiplier = qm
-		}
+	if err != nil || contract == nil {
+		return nil, fmt.Errorf("protection contract multiplier unknown: %v", err)
 	}
+	qm, parseErr := strconv.ParseFloat(contract.QuantoMultiplier, 64)
+	if parseErr != nil || qm <= 0 {
+		return nil, fmt.Errorf("invalid contract multiplier")
+	}
+	quantoMultiplier = qm
 
 	var result []types.OpenOrder
 	for _, order := range orders {
@@ -626,27 +645,37 @@ func (t *GateTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	}
 
 	triggerOrders, _, err := t.client.FuturesApi.ListPriceTriggeredOrders(t.ctx, "usdt", "open", triggerOpts)
-	if err == nil {
+	if err != nil {
+		return nil, fmt.Errorf("trigger orders unknown: %w", err)
+	}
+	{
 		for _, order := range triggerOrders {
 			triggerPrice, _ := strconv.ParseFloat(order.Trigger.Price, 64)
 
+			positionSide, orderType, err := gateTriggerIdentity(order)
+			if err != nil {
+				return nil, err
+			}
 			side := "BUY"
-			if order.Initial.Size < 0 {
+			if positionSide == "LONG" {
 				side = "SELL"
 			}
 
-			orderType := "STOP_MARKET"
-			if order.Trigger.Rule == 2 {
-				orderType = "TAKE_PROFIT_MARKET"
+			// Generic trigger orders without close semantics are entry risk.
+			if !order.Initial.ReduceOnly && !order.Initial.IsReduceOnly && !order.Initial.Close && !order.Initial.IsClose && order.Initial.AutoSize == "" {
+				positionSide = "BOTH"
+				orderType = "TRIGGER_ENTRY"
 			}
 
 			// Convert contract count to actual token quantity
 			quantity := math.Abs(float64(order.Initial.Size)) * quantoMultiplier
 
 			result = append(result, types.OpenOrder{
-				OrderID:   fmt.Sprintf("%d", order.Id),
-				Symbol:    t.revertSymbol(order.Initial.Contract),
-				Side:      side,
+				OrderID: fmt.Sprintf("%d", order.Id),
+				Symbol:  t.revertSymbol(order.Initial.Contract),
+				Side:    side, PositionSide: positionSide,
+				ReduceOnly:    order.Initial.ReduceOnly || order.Initial.IsReduceOnly,
+				ClosePosition: order.Initial.Close || order.Initial.IsClose, Algo: true,
 				Type:      orderType,
 				StopPrice: triggerPrice,
 				Quantity:  quantity,
@@ -656,4 +685,24 @@ func (t *GateTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	}
 
 	return result, nil
+}
+
+// The SDK defines rule 1 as >= and rule 2 as <=. Trigger direction alone
+// does not identify SL/TP: it must be combined with the closing position side.
+func gateTriggerIdentity(order gateapi.FuturesPriceTriggeredOrder) (string, string, error) {
+	side := ""
+	if order.Initial.Size < 0 || order.Initial.AutoSize == "close_long" || order.OrderType == "plan-close-long-position" {
+		side = "LONG"
+	}
+	if order.Initial.Size > 0 || order.Initial.AutoSize == "close_short" || order.OrderType == "plan-close-short-position" {
+		side = "SHORT"
+	}
+	if side == "" || (order.Trigger.Rule != 1 && order.Trigger.Rule != 2) {
+		return "", "", fmt.Errorf("trigger %d position/rule unknown", order.Id)
+	}
+	kind := "STOP_MARKET"
+	if (side == "LONG" && order.Trigger.Rule == 1) || (side == "SHORT" && order.Trigger.Rule == 2) {
+		kind = "TAKE_PROFIT_MARKET"
+	}
+	return side, kind, nil
 }

@@ -133,6 +133,8 @@ type AutoTrader struct {
 	config                     AutoTraderConfig
 	trader                     Trader                       // Use Trader interface (supports multiple platforms)
 	cycleGateStates            map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
+	protectionFailures         map[string]int
+	protectionFaults           map[string]string // guarded by runtimeMu; blocks new account risk until reconciled
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)

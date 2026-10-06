@@ -273,6 +273,11 @@ func fetchKlines(baseURL, symbol, interval string, limit int) ([]Kline, error) {
 		if len(r) < 11 {
 			continue
 		}
+		// Binance includes the forming candle. Confirmation and replay both
+		// consume only candles whose exchange close time has passed.
+		if closeTime := int64(toF(r[6])); closeTime >= time.Now().UnixMilli() {
+			continue
+		}
 		out = append(out, Kline{
 			OpenTime:     int64(toF(r[0])),
 			Open:         toF(r[1]),

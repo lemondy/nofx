@@ -47,12 +47,12 @@ func TestValidateOpenRisk(t *testing.T) {
 	}
 
 	// Valid short (entry 0.5358, SL 0.559, TP 0.4635 → RR ≈ 3.1) → pass.
-	if err := at.validateOpenRisk(&kernel.Decision{Action: "open_short", Symbol: "EDGEUSDT", StopLoss: 0.559, TakeProfit: 0.4635}, 0.5358, 3.5, 3.5); err != nil {
+	if err := at.validateOpenRisk(&kernel.Decision{Action: "open_short", Symbol: "EDGEUSDT", StopLoss: 0.559, TakeProfit: 0.46}, 0.5358, 3.5, 3.5); err != nil {
 		t.Fatalf("valid short rejected: %v", err)
 	}
 
 	// Valid long (entry 100, SL 97, TP 109 → RR = 3.0) → pass.
-	if err := at.validateOpenRisk(&kernel.Decision{Action: "open_long", Symbol: "BTCUSDT", StopLoss: 97, TakeProfit: 109}, 100, 3.5, 3.5); err != nil {
+	if err := at.validateOpenRisk(&kernel.Decision{Action: "open_long", Symbol: "BTCUSDT", StopLoss: 97, TakeProfit: 110}, 100, 3.5, 3.5); err != nil {
 		t.Fatalf("valid long rejected: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestValidateOpenRiskStopDistanceCap(t *testing.T) {
 		t.Fatal("8.9% stop with unknown ATR (8% cap) must be rejected")
 	}
 	// Exactly at the cap → allowed.
-	ok := &kernel.Decision{Action: "open_short", Symbol: "EDGEUSDT", StopLoss: 108, TakeProfit: 88, Leverage: 3}
+	ok := &kernel.Decision{Action: "open_short", Symbol: "EDGEUSDT", StopLoss: 108, TakeProfit: 87, Leverage: 3}
 	if err := at.validateOpenRisk(ok, 100, 3.0, 3.0); err != nil {
 		t.Fatalf("8%% stop exactly at cap must pass: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestValidateOpenRiskDualAnchor(t *testing.T) {
 		t.Fatal("decision-price RR 2.08 below floor 3.0 must be rejected despite lucky ticker")
 	}
 	// Same plan, but AI's own price respects the floor → both anchors pass.
-	d2 := &kernel.Decision{Action: "open_long", Symbol: "SOLUSDT", Price: 102.7, StopLoss: 101.85, TakeProfit: 105.85}
+	d2 := &kernel.Decision{Action: "open_long", Symbol: "SOLUSDT", Price: 102.7, StopLoss: 101.85, TakeProfit: 106.2}
 	if err := at.validateOpenRisk(d2, 102.6, 3, 3); err != nil {
 		t.Fatalf("both anchors above floor must pass: %v", err)
 	}
@@ -345,28 +345,12 @@ func TestValidateOpenRiskDualAnchor(t *testing.T) {
 	}
 }
 
-// reanchorProtectivePrices: SL/TP shift by (fill - ref) so planned distances
-// survive slippage; no-op on zero inputs.
-func TestReanchorProtectivePrices(t *testing.T) {
-	d := &kernel.Decision{StopLoss: 101.85, TakeProfit: 105.85}
-	reanchorProtectivePrices(d, 102.6, 103.13) // filled 0.53 higher
-	if d.StopLoss != 102.38 || d.TakeProfit != 106.38 {
-		t.Fatalf("reanchor wrong: SL=%v TP=%v", d.StopLoss, d.TakeProfit)
-	}
-	// Zero fill/reference → untouched.
-	d2 := &kernel.Decision{StopLoss: 101.85, TakeProfit: 105.85}
-	reanchorProtectivePrices(d2, 102.6, 0)
-	if d2.StopLoss != 101.85 {
-		t.Fatal("zero fill must not reanchor")
-	}
-}
-
 // ATR noise floor: stops closer than SLMinATRMult × ATR(1h) are rejected —
 // SOL's 1.26% stop inside a 1.5% ATR was the motivating case.
 func TestValidateOpenRiskATRFloor(t *testing.T) {
 	at := riskTestTrader(store.RiskControlConfig{MinRiskRewardRatio: 1.5, SLMinATRMult: 1.5})
 	// Entry 100, SL 101.85-equivalent for a short: dist 1.26%, ATR 1.5% → floor 2.25% → reject.
-	tight := &kernel.Decision{Action: "open_short", Symbol: "SOLUSDT", StopLoss: 101.26, TakeProfit: 97.9}
+	tight := &kernel.Decision{Action: "open_short", Symbol: "SOLUSDT", StopLoss: 101.26, TakeProfit: 97.5}
 	if err := at.validateOpenRisk(tight, 100, 1.5, 1.5); err == nil {
 		t.Fatal("1.26% stop below 2.25% floor must be rejected")
 	}
@@ -389,8 +373,8 @@ func TestClampSizeToRisk(t *testing.T) {
 
 	// equity 80, risk 1.5%, dist 1.24% → cap = 80×1.5/1.24 ≈ 96.8; size 150 → clamped.
 	got := at.clampSizeToRisk(d, 150, 80, 103.13)
-	if got < 96 || got > 98 {
-		t.Fatalf("clamp = %.2f, want ≈96.8", got)
+	if got < 83 || got > 84 {
+		t.Fatalf("clamp = %.2f, want ≈83.27 including 20bps cost", got)
 	}
 	// Smaller size than the cap passes untouched.
 	if got := at.clampSizeToRisk(d, 50, 80, 103.13); got != 50 {

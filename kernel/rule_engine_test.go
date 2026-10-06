@@ -99,14 +99,14 @@ func TestCheckDecisionAgainstRules_CloseAndHoldSkipped(t *testing.T) {
 	}
 }
 
-func TestCheckDecisionAgainstRules_MalformedRuleSkipped(t *testing.T) {
+func TestCheckDecisionAgainstRules_InvalidBlockingRuleFailsClosed(t *testing.T) {
 	rules := []*store.TradingRuleDB{
 		{ID: 1, RuleType: "hard", Name: "broken", ConditionJSON: `{invalid`, OnViolation: "block", Enabled: true},
 	}
 	d := Decision{Symbol: "BTCUSDT", Action: "open_long", Leverage: 100}
 	violations, _ := CheckDecisionAgainstRules(rules, d, 10000, 0)
-	if len(violations) != 0 {
-		t.Fatalf("malformed rule should be skipped, got %+v", violations)
+	if len(violations) != 1 {
+		t.Fatalf("invalid blocking rule must fail closed, got %+v", violations)
 	}
 }
 

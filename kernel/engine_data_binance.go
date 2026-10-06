@@ -723,8 +723,18 @@ func binanceOrderBookSpreadPct(symbol string) float64 {
 // min, shared with the 1h variant's cache shape). The BTC long-side filter
 // reads TRUE 4h bars — the same convention as the short scan's bull
 // predicate — instead of phase-arbitrary 1h aggregates (2026-10-03 review).
+// BTC4hTrendCloses provides the same closed-bar BTC regime input to execution.
+func BTC4hTrendCloses(limit int) []float64 { return binanceBTC4hCloses(limit) }
+
+var btc4hLastAttempt time.Time
+
 func binanceBTC4hCloses(limit int) []float64 {
 	btcClosesMu.Lock()
+	if len(btc4hClosesCache) == 0 && time.Since(btc4hLastAttempt) < 30*time.Second {
+		btcClosesMu.Unlock()
+		return nil
+	}
+	btc4hLastAttempt = time.Now()
 	if len(btc4hClosesCache) >= limit && time.Since(btc4hClosesFetched) < 5*time.Minute {
 		out := btc4hClosesCache[len(btc4hClosesCache)-limit:]
 		btcClosesMu.Unlock()

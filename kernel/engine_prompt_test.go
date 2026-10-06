@@ -231,7 +231,7 @@ func TestBuildUserPromptTPRequiresFullArrayScan(t *testing.T) {
 		"usable=false",
 		"tp_option",
 		"exit_mode",
-		"最低RR=1.5",
+		"最低净RR=1.5",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("TP rule missing %q", want)
@@ -495,8 +495,8 @@ func TestRiskBudgetSingleSource(t *testing.T) {
 	sp := engine.BuildSystemPrompt(75, "")
 	for _, want := range []string{
 		"equity × 3.5% (risk budget)",
-		"100 × 3.5 ÷ 6.48 ≈ 54.0 USDT",
-		"risk at stop ≈ 3.50 USDT",
+		"100 × 3.5 ÷ 6.68 ≈ 52.4 USDT",
+		"stop loss plus estimated costs ≈ 3.50 USDT",
 		"actual sizing uses current user-prompt equity",
 	} {
 		if !strings.Contains(sp, want) {
@@ -513,7 +513,7 @@ func TestRiskBudgetSingleSource(t *testing.T) {
 	// prose AND examples.
 	engine0 := NewStrategyEngine(&store.StrategyConfig{})
 	sp0 := engine0.BuildSystemPrompt(100, "")
-	if !strings.Contains(sp0, "100 × 1.5 ÷ 6.48") || !strings.Contains(sp0, "risk at stop ≈ 1.50 USDT") {
+	if !strings.Contains(sp0, "100 × 1.5 ÷ 6.68") || !strings.Contains(sp0, "stop loss plus estimated costs ≈ 1.50 USDT") {
 		t.Error("default 1.5% must render consistently in prose and examples")
 	}
 	if sp != engine.BuildSystemPrompt(9999.99, "") {

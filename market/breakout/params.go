@@ -1,18 +1,17 @@
 package breakout
 
 import (
-	"nofx/logger"
 	"encoding/json"
 	"fmt"
+	"nofx/logger"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
 
-// TunableParams holds the engine parameters the auto-tuner may adjust. All
-// values have hard bounds; the tuner moves them in small steps and persists
-// to disk so tuning survives restarts.
+// TunableParams holds bounded scanner parameters. Research tuners propose
+// changes; explicit parameter publication persists before changing memory.
 type TunableParams struct {
 	// Price dimension sigmoid (ATR-normalized breakout strength)
 	PriceATRCenter float64 `json:"price_atr_center"` // default 1.0
@@ -37,22 +36,16 @@ type TunableParams struct {
 	BacktestAt time.Time `json:"backtest_at"`
 	Samples    int       `json:"samples"` // signals in the last backtest
 
-	// Short-scan composite weights (online-tuned; keys in shortWeightKeys).
+	// Short-scan composite weights (explicitly promoted; keys in shortWeightKeys).
 	ShortWeights map[string]float64 `json:"short_weights,omitempty"`
+	// Explicit promotion after execution/portfolio validation. Research tuners never set this.
+	ShortWeightsValidated bool `json:"short_weights_validated,omitempty"`
 
-	// ShortTunerEnabled gates the ONLINE weight update (shorttuner.go step 2).
-	// nil/false = disabled (default since 2026-09-22): the update multiplied
-	// exp(η·corr) over the SAME cumulative cohort every 30 minutes, so any
-	// stable-correlation component railed to the clamp bounds — live evidence:
-	// overbought/parabolic pinned at 0.2984, divergence/rejection/structure/
-	// volume_fade at 0.0298 (structure designed at 0.15). Signal SAMPLING and
-	// outcome evaluation stay on; only the weight write is gated. Set true to
-	// re-enable after the update rule is fixed (incremental window +
-	// significance test).
+	// ShortTunerEnabled permits forward research proposals. Live custom
+	// weights also require ShortWeightsValidated; research never promotes them.
 	ShortTunerEnabled *bool `json:"short_tuner_enabled,omitempty"`
-	// ShortTunerLastTunedMs: timestamp of the last SUCCESSFUL weight update —
-	// the incremental-window boundary so the tuner evaluates only NEW samples
-	// instead of re-multiplying the same cohort (P1, 2026-09-26 review).
+	// Boundary of the last explicit promotion. Research proposals never
+	// advance it or repeatedly multiply the incumbent weights.
 	ShortTunerLastTunedMs int64 `json:"short_tuner_last_tuned_ms,omitempty"`
 }
 
@@ -120,12 +113,27 @@ func atomicWriteJSON(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tmp, err)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create params temp: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename %s: %w", tmp, err)
+	name := tmp.Name()
+	defer os.Remove(name)
+	defer tmp.Close()
+	if err := tmp.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync %s: %w", name, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("rename %s: %w", name, err)
 	}
 	return nil
 }
@@ -136,12 +144,14 @@ func GetParams() TunableParams {
 	paramsMu.Lock()
 	defer paramsMu.Unlock()
 	loadParamsLocked()
-	return currentParams
+	return cloneParams(currentParams)
 }
 
-// ApplyParams merges new values (clamped) and persists.
+// ApplyParams replaces parameters (clamped) after successful persistence.
 func ApplyParams(p TunableParams) {
-	_ = ApplyParamsChecked(p)
+	if err := ApplyParamsChecked(p); err != nil {
+		logger.Errorf("breakout params unchanged: %v", err)
+	}
 }
 
 // ApplyParamsChecked applies and returns the PERSIST error (P2, 2026-09-26
@@ -153,8 +163,16 @@ func ApplyParamsChecked(p TunableParams) error {
 	defer paramsMu.Unlock()
 	loadParamsLocked()
 	p.UpdatedAt = time.Now()
-	currentParams = clampParams(p)
-	return saveParamsChecked()
+	next := clampParams(cloneParams(p))
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal params: %w", err)
+	}
+	if err := atomicWriteJSON(paramsPath, data); err != nil {
+		return err
+	}
+	currentParams = next
+	return nil
 }
 
 func clampParams(p TunableParams) TunableParams {
@@ -178,6 +196,7 @@ func loadParamsLocked() {
 		return
 	}
 	paramsLoaded = true
+	currentParams = defaultParams()
 	data, err := os.ReadFile(paramsPath)
 	if err != nil {
 		return
@@ -189,16 +208,17 @@ func loadParamsLocked() {
 	currentParams = clampParams(p)
 }
 
-func saveParamsLocked() {
-	if err := saveParamsChecked(); err != nil {
-		logger.Errorf("⚠️ breakout params persist FAILED (memory-only this run): %v", err)
+func cloneParams(p TunableParams) TunableParams {
+	if p.ShortWeights != nil {
+		copyWeights := make(map[string]float64, len(p.ShortWeights))
+		for k, v := range p.ShortWeights {
+			copyWeights[k] = v
+		}
+		p.ShortWeights = copyWeights
 	}
-}
-
-func saveParamsChecked() error {
-	data, err := json.MarshalIndent(currentParams, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal params: %w", err)
+	if p.ShortTunerEnabled != nil {
+		enabled := *p.ShortTunerEnabled
+		p.ShortTunerEnabled = &enabled
 	}
-	return atomicWriteJSON(paramsPath, data)
+	return p
 }

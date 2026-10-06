@@ -22,9 +22,9 @@ func TestOrphanProtectiveOrder(t *testing.T) {
 	}{
 		{"hedge long order with live long", types.OpenOrder{Symbol: "BTCUSDT", PositionSide: "LONG"}, false},
 		{"hedge short order, short gone", types.OpenOrder{Symbol: "BTCUSDT", PositionSide: "SHORT"}, true},
-		{"one-way BOTH order, any position alive", types.OpenOrder{Symbol: "ETHUSDT", PositionSide: "BOTH"}, false},
-		{"one-way BOTH order, no position", types.OpenOrder{Symbol: "XRPUSDT", PositionSide: "BOTH"}, true},
-		{"empty sides treated as one-way", types.OpenOrder{Symbol: "XRPUSDT"}, true},
+		{"one-way BOTH order, any position alive", types.OpenOrder{Symbol: "ETHUSDT", PositionSide: "BOTH", ReduceOnly: true}, false},
+		{"one-way BOTH order, no position", types.OpenOrder{Symbol: "XRPUSDT", PositionSide: "BOTH", ReduceOnly: true}, true},
+		{"empty sides treated as one-way", types.OpenOrder{Symbol: "XRPUSDT", ReduceOnly: true}, true},
 		{"case-insensitive symbol", types.OpenOrder{Symbol: "btcusdt", PositionSide: "LONG"}, false},
 	}
 	for _, c := range cases {

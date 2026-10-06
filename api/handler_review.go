@@ -243,6 +243,9 @@ func validateRuleInput(input *store.RuleInput, creating bool) error {
 			return fmt.Errorf("soft rule requires lesson_text")
 		}
 	case "":
+		if creating {
+			return fmt.Errorf("rule_type is required")
+		}
 	default:
 		return fmt.Errorf("rule_type must be hard or soft")
 	}
@@ -422,25 +425,24 @@ func (s *Server) handleAIApplyRules(c *gin.Context) {
 		return
 	}
 
-	now := time.Now().UTC().UnixMilli()
 	saved := 0
+	rejected := []gin.H{}
 	for i := range req.Rules {
 		input := req.Rules[i]
 		if err := validateRuleInput(&input, true); err != nil {
-			continue // skip invalid proposals
+			rejected = append(rejected, gin.H{"index": i, "reason": err.Error()})
+			continue
 		}
 		if input.Source == "" {
 			input.Source = "ai_review"
 		}
-		rule, err := s.store.Rule().CreateRule(traderID, &input)
-		if err != nil {
+		if _, err := s.store.Rule().CreateRule(traderID, &input); err != nil {
+			rejected = append(rejected, gin.H{"index": i, "reason": "rule persistence failed"})
 			continue
 		}
-		_ = rule
 		saved++
 	}
-	_ = now
-	c.JSON(http.StatusOK, gin.H{"saved": saved})
+	c.JSON(http.StatusOK, gin.H{"saved": saved, "rejected": rejected})
 }
 
 // handleAIReview POST /api/review/ai/review

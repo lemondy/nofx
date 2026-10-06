@@ -590,10 +590,16 @@ func (t *BybitTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					displayType = orderType
 				}
 
-				positionSide := "LONG"
-				if strings.EqualFold(side, "Buy") {
+				positionSide := "BOTH"
+				idx, _ := strconv.Atoi(fmt.Sprint(order["positionIdx"]))
+				if idx == 1 {
+					positionSide = "LONG"
+				}
+				if idx == 2 {
 					positionSide = "SHORT"
 				}
+				reduceOnly, _ := order["reduceOnly"].(bool)
+				closeOnTrigger, _ := order["closeOnTrigger"].(bool)
 
 				result = append(result, types.OpenOrder{
 					OrderID:      orderId,
@@ -605,6 +611,7 @@ func (t *BybitTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					StopPrice:    price,
 					Quantity:     quantity,
 					Status:       "NEW",
+					ReduceOnly:   reduceOnly || closeOnTrigger,
 				})
 			}
 		}

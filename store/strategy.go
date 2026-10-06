@@ -535,6 +535,9 @@ type RiskControlConfig struct {
 	// from the validated price is a different trade than the gates approved.
 	// (CODE ENFORCED)
 	MaxEntrySlippageBps int `json:"max_entry_slippage_bps"`
+	// EntryRoundTripCostBps estimates total fees and exit slippage for net RR.
+	// Zero uses a conservative 20 bps estimate; configure for the venue/tier.
+	EntryRoundTripCostBps float64 `json:"entry_round_trip_cost_bps"`
 	// ---- Long-side entry discipline (user design 2026-10-01) ----
 	// LongPullbackEntry: nil/true = breakout-confirmed LONG anchors at the
 	// BROKEN level (retest entry); false = legacy offset anchors.
@@ -1510,4 +1513,18 @@ func (c *StrategyConfig) getEffectiveTimeframeCount() int {
 		count++
 	}
 	return count
+}
+
+func (r RiskControlConfig) EffectiveEntryRoundTripCostBps() float64 {
+	if r.EntryRoundTripCostBps > 0 {
+		return r.EntryRoundTripCostBps
+	}
+	return 20
+}
+
+func (r RiskControlConfig) EffectiveRiskPerTradePct() float64 {
+	if r.RiskPerTradePct > 0 {
+		return r.RiskPerTradePct
+	}
+	return 1.5
 }

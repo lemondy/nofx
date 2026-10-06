@@ -21,19 +21,20 @@ import (
 // Rows are written on every set/drop; startup reconciliation restores
 // ownership from them. One resting entry per trader+symbol+side.
 type PendingEntryDB struct {
-	ExecutedQty  float64   `gorm:"column:executed_qty;default:0" json:"executed_qty"`
-	ProtectedQty float64   `gorm:"column:protected_qty;default:0" json:"protected_qty"`
-	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID     string    `gorm:"column:trader_id;index:idx_pending_trader_symbol_side,unique" json:"trader_id"`
-	Symbol       string    `gorm:"column:symbol;index:idx_pending_trader_symbol_side,unique" json:"symbol"`
-	Side         string    `gorm:"column:side;size:8;index:idx_pending_trader_symbol_side,unique" json:"side"` // long / short
-	Price        float64   `gorm:"column:price" json:"price"`
-	Quantity     float64   `gorm:"column:quantity" json:"quantity"`
-	StopLoss     float64   `gorm:"column:stop_loss" json:"stop_loss"`
-	TakeProfit   float64   `gorm:"column:take_profit" json:"take_profit"`
-	Leverage     int       `gorm:"column:leverage" json:"leverage"`
-	OrderID      string    `gorm:"column:order_id;size:64" json:"order_id"`
-	PlacedAt     time.Time `gorm:"column:placed_at" json:"placed_at"`
+	RecoveryReason string    `gorm:"column:recovery_reason" json:"recovery_reason,omitempty"`
+	ExecutedQty    float64   `gorm:"column:executed_qty;default:0" json:"executed_qty"`
+	ProtectedQty   float64   `gorm:"column:protected_qty;default:0" json:"protected_qty"`
+	ID             uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraderID       string    `gorm:"column:trader_id;index:idx_pending_trader_symbol_side,unique" json:"trader_id"`
+	Symbol         string    `gorm:"column:symbol;index:idx_pending_trader_symbol_side,unique" json:"symbol"`
+	Side           string    `gorm:"column:side;size:8;index:idx_pending_trader_symbol_side,unique" json:"side"` // long / short
+	Price          float64   `gorm:"column:price" json:"price"`
+	Quantity       float64   `gorm:"column:quantity" json:"quantity"`
+	StopLoss       float64   `gorm:"column:stop_loss" json:"stop_loss"`
+	TakeProfit     float64   `gorm:"column:take_profit" json:"take_profit"`
+	Leverage       int       `gorm:"column:leverage" json:"leverage"`
+	OrderID        string    `gorm:"column:order_id;size:64" json:"order_id"`
+	PlacedAt       time.Time `gorm:"column:placed_at" json:"placed_at"`
 	// ExitMode rides the pending entry so the fill stamps the position's
 	// exit template (trend|range|quick) even when the fill lands offline.
 	ExitMode string `gorm:"column:exit_mode" json:"exit_mode,omitempty"`

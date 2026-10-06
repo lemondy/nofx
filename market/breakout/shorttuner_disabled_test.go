@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -54,9 +55,12 @@ func TestRunShortTunerNoWeightWriteWhenDisabled(t *testing.T) {
 	// Stub the ticker endpoint RunShortTuner's evaluation uses.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]map[string]string{
-			{"symbol": "TESTUSDT", "lastPrice": "110", "priceChangePercent": "10", "quoteVolume": "1000000"},
-		})
+		if r.URL.Path == "/fapi/v1/fundingRate" {
+			w.Write([]byte("[]"))
+			return
+		}
+		open, _ := strconv.ParseInt(r.URL.Query().Get("startTime"), 10, 64)
+		_ = json.NewEncoder(w).Encode([][]interface{}{{open, "100", "110", "99", "110", "100", open + 59999}})
 	}))
 	defer srv.Close()
 	originalClient := binanceHTTP

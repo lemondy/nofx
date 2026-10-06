@@ -1,0 +1,47 @@
+=== RUN   TestAudit05AdverseSlippageDirection
+    review_20261005_temp_test.go:15: side=long fill=102 got=0bps want=200bps
+    review_20261005_temp_test.go:15: side=long fill=98 got=200bps want=0bps
+    review_20261005_temp_test.go:15: side=short fill=98 got=0bps want=200bps
+    review_20261005_temp_test.go:15: side=short fill=102 got=200bps want=0bps
+--- FAIL: TestAudit05AdverseSlippageDirection (0.00s)
+=== RUN   TestAudit05ShortBansMustReachMarketExecution
+    review_20261005_temp_test.go:25: market short passed ban BTC_4H_STRONGBULL
+    review_20261005_temp_test.go:25: market short passed ban SHORT_TOP_CONFIRM_MISSING
+--- FAIL: TestAudit05ShortBansMustReachMarketExecution (0.00s)
+=== RUN   TestAudit05DailyUptrendBanMustCoverLimitShort
+    review_20261005_temp_test.go:35: limit short bypassed enabled 1d uptrend ban
+--- FAIL: TestAudit05DailyUptrendBanMustCoverLimitShort (0.62s)
+=== RUN   TestAudit05WatchdogMustRepairInsufficientSLCoverage
+10-05 08:42:59 [INFO] trader/auto_trader_risk.go:1624 🔧 [] Protection watchdog: seeded recorded SL XUSDT long = 95 from exchange
+10-05 08:42:59 [INFO] trader/auto_trader_risk.go:1631 🔧 [] Protection watchdog: seeded recorded TP XUSDT long = 110 from exchange
+    review_20261005_temp_test.go:56: 1-unit position has only 0.1-unit stop, watchdog did not repair
+--- FAIL: TestAudit05WatchdogMustRepairInsufficientSLCoverage (0.00s)
+=== RUN   TestAudit05CrossedMissingStopMustExit
+10-05 08:42:59 [INFO] trader/auto_trader_risk.go:1631 🔧 [] Protection watchdog: seeded recorded TP XUSDT long = 110 from exchange
+10-05 08:42:59 [INFO] trader/auto_trader_risk.go:1669 ⚠️ [] Protection watchdog: XUSDT recorded SL 95 is on the wrong side of mark 90 — not placed, manual check
+    review_20261005_temp_test.go:64: mark 90 crossed recorded long SL 95, watchdog neither restores a valid SL nor exits
+--- FAIL: TestAudit05CrossedMissingStopMustExit (0.00s)
+=== RUN   TestAudit05DailyHaltMustCancelPendingRisk
+10-05 08:42:59 [INFO] trader/auto_trader_pending.go:567 📌 [] Limit entry XUSDT pending (1/3 cycles, age 0s of 30m0s)
+    review_20261005_temp_test.go:74: daily halt active, existing NEW entry remains live
+--- FAIL: TestAudit05DailyHaltMustCancelPendingRisk (0.00s)
+FAIL
+FAIL	nofx/trader	1.409s
+=== RUN   TestAudit05UnknownRuleFieldsMustBeRejected
+    review_20261005_temp_test.go:6: unsupported funding_rate rule accepted; evaluator has no implementation
+--- FAIL: TestAudit05UnknownRuleFieldsMustBeRejected (0.00s)
+FAIL
+FAIL	nofx/kernel	0.311s
+=== RUN   TestAudit05ResampleMustAlignToExchangeHours
+    review_20261005_temp_test.go:16: synthetic 1h bar starts 2026-10-01 00:15:00 +0000 UTC instead of UTC-hour boundary
+    review_20261005_temp_test.go:16: synthetic 1h bar starts 2026-10-01 01:15:00 +0000 UTC instead of UTC-hour boundary
+--- FAIL: TestAudit05ResampleMustAlignToExchangeHours (0.00s)
+=== RUN   TestAudit05PersistFailureMustKeepLiveParams
+    review_20261005_temp_test.go:27: failed persistence still changes production in-memory parameters
+--- FAIL: TestAudit05PersistFailureMustKeepLiveParams (0.00s)
+=== RUN   TestAudit05WeakCorrelationMustNotBeCalledSignificant
+    review_20261005_temp_test.go:33: n=30 Pearson r=0.16 (t≈0.86) incorrectly admitted as significant
+--- FAIL: TestAudit05WeakCorrelationMustNotBeCalledSignificant (0.00s)
+FAIL
+FAIL	nofx/market/breakout	0.334s
+FAIL

@@ -1,0 +1,9 @@
+package kernel
+
+import "testing"
+
+func TestAudit05UnknownRuleFieldsMustBeRejected(t *testing.T) {
+	if _, err := ParseRuleCondition(`{"field":"funding_rate","op":">","value":0.03}`); err == nil {
+		t.Error("unsupported funding_rate rule accepted; evaluator has no implementation")
+	}
+}

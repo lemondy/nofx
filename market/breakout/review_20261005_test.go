@@ -1,0 +1,65 @@
+package breakout
+
+import (
+	"math"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestAudit05ResampleMustAlignToExchangeHours(t *testing.T) {
+	start := time.Date(2026, 10, 1, 0, 15, 0, 0, time.UTC)
+	var bars []Kline
+	for i := 0; i < 8; i++ {
+		bars = append(bars, Kline{OpenTime: start.Add(time.Duration(i) * 15 * time.Minute).UnixMilli(), Open: 100, High: 101, Low: 99, Close: 100})
+	}
+	out := resample1h(bars)
+	for _, b := range out {
+		if b.OpenTime%time.Hour.Milliseconds() != 0 {
+			t.Errorf("synthetic 1h bar starts %s instead of UTC-hour boundary", time.UnixMilli(b.OpenTime).UTC())
+		}
+	}
+}
+
+func TestAudit05PersistFailureMustKeepLiveParams(t *testing.T) {
+	paramsMu.Lock()
+	oldPath, oldLoaded, oldParams := paramsPath, paramsLoaded, currentParams
+	paramsMu.Unlock()
+	t.Cleanup(func() {
+		paramsMu.Lock()
+		paramsPath, paramsLoaded, currentParams = oldPath, oldLoaded, oldParams
+		paramsMu.Unlock()
+	})
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "file")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	paramsMu.Lock()
+	paramsPath = filepath.Join(blocker, "params.json")
+	paramsLoaded = true
+	currentParams = defaultParams()
+	paramsMu.Unlock()
+	before := GetParams()
+	next := before
+	next.StrongThreshold = 85
+	if err := ApplyParamsChecked(next); err == nil {
+		t.Fatal("fixture persist unexpectedly succeeded")
+	}
+	if GetParams().StrongThreshold != before.StrongThreshold {
+		t.Error("failed persistence still changes production in-memory parameters")
+	}
+}
+
+func TestAudit05WeakCorrelationMustNotBeCalledSignificant(t *testing.T) {
+	var samples []shortSample
+	for i := 0; i < 30; i++ {
+		x := math.Cos(2 * math.Pi * float64(i) / 30)
+		z := math.Sin(2 * math.Pi * float64(i) / 30)
+		samples = append(samples, shortSample{TS: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Truncate(48 * time.Hour).Add(time.Duration(i) * 48 * time.Hour).UnixMilli(), Components: map[string]float64{"stretch": 50 + 10*x}, Outcome: 0.16*x + math.Sqrt(1-0.16*0.16)*z})
+	}
+	if _, ok := updateShortWeights(samples, DefaultShortWeights(), shortTunerEta); ok {
+		t.Error("n=30 Pearson r=0.16 (t≈0.86) incorrectly admitted as significant")
+	}
+}

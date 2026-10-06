@@ -122,26 +122,21 @@ func (t *KuCoinTrader) OpenShort(symbol string, quantity float64, leverage int) 
 
 // queryOrderFillPrice queries order status and returns fill price
 func (t *KuCoinTrader) queryOrderFillPrice(orderId string) float64 {
-	// Wait a bit for order to fill
 	time.Sleep(500 * time.Millisecond)
-
-	path := fmt.Sprintf("%s/%s", kucoinOrderPath, orderId)
-	data, err := t.doRequest("GET", path, nil)
+	data, err := t.doRequest("GET", fmt.Sprintf("%s/%s", kucoinOrderPath, orderId), nil)
 	if err != nil {
-		logger.Warnf("Failed to query order %s: %v", orderId, err)
 		return 0
 	}
-
 	var order struct {
+		AvgDealPrice string  `json:"avgDealPrice"`
 		DealAvgPrice float64 `json:"dealAvgPrice"`
-		Status       string  `json:"status"`
-		DealSize     int64   `json:"dealSize"`
 	}
-
-	if err := json.Unmarshal(data, &order); err != nil {
+	if json.Unmarshal(data, &order) != nil {
 		return 0
 	}
-
+	if price, err := strconv.ParseFloat(order.AvgDealPrice, 64); err == nil && price > 0 {
+		return price
+	}
 	return order.DealAvgPrice
 }
 
@@ -197,7 +192,7 @@ func (t *KuCoinTrader) CloseLong(symbol string, quantity float64) (map[string]in
 		"type":       "market",
 		"size":       lots,
 		"reduceOnly": true,
-		"closeOrder": true,
+		"closeOrder": false,
 		"marginMode": marginMode, // Use position's margin mode
 	}
 
@@ -278,7 +273,7 @@ func (t *KuCoinTrader) CloseShort(symbol string, quantity float64) (map[string]i
 		"type":       "market",
 		"size":       lots,
 		"reduceOnly": true,
-		"closeOrder": true,
+		"closeOrder": false,
 		"marginMode": marginMode, // Use position's margin mode
 	}
 
@@ -357,7 +352,7 @@ func (t *KuCoinTrader) SetStopLoss(symbol string, positionSide string, quantity,
 		"stopPriceType": "MP", // Mark Price
 		"stopPrice":     fmt.Sprintf("%.8f", stopPrice),
 		"reduceOnly":    true,
-		"closeOrder":    true,
+		"closeOrder":    false,
 	}
 
 	_, err = t.doRequest("POST", kucoinStopOrderPath, body)
@@ -397,7 +392,7 @@ func (t *KuCoinTrader) SetTakeProfit(symbol string, positionSide string, quantit
 		"stopPriceType": "MP", // Mark Price
 		"stopPrice":     fmt.Sprintf("%.8f", takeProfitPrice),
 		"reduceOnly":    true,
-		"closeOrder":    true,
+		"closeOrder":    false,
 	}
 
 	_, err = t.doRequest("POST", kucoinStopOrderPath, body)
@@ -576,6 +571,11 @@ func (t *KuCoinTrader) GetOrderStatus(symbol string, orderID string) (map[string
 		Symbol       string  `json:"symbol"`
 		Status       string  `json:"status"`
 		DealAvgPrice float64 `json:"dealAvgPrice"`
+		AvgDealPrice string  `json:"avgDealPrice"`
+		DealValue    string  `json:"dealValue"`
+		Size         int64   `json:"size"`
+		IsActive     *bool   `json:"isActive"`
+		CancelExist  bool    `json:"cancelExist"`
 		DealSize     int64   `json:"dealSize"`
 		Fee          float64 `json:"fee"`
 		Side         string  `json:"side"`
@@ -585,22 +585,44 @@ func (t *KuCoinTrader) GetOrderStatus(symbol string, orderID string) (map[string
 		return nil, err
 	}
 
-	// Convert status
-	status := "NEW"
-	if order.Status == "done" {
-		status = "FILLED"
-	} else if order.Status == "cancelled" || order.Status == "canceled" {
-		status = "CANCELED"
+	contract, err := t.getContract(symbol)
+	if err != nil || contract.Multiplier <= 0 {
+		return nil, fmt.Errorf("fill quantity multiplier unavailable: %v", err)
 	}
-
-	return map[string]interface{}{
-		"orderId":     order.Id,
-		"symbol":      t.convertSymbolBack(order.Symbol),
-		"status":      status,
-		"avgPrice":    order.DealAvgPrice,
-		"executedQty": order.DealSize,
-		"commission":  order.Fee,
-	}, nil
+	quantity := float64(order.DealSize) * contract.Multiplier
+	average := order.DealAvgPrice
+	if price, err := strconv.ParseFloat(order.AvgDealPrice, 64); err == nil && price > 0 {
+		average = price
+	}
+	if average <= 0 && quantity > 0 && !contract.IsInverse {
+		value, _ := strconv.ParseFloat(order.DealValue, 64)
+		average = value / quantity
+	}
+	status := "NEW"
+	switch strings.ToLower(order.Status) {
+	case "filled":
+		status = "FILLED"
+	case "cancelled", "canceled":
+		status = "CANCELED"
+	case "done":
+		if order.CancelExist || order.DealSize < order.Size {
+			status = "CANCELED"
+		} else {
+			status = "FILLED"
+		}
+	}
+	if order.IsActive != nil {
+		if *order.IsActive {
+			if quantity > 0 {
+				status = "PARTIALLY_FILLED"
+			}
+		} else if order.CancelExist || order.DealSize < order.Size {
+			status = "CANCELED"
+		} else if order.Size > 0 {
+			status = "FILLED"
+		}
+	}
+	return map[string]interface{}{"orderId": order.Id, "symbol": t.convertSymbolBack(order.Symbol), "status": status, "avgPrice": average, "executedQty": quantity, "commission": order.Fee}, nil
 }
 
 // GetClosedPnL gets closed position PnL records
@@ -685,103 +707,84 @@ func (t *KuCoinTrader) GetClosedPnL(startTime time.Time, limit int) ([]types.Clo
 }
 
 // GetOpenOrders gets open/pending orders
+type kucoinOpenOrder struct {
+	ID         string `json:"id"`
+	Symbol     string `json:"symbol"`
+	Side       string `json:"side"`
+	Type       string `json:"type"`
+	Price      string `json:"price"`
+	StopPrice  string `json:"stopPrice"`
+	Stop       string `json:"stop"`
+	Size       int64  `json:"size"`
+	DealSize   int64  `json:"dealSize"`
+	ReduceOnly bool   `json:"reduceOnly"`
+	CloseOrder bool   `json:"closeOrder"`
+}
+
+func decodeKucoinOrders(data []byte) ([]kucoinOpenOrder, error) {
+	var envelope struct {
+		Items     []kucoinOpenOrder `json:"items"`
+		TotalPage int               `json:"totalPage"`
+	}
+	if err := json.Unmarshal(data, &envelope); err == nil {
+		if envelope.TotalPage > 1 {
+			return nil, fmt.Errorf("open orders exceed one page; coverage unavailable")
+		}
+		return envelope.Items, nil
+	}
+	var items []kucoinOpenOrder
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (t *KuCoinTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	kcSymbol := t.convertSymbol(symbol)
-
-	// Get regular orders
-	path := fmt.Sprintf("%s?symbol=%s&status=active", kucoinOrderPath, kcSymbol)
-	data, err := t.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get open orders: %w", err)
+	contract, err := t.getContract(symbol)
+	if err != nil || contract.Multiplier <= 0 {
+		return nil, fmt.Errorf("open orders: contract multiplier unavailable: %v", err)
 	}
-
-	var response struct {
-		Items []struct {
-			Id       string `json:"id"`
-			Symbol   string `json:"symbol"`
-			Side     string `json:"side"`
-			Type     string `json:"type"`
-			Price    string `json:"price"`
-			Size     int64  `json:"size"`
-			StopType string `json:"stopType"`
-		} `json:"items"`
-	}
-
-	if err := json.Unmarshal(data, &response); err != nil {
-		// Try alternate format
-		var items []struct {
-			Id       string `json:"id"`
-			Symbol   string `json:"symbol"`
-			Side     string `json:"side"`
-			Type     string `json:"type"`
-			Price    string `json:"price"`
-			Size     int64  `json:"size"`
-			StopType string `json:"stopType"`
-		}
-		if err := json.Unmarshal(data, &items); err != nil {
-			return nil, err
-		}
-		response.Items = items
-	}
-
 	var orders []types.OpenOrder
-	for _, item := range response.Items {
-		// Determine position side based on order side
-		positionSide := "LONG"
-		if item.Side == "sell" {
-			positionSide = "SHORT"
+	for _, path := range []string{kucoinOrderPath + "?status=active", kucoinStopOrderPath + "?status=active"} {
+		data, err := t.doRequest("GET", path+"&symbol="+kcSymbol+"&pageSize=100", nil)
+		if err != nil {
+			return nil, fmt.Errorf("open orders %s: %w", path, err)
 		}
-
-		price, _ := strconv.ParseFloat(item.Price, 64)
-
-		orders = append(orders, types.OpenOrder{
-			OrderID:      item.Id,
-			Symbol:       t.convertSymbolBack(item.Symbol),
-			Side:         strings.ToUpper(item.Side),
-			PositionSide: positionSide,
-			Type:         strings.ToUpper(item.Type),
-			Price:        price,
-			Quantity:     float64(item.Size),
-			Status:       "NEW",
-		})
-	}
-
-	// Get stop orders
-	stopPath := fmt.Sprintf("%s?symbol=%s", kucoinStopOrderPath, kcSymbol)
-	stopData, err := t.doRequest("GET", stopPath, nil)
-	if err == nil {
-		var stopResponse struct {
-			Items []struct {
-				Id        string `json:"id"`
-				Symbol    string `json:"symbol"`
-				Side      string `json:"side"`
-				StopPrice string `json:"stopPrice"`
-				Size      int64  `json:"size"`
-			} `json:"items"`
+		items, err := decodeKucoinOrders(data)
+		if err != nil {
+			return nil, fmt.Errorf("open orders decode: %w", err)
 		}
-
-		if json.Unmarshal(stopData, &stopResponse) == nil {
-			for _, item := range stopResponse.Items {
-				positionSide := "LONG"
-				if item.Side == "sell" {
-					positionSide = "SHORT"
-				}
-
-				stopPrice, _ := strconv.ParseFloat(item.StopPrice, 64)
-
-				orders = append(orders, types.OpenOrder{
-					OrderID:      item.Id,
-					Symbol:       t.convertSymbolBack(item.Symbol),
-					Side:         strings.ToUpper(item.Side),
-					PositionSide: positionSide,
-					Type:         "STOP_MARKET",
-					StopPrice:    stopPrice,
-					Quantity:     float64(item.Size),
-					Status:       "NEW",
-				})
+		for _, item := range items {
+			if item.Symbol != kcSymbol {
+				continue
 			}
+			order, err := normalizeKucoinOrder(item, contract.Multiplier)
+			if err != nil {
+				return nil, err
+			}
+			order.Symbol = symbol
+			orders = append(orders, order)
 		}
 	}
-
 	return orders, nil
+}
+
+func normalizeKucoinOrder(item kucoinOpenOrder, multiplier float64) (types.OpenOrder, error) {
+	price, _ := strconv.ParseFloat(item.Price, 64)
+	stopPrice, _ := strconv.ParseFloat(item.StopPrice, 64)
+	order := types.OpenOrder{OrderID: item.ID, Side: strings.ToUpper(item.Side), PositionSide: "BOTH",
+		Type: strings.ToUpper(item.Type), Price: price, StopPrice: stopPrice,
+		Quantity: float64(item.Size-item.DealSize) * multiplier, Status: "NEW", ReduceOnly: item.ReduceOnly,
+		ClosePosition: item.CloseOrder, Algo: stopPrice > 0}
+	if stopPrice > 0 {
+		if item.Stop != "up" && item.Stop != "down" {
+			return order, fmt.Errorf("unknown stop direction %q", item.Stop)
+		}
+		order.Type = "STOP_MARKET"
+		if (order.Side == "SELL" && item.Stop == "up") || (order.Side == "BUY" && item.Stop == "down") {
+			order.Type = "TAKE_PROFIT_MARKET"
+		}
+	}
+	return order, nil
 }

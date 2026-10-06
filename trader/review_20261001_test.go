@@ -17,6 +17,9 @@ type review20261001Mock struct {
 	orders       []types.OpenOrder
 }
 
+func (m *review20261001Mock) GetBalance() (map[string]interface{}, error) {
+	return map[string]interface{}{"totalEquity": 1000.0}, nil
+}
 func (m *review20261001Mock) SetStopLoss(string, string, float64, float64) error   { return m.slErr }
 func (m *review20261001Mock) SetTakeProfit(string, string, float64, float64) error { return m.tpErr }
 func (m *review20261001Mock) GetOpenOrders(string) ([]types.OpenOrder, error)      { return m.orders, nil }

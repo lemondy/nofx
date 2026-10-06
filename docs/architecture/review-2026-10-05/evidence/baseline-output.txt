@@ -1,0 +1,20 @@
+ok  	nofx/kernel	(cached)
+ok  	nofx/market	1.568s
+ok  	nofx/market/breakout	0.787s
+ok  	nofx/trader	(cached)
+ok  	nofx/trader/aster	(cached)
+ok  	nofx/trader/binance	(cached)
+?   	nofx/trader/binance_stocks	[no test files]
+?   	nofx/trader/bitget	[no test files]
+ok  	nofx/trader/bybit	(cached)
+ok  	nofx/trader/gate	(cached)
+ok  	nofx/trader/hyperliquid	(cached)
+ok  	nofx/trader/indodax	(cached)
+ok  	nofx/trader/kucoin	(cached)
+ok  	nofx/trader/lighter	(cached)
+?   	nofx/trader/okx	[no test files]
+?   	nofx/trader/testutil	[no test files]
+ok  	nofx/trader/types	(cached)
+ok  	nofx/store	(cached)
+ok  	nofx/api	0.969s
+?   	nofx/manager	[no test files]

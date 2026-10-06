@@ -15,15 +15,15 @@ func TestBTCRegimeTimelineAndRegimeAt(t *testing.T) {
 	// Build 60 4h bars: flat for 20 bars, strong rally for 20, strong dump
 	// for 20 — the EMA20/50+RSI classifier should read bull mid-rally and
 	// bear mid-dump.
-	n := 60
+	n := 100
 	k := make([]Kline, n)
 	price := 100.0
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < n; i++ {
 		switch {
-		case i < 20:
+		case i < 60:
 			// flat
-		case i < 40:
+		case i < 80:
 			price *= 1.02 // rally
 		default:
 			price *= 0.97 // dump
@@ -36,7 +36,7 @@ func TestBTCRegimeTimelineAndRegimeAt(t *testing.T) {
 	}
 
 	// Mid-rally bar (bar 35 closed): down-direction must carry the 0.85 haircut.
-	rallyTime := start.Add(36 * 4 * time.Hour) // after bar 35 closes
+	rallyTime := start.Add(76 * 4 * time.Hour) // after bar 35 closes
 	regime, mult := regimeAt(tl, rallyTime, DirDown)
 	if regime != "btc_bull" || mult != 0.85 {
 		t.Fatalf("mid-rally down regime=%s mult=%.2f, want btc_bull/0.85", regime, mult)
@@ -48,7 +48,7 @@ func TestBTCRegimeTimelineAndRegimeAt(t *testing.T) {
 	}
 
 	// Mid-dump: up-direction haircuts.
-	dumpTime := start.Add(56 * 4 * time.Hour)
+	dumpTime := start.Add(96 * 4 * time.Hour)
 	regime, upMult = regimeAt(tl, dumpTime, DirUp)
 	if regime != "btc_bear" || upMult != 0.85 {
 		t.Fatalf("mid-dump up regime=%s mult=%.2f, want btc_bear/0.85", regime, upMult)
@@ -139,11 +139,11 @@ func TestTuneWalkForwardVerifiesOnHoldout(t *testing.T) {
 			foundStrong = true
 		}
 	}
-	if !foundStrong {
-		t.Fatalf("honest edge should verify, changes=%v rejected=%v", changes, rejected)
+	if foundStrong {
+		t.Fatalf("equal incumbent proxy must not verify, changes=%v", changes)
 	}
-	if GetParams().StrongThreshold == prev.StrongThreshold {
-		t.Fatal("verified cutoff should have been applied")
+	if GetParams().StrongThreshold != prev.StrongThreshold {
+		t.Fatal("research proxy changed live parameters")
 	}
 	next := GetParams()
 	if next.PriceATRCenter != prev.PriceATRCenter || next.VolCenter != prev.VolCenter {

@@ -1,0 +1,18 @@
+ok  	nofx/trader	3.665s
+ok  	nofx/kernel	45.459s
+ok  	nofx/market/breakout	0.814s
+ok  	nofx/trader/aster	0.584s
+ok  	nofx/trader/binance	17.001s
+?   	nofx/trader/binance_stocks	[no test files]
+?   	nofx/trader/bitget	[no test files]
+ok  	nofx/trader/bybit	0.576s
+ok  	nofx/trader/gate	0.696s
+ok  	nofx/trader/hyperliquid	0.631s
+ok  	nofx/trader/indodax	0.726s
+ok  	nofx/trader/kucoin	0.522s
+ok  	nofx/trader/lighter	0.359s
+?   	nofx/trader/okx	[no test files]
+?   	nofx/trader/testutil	[no test files]
+ok  	nofx/trader/types	0.298s
+ok  	nofx/api	0.852s
+ok  	nofx/store	0.647s

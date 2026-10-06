@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	hl "github.com/sonirico/go-hyperliquid"
 	"math"
 	"net/http"
 	"nofx/logger"
@@ -539,35 +540,37 @@ func (t *HyperliquidTrader) GetTrades(startTime time.Time, limit int) ([]types.T
 
 // GetOpenOrders gets all open/pending orders for a symbol
 func (t *HyperliquidTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
-	openOrders, err := t.exchange.Info().OpenOrders(t.ctx, t.walletAddr)
+	orders, err := t.exchange.Info().FrontendOpenOrders(t.ctx, t.walletAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get open orders: %w", err)
+		return nil, fmt.Errorf("open protection orders unknown: %w", err)
 	}
+	return normalizeFrontendOrders(symbol, orders)
+}
 
+func normalizeFrontendOrders(symbol string, orders []hl.FrontendOpenOrder) ([]types.OpenOrder, error) {
+	coin := convertSymbolToHyperliquid(symbol)
 	var result []types.OpenOrder
-	for _, order := range openOrders {
-		if order.Coin != symbol {
+	for _, order := range orders {
+		if order.Coin != coin {
 			continue
 		}
-
 		side := "BUY"
 		if order.Side == "A" {
 			side = "SELL"
 		}
-
+		typ := "LIMIT"
+		if order.IsTrigger {
+			typ = strings.ReplaceAll(strings.ToUpper(order.OrderType), " ", "_")
+			if !strings.Contains(typ, "STOP") && !strings.Contains(typ, "TAKE_PROFIT") {
+				return nil, fmt.Errorf("unrecognized trigger type %q", order.OrderType)
+			}
+		}
 		result = append(result, types.OpenOrder{
-			OrderID:      fmt.Sprintf("%d", order.Oid),
-			Symbol:       order.Coin,
-			Side:         side,
-			PositionSide: "",
-			Type:         "LIMIT",
-			Price:        order.LimitPx,
-			StopPrice:    0,
-			Quantity:     order.Size,
-			Status:       "NEW",
+			OrderID: fmt.Sprint(order.Oid), Symbol: symbol, Side: side, PositionSide: "BOTH",
+			Type: typ, Price: order.LimitPx, StopPrice: order.TriggerPx, Quantity: order.Sz, Status: "NEW",
+			ReduceOnly: order.ReduceOnly, ClosePosition: order.IsPositionTpSl, Algo: order.IsTrigger,
 		})
 	}
-
 	return result, nil
 }
 

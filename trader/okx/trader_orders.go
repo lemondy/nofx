@@ -686,14 +686,15 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	}
 	if err == nil && data != nil {
 		var orders []struct {
-			OrdId   string `json:"ordId"`
-			InstId  string `json:"instId"`
-			Side    string `json:"side"`    // buy/sell
-			PosSide string `json:"posSide"` // long/short/net
-			OrdType string `json:"ordType"` // limit/market/post_only
-			Px      string `json:"px"`      // price
-			Sz      string `json:"sz"`      // size
-			State   string `json:"state"`   // live/partially_filled
+			ReduceOnly bool   `json:"reduceOnly"`
+			OrdId      string `json:"ordId"`
+			InstId     string `json:"instId"`
+			Side       string `json:"side"`    // buy/sell
+			PosSide    string `json:"posSide"` // long/short/net
+			OrdType    string `json:"ordType"` // limit/market/post_only
+			Px         string `json:"px"`      // price
+			Sz         string `json:"sz"`      // size
+			State      string `json:"state"`   // live/partially_filled
 		}
 		if err := json.Unmarshal(data, &orders); err != nil {
 			return nil, err
@@ -721,6 +722,7 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					StopPrice:    0,
 					Quantity:     quantity,
 					Status:       "NEW",
+					ReduceOnly:   order.ReduceOnly,
 				})
 			}
 		}
@@ -735,16 +737,18 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	}
 	if err == nil && algoData != nil {
 		var algoOrders []struct {
-			AlgoId      string `json:"algoId"`
-			InstId      string `json:"instId"`
-			Side        string `json:"side"`
-			PosSide     string `json:"posSide"`
-			OrdType     string `json:"ordType"` // conditional/oco/trigger
-			TriggerPx   string `json:"triggerPx"`
-			SlTriggerPx string `json:"slTriggerPx"` // Stop loss trigger price
-			TpTriggerPx string `json:"tpTriggerPx"` // Take profit trigger price
-			Sz          string `json:"sz"`
-			State       string `json:"state"`
+			ReduceOnly    bool   `json:"reduceOnly"`
+			CloseFraction string `json:"closeFraction"`
+			AlgoId        string `json:"algoId"`
+			InstId        string `json:"instId"`
+			Side          string `json:"side"`
+			PosSide       string `json:"posSide"`
+			OrdType       string `json:"ordType"` // conditional/oco/trigger
+			TriggerPx     string `json:"triggerPx"`
+			SlTriggerPx   string `json:"slTriggerPx"` // Stop loss trigger price
+			TpTriggerPx   string `json:"tpTriggerPx"` // Take profit trigger price
+			Sz            string `json:"sz"`
+			State         string `json:"state"`
 		}
 		if err := json.Unmarshal(algoData, &algoOrders); err != nil {
 			return nil, err
@@ -765,16 +769,18 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					slPrice, _ := strconv.ParseFloat(order.SlTriggerPx, 64)
 					if slPrice > 0 {
 						result = append(result, types.OpenOrder{
-							OrderID:      order.AlgoId,
-							Algo:         true,
-							Symbol:       symbol,
-							Side:         side,
-							PositionSide: positionSide,
-							Type:         "STOP_MARKET",
-							Price:        0,
-							StopPrice:    slPrice,
-							Quantity:     quantity,
-							Status:       "NEW",
+							OrderID:       order.AlgoId,
+							Algo:          true,
+							Symbol:        symbol,
+							Side:          side,
+							PositionSide:  positionSide,
+							Type:          "STOP_MARKET",
+							Price:         0,
+							StopPrice:     slPrice,
+							Quantity:      quantity,
+							Status:        "NEW",
+							ReduceOnly:    order.ReduceOnly,
+							ClosePosition: order.CloseFraction == "1",
 						})
 					}
 				}
@@ -784,16 +790,18 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					tpPrice, _ := strconv.ParseFloat(order.TpTriggerPx, 64)
 					if tpPrice > 0 {
 						result = append(result, types.OpenOrder{
-							OrderID:      order.AlgoId,
-							Algo:         true,
-							Symbol:       symbol,
-							Side:         side,
-							PositionSide: positionSide,
-							Type:         "TAKE_PROFIT_MARKET",
-							Price:        0,
-							StopPrice:    tpPrice,
-							Quantity:     quantity,
-							Status:       "NEW",
+							OrderID:       order.AlgoId,
+							Algo:          true,
+							Symbol:        symbol,
+							Side:          side,
+							PositionSide:  positionSide,
+							Type:          "TAKE_PROFIT_MARKET",
+							Price:         0,
+							StopPrice:     tpPrice,
+							Quantity:      quantity,
+							Status:        "NEW",
+							ReduceOnly:    order.ReduceOnly,
+							ClosePosition: order.CloseFraction == "1",
 						})
 					}
 				}
@@ -803,16 +811,18 @@ func (t *OKXTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 					triggerPrice, _ := strconv.ParseFloat(order.TriggerPx, 64)
 					if triggerPrice > 0 {
 						result = append(result, types.OpenOrder{
-							OrderID:      order.AlgoId,
-							Algo:         true,
-							Symbol:       symbol,
-							Side:         side,
-							PositionSide: positionSide,
-							Type:         "STOP_MARKET",
-							Price:        0,
-							StopPrice:    triggerPrice,
-							Quantity:     quantity,
-							Status:       "NEW",
+							OrderID:       order.AlgoId,
+							Algo:          true,
+							Symbol:        symbol,
+							Side:          side,
+							PositionSide:  positionSide,
+							Type:          "STOP_MARKET",
+							Price:         0,
+							StopPrice:     triggerPrice,
+							Quantity:      quantity,
+							Status:        "NEW",
+							ReduceOnly:    order.ReduceOnly,
+							ClosePosition: order.CloseFraction == "1",
 						})
 					}
 				}

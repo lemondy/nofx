@@ -25,10 +25,9 @@ func TestReportFillSlippage(t *testing.T) {
 		t.Fatalf("150bps fill: alerted=%v bps=%.1f, want true/~150", alerted, bps)
 	}
 
-	// Slippage in the FAVORABLE direction still counts (absolute) — a fill
-	// 1.2% better than checked is the same entry-quality information.
-	if _, alerted := at.reportFillSlippage(d, 100, 98.8); !alerted {
-		t.Fatal("favorable 120bps fill should still alert (absolute distance)")
+	// Favorable slippage must not emit an adverse entry warning.
+	if _, alerted := at.reportFillSlippage(d, 100, 98.8); alerted {
+		t.Fatal("favorable 120bps fill must not alert")
 	}
 
 	// Degenerate inputs.

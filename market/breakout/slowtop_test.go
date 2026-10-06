@@ -66,6 +66,7 @@ func TestUpdateShortWeights(t *testing.T) {
 		}
 		_ = now
 		samples = append(samples, shortSample{
+			TS:        now.UTC().Truncate(48 * time.Hour).Add(time.Duration(i) * 48 * time.Hour).UnixMilli(),
 			Evaluated: true,
 			Outcome:   outcome,
 			Components: map[string]float64{

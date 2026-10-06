@@ -648,15 +648,17 @@ func (t *AsterTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 	}
 
 	var orders []struct {
-		OrderID      int64  `json:"orderId"`
-		Symbol       string `json:"symbol"`
-		Side         string `json:"side"`
-		PositionSide string `json:"positionSide"`
-		Type         string `json:"type"`
-		Price        string `json:"price"`
-		StopPrice    string `json:"stopPrice"`
-		OrigQty      string `json:"origQty"`
-		Status       string `json:"status"`
+		ReduceOnly    bool   `json:"reduceOnly"`
+		ClosePosition bool   `json:"closePosition"`
+		OrderID       int64  `json:"orderId"`
+		Symbol        string `json:"symbol"`
+		Side          string `json:"side"`
+		PositionSide  string `json:"positionSide"`
+		Type          string `json:"type"`
+		Price         string `json:"price"`
+		StopPrice     string `json:"stopPrice"`
+		OrigQty       string `json:"origQty"`
+		Status        string `json:"status"`
 	}
 
 	if err := json.Unmarshal(body, &orders); err != nil {
@@ -670,6 +672,7 @@ func (t *AsterTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
 		quantity, _ := strconv.ParseFloat(order.OrigQty, 64)
 
 		result = append(result, types.OpenOrder{
+			ReduceOnly: order.ReduceOnly, ClosePosition: order.ClosePosition,
 			OrderID:      fmt.Sprintf("%d", order.OrderID),
 			Symbol:       order.Symbol,
 			Side:         order.Side,

@@ -6,51 +6,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
 	"nofx/logger"
 )
 
-// Short-scan online tuner. The nine component weights start at the designed
-// values; a forward evaluator keeps nudging them toward the components that
-// actually predicted 24h short PnL:
-//
-//   - every hour the scheduler samples the current top-10 (score, components,
-//     price) into a JSONL journal;
-//   - samples older than 24h are marked evaluated with
-//     outcome = (scanPrice - priceNow) / scanPrice × 100 (unlevered short PnL);
-//   - when ENABLED, each component's weight is multiplied by
-//     exp(η × Pearson(component, outcome)) over the evaluated cohort, then
-//     clamped to [0.03, 0.30] and renormalized to sum 1.
-//
-// The weight update is DISABLED by default (short_tuner_enabled, 2026-09-22):
-// it re-multiplied over the same cumulative cohort on every 30-min run, so
-// stable-sign correlations compounded geometrically into the clamp bounds.
-// Sampling/evaluation continue; re-enable only after the update rule is fixed
-// (incremental window + significance test).
-//
-// Historical backtesting is NOT possible for these components (Binance only
-// serves ~24h of OI history and the LS ratio is spot-only-recent), so the
-// tuner learns forward from live samples instead. Everything persists in a
-// JSONL journal under the data dir; restart-safe.
+// Short scanner forward research: hourly observations are labelled at a
+// fixed +24h horizon using historical prices, funding and disclosed costs.
+// Optional studies aggregate separated 24h time blocks and save bounded
+// weight proposals. They never publish live weights or advance a live cursor.
+// Live custom weights additionally require explicit validation/promotion.
 
 const (
 	shortTunerSampleEvery = time.Hour
 	shortTunerEvalAfter   = 24 * time.Hour
 	shortTunerMinSamples  = 30
 	shortTunerEta         = 0.25
-	shortTunerPruneAfter  = 14 * 24 * time.Hour
+	shortTunerPruneAfter  = 180 * 24 * time.Hour
 )
 
 var shortTunerMu sync.Mutex
 
-// shortTunerUpdateEnabled gates the online weight write. Default OFF — the
-// update rule (repeated exp(η·corr) over the same cumulative cohort) railed
-// weights to the clamp bounds (structure 0.15 → 0.0298 by 2026-09-22); see
-// TunableParams.ShortTunerEnabled. Sampling and outcome evaluation are NOT
-// gated — the journal keeps accumulating for the eventual fixed rule.
+// The existing enable switch now permits research proposals only.
 func shortTunerUpdateEnabled() bool {
 	p := GetParams()
 	return p.ShortTunerEnabled != nil && *p.ShortTunerEnabled
@@ -88,7 +70,7 @@ func DefaultShortWeights() map[string]float64 {
 // Disabled ⇒ designed defaults, full stop; the polluted file becomes inert.
 func shortWeights() map[string]float64 {
 	p := GetParams()
-	if !shortTunerUpdateEnabled() || len(p.ShortWeights) == 0 {
+	if !shortTunerUpdateEnabled() || !p.ShortWeightsValidated || len(p.ShortWeights) == 0 {
 		return DefaultShortWeights()
 	}
 	w := make(map[string]float64, len(shortWeightKeys))
@@ -107,7 +89,7 @@ func shortWeights() map[string]float64 {
 	for _, k := range shortWeightKeys {
 		w[k] /= total
 	}
-	return w
+	return boundedShortWeights(w)
 }
 
 // shortTuningPath is where the signal journal lives (override in tests).
@@ -121,14 +103,22 @@ func SetShortTuningPath(p string) {
 }
 
 type shortSample struct {
-	TS          int64              `json:"ts"`
-	Symbol      string             `json:"symbol"`
-	Score       float64            `json:"score"`
-	Price       float64            `json:"price"`
-	Components  map[string]float64 `json:"components"`
-	Evaluated   bool               `json:"evaluated"`
-	Outcome     float64            `json:"outcome,omitempty"`     // % short PnL at +24h
-	Unpriceable bool               `json:"unpriceable,omitempty"` // delisted/no quote — excluded from correlations
+	LabelAttempts int                `json:"label_attempts,omitempty"`
+	NextRetryAt   int64              `json:"next_retry_at,omitempty"`
+	LabelAt       int64              `json:"label_at,omitempty"`
+	LabelVersion  int                `json:"label_version,omitempty"`
+	EvaluatedAt   int64              `json:"evaluated_at,omitempty"`
+	FundingPct    float64            `json:"funding_pct,omitempty"`
+	CostPct       float64            `json:"cost_pct,omitempty"`
+	MissingReason string             `json:"missing_reason,omitempty"`
+	TS            int64              `json:"ts"`
+	Symbol        string             `json:"symbol"`
+	Score         float64            `json:"score"`
+	Price         float64            `json:"price"`
+	Components    map[string]float64 `json:"components"`
+	Evaluated     bool               `json:"evaluated"`
+	Outcome       float64            `json:"outcome,omitempty"`     // % short PnL at +24h
+	Unpriceable   bool               `json:"unpriceable,omitempty"` // delisted/no quote — excluded from correlations
 }
 
 // SampleShortSignals journals the current top-10 for future evaluation.
@@ -180,7 +170,9 @@ func SampleShortSignals(signals []ShortSignal, now time.Time) {
 		return
 	}
 	defer f.Close()
-	f.Write(buf)
+	if _, err := f.Write(buf); err != nil {
+		logger.Errorf("short sample append: %v", err)
+	}
 }
 
 // RunShortTuner evaluates matured samples and nudges the component weights.
@@ -201,97 +193,56 @@ func RunShortTuner(now time.Time) {
 		return
 	}
 
-	// 1. Evaluate matured samples with one batched ticker call.
-	prices, err := allPerpTickers()
-	if err != nil {
-		return
-	}
-	priceOf := make(map[string]float64, len(prices))
-	for _, t := range prices {
-		if p, perr := parseFloatStr(t.LastPrice); perr == nil && p > 0 {
-			priceOf[t.Symbol] = p
-		}
-	}
+	// Labels are historical +24h prices, never the scheduler's current quote.
+	// Legacy current-ticker labels are invalidated and rebuilt on restart.
 	changed := false
+	evaluatedThisRun := 0
 	for i := range samples {
 		s := &samples[i]
-		if s.Evaluated || s.Price <= 0 {
+		if s.Evaluated && s.LabelVersion != 2 {
+			s.Evaluated = false
+			s.Unpriceable = false
+			changed = true
+		}
+		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
 			continue
 		}
-		if now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
-			continue
+		if evaluatedThisRun >= 50 {
+			break
 		}
-		nowPrice, ok := priceOf[s.Symbol]
-		if !ok || nowPrice <= 0 {
-			s.Evaluated = true   // delisted/no data — drop from future evaluation
-			s.Unpriceable = true // P1: excluded from correlations (Outcome=0 was a fake zero)
+		evaluatedThisRun++
+		if s.Price <= 0 || math.IsNaN(s.Price) || math.IsInf(s.Price, 0) || s.TS <= 0 {
+			s.Unpriceable = true
+			s.MissingReason = "invalid sample price/time"
+			s.Evaluated = true
+			s.LabelVersion = 2
 			changed = true
 			continue
 		}
-		s.Outcome = (s.Price - nowPrice) / s.Price * 100
+		price, labelAt, funding, err := historicalShortLabel(*s)
+		if err != nil {
+			s.Unpriceable = true
+			s.MissingReason = err.Error()
+			s.LabelAttempts++
+			retry := time.Hour * time.Duration(1<<min(s.LabelAttempts, 4))
+			s.NextRetryAt = now.Add(retry).UnixMilli()
+			changed = true
+			continue // transient/delisting gaps are observable and retryable
+		}
+		s.Outcome = (s.Price-price)/s.Price*100 + funding - btCostRoundTrip
+		s.LabelAt = labelAt
+		s.LabelVersion = 2
+		s.EvaluatedAt = now.UnixMilli()
+		s.FundingPct = funding
+		s.CostPct = btCostRoundTrip
 		s.Evaluated = true
+		s.Unpriceable = false
+		s.MissingReason = ""
+		s.NextRetryAt = 0
 		changed = true
 	}
 
-	// 2. Weight update from the evaluated cohort (bounded, clamped).
-	// DISABLED by default (params.short_tuner_enabled, 2026-09-22): this was a
-	// repeated multiplicative update on the same cumulative cohort — every run
-	// re-multiplied exp(η·corr) over ALL retained samples, so any stable-sign
-	// correlation railed to the [0.03, 0.30] clamp bounds (structure went
-	// 0.15 → 0.0298; overbought/parabolic → 0.2984). Evaluation in step 1 and
-	// the prune/write in step 3 still run, so the outcome journal keeps
-	// accumulating for the eventual fixed update rule; only the weight write
-	// is gated.
-	if shortTunerUpdateEnabled() {
-		// P1 fix (2026-09-26 review): the update now runs on an INCREMENTAL
-		// window (samples evaluated since the LAST successful tune, tracked
-		// via shortTunerLastTunedMs in the params file) instead of re-mul-
-		// tiplying exp(η·corr) over the same cumulative cohort forever.
-		var eval []shortSample
-		lastTuned := GetParams().ShortTunerLastTunedMs
-		for _, s := range samples {
-			// Delisted/unpriceable samples carry Outcome=0 — including them
-			// poisoned the correlations with fake zeros. Excluded.
-			if s.Evaluated && !s.Unpriceable && s.TS > lastTuned && len(s.Components) > 0 {
-				eval = append(eval, s)
-			}
-		}
-		if len(eval) >= shortTunerMinSamples {
-			w := shortWeights()
-			newW, ok := updateShortWeights(eval, w, shortTunerEta)
-			// Cursor = max consumed sample TS (P1, 2026-09-26 re-review):
-			// time.Now() would jump PAST the most recent 24h of samples that
-			// have not matured yet — they'd never be selected once they did.
-			cursor := lastTuned
-			for _, s := range eval {
-				if s.TS > cursor {
-					cursor = s.TS
-				}
-			}
-			switch {
-			case !ok:
-				logger.Infof("🩸 Short tuner: %d samples but no component passed significance (|corr| ≥ %.2f, n ≥ %d) — weights unchanged, cursor advanced to %d", len(eval), shortTunerMinCorr, shortTunerMinComponentN, cursor)
-				p := GetParams()
-				p.ShortTunerLastTunedMs = cursor
-				ApplyParams(p)
-			case !weightsClose(newW, w):
-				p := GetParams()
-				p.ShortWeights = newW
-				p.ShortTunerLastTunedMs = cursor
-				ApplyParams(p)
-				logger.Infof("🩸 Short tuner: weights updated from %d NEW samples (since last tune): %v", len(eval), formatWeights(newW))
-				changed = true
-			default:
-				p := GetParams()
-				p.ShortTunerLastTunedMs = cursor
-				ApplyParams(p)
-			}
-		}
-	} else {
-		logger.Infof("🩸 Short tuner: weight update disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched")
-	}
-
-	// 3. Prune old journal entries and rewrite when anything changed.
+	// Persist valid labels before using them to produce a research proposal.
 	cut := now.Add(-shortTunerPruneAfter).UnixMilli()
 	kept := samples[:0]
 	for _, s := range samples {
@@ -300,65 +251,130 @@ func RunShortTuner(now time.Time) {
 		}
 	}
 	if changed || len(kept) != len(samples) {
-		writeSamples(kept)
+		if err := writeSamples(kept); err != nil {
+			logger.Errorf("short journal persist failed: %v", err)
+			return
+		}
 	}
+	samples = kept
+
+	// Optional bounded research proposal; publication remains separate.
+	if shortTunerUpdateEnabled() {
+		// Evaluate labels since the last explicit promotion. Re-running a
+		// proposal never compounds the candidate into live weights.
+		var eval []shortSample
+		lastTuned := GetParams().ShortTunerLastTunedMs
+		for _, s := range samples {
+			// Delisted/unpriceable samples carry Outcome=0 — including them
+			// poisoned the correlations with fake zeros. Excluded.
+			if s.Evaluated && s.LabelVersion == 2 && !s.Unpriceable && s.TS > lastTuned && len(s.Components) > 0 {
+				eval = append(eval, s)
+			}
+		}
+		if len(eval) >= shortTunerMinSamples {
+			w := shortWeights()
+			newW, ok := updateShortWeights(eval, w, shortTunerEta)
+			// Retain thin cohorts until enough non-overlapping time blocks accrue.
+			// Proposal generation does not consume the live promotion cursor.
+			if ok {
+				proposal := ShortWeightProposal{GeneratedAt: now.UTC(), Incumbent: w, Candidate: newW, Samples: len(eval), Applied: false, EvaluationScope: "fixed_24h_forward_labels_research_only"}
+				data, err := json.MarshalIndent(proposal, "", "  ")
+				if err == nil {
+					err = atomicWriteJSON(shortWeightProposalPath, data)
+				}
+				if err != nil {
+					logger.Errorf("short research proposal persist failed: %v", err)
+				}
+			}
+
+		}
+	} else {
+		logger.Infof("🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched")
+	}
+
 }
 
-const (
-	// P1 (2026-09-26 review): the update fires only on SIGNIFICANT
-	// correlations with enough per-component samples — small-noise corr on
-	// thin components was what railed weights into the clamp bounds.
-	shortTunerMinCorr       = 0.15
-	shortTunerMinComponentN = 30
-)
+const shortTunerMinComponentN = 30
 
-// updateShortWeights nudges each SIGNIFICANT component weight by
-// exp(η × corr(component, outcome)) over the evaluated cohort, then clamps
-// and renormalizes. ok=false when NO component passes significance — the
-// weights must not move on noise. Pure.
+// One observation per non-overlapping 24h block limits repeated-symbol and
+// overlapping-label pseudo replication. Fisher z > 3 is a conservative
+// normal-approximation gate after testing nine components (two-sided p<0.003).
 func updateShortWeights(samples []shortSample, base map[string]float64, eta float64) (map[string]float64, bool) {
+	type block struct {
+		x, y float64
+		n    int
+	}
 	out := make(map[string]float64, len(shortWeightKeys))
-	anySignificant := false
-	for _, k := range shortWeightKeys {
-		var xs, ys []float64
+	significant := false
+	for _, key := range shortWeightKeys {
+		groups := map[int64]*block{}
 		for _, s := range samples {
-			v, ok := s.Components[k]
-			if !ok {
+			x, ok := s.Components[key]
+			if !ok || s.TS <= 0 || math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(s.Outcome) || math.IsInf(s.Outcome, 0) {
 				continue
 			}
-			xs = append(xs, v)
-			ys = append(ys, s.Outcome)
+			// Entry windows from adjacent UTC days still overlap. Retain alternate
+			// daily blocks so every included block has a full 24h separation.
+			day := s.TS / (24 * time.Hour).Milliseconds()
+			if day%2 != 0 {
+				continue
+			}
+			g := groups[day]
+			if g == nil {
+				g = &block{}
+				groups[day] = g
+			}
+			g.x += x
+			g.y += s.Outcome
+			g.n++
+		}
+		days := make([]int64, 0, len(groups))
+		for day := range groups {
+			days = append(days, day)
+		}
+		sort.Slice(days, func(i, j int) bool { return days[i] < days[j] })
+		var xs, ys []float64
+		for _, day := range days {
+			g := groups[day]
+			xs = append(xs, g.x/float64(g.n))
+			ys = append(ys, g.y/float64(g.n))
 		}
 		corr := pearson(xs, ys)
-		if len(xs) >= shortTunerMinComponentN && math.Abs(corr) >= shortTunerMinCorr {
-			anySignificant = true
-			out[k] = base[k] * math.Exp(eta*corr)
+		r := math.Min(math.Abs(corr), 1-1e-12)
+		z := math.Atanh(r) * math.Sqrt(math.Max(0, float64(len(xs)-3)))
+		if len(xs) >= shortTunerMinComponentN && z > 3 {
+			significant = true
+			out[key] = base[key] * math.Exp(eta*corr)
 		} else {
-			out[k] = base[k]
+			out[key] = base[key]
 		}
 	}
-	if !anySignificant {
+	if !significant {
 		return nil, false
 	}
-	// Clamp + renormalize.
-	const lo, hi = 0.03, 0.30
-	total := 0.0
-	for _, k := range shortWeightKeys {
-		if out[k] < lo {
-			out[k] = lo
+	return boundedShortWeights(out), true
+}
+
+// Project onto a bounded simplex; normalization cannot undo either bound.
+func boundedShortWeights(weights map[string]float64) map[string]float64 {
+	lo, hi := 0.0, 100.0
+	for i := 0; i < 100; i++ {
+		scale := (lo + hi) / 2
+		sum := 0.0
+		for _, key := range shortWeightKeys {
+			sum += clamp(weights[key]*scale, 0.03, 0.30)
 		}
-		if out[k] > hi {
-			out[k] = hi
+		if sum > 1 {
+			hi = scale
+		} else {
+			lo = scale
 		}
-		total += out[k]
 	}
-	if total <= 0 {
-		return DefaultShortWeights(), true
+	out := map[string]float64{}
+	for _, key := range shortWeightKeys {
+		out[key] = clamp(weights[key]*(lo+hi)/2, 0.03, 0.30)
 	}
-	for _, k := range shortWeightKeys {
-		out[k] = math.Round(out[k]/total*10000) / 10000
-	}
-	return out, true
+	return out
 }
 
 func pearson(xs, ys []float64) float64 {
@@ -425,21 +441,70 @@ func readSamples() []shortSample {
 	return samples
 }
 
-func writeSamples(samples []shortSample) {
-	f, err := os.OpenFile(shortTuningPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
+func writeSamples(samples []shortSample) error {
+	var buf bytes.Buffer
 	for _, s := range samples {
-		if b, err := json.Marshal(s); err == nil {
-			f.Write(append(b, '\n'))
+		b, err := json.Marshal(s)
+		if err != nil {
+			return err
 		}
+		buf.Write(b)
+		buf.WriteByte('\n')
 	}
+	return atomicWriteJSON(shortTuningPath, buf.Bytes())
 }
 
-func parseFloatStr(s string) (float64, error) {
-	var v float64
-	_, err := fmt.Sscanf(s, "%g", &v)
-	return v, err
+// The last fully closed one-minute candle at +24h gives a fixed horizon
+// with <=60s resolution. Funding is signed for a short and fees/slippage
+// use the same disclosed estimate as the research replay.
+func historicalShortLabel(s shortSample) (float64, int64, float64, error) {
+	target := time.UnixMilli(s.TS).Add(shortTunerEvalAfter)
+	open := target.Truncate(time.Minute).Add(-time.Minute).UnixMilli()
+	u := fmt.Sprintf("%s/fapi/v1/klines?symbol=%s&interval=1m&startTime=%d&endTime=%d&limit=1", fapiBase(), url.QueryEscape(s.Symbol), open, open+time.Minute.Milliseconds()-1)
+	var raw [][]interface{}
+	if err := fetchJSON(u, &raw); err != nil {
+		return 0, 0, 0, err
+	}
+	if len(raw) != 1 || len(raw[0]) < 7 {
+		return 0, 0, 0, fmt.Errorf("24h historical candle unavailable")
+	}
+	if int64(toF(raw[0][0])) != open {
+		return 0, 0, 0, fmt.Errorf("24h historical candle misaligned")
+	}
+	price := toF(raw[0][4])
+	labelAt := open + time.Minute.Milliseconds()
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return 0, 0, 0, fmt.Errorf("invalid historical price")
+	}
+	var funding []struct {
+		FundingRate string `json:"fundingRate"`
+		FundingTime int64  `json:"fundingTime"`
+	}
+	u = fmt.Sprintf("%s/fapi/v1/fundingRate?symbol=%s&startTime=%d&endTime=%d&limit=1000", fapiBase(), url.QueryEscape(s.Symbol), s.TS+1, labelAt)
+	if err := fetchJSON(u, &funding); err != nil {
+		return 0, 0, 0, fmt.Errorf("historical funding: %w", err)
+	}
+	total := 0.0
+	for _, f := range funding {
+		if f.FundingTime <= s.TS || f.FundingTime > labelAt {
+			continue
+		}
+		rate, err := strconv.ParseFloat(f.FundingRate, 64)
+		if err != nil || math.IsNaN(rate) || math.IsInf(rate, 0) {
+			return 0, 0, 0, fmt.Errorf("invalid historical funding")
+		}
+		total += rate * 100
+	}
+	return price, labelAt, total, nil
+}
+
+var shortWeightProposalPath = "data/shortscan_weight_proposal.json"
+
+type ShortWeightProposal struct {
+	GeneratedAt     time.Time          `json:"generated_at"`
+	Incumbent       map[string]float64 `json:"incumbent"`
+	Candidate       map[string]float64 `json:"candidate"`
+	Samples         int                `json:"samples"`
+	Applied         bool               `json:"applied"`
+	EvaluationScope string             `json:"evaluation_scope"`
 }

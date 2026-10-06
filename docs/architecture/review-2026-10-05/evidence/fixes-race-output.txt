@@ -1,0 +1,16 @@
+# nofx/trader/kucoin.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-3195032937/000023.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+# nofx/trader/gate.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-3856132581/000023.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+# nofx/trader/hyperliquid.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-2854303476/000031.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+# nofx/kernel.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-3417870515/000023.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+# nofx/trader.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-2821650187/000031.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+ok  	nofx/trader	3.595s
+ok  	nofx/kernel	2.792s
+ok  	nofx/market/breakout	1.811s
+ok  	nofx/trader/gate	1.632s
+ok  	nofx/trader/hyperliquid	1.913s
+ok  	nofx/trader/kucoin	1.831s
