@@ -95,7 +95,8 @@ func (pb *PositionBuilder) handleOpen(
 	// Also update exchange_id and exchange_type if they were empty
 	if existing.ExchangeID == "" || existing.ExchangeType == "" {
 		if err := pb.positionStore.UpdatePositionExchangeInfo(existing.ID, exchangeID, exchangeType); err != nil {
-			logger.Infof("  ⚠️  Failed to update exchange info: %v", err)
+			// review 2026-10-07 B2-B: propagate writes so the fill transaction rolls back.
+			return fmt.Errorf("failed to update exchange info: %w", err)
 		}
 	}
 
@@ -122,7 +123,12 @@ func (pb *PositionBuilder) handleClose(
 		// pre-flushes against, user report 09-29: BTWUSDT +13.66U vanished),
 		// re-attribute this fill's exchange-reported PnL to that row instead
 		// of dropping it forever.
-		if pb.positionStore.BackfillReconciledPnL(traderID, symbol, side, realizedPnL, fee, price, tradeTimeMs) {
+		// review 2026-10-07 B2-B: a failed backfill is not a completed accounting receipt.
+		backfilled, err := pb.positionStore.backfillReconciledPnL(traderID, symbol, side, realizedPnL, fee, price, tradeTimeMs)
+		if err != nil {
+			return err
+		}
+		if backfilled {
 			return nil
 		}
 		// Otherwise: trades out of order or database cleared — skip.
@@ -189,7 +195,8 @@ func (pb *PositionBuilder) handleClose(
 		if !position.AIManaged && NewAIManagedStore(pb.positionStore.db).MarkedAfter(
 			traderID, symbol, strings.ToLower(side), time.UnixMilli(position.CreatedAt)) {
 			if err := pb.positionStore.SetAIManaged(position.ID); err != nil {
-				logger.Infof("  ⚠️  Failed to stamp ai_managed on closing row %d (%s %s): %v", position.ID, symbol, side, err)
+				// review 2026-10-07 B2-B: keep ownership and the accounting receipt atomic.
+				return fmt.Errorf("failed to stamp ai_managed: %w", err)
 			}
 		}
 
@@ -219,6 +226,15 @@ func quantitiesMatch(a, b float64) bool {
 // the actual fill price/time, and marks the row 'sync' — the reconciliation
 // stamp has served its purpose. Returns whether a row was backfilled.
 func (s *PositionStore) BackfillReconciledPnL(traderID, symbol, side string, realizedPnL, fee, price float64, tradeTimeMs int64) bool {
+	backfilled, err := s.backfillReconciledPnL(traderID, symbol, side, realizedPnL, fee, price, tradeTimeMs)
+	if err != nil {
+		logger.Infof("  ⚠️  BackfillReconciledPnL failed for %s %s: %v", symbol, side, err)
+	}
+	return backfilled
+}
+
+// review 2026-10-07 B2-B: distinguish no matching row from a failed DB operation.
+func (s *PositionStore) backfillReconciledPnL(traderID, symbol, side string, realizedPnL, fee, price float64, tradeTimeMs int64) (bool, error) {
 	var row TraderPosition
 	// No close_reason filter: the FIRST backfill re-stamps the row 'sync',
 	// and later fills of the same close (multi-leg exits) must keep landing
@@ -230,7 +246,10 @@ func (s *PositionStore) BackfillReconciledPnL(traderID, symbol, side string, rea
 		time.Now().UTC().UnixMilli()-30*60*1000,
 	).Order("exit_time DESC").First(&row).Error
 	if err != nil {
-		return false
+		if err == gorm.ErrRecordNotFound {
+			return false, nil
+		}
+		return false, err
 	}
 	// Atomic accumulate (2026-10-03 review): the old shape read the row then
 	// wrote row.RealizedPnL + realizedPnL — two close fills landing near-
@@ -244,10 +263,9 @@ func (s *PositionStore) BackfillReconciledPnL(traderID, symbol, side string, rea
 		"updated_at":   time.Now().UTC().UnixMilli(),
 	}
 	if err := s.db.Model(&TraderPosition{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
-		logger.Infof("  ⚠️  BackfillReconciledPnL failed for row #%d (%s %s): %v", row.ID, symbol, side, err)
-		return false
+		return false, err
 	}
 	logger.Infof("  🔧 Backfilled reconciled row #%d (%s %s): realized PnL %+.4f at fill %.6g (was stamped 0 by netting_reconcile)",
 		row.ID, symbol, side, realizedPnL, price)
-	return true
+	return true, nil
 }

@@ -19,6 +19,8 @@ import (
 var (
 	binanceSyncState      = make(map[string]int64) // exchangeID -> lastSyncTimeMs (Unix ms)
 	binanceSyncStateMutex sync.RWMutex
+	// review 2026-10-07 B2-A: all clients and entry points share one mutex per account.
+	binanceSyncAccounts sync.Map // exchangeID -> *sync.Mutex
 )
 
 // SyncOrdersFromBinance syncs Binance Futures trade history to local database
@@ -28,6 +30,10 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 	if st == nil {
 		return fmt.Errorf("store is nil")
 	}
+	accountLock, _ := binanceSyncAccounts.LoadOrStore(exchangeID, &sync.Mutex{})
+	mu := accountLock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
 
 	orderStore := st.Order()
 
@@ -47,8 +53,8 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 					lastFillTimeMs, nowMs)
 				lastSyncTimeMs = nowMs - 24*60*60*1000 // 24 hours ago
 			} else {
-				// Add 1 second buffer to avoid re-fetching the same fill
-				lastSyncTimeMs = lastFillTimeMs + 1000
+				// review 2026-10-07 B2-C: overlap discovery across restart and deduplicate by fill ID.
+				lastSyncTimeMs = lastFillTimeMs - (5 * time.Minute).Milliseconds()
 				logger.Infof("📅 Recovered last sync time from DB: %s (UTC)",
 					time.UnixMilli(lastSyncTimeMs).UTC().Format("2006-01-02 15:04:05"))
 			}
@@ -110,6 +116,15 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		symbolMap[s] = true
 	}
 
+	// review 2026-10-07 B2-C: a locally OPEN position may already be flat on the exchange.
+	openSymbols, err := st.Position().GetOpenSymbolsByExchange(exchangeID)
+	if err != nil {
+		return fmt.Errorf("failed to discover DB open position symbols: %w", err)
+	}
+	for _, s := range openSymbols {
+		symbolMap[s] = true
+	}
+
 	// Method 4: ALWAYS query REALIZED_PNL income to find symbols with closed trades
 	// This catches trades that COMMISSION missed (VIP users, BNB fee discount)
 	// IMPORTANT: Must run always, not just when symbolMap is empty,
@@ -136,7 +151,6 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 		logger.Infof("📭 No symbols with new trades to sync")
 		// DON'T update lastSyncTime to current time here!
 		// Keep using the last actual trade time from DB to avoid creating gaps
-		// The lastSyncTimeMs from DB already has +1000ms buffer added
 		return nil
 	}
 
@@ -184,28 +198,25 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 	})
 
 	// Process trades one by one
-	positionStore := st.Position()
-	posBuilder := store.NewPositionBuilder(positionStore)
 	syncedCount := 0
 
 	skippedCount := 0
 	exchangeClosedSymbols := make(map[string]bool) // symbols with close trades this round (raw exchange symbol)
+	// review 2026-10-07 B2-B: a trade that fails to account blocks only the
+	// REST of its own symbol this run (later fills on that symbol depend on
+	// it) — other symbols still book, the orphan sweep below still runs, and
+	// failedSymbols keeps the cursor from advancing so the failure retries.
+	// Returning early here made one poison trade freeze ALL bookkeeping.
+	accountingFailed := make(map[string]bool)
 	for _, trade := range allTrades {
-		// Check if trade already exists
-		existing, err := orderStore.GetOrderByExchangeID(exchangeID, trade.TradeID)
-		if err == nil && existing != nil {
-			skippedCount++
-			continue // Trade already exists, skip
+		if accountingFailed[trade.Symbol] {
+			continue
 		}
-
 		// Normalize symbol
 		symbol := market.Normalize(trade.Symbol)
 
 		// Determine order action based on side and position side
 		orderAction := t.determineOrderAction(trade.Side, trade.PositionSide, trade.RealizedPnL)
-		if orderAction == "close_long" || orderAction == "close_short" {
-			exchangeClosedSymbols[trade.Symbol] = true
-		}
 
 		// Determine position side for position builder
 		positionSide := trade.PositionSide
@@ -244,12 +255,6 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 			UpdatedAt:       tradeTimeMs,
 		}
 
-		// Insert order record
-		if err := orderStore.CreateOrder(orderRecord); err != nil {
-			logger.Infof("  ⚠️ Failed to sync trade %s: %v", trade.TradeID, err)
-			continue
-		}
-
 		// Create fill record - use Unix milliseconds UTC
 		fillRecord := &store.TraderFill{
 			TraderID:        traderID,
@@ -270,20 +275,22 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 			CreatedAt:       tradeTimeMs,
 		}
 
-		if err := orderStore.CreateFill(fillRecord); err != nil {
-			logger.Infof("  ⚠️ Failed to sync fill for trade %s: %v", trade.TradeID, err)
+		// review 2026-10-07 B2-A/B2-B: commit order, fill and position together.
+		// On failure the transaction rolled back (no fill receipt), so the
+		// trade is retried next run; the cursor does not advance past it.
+		applied, err := orderStore.ApplyTrade(orderRecord, fillRecord)
+		if err != nil {
+			logger.Errorf("  ❌ Failed to account for trade %s %s (rolled back, retried next sync): %v", trade.Symbol, trade.TradeID, err)
+			accountingFailed[trade.Symbol] = true
+			failedSymbols = append(failedSymbols, trade.Symbol)
+			continue
 		}
-
-		// Create/update position record using PositionBuilder
-		if err := posBuilder.ProcessTrade(
-			traderID, exchangeID, exchangeType,
-			symbol, positionSide, orderAction,
-			trade.Quantity, trade.Price, trade.Fee, trade.RealizedPnL,
-			tradeTimeMs, trade.PositionOrderID(),
-		); err != nil {
-			logger.Infof("  ⚠️ Failed to sync position for trade %s: %v", trade.TradeID, err)
-		} else {
-			logger.Infof("  📍 Position updated for trade: %s (action: %s, qty: %.6f)", trade.TradeID, orderAction, trade.Quantity)
+		if !applied {
+			skippedCount++
+			continue
+		}
+		if orderAction == "close_long" || orderAction == "close_short" {
+			exchangeClosedSymbols[trade.Symbol] = true
 		}
 
 		syncedCount++

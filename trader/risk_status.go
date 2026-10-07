@@ -89,8 +89,26 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 		}
 	}
 	today := time.Now().UTC().Format("2006-01-02")
-	if at.dayStartDay == today && at.dayStartEquity > 0 {
-		out.DayStartEquity = at.dayStartEquity
+	// review 2026-10-07 B2-E: day anchors and pending fields are written under executionMutex.
+	// Snapshot under the same lock, then release it before exchange or durable reads.
+	mu := at.executionMutex()
+	mu.Lock()
+	dayStartDay, dayStartEquity := at.dayStartDay, at.dayStartEquity
+	out.Pending = []PendingStatus{}
+	at.pendingEntriesMu.RLock()
+	for _, pe := range at.pendingEntries {
+		if pe == nil {
+			continue
+		}
+		out.Pending = append(out.Pending, PendingStatus{
+			Symbol: pe.Symbol, Side: pe.Side, Price: pe.Price, Quantity: pe.Quantity,
+			StopLoss: pe.StopLoss, TakeProfit: pe.TakeProfit, PlacedAt: pe.PlacedAt.UTC(), FilledQty: pe.ExecutedQty,
+		})
+	}
+	at.pendingEntriesMu.RUnlock()
+	mu.Unlock()
+	if dayStartDay == today && dayStartEquity > 0 {
+		out.DayStartEquity = dayStartEquity
 	} else if baseline, ok := at.inheritDailyBaseline(today); ok {
 		out.DayStartEquity = baseline
 	}
@@ -115,18 +133,6 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 		sort.Slice(out.LossStreakBans, func(i, j int) bool { return out.LossStreakBans[i].Symbol < out.LossStreakBans[j].Symbol })
 	}
 
-	out.Pending = []PendingStatus{}
-	at.pendingEntriesMu.RLock()
-	for _, pe := range at.pendingEntries {
-		if pe == nil {
-			continue
-		}
-		out.Pending = append(out.Pending, PendingStatus{
-			Symbol: pe.Symbol, Side: pe.Side, Price: pe.Price, Quantity: pe.Quantity,
-			StopLoss: pe.StopLoss, TakeProfit: pe.TakeProfit, PlacedAt: pe.PlacedAt.UTC(), FilledQty: pe.ExecutedQty,
-		})
-	}
-	at.pendingEntriesMu.RUnlock()
 	sort.Slice(out.Pending, func(i, j int) bool { return out.Pending[i].PlacedAt.Before(out.Pending[j].PlacedAt) })
 
 	out.Positions = []PositionRStatus{}
