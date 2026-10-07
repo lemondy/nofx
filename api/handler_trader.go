@@ -841,8 +841,14 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
+	// review 2026-10-07 B1-5 (P0-1): this probe only feeds the diagnostics
+	// below; the instance pointer is deliberately not retained. The old code
+	// held the pointer from here through the checks and called Start on it —
+	// a background reload could evict and replace the instance in the
+	// manager meanwhile, orphaning the started copy (live orders outside the
+	// manager map). The final start goes through StartTrader, which
+	// re-resolves the id and starts under the manager's loadMu.
+	if _, getErr := s.traderManager.GetTrader(traderID); getErr != nil {
 		if fullCfg != nil && fullCfg.Trader != nil {
 			// Check strategy
 			if fullCfg.Strategy == nil {
@@ -879,15 +885,16 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 			SafeBadRequestWithDetails(c, describeTraderStartError(traderName, loadErr), "trader.start.load_failed", traderSetupReasonParams(loadErr, "", "trader_name", traderName))
 			return
 		}
-		SafeBadRequestWithDetails(c, describeTraderStartError(traderName, err), "trader.start.setup_invalid", traderSetupReasonParams(err, "", "trader_name", traderName))
+		SafeBadRequestWithDetails(c, describeTraderStartError(traderName, getErr), "trader.start.setup_invalid", traderSetupReasonParams(getErr, "", "trader_name", traderName))
 		return
 	}
 
-	if err := trader.Start(); err != nil && !errors.Is(err, traderpkg.ErrAlreadyRunning) {
-		SafeBadRequest(c, err.Error())
+	startedName, startErr := s.traderManager.StartTrader(traderID)
+	if startErr != nil && !errors.Is(startErr, traderpkg.ErrAlreadyRunning) {
+		SafeBadRequest(c, startErr.Error())
 		return
 	}
-	logger.Infof("✓ Trader %s started", trader.GetName())
+	logger.Infof("✓ Trader %s started", startedName)
 	c.JSON(http.StatusOK, gin.H{"message": "Trader started"})
 }
 
