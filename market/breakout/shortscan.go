@@ -34,6 +34,13 @@ const (
 // ShortScanUniverse is how many top 24h gainers each short-scan run covers.
 const ShortScanUniverse = 50
 
+// shortScanMinGainerChgPct: review 2026-10-07 S4 — the live "gainer" universe
+// is top-50 by rank, so a quiet market scored +1-4% coins as pump-fade shorts.
+// Require a real pump. The board is still recorded to the history pool as
+// before (the pool applies its own peak ranking and the board prefix is the
+// durable asset); only the scan work items are filtered.
+const shortScanMinGainerChgPct = 5.0
+
 // ShortSignal is one ranked short candidate.
 type ShortSignal struct {
 	Symbol           string          `json:"symbol"`
@@ -49,7 +56,7 @@ type ShortSignal struct {
 	FakeBreakout     bool            `json:"fake_breakout"`
 	MABreak          bool            `json:"ma20_break"`
 	FundingRollover  bool            `json:"funding_rollover"`
-	Confirmed        bool            `json:"confirmed"` // at least one topping confirmation printed
+	Confirmed        bool            `json:"confirmed"` // 4h bearish divergence or fake breakout printed (EMA20 break / funding rollover are NOT confirmations)
 	Score            float64         `json:"score"`     // 0-100 composite short suitability
 	Percentile       float64         `json:"percentile"`
 	Grade            string          `json:"grade"`                    // strong / medium / weak / noise
@@ -151,6 +158,16 @@ func gainerTickerSnapshot(limit int) ([]GainerQuote, []GainerQuote, map[string]G
 func TopGainerSymbols(limit int) ([]GainerQuote, error) {
 	board, _, _, err := gainerTickerSnapshot(limit)
 	return board, err
+}
+
+// pumpWindows5d returns the recent and prior 30-interval (5d of 4h bars)
+// returns in percent; ok=false when fewer than 61 bars are available.
+func pumpWindows5d(c4h []float64) (recent, prior float64, ok bool) {
+	n := len(c4h)
+	if n < 61 {
+		return 0, 0, false
+	}
+	return (c4h[n-1]/c4h[n-31] - 1) * 100, (c4h[n-31]/c4h[n-61] - 1) * 100, true
 }
 
 // AnalyzeShort computes the short-suitability score for one symbol. btc4h is
@@ -321,8 +338,11 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 	if oi, oerr := ds.OIHistory("5m", 288); oerr == nil && len(oi) >= 49 {
 		vals := oiValueSeries(oi)
 		sig.OIValueMillions = round2(vals[len(vals)-1] / 1_000_000)
-		if base := vals[len(vals)-49]; base > 0 {
-			oiChg := (vals[len(vals)-1] - base) / base * 100
+		// review 2026-10-07 S6: 4h build-up is measured on contract QUANTITY
+		// (OIPoint.OI). Notional Value rises with price even while contracts
+		// are being closed, which read a pump as fresh long crowding.
+		if base := oi[len(oi)-49].OI; base > 0 {
+			oiChg := (oi[len(oi)-1].OI - base) / base * 100
 			oiPart = clamp100(sigmoidScore(oiChg, 5, 4))
 			oiKnown = true
 		} else {
@@ -366,9 +386,9 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 	}
 
 	// ── 7. Parabolic pump: 5d magnitude + acceleration + BTC outperformance ──
-	if len(c4h) >= 56 {
-		recent5d := (c4h[len(c4h)-1]/c4h[len(c4h)-31] - 1) * 100
-		prior5d := (c4h[len(c4h)-31]/c4h[len(c4h)-56] - 1) * 100
+	// review 2026-10-07 S5: both windows span 30 intervals (recent 1..31 back,
+	// prior 31..61 back); the prior one used to span only 25, biasing accel.
+	if recent5d, prior5d, ok := pumpWindows5d(c4h); ok {
 		accel := recent5d - prior5d
 		parabolic := 0.6*clamp100(sigmoidScore(recent5d, 40, 25)) +
 			0.4*clamp100(sigmoidScore(accel, 15, 12))
@@ -450,7 +470,13 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 		structure = math.Min(100, structure+20)
 	}
 	sig.Components.Structure = structure
-	sig.Confirmed = sig.BearishDiv4h || sig.FakeBreakout || sig.MABreak || sig.FundingRollover
+	// review 2026-10-07 S2/S3: topping confirmation = 4h bearish divergence or
+	// fake breakout ONLY. A bare 1h EMA20 break (structure=80) had a 47% win
+	// rate / -0.99% mean in the journal, so MABreak stays a flag + Structure
+	// score input but is not a confirmation. FundingRollover here uses a loose
+	// fixed threshold (0.01%/period); the kernel gate accepts the live
+	// strategy-threshold funding_rollover.detected instead.
+	sig.Confirmed = sig.BearishDiv4h || sig.FakeBreakout
 
 	w := shortWeights()
 	sig.Score = round2(w["stretch"]*sig.Components.Stretch +
@@ -744,8 +770,13 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 	items := make([]shortScanItem, 0, len(board)+histMax)
 	covered := make(map[string]bool, len(board))
 	for _, g := range board {
-		items = append(items, shortScanItem{g.Symbol, g.ChgPct, "gainer"})
+		// Still marked covered: a sub-threshold board coin must not re-enter
+		// as hist_gainer/breakdown under a different label this cycle.
 		covered[g.Symbol] = true
+		if g.ChgPct < shortScanMinGainerChgPct {
+			continue
+		}
+		items = append(items, shortScanItem{g.Symbol, g.ChgPct, "gainer"})
 	}
 	if histDays > 0 {
 		extra := historyUniverseCandidates(loadGainerHistory(), time.Now(), histDays, index, covered, histMax)

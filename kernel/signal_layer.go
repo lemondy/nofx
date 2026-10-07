@@ -673,7 +673,7 @@ type SignalOptions struct {
 	BTCFilterShort bool
 	// ShortTopConfirmGate: the playbook's 默认姿态 program-enforced — a
 	// short_scan candidate may only open short with the scanner's topping
-	// confirmation (顶背离/假突破/破EMA20/费率回落); missing confirmation
+	// confirmation (顶背离/假突破; 费率回落 via live funding_rollover.detected); missing confirmation
 	// emits SHORT_TOP_CONFIRM_MISSING. Candidates without short_scan
 	// evidence (ShortScanConfirmed == nil) are not gated — the 15m
 	// MICRO_TREND gate still applies to them.
@@ -1886,11 +1886,19 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		}
 		// Short top-confirmation gate (playbook 默认姿态, was prompt-only —
 		// review 2026-10-04 C3): a short_scan candidate needs the scanner's
-		// topping confirmation (顶背离/假突破/破EMA20/费率回落). Candidates
+		// topping confirmation (顶背离/假突破 from the scanner, or live funding_rollover.detected; 破EMA20 is NOT one — review 2026-10-07). Candidates
 		// WITHOUT short_scan evidence (piggy breakdown, model-initiated) are
 		// not gated here — the 15m MICRO_TREND gate still applies to them.
+		// review 2026-10-07 S3: the scanner's Confirmed covers divergence /
+		// fake breakout only; the funding-rollover confirmation is the live
+		// derivatives.funding_rollover.detected (strategy crowding threshold),
+		// per the prompt rule — either one satisfies the gate.
 		if !isLong && opt.ShortTopConfirmGate && opt.ShortScanConfirmed != nil && !*opt.ShortScanConfirmed {
-			add("SHORT_TOP_CONFIRM_MISSING")
+			liveRollover := sig.Derivatives != nil && sig.Derivatives.FundingRollover != nil &&
+				sig.Derivatives.FundingRollover.Detected
+			if !liveRollover {
+				add("SHORT_TOP_CONFIRM_MISSING")
+			}
 		}
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
 			add(fmt.Sprintf("RR_MAX_%.2f", g.RR.BestRR))
