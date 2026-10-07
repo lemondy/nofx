@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"nofx/logger"
 	"nofx/security"
 )
 
@@ -92,9 +93,42 @@ var (
 	sentimentMu       sync.Mutex
 	sentimentCache    *MarketSentiment
 	sentimentCachedAt time.Time
+	// sentimentCacheTTLCur is the TTL that applies to the CURRENT cache entry:
+	// the full TTL when every source succeeded (or was reused), a short one
+	// when any source is missing so the next call retries soon.
+	sentimentCacheTTLCur = sentimentCacheTTL
+	// sentimentInflight is non-nil while a refresh runs (single-flight).
+	sentimentInflight chan struct{}
+
+	// Last successful value per source + when it was fetched, for the
+	// per-source fallback (review 2026-10-07 B2-4).
+	lastCrypto    *CryptoFG
+	lastCryptoAt  time.Time
+	lastStock     *StockFG
+	lastStockAt   time.Time
+	lastBinance   *BinanceCrowd
+	lastBinanceAt time.Time
 )
 
 const sentimentCacheTTL = 30 * time.Minute
+
+// review 2026-10-07 B2-4: a refresh with a missing source used to be cached
+// for the full 30 min (one alternative.me timeout silently disabled the
+// greed down-weight that long). Now a failed source reuses its last good
+// value up to sentimentReuseMaxAge, and a composite that still has a hole is
+// cached only sentimentFailTTL.
+const (
+	sentimentReuseMaxAge = 2 * time.Hour
+	sentimentFailTTL     = 2 * time.Minute
+)
+
+// Injectable for tests; production defaults unchanged.
+var (
+	sentimentFetchCrypto  = fetchCryptoFG
+	sentimentFetchStock   = fetchStockFG
+	sentimentFetchBinance = fetchBinanceCrowd
+	sentimentNow          = time.Now
+)
 
 func sentimentHTTPGet(url string, out interface{}) error {
 	client := security.SafeHTTPClient(15 * time.Second)
@@ -215,23 +249,105 @@ func fetchBinanceCrowd() *BinanceCrowd {
 // GetMarketSentiment returns the composite with per-source cache TTLs. Each
 // source refreshes independently so one flaky vendor doesn't age the others.
 func GetMarketSentiment() *MarketSentiment {
-	sentimentMu.Lock()
-	defer sentimentMu.Unlock()
-	if sentimentCache != nil && time.Since(sentimentCachedAt) < sentimentCacheTTL {
-		return sentimentCache
-	}
+	for {
+		sentimentMu.Lock()
+		if sentimentCache != nil && sentimentNow().Sub(sentimentCachedAt) < sentimentCacheTTLCur {
+			c := sentimentCache
+			sentimentMu.Unlock()
+			return c
+		}
+		if ch := sentimentInflight; ch != nil {
+			// Single-flight: someone else is fetching. Serve the (expired)
+			// cache meanwhile if there is one, else wait for the result.
+			stale := sentimentCache
+			sentimentMu.Unlock()
+			if stale != nil {
+				return stale
+			}
+			<-ch
+			continue
+		}
+		ch := make(chan struct{})
+		sentimentInflight = ch
+		sentimentMu.Unlock()
 
+		return publishSentimentRefresh(ch)
+	}
+}
+
+// publishSentimentRefresh runs the refresh as the single-flight winner and
+// ALWAYS releases the in-flight slot: a panic inside the refresh used to
+// leave sentimentInflight set and ch open forever, so every waiter blocked
+// and no later call could ever refresh again (review 2026-10-07 B2-4).
+func publishSentimentRefresh(ch chan struct{}) (out *MarketSentiment) {
+	defer func() {
+		r := recover()
+		sentimentMu.Lock()
+		if r == nil && out != nil {
+			sentimentCache = out
+			sentimentCachedAt = sentimentNow()
+			if out.Crypto == nil || out.Stock == nil || out.Binance == nil {
+				sentimentCacheTTLCur = sentimentFailTTL
+			} else {
+				sentimentCacheTTLCur = sentimentCacheTTL
+			}
+		}
+		sentimentInflight = nil
+		sentimentMu.Unlock()
+		close(ch)
+		if r != nil {
+			logger.Errorf("⚠️ sentiment refresh panicked (recovered): %v", r)
+			out = &MarketSentiment{Notes: []string{"sentiment_refresh_panicked"}}
+		}
+	}()
+	return refreshSentiment() // network I/O without holding sentimentMu
+}
+
+// refreshSentiment fetches all sources concurrently and applies the
+// per-source stale-reuse fallback. Only the refresh winner calls it.
+// sentimentPanicHook is a test-only seam (nil in production).
+var sentimentPanicHook func()
+
+func refreshSentiment() *MarketSentiment {
+	if sentimentPanicHook != nil {
+		sentimentPanicHook()
+	}
 	out := &MarketSentiment{}
 	var wg sync.WaitGroup
-	if out.Crypto == nil {
-		wg.Add(1)
-		go func() { defer wg.Done(); out.Crypto = fetchCryptoFG() }()
-	}
-	wg.Add(1)
-	go func() { defer wg.Done(); out.Stock = fetchStockFG() }()
-	wg.Add(1)
-	go func() { defer wg.Done(); out.Binance = fetchBinanceCrowd() }()
+	wg.Add(3)
+	go func() { defer wg.Done(); out.Crypto = sentimentFetchCrypto() }()
+	go func() { defer wg.Done(); out.Stock = sentimentFetchStock() }()
+	go func() { defer wg.Done(); out.Binance = sentimentFetchBinance() }()
 	wg.Wait()
+
+	now := sentimentNow()
+	sentimentMu.Lock()
+	// reuse reports whether the last good value is young enough. The
+	// composite FetchedAt stays the wall clock of THIS refresh; the note says
+	// which source is a reused older value (its own SourceAt/MarketDate/...
+	// fields still describe the data's real age).
+	reuse := func(at time.Time, have bool) bool {
+		return have && now.Sub(at) <= sentimentReuseMaxAge
+	}
+	if out.Crypto != nil {
+		lastCrypto, lastCryptoAt = out.Crypto, now
+	} else if reuse(lastCryptoAt, lastCrypto != nil) {
+		out.Crypto = lastCrypto
+		out.Notes = append(out.Notes, "crypto_fg_stale_reused")
+	}
+	if out.Stock != nil {
+		lastStock, lastStockAt = out.Stock, now
+	} else if reuse(lastStockAt, lastStock != nil) {
+		out.Stock = lastStock
+		out.Notes = append(out.Notes, "stock_fg_stale_reused")
+	}
+	if out.Binance != nil {
+		lastBinance, lastBinanceAt = out.Binance, now
+	} else if reuse(lastBinanceAt, lastBinance != nil) {
+		out.Binance = lastBinance
+		out.Notes = append(out.Notes, "binance_crowding_stale_reused")
+	}
+	sentimentMu.Unlock()
 
 	if out.Crypto == nil {
 		out.Notes = append(out.Notes, "crypto_fg_fetch_failed")
@@ -245,10 +361,8 @@ func GetMarketSentiment() *MarketSentiment {
 	// Wall clock of the FETCH — the only "now" this package is allowed to
 	// stamp (the render path reads stored fields so a 29-minute-old cache
 	// can never pose as fresh, user review 2026-09-27).
-	out.FetchedAt = time.Now().UTC().Format("2006-01-02 15:04 UTC")
+	out.FetchedAt = now.UTC().Format("2006-01-02 15:04 UTC")
 	out.Regime, out.TradeEffect = classifySentimentRegime(out)
-	sentimentCache = out
-	sentimentCachedAt = time.Now()
 	return out
 }
 
@@ -259,8 +373,10 @@ func GetMarketSentiment() *MarketSentiment {
 // Crowding requires SAME-SIDE CONFLUENCE (user review 09-29: a single L/S
 // >2 reading with cheap funding is NOT "leverage crowded" — labeling it so
 // pushed the model toward over-conservatism):
-//   long crowd  = funding annualized ≥ +50% (either major) AND L/S > 2
-//   short crowd = funding annualized ≤ −50% (either major) AND L/S < 0.5
+//
+//	long crowd  = funding annualized ≥ +50% (either major) AND L/S > 2
+//	short crowd = funding annualized ≤ −50% (either major) AND L/S < 0.5
+//
 // Zero values = missing fetches and never trigger (L/S > 0 guarded).
 // Pure function of the stored values — never of the wall clock.
 func classifySentimentRegime(m *MarketSentiment) (regime, effect string) {

@@ -1046,7 +1046,10 @@ func TestBreakoutStateBelowAndConfirmed(t *testing.T) {
 		t.Fatal("without OI data status must not be confirmed")
 	}
 	switch sig.Breakout.Status {
-	case "broken_unconfirmed", "approach", "below", "fake_break":
+	// review 2026-10-07 B2-3: a cross inside the last 8 bars is now detected
+	// (close transition), so this steadily rising series legitimately yields
+	// retest_hold/extended (its lows hug the level) — still never confirmed.
+	case "broken_unconfirmed", "approach", "below", "fake_break", "retest_hold", "extended":
 	default:
 		t.Fatalf("unexpected status %s", sig.Breakout.Status)
 	}

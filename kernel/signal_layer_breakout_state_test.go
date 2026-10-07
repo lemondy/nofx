@@ -119,46 +119,113 @@ func TestBreakoutStateFakeBreak(t *testing.T) {
 	}
 }
 
-// boRetestBars: consolidation, one old spike (bar 10, BEFORE the level
-// window), level-window bars at 101.5, then a hold tail; `touch` makes one
-// tail bar dip to the level.
-func boRetestBars(touch bool) []market.KlineBar {
+// boRetestBars (review 2026-10-07 B2-3): 60 bars. Bar 10 is an OLDER higher
+// high (before the level window, 104) that must NOT influence the state.
+// Level window [22,52) has max high 101.5. Bars 52-53 stay inside, bar 54
+// closes across (prev close 101.0 -> 102.0), then a hold tail. touchAt>0
+// makes that tail bar dip to 101.2 (within 0.25% of the level) and close
+// beyond; backInside makes the last closed bar close back under the level.
+func boRetestBars(touchAt int, backInside bool) []market.KlineBar {
 	return boBars(60, func(i int) (h, l, c float64) {
 		if i == 10 {
-			return 104.0, 103.4, 103.5 // the older cross — before the level window
+			return 104.0, 103.4, 103.5
 		}
-		if i >= 52 {
-			if touch && i == 56 {
-				return 102.3, 101.2, 102.0 // the pullback: touches, holds
+		if backInside && i == 59 {
+			return 101.6, 100.9, 101.0
+		}
+		if i >= 54 {
+			if i == touchAt {
+				return 102.3, 101.2, 102.0
 			}
-			return 102.3, 102.0, 102.0 // lows stay clear of the level
+			return 102.3, 102.0, 102.0
 		}
 		if i >= 22 {
-			return 101.5, 100.8, 101.0 // level window bars: max high 101.5
+			return 101.5, 100.8, 101.0
 		}
 		return 95.5, 95.0, 95.2
 	})
 }
 
-// Crossed before the recent window, still beyond, touched the level in the
-// last 8 bars → retest_hold: the state the retest entry path was designed
-// around and could never reach.
-func TestBreakoutStateRetestHold(t *testing.T) {
-	sig, data, now := boSignal("up", boRetestBars(true), 102.5, 0, 0)
-	st := computeBreakoutState(data, sig, now)
-	if st.Level != 101.5 {
-		t.Fatalf("level = %.2f, want 101.5 (window excluding the last 8 bars)", st.Level)
+func boMirror(long []market.KlineBar) []market.KlineBar {
+	short := make([]market.KlineBar, len(long))
+	for i, b := range long {
+		short[i] = market.KlineBar{Time: b.Time, Open: 200 - b.Open, High: 200 - b.Low, Low: 200 - b.High, Close: 200 - b.Close, Volume: b.Volume}
 	}
-	if st.Status != "retest_hold" {
-		t.Fatalf("status = %q, want retest_hold", st.Status)
+	return short
+}
+
+// boRun evaluates the long scenario and its short mirror.
+func boRun(bars []market.KlineBar, price, vol, oi float64) (long, short *BreakoutState) {
+	sigL, dataL, nowL := boSignal("up", bars, price, vol, oi)
+	sigS, dataS, nowS := boSignal("down", boMirror(bars), 200-price, vol, oi)
+	return computeBreakoutState(dataL, sigL, nowL), computeBreakoutState(dataS, sigS, nowS)
+}
+
+// Cross inside the last 8 bars, pullback to the level after the cross and
+// held → retest_hold. Previously unreachable (olderCross needed a pre-window
+// higher high; here the old spike exists but the verdict must come from the
+// real cross), B2-3 case B.
+func TestBreakoutStateRetestHold(t *testing.T) {
+	l, s := boRun(boRetestBars(57, false), 102.5, 0, 0)
+	if l.Level != 101.5 {
+		t.Fatalf("level = %.2f, want 101.5", l.Level)
+	}
+	if l.Status != "retest_hold" || s.Status != "retest_hold" {
+		t.Fatalf("long=%q short=%q, want retest_hold", l.Status, s.Status)
 	}
 }
 
-// Crossed, still beyond, no touch in the recent window → extended.
+// A dip BEFORE the cross bar is not a retest of the break.
+func TestBreakoutStateTouchBeforeCrossIsNotRetest(t *testing.T) {
+	bars := boRetestBars(-1, false) // bars 52-53 already sit at 100.8..101.5 (touch zone) but precede the cross
+	l, s := boRun(bars, 102.5, 0, 0)
+	if l.Status != "extended" || s.Status != "extended" {
+		t.Fatalf("long=%q short=%q, want extended (no retest AFTER the cross)", l.Status, s.Status)
+	}
+}
+
+// Cross, still beyond, no retest, no confirmation, cross is 5 bars old →
+// extended (chase context).
 func TestBreakoutStateExtended(t *testing.T) {
-	sig, data, now := boSignal("up", boRetestBars(false), 102.5, 0, 0)
-	if st := computeBreakoutState(data, sig, now); st.Status != "extended" {
-		t.Fatalf("status = %q, want extended (chase context)", st.Status)
+	l, s := boRun(boRetestBars(-1, false), 102.5, 0, 0)
+	if l.Status != "extended" || s.Status != "extended" {
+		t.Fatalf("long=%q short=%q, want extended", l.Status, s.Status)
+	}
+}
+
+// Fresh break with volume+OI confirmation reaches confirmed even though an
+// older higher high exists outside the window (B2-3 case A: used to be
+// labeled extended/retest_hold, disabling the market exception).
+func TestBreakoutStateConfirmedDespiteOlderHigh(t *testing.T) {
+	l, s := boRun(boRetestBars(-1, false), 102.5, 1.8, 0.5)
+	if l.Status != "confirmed" || s.Status != "confirmed" {
+		t.Fatalf("long=%q short=%q, want confirmed", l.Status, s.Status)
+	}
+}
+
+// Crossed within the window, then the latest close is back inside → fake_break.
+func TestBreakoutStateFakeBreakAfterCrossWithOlderHigh(t *testing.T) {
+	l, s := boRun(boRetestBars(57, true), 101.8, 1.8, 0.5) // live price pokes back above intrabar
+	if l.Status != "fake_break" || s.Status != "fake_break" {
+		t.Fatalf("long=%q short=%q, want fake_break", l.Status, s.Status)
+	}
+}
+
+// A wick above the level with every close inside is not a cross: with price
+// still inside the level the state is below/approach, never fake_break.
+func TestBreakoutStateWickOnlyIsNotCross(t *testing.T) {
+	bars := boBars(60, func(i int) (h, l, c float64) {
+		if i == 56 {
+			return 102.0, 100.8, 101.0 // wick through 101.5, close inside
+		}
+		if i >= 22 {
+			return 101.5, 100.8, 101.0
+		}
+		return 95.5, 95.0, 95.2
+	})
+	l, _ := boRun(bars, 101.0, 1.8, 0.5)
+	if l.Status == "fake_break" || l.Status == "retest_hold" || l.Status == "extended" {
+		t.Fatalf("status = %q, a wick without a close-cross must not produce a cross status", l.Status)
 	}
 }
 
