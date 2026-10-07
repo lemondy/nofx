@@ -75,3 +75,21 @@ func (at *AutoTrader) checkConfigDrift() {
 			"<b>⚠️ 策略配置漂移</b>\n<i>数据库中的 risk_control 已与进程启动时加载的配置不一致(进程继续用启动时的旧值)——通常是策略页保存或后端改库所致。确认期望值后重启进程以加载新配置(30 分钟去重)</i>"))
 	}
 }
+
+// seedConfigVersionBaseline anchors version 1 of the strategy's config
+// history when the trader starts (2026-10-07 review: the history only began
+// when someone opened the versions page, so the config a trader actually ran
+// under before that had no row and its trades no version to attribute to).
+// No-op once any version exists; best-effort.
+func (at *AutoTrader) seedConfigVersionBaseline() {
+	if at.store == nil || at.strategyID == "" {
+		return
+	}
+	strategy, err := at.store.Strategy().Get(at.userID, at.strategyID)
+	if err != nil || strategy == nil {
+		return
+	}
+	if err := at.store.Strategy().EnsureConfigVersionBaseline(at.strategyID, strategy.Config, "baseline", strategy.UpdatedAt.UnixMilli()); err != nil {
+		logger.Warnf("⚠️ [%s] config version baseline failed for %s: %v", at.name, at.strategyID, err)
+	}
+}

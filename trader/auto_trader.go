@@ -562,6 +562,8 @@ func (at *AutoTrader) run() (err error) {
 	logger.Infof("⚙️  Scan interval: %v", at.config.ScanInterval)
 	logger.Info("🤖 AI will make full decisions on leverage, position size, stop loss/take profit, etc.")
 
+	at.seedConfigVersionBaseline()
+
 	// Start drawdown monitoring
 	at.startDrawdownMonitor()
 

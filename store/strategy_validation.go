@@ -34,6 +34,9 @@ func (c *StrategyConfig) Validate() error {
 	if r.MinPositionSize < 0 || r.MinRiskRewardRatio < 0 || r.MinConfidence < 0 || r.MinConfidence > 100 || r.MinHoldMinutes < 0 || r.TPCloseFraction > 1 {
 		return fmt.Errorf("invalid risk control threshold")
 	}
+	if err := r.validateBoundsAndLadder(); err != nil {
+		return err
+	}
 	k := c.Indicators.Klines
 	if k.PrimaryCount < 0 || k.PrimaryCount > MaxKlineCount || k.LongerCount < 0 || k.LongerCount > MaxKlineCount || len(k.SelectedTimeframes) > MaxTimeframes {
 		return fmt.Errorf("kline configuration exceeds limits")
@@ -71,6 +74,44 @@ func (g *GridStrategyConfig) Validate() error {
 	}
 	if g.Distribution != "" && g.Distribution != "uniform" && g.Distribution != "gaussian" && g.Distribution != "pyramid" {
 		return fmt.Errorf("invalid grid distribution")
+	}
+	return nil
+}
+
+// validateBoundsAndLadder (2026-10-07 review N4): upper bounds on the
+// percentage/cost knobs and the exit-ladder relations that would make tiers
+// dead or contradictory. House semantics are preserved — 0 keeps the
+// documented default and negative values keep their "off" meaning; only
+// values that cannot be intended are rejected.
+func (r RiskControlConfig) validateBoundsAndLadder() error {
+	bounds := []struct {
+		name string
+		v    float64
+		max  float64
+	}{
+		{"risk_per_trade_pct", r.RiskPerTradePct, 10},
+		{"account_max_drawdown_pct", r.AccountMaxDrawdownPct, 100},
+		{"daily_max_loss_pct", r.DailyMaxLossPct, 100},
+		{"max_account_risk_pct", r.MaxAccountRiskPct, 100},
+		{"max_net_directional_risk_pct", r.MaxNetDirectionalRiskPct, 100},
+		{"max_stop_distance_pct", r.MaxStopDistancePct, 50},
+		{"entry_round_trip_cost_bps", r.EntryRoundTripCostBps, 500},
+		{"sl_min_atr_mult", r.SLMinATRMult, 10},
+		{"peak_drawdown_giveback_r", r.PeakDrawdownGivebackR, 1},
+	}
+	for _, b := range bounds {
+		if b.v > b.max {
+			return fmt.Errorf("%s must be ≤ %g (got %g)", b.name, b.max, b.v)
+		}
+	}
+	if r.AccountMaxDrawdownPct < 0 {
+		return fmt.Errorf("account_max_drawdown_pct must be ≥ 0 (0 disables)")
+	}
+	if r.TPTrimAtR > 0 && r.TPFullAtR > 0 && r.TPFullAtR <= r.TPTrimAtR {
+		return fmt.Errorf("tp_full_at_r (%g) must be above tp_trim_at_r (%g) — the full tier would fire first and the trim tier never", r.TPFullAtR, r.TPTrimAtR)
+	}
+	if r.BreakevenArmR > 0 && r.ProfitLockAtR > 0 && r.BreakevenArmR >= r.ProfitLockAtR {
+		return fmt.Errorf("breakeven_arm_r (%g) must be below profit_lock_at_r (%g) — the 1R lock already parks the stop at breakeven", r.BreakevenArmR, r.ProfitLockAtR)
 	}
 	return nil
 }
