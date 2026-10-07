@@ -3119,9 +3119,11 @@ func roundSignificant(v float64, n int) float64 {
 //	approach            within 1×ATR(1h)% of the level
 //	broken_unconfirmed  beyond the level but without volume/OI confirmation
 //	confirmed           beyond the level WITH volume + OI confirmation
-//	fake_break          crossed within the last 8 bars but the last close is back inside
-//	retest_hold         crossed earlier, pulled back to the level within the last 8 bars and held
-//	extended            crossed earlier and never retested (chase context)
+//	fake_break          closed across within the last 8 bars but the last close is back inside
+//	retest_hold         closed across within the last 8 bars, later pulled back to the level and held
+//	extended            closed across >=2 bars ago, never retested, no vol+OI confirmation (chase context)
+//
+// (full decision table: see the cross-detection block below, review 2026-10-07 B2-3)
 //
 // Best-effort: any missing input (no 1h bars, no structure level, no ATR)
 // returns nil — the model falls back to reading the raw levels. A series too
@@ -3237,45 +3239,71 @@ func computeBreakoutState(data *market.Data, sig *SymbolSignal, now time.Time) *
 	}
 
 	// Cross recency + retest/fake detection from the closed 1h bars.
+	//
+	// review 2026-10-07 B2-3: the level is the extreme of bars[n-38:n-8], so
+	// a bar inside the level window can never exceed it and a scan over bars
+	// older than the window says nothing about THIS level. The old
+	// "olderCross" scan therefore only fired on a pre-window higher high,
+	// mislabeling fresh breaks as extended/retest_hold and making a genuine
+	// cross-then-retest unreachable. Now everything anchors on the first
+	// genuine cross inside the last boCrossWindow bars.
+	//
+	// A cross is an inside→outside CLOSE transition (previous close on/inside
+	// the level, this close beyond it) — same definition as
+	// market/breakout computeTF. Wicks alone are not crosses; a bar that
+	// already opened/closed outside is not a fresh cross.
+	//
+	// Decision table (cross = first transition in the last 8 closed bars;
+	// "latest" = last closed bar's close):
+	//
+	//	cross, latest back inside                        → fake_break
+	//	cross, latest beyond, a later bar's Low (long) /
+	//	  High (short) came within 0.25% of level        → retest_hold
+	//	cross, latest beyond, no retest, vol+OI confirm  → confirmed
+	//	cross, latest beyond, no retest, no confirm,
+	//	  cross is >=2 bars old                          → extended (chase)
+	//	cross on the latest bar / no cross in window
+	//	  (live price beyond), vol+OI confirm            → confirmed
+	//	otherwise                                        → broken_unconfirmed
 	if haveBars {
 		n := len(bars)
-		crossedIdx := -1
-		for i := n - 1; i >= n-8 && i >= 0; i-- {
-			crossed := (isLong && bars[i].High > level) || (!isLong && bars[i].Low < level)
-			if crossed {
-				crossedIdx = i
+		beyondClose := func(c float64) bool {
+			if isLong {
+				return c > level
 			}
+			return c < level
 		}
-		olderCross := false
-		for i := 0; i < n-8; i++ {
-			crossed := (isLong && bars[i].High > level) || (!isLong && bars[i].Low < level)
-			if crossed {
-				olderCross = true
+		crossedIdx := -1
+		for i := n - boCrossWindow; i < n; i++ {
+			if i < 1 {
+				continue
+			}
+			if !beyondClose(bars[i-1].Close) && beyondClose(bars[i].Close) {
+				crossedIdx = i
 				break
 			}
 		}
-		backInside := (isLong && bars[n-1].Close < level) || (!isLong && bars[n-1].Close > level)
+		backInside := !beyondClose(bars[n-1].Close)
+		retested := false
+		if crossedIdx >= 0 {
+			for i := crossedIdx + 1; i < n; i++ {
+				if isLong && bars[i].Low <= level*(1+0.0025) {
+					retested = true
+				}
+				if !isLong && bars[i].High >= level*(1-0.0025) {
+					retested = true
+				}
+			}
+		}
 		switch {
 		case crossedIdx >= 0 && backInside:
 			st.Status = "fake_break"
-		case olderCross && !backInside:
-			// crossed a while ago and still beyond — check the retest.
-			touched := false
-			for i := n - 8; i < n; i++ {
-				if isLong && bars[i].Low <= level*(1+0.0025) {
-					touched = true
-				}
-				if !isLong && bars[i].High >= level*(1-0.0025) {
-					touched = true
-				}
-			}
-			if touched {
-				st.Status = "retest_hold"
-			} else {
-				st.Status = "extended"
-			}
+		case crossedIdx >= 0 && retested:
+			st.Status = "retest_hold"
 		case st.VolumeConfirm && st.OIConfirm:
 			st.Status = "confirmed"
+		case crossedIdx >= 0 && crossedIdx < n-1:
+			st.Status = "extended"
 		default:
 			st.Status = "broken_unconfirmed"
 		}
