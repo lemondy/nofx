@@ -419,6 +419,14 @@ type RRScan struct {
 	// there (the prompt requires the model to note the uncertainty).
 	FirstTargetBeyondStructure bool `json:"first_target_beyond_structure,omitempty"`
 	Usable                     bool `json:"usable"` // a qualifying target exists
+	// FirstObstacle / FirstObstacleRR (2026-10-07 review S2): the NEAREST
+	// structural (non-BOLL) level in the trade's path and the net RR at it —
+	// whether or not it reaches min_rr. first_rr_ge_target skips every level
+	// below min_rr, so a qualifying far TP can sit behind a wall the price
+	// meets first (live: planned TP 17.9% away on average, 2/109 reached,
+	// mean MFE 2.86%). Evidence only — no gate reads it.
+	FirstObstacle   float64 `json:"first_obstacle,omitempty"`
+	FirstObstacleRR float64 `json:"first_obstacle_rr,omitempty"`
 	// TPOptions is the menu the model picks from (user directive 2026-09-29):
 	// up to three QUALIFYING (RR ≥ min_rr, non-BOLL) structural targets —
 	// near/mid/far — so the regime call ("trend keeps running" vs "range
@@ -2163,6 +2171,10 @@ func scanRRWindowWithCost(entry float64, basis string, stopPct float64, stopPric
 		v := (dist - costPct) / (stopPct + costPct)
 		if v > best {
 			best, bestT = v, t
+		}
+		if out.FirstObstacle == 0 && !bollT[t] {
+			out.FirstObstacle = t
+			out.FirstObstacleRR = round2(v)
 		}
 		if minRR > 0 && !out.Usable && v >= minRR-1e-9 && !bollT[t] {
 			out.FirstRRGeTarget = t

@@ -954,11 +954,25 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			c.ScannerConflict = hasScannerConflict(c.Sources, c.ScannerDirection)
 			candidates = append(candidates, c)
 		}
+		sortMixedCandidates(candidates)
 		return e.filterExcludedCoins(candidates), nil
 
 	default:
 		return nil, fmt.Errorf("unknown coin source type: %s", coinSource.SourceType)
 	}
+}
+
+// sortMixedCandidates gives the mixed pool a deterministic order (2026-10-07
+// review: the map-collapse emitted a random order every cycle — prompt order
+// shifted LLM position bias, broke run-to-run reproducibility and prompt-cache
+// reuse). Multi-source confluence first, then symbol.
+func sortMixedCandidates(c []CandidateCoin) {
+	sort.SliceStable(c, func(i, j int) bool {
+		if len(c[i].Sources) != len(c[j].Sources) {
+			return len(c[i].Sources) > len(c[j].Sources)
+		}
+		return c[i].Symbol < c[j].Symbol
+	})
 }
 
 // hasScannerConflict reports whether a candidate carries OPPOSITE

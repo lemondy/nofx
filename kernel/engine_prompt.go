@@ -1983,6 +1983,7 @@ const signalBlockLegend = `时间口径: timeframe 名称是K线粒度;trend_win
 - market_regime、execution_filter、pump_guard、data_quality、data_freshness、liquidity、funding_rollover、bb_ride(布林上轨骑行)/short_ride(布林下轨骑行) 和 breakout 均为程序结果。funding_rate 是原始小数;funding_annualized_pct 才是年化百分比。pump_guard.return_4h_pct = 最近 5 根已闭合 4h K 线(约 20 小时)的趋势窗口累计涨幅——4h 周期指标,不是最近 4 小时的涨幅。
 - bias.scanner 只是候选来源姿态;方向依据 structure/execution/directional_score。仅在 hard_entry_gate.allowed=true 且准备开仓时处理 signal_conflict;已被硬门阻断时直接 wait,不展开冲突分析。
 - support/resistance 与距离均按实时价生成;空数组表示对应方向没有结构参考。trend 与窗口收益方向不同可以是合法反弹/回撤,不自动构成冲突。
+- rr_scan.first_obstacle / first_obstacle_rr = 交易路径上最近的结构位及该位的净 RR(无论是否达到 min_rr)。止盈目标若在它之后,价格要先穿过它;first_obstacle_rr 很低说明前方很近就有墙——这是证据,不是禁开码,请在推理中说明你如何看待它。
 数据新鲜度优先级: Structured Signal timestamp > derivatives/liquidity > scanner/rankings。hint/榜单旧价格禁止参与 entry/SL/TP/RR 精确计算。ohlcv 只用于软证据,不得覆盖上述程序结论。
 `
 
