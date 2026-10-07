@@ -28,6 +28,9 @@ type TraderManager struct {
 	loadMu               sync.Mutex
 	competitionRefreshMu sync.Mutex
 	store                *store.Store // set via SetStore; used by EnsureTraderStarted
+	// startFn starts an AutoTrader; nil means (*trader.AutoTrader).Start.
+	// Test seam only — production code never sets it. review 2026-10-07 B1-5
+	startFn func(*trader.AutoTrader) error
 }
 
 // SetStore wires the store (needed by EnsureTraderStarted to persist state).
@@ -63,6 +66,42 @@ func (tm *TraderManager) GetTrader(id string) (*trader.AutoTrader, error) {
 		return nil, fmt.Errorf("trader ID '%s' does not exist", id)
 	}
 	return t, nil
+}
+
+// StartTrader resolves id and starts the instance currently registered in
+// the map, atomically with respect to reloads.
+//
+// review 2026-10-07 B1-5 (P0-1): handleStartTrader used to fetch the instance
+// with GetTrader, run ~40 lines of unlocked validation, and only then call
+// Start on the held pointer. A background reload (RemoveTraderAndThen +
+// LoadUserTradersFromStore) could evict and replace the instance in between,
+// so the started copy lived outside the manager map — an orphan loop placing
+// live orders with no owner. Lookup + start now share one loadMu critical
+// section, the same lock RemoveTraderAndThen and LoadUserTradersFromStore
+// hold while evicting or re-adding instances (lock order loadMu -> tm.mu,
+// unchanged), so the started instance is by construction the one registered
+// under id: an evicted or replaced pointer can never reach Start from here.
+// ErrAlreadyRunning is returned unchanged so existing caller tolerance keeps
+// working.
+func (tm *TraderManager) StartTrader(id string) (traderName string, err error) {
+	tm.loadMu.Lock()
+	defer tm.loadMu.Unlock()
+
+	start := tm.startFn
+	if start == nil {
+		start = (*trader.AutoTrader).Start
+	}
+
+	tm.mu.Lock()
+	t, exists := tm.traders[id]
+	tm.mu.Unlock()
+	if !exists || t == nil {
+		return "", fmt.Errorf("trader ID '%s' does not exist", id)
+	}
+	if err := start(t); err != nil {
+		return t.GetName(), err
+	}
+	return t.GetName(), nil
 }
 
 // GetAllTraders retrieves all traders
