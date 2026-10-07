@@ -360,38 +360,34 @@ func (t *FuturesTrader) determineOrderAction(side, positionSide string, realized
 	side = strings.ToUpper(side)
 	positionSide = strings.ToUpper(positionSide)
 
-	// If there's realized PnL, it's likely a close trade
-	isClose := realizedPnL != 0
-
-	if positionSide == "LONG" || positionSide == "" {
+	// review 2026-10-07 B1-7: in hedge mode (positionSide LONG/SHORT)
+	// (positionSide, side) fully determine open vs close. Classifying by
+	// realizedPnL != 0 mislabeled a breakeven close (PnL exactly 0) as an
+	// open and the builder then ADDED quantity to the opposite row.
+	switch positionSide {
+	case "LONG":
 		if side == "BUY" {
-			if isClose {
-				return "close_short" // Buying to close short
-			}
 			return "open_long"
-		} else {
-			if isClose {
-				return "close_long" // Selling to close long
-			}
-			return "open_short"
 		}
-	} else if positionSide == "SHORT" {
+		return "close_long"
+	case "SHORT":
 		if side == "SELL" {
-			if isClose {
-				return "close_long"
-			}
 			return "open_short"
-		} else {
-			if isClose {
-				return "close_short"
-			}
-			return "open_long"
 		}
+		return "close_short"
 	}
 
-	// Default fallback
+	// One-way mode (positionSide "" or "BOTH"): direction is not encoded, so
+	// keep the realized-PnL heuristic — a trade with realized PnL is a close.
+	isClose := realizedPnL != 0
 	if side == "BUY" {
+		if isClose {
+			return "close_short" // Buying to close short
+		}
 		return "open_long"
+	}
+	if isClose {
+		return "close_long" // Selling to close long
 	}
 	return "open_short"
 }
