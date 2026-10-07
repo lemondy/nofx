@@ -31,10 +31,41 @@ func (s *Server) handleGetGridRiskInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, riskInfo)
 }
 
+// syncBalanceFetchBalance queries the exchange for a raw balance snapshot via
+// the throwaway probe client built by buildExchangeProbeTrader. Package-level
+// var is a test-only injection point (production never reassigns it) so tests
+// can stand in for the network call without a live exchange.
+// review 2026-10-07 B2-1
+var syncBalanceFetchBalance = func(tempTrader trader.Trader) (map[string]interface{}, error) {
+	return tempTrader.GetBalance()
+}
+
+// syncBalanceReloadInBackground spawns the remove→reload chain that re-applies
+// the trader row to the in-memory manager after a balance sync. Package-level
+// var is a test-only injection point; production keeps the default.
+// review 2026-10-07 B2-1
+var syncBalanceReloadInBackground = func(s *Server, userID, traderID string) {
+	go func() {
+		s.removeTraderForReload(userID, traderID)
+		if err := s.traderManager.LoadUserTradersFromStore(s.store, userID); err != nil {
+			logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
+		}
+		logger.Infof("✓ Trader %s reloaded in background after balance sync", traderID)
+	}()
+}
+
 // handleSyncBalance Sync exchange balance to initial_balance (Option B: Manual Sync + Option C: Smart Detection)
+//
+// review 2026-10-07 B2-1 (P1-1): this handler used to hold the SERVER-GLOBAL
+// traderOpsMu for its whole body — including the GetBalance network probe and
+// the inline remove→reload chain whose Stop() joins the in-flight AI decision
+// cycle (routinely minutes) — so every other user's create/update/delete/
+// start/stop queued behind one balance sync. Shape now matches the
+// update/delete handlers in handler_trader.go: the exchange probe runs with no
+// ops lock held, the ops lock guards only the DB write (fetch outside / write
+// inside keeps concurrent syncs serialized without network I/O under the
+// lock), and the reload chain runs in a background goroutine.
 func (s *Server) handleSyncBalance(c *gin.Context) {
-	s.traderOpsMu.Lock()
-	defer s.traderOpsMu.Unlock()
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
 
@@ -62,8 +93,9 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 		return
 	}
 
-	// Query actual balance
-	balanceInfo, balanceErr := tempTrader.GetBalance()
+	// Query actual balance — deliberately outside traderOpsMu (see the
+	// handler comment above). review 2026-10-07 B2-1
+	balanceInfo, balanceErr := syncBalanceFetchBalance(tempTrader)
 	if balanceErr != nil {
 		logger.Infof("⚠️ Failed to query exchange balance: %v", balanceErr)
 		SafeInternalError(c, "Failed to query balance", balanceErr)
@@ -94,20 +126,22 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	logger.Infof("✓ Queried actual exchange balance: %.2f USDT (current config: %.2f USDT, change: %.2f%%)",
 		actualBalance, oldBalance, changePercent)
 
-	// Update initial_balance in database
+	// Update initial_balance in database — traderOpsMu is held for this DB
+	// write only. review 2026-10-07 B2-1
+	s.traderOpsMu.Lock()
 	err = s.store.Trader().UpdateInitialBalance(userID, traderID, actualBalance)
+	s.traderOpsMu.Unlock()
 	if err != nil {
 		logger.Infof("❌ Failed to update initial_balance: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update balance"})
 		return
 	}
 
-	// Reload traders into memory
-	s.removeTraderForReload(userID, traderID)
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
-	if err != nil {
-		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
-	}
+	// Reload traders into memory in the background — Stop() inside
+	// removeTraderForReload joins the in-flight AI cycle and can take
+	// minutes, so the HTTP response must not wait for it (same shape as the
+	// update path in handler_trader.go). review 2026-10-07 B2-1
+	syncBalanceReloadInBackground(s, userID, traderID)
 
 	logger.Infof("✅ Synced balance: %.2f → %.2f USDT (%s %.2f%%)", oldBalance, actualBalance, changeType, changePercent)
 
