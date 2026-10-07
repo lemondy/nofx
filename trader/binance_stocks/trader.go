@@ -465,6 +465,7 @@ func (t *StocksTrader) GetTradesForSymbol(symbol string, startTime time.Time, li
 		fee, _ := strconv.ParseFloat(f.Commission, 64)
 		out = append(out, types.TradeRecord{
 			TradeID:      strconv.FormatInt(f.ID, 10),
+			OrderID:      strconv.FormatInt(f.OrderID, 10),
 			Symbol:       f.Symbol,
 			Side:         f.Side,
 			PositionSide: "LONG",

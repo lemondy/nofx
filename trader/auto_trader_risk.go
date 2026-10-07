@@ -909,11 +909,8 @@ func (at *AutoTrader) clampSizeToRisk(decision *kernel.Decision, sizeUSD, equity
 		return sizeUSD
 	}
 	distPct := math.Abs(livePrice-decision.StopLoss) / livePrice * 100
-	costBps := at.config.StrategyConfig.RiskControl.EntryRoundTripCostBps
-	if costBps <= 0 {
-		costBps = 20
-	}
-	distPct += costBps / 100
+	// Same cost caliber as checkNetRR (single resolver).
+	distPct += at.config.StrategyConfig.RiskControl.EffectiveEntryRoundTripCostBps() / 100
 	if distPct <= 0 {
 		return sizeUSD
 	}

@@ -150,7 +150,7 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 				rowAge = now.Sub(time.UnixMilli(row.UpdatedAt)) // same fallback as orphanedRows
 			}
 			if rowAge > orphanStaleRowAge {
-				if err := at.store.Position().ClosePositionFully(row.ID, row.EntryPrice, "", now.UnixMilli(), row.RealizedPnL, row.Fee, "netting_reconcile_stale"); err != nil {
+				if err := at.store.Position().ClosePositionFully(row.ID, row.EntryPrice, "", now.UnixMilli(), 0, 0, "netting_reconcile_stale"); err != nil {
 					logger.Infof("⚠️ [%s] orphan reconcile: stale-row close %s %s row #%d failed: %v", at.name, row.Symbol, row.Side, row.ID, err)
 					continue
 				}
@@ -164,7 +164,7 @@ func (at *AutoTrader) reconcileOrphanedPositionRows() {
 			}
 			continue
 		}
-		if err := at.store.Position().ClosePositionFully(row.ID, exitPrice, "", now.UnixMilli(), row.RealizedPnL, row.Fee, "netting_reconcile"); err != nil {
+		if err := at.store.Position().ClosePositionFully(row.ID, exitPrice, "", now.UnixMilli(), 0, 0, "netting_reconcile"); err != nil {
 			logger.Infof("⚠️ [%s] orphan reconcile: closing %s %s row #%d failed: %v", at.name, row.Symbol, row.Side, row.ID, err)
 			continue
 		}

@@ -256,7 +256,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 			ExchangeID:      exchangeID,
 			ExchangeType:    exchangeType,
 			OrderID:         orderRecord.ID,
-			ExchangeOrderID: trade.TradeID,
+			ExchangeOrderID: trade.PositionOrderID(),
 			ExchangeTradeID: trade.TradeID,
 			Symbol:          symbol,
 			Side:            side,
@@ -266,7 +266,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 			Commission:      trade.Fee,
 			CommissionAsset: "USDT",
 			RealizedPnL:     trade.RealizedPnL,
-			IsMaker:         false,
+			IsMaker:         trade.IsMaker,
 			CreatedAt:       tradeTimeMs,
 		}
 
@@ -279,7 +279,7 @@ func (t *FuturesTrader) SyncOrdersFromBinance(traderID string, exchangeID string
 			traderID, exchangeID, exchangeType,
 			symbol, positionSide, orderAction,
 			trade.Quantity, trade.Price, trade.Fee, trade.RealizedPnL,
-			tradeTimeMs, trade.TradeID,
+			tradeTimeMs, trade.PositionOrderID(),
 		); err != nil {
 			logger.Infof("  ⚠️ Failed to sync position for trade %s: %v", trade.TradeID, err)
 		} else {

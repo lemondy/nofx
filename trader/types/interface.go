@@ -26,7 +26,11 @@ type ClosedPnLRecord struct {
 // TradeRecord represents a single trade/fill from exchange
 // Used for reconstructing position history with unified algorithm
 type TradeRecord struct {
-	TradeID      string    // Unique trade ID from exchange
+	TradeID string // Unique trade ID from exchange (fill-level; dedup key)
+	OrderID string // Exchange ORDER id this fill belongs to ("" = unknown). Position
+	// ownership (ai_entry_orders) is keyed by order id — 2026-10-07 review N2:
+	// syncs passed TradeID there, so no AI entry ever matched.
+	IsMaker      bool      // fill was a maker fill (false when the venue does not report it)
 	Symbol       string    // Trading pair (e.g., "BTCUSDT")
 	Side         string    // "BUY" or "SELL"
 	PositionSide string    // "LONG", "SHORT", or "BOTH" (for one-way mode)
@@ -36,6 +40,16 @@ type TradeRecord struct {
 	RealizedPnL  float64   // Realized PnL (non-zero for closing trades)
 	Fee          float64   // Trading fee/commission
 	Time         time.Time // Trade execution time
+}
+
+// PositionOrderID is the id the position builder records as the row's
+// entry/exit order: the exchange order id when the venue reports it, else
+// the trade id (legacy behavior).
+func (t TradeRecord) PositionOrderID() string {
+	if t.OrderID != "" {
+		return t.OrderID
+	}
+	return t.TradeID
 }
 
 // Trader Unified trader interface

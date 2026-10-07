@@ -434,8 +434,14 @@ func (s *PositionStore) GetClosedMissingExcursions(traderID string, limit int) (
 }
 
 // ClosePositionFully marks position as fully closed
-// exitTimeMs is Unix milliseconds UTC
-func (s *PositionStore) ClosePositionFully(id int64, exitPrice float64, exitOrderID string, exitTimeMs int64, totalRealizedPnL float64, totalFee float64, closeReason string) error {
+// exitTimeMs is Unix milliseconds UTC.
+//
+// addPnL/addFee are the DELTA of the closing leg only — they are added to the
+// row's stored accumulation in SQL. 2026-10-07 review N1: callers used to pass
+// the row's running total (stored + this leg) while this function also added
+// the stored value, so every close doubled the entry fee and every earlier
+// partial-close PnL. Pass 0/0 when the row's accumulation is already final.
+func (s *PositionStore) ClosePositionFully(id int64, exitPrice float64, exitOrderID string, exitTimeMs int64, addPnL float64, addFee float64, closeReason string) error {
 	var pos TraderPosition
 	if err := s.db.First(&pos, id).Error; err != nil {
 		return fmt.Errorf("failed to get position: %w", err)
@@ -455,8 +461,8 @@ func (s *PositionStore) ClosePositionFully(id int64, exitPrice float64, exitOrde
 		"exit_price":    exitPrice,
 		"exit_order_id": exitOrderID,
 		"exit_time":     exitTimeMs,
-		"realized_pnl":  gorm.Expr("realized_pnl + ?", totalRealizedPnL),
-		"fee":           gorm.Expr("fee + ?", totalFee),
+		"realized_pnl":  gorm.Expr("realized_pnl + ?", addPnL),
+		"fee":           gorm.Expr("fee + ?", addFee),
 		"status":        "CLOSED",
 		"close_reason":  closeReason,
 		"updated_at":    time.Now().UTC().UnixMilli(),

@@ -619,6 +619,7 @@ func (t *LighterTraderV2) GetTrades(startTime time.Time, limit int) ([]tradertyp
 
 			closeTrade := tradertypes.TradeRecord{
 				TradeID:      fmt.Sprintf("%d_close", lt.TradeID),
+				OrderID:      lighterOwnOrderID(lt, side),
 				Symbol:       symbol,
 				Side:         side,
 				PositionSide: closeSide,
@@ -633,6 +634,7 @@ func (t *LighterTraderV2) GetTrades(startTime time.Time, limit int) ([]tradertyp
 
 			openTrade := tradertypes.TradeRecord{
 				TradeID:      fmt.Sprintf("%d_open", lt.TradeID),
+				OrderID:      lighterOwnOrderID(lt, side),
 				Symbol:       symbol,
 				Side:         side,
 				PositionSide: openSide,
@@ -675,6 +677,7 @@ func (t *LighterTraderV2) GetTrades(startTime time.Time, limit int) ([]tradertyp
 
 		trade := tradertypes.TradeRecord{
 			TradeID:      fmt.Sprintf("%d", lt.TradeID),
+			OrderID:      lighterOwnOrderID(lt, side),
 			Symbol:       symbol,
 			Side:         side,
 			PositionSide: positionSide,
@@ -689,4 +692,18 @@ func (t *LighterTraderV2) GetTrades(startTime time.Time, limit int) ([]tradertyp
 	}
 
 	return result, nil
+}
+
+// lighterOwnOrderID is this account's order id on a fill: the bid order when
+// we bought, the ask order when we sold (2026-10-07 review N2 — position
+// ownership is keyed by order id, not trade id).
+func lighterOwnOrderID(lt LighterTrade, side string) string {
+	id := lt.AskID
+	if side == "BUY" {
+		id = lt.BidID
+	}
+	if id == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", id)
 }

@@ -170,11 +170,10 @@ func (pb *PositionBuilder) handleClose(
 			finalExitPrice = price
 		}
 
-		// Calculate total PnL (existing + new)
+		// Totals for the log only — ClosePositionFully adds THIS leg's
+		// delta (realizedPnL, fee) to the stored accumulation in SQL
+		// (2026-10-07 review N1: passing the total here doubled it).
 		totalPnL := position.RealizedPnL + realizedPnL
-
-		// Calculate total fee (existing + new)
-		totalFee := position.Fee + fee
 
 		logger.Infof("  ✅ Full close: %s %s %.6f @ %.2f (avg exit: %.2f, entry: %.2f, PnL: %.2f)",
 			symbol, side, closeQty, price, finalExitPrice, position.EntryPrice, totalPnL)
@@ -199,8 +198,8 @@ func (pb *PositionBuilder) handleClose(
 			finalExitPrice,
 			orderID,
 			tradeTimeMs,
-			totalPnL,
-			totalFee,
+			realizedPnL,
+			fee,
 			"sync",
 		)
 	}

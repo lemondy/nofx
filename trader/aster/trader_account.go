@@ -239,6 +239,7 @@ func (t *AsterTrader) GetTrades(startTime time.Time, limit int) ([]types.TradeRe
 
 		trade := types.TradeRecord{
 			TradeID:      strconv.FormatInt(at.ID, 10),
+			OrderID:      strconv.FormatInt(at.OrderID, 10),
 			Symbol:       at.Symbol,
 			Side:         at.Side,
 			PositionSide: at.PositionSide,

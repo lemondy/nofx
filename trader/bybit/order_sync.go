@@ -281,7 +281,7 @@ func (t *BybitTrader) SyncOrdersFromBybit(traderID string, exchangeID string, ex
 			traderID, exchangeID, exchangeType,
 			symbol, positionSide, trade.OrderAction,
 			trade.ExecQty, trade.ExecPrice, trade.ExecFee, trade.ClosedPnL,
-			execTimeMs, trade.ExecID,
+			execTimeMs, firstNonEmpty(trade.OrderID, trade.ExecID),
 		); err != nil {
 			logger.Infof("  ⚠️ Failed to sync position for trade %s: %v", trade.ExecID, err)
 		} else {
@@ -307,3 +307,15 @@ func (t *BybitTrader) StartOrderSync(traderID string, exchangeID string, exchang
 }
 
 func (t *BybitTrader) StopOrderSync() { t.orderSync.Stop() }
+
+// firstNonEmpty picks the exchange ORDER id for position ownership, falling
+// back to the fill id (2026-10-07 review N2: ownership marks are keyed by
+// order id; passing the fill id meant no AI entry ever matched).
+func firstNonEmpty(ids ...string) string {
+	for _, id := range ids {
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
