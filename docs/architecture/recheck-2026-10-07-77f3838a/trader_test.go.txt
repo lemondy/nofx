@@ -1,0 +1,159 @@
+package trader
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"nofx/kernel"
+	"nofx/market"
+	"nofx/store"
+)
+
+// These two residual tests deliberately assert the defect's current behavior.
+// PASS means reproduced, not repaired. No orders reach a real exchange.
+func TestAudit77ResidualBTCUnknownMarketBypass(t *testing.T) {
+	on := true
+	at := riskTestTrader(store.RiskControlConfig{BTCFilterShort: &on})
+	at.cycleGateStates = map[string]*kernel.GateState{
+		"XUSDT": {ShortAllowed: false, ShortFailed: []string{"BTC_REGIME_UNKNOWN"}},
+	}
+	d := kernel.Decision{Symbol: "XUSDT", Action: "open_short", Confidence: 100, Price: 100, StopLoss: 105, TakeProfit: 90}
+	if absoluteBanCode("BTC_REGIME_UNKNOWN") {
+		t.Fatal("residual changed: unknown is now an absolute ban")
+	}
+	if got := at.applyHardRiskGates([]kernel.Decision{d}, &kernel.Context{}); len(got) != 1 {
+		t.Fatalf("residual changed: decision was blocked: %+v", got)
+	}
+	if err := at.entryExecutionBlocked(d.Symbol, "short"); err != nil {
+		t.Fatalf("residual changed: execution blocked: %v", err)
+	}
+	for _, limitMode := range []bool{false, true} {
+		at.config.StrategyConfig.RiskControl.LimitEntryEnabled = limitMode
+		// Kernel sets MarketException from ride/breakout evidence separately
+		// from BTC bans; a failed BTC gate can coexist with this evidence.
+		at.cycleGateStates["XUSDT"].ShortMarketException = true
+		if got, err := at.marketExceptionGate(&d, nil, false); err != nil || got.Action != "open_short" {
+			t.Fatalf("residual changed: limit mode=%t dispatch blocked/degraded: %+v %v", limitMode, got, err)
+		}
+	}
+	t.Log("REPRODUCED: opt-in BTC unknown short ban passed filter/preflight; market dispatch passed with limit mode off and with independent exception evidence")
+}
+
+func TestAudit77ResidualBTCUnknownPendingPolicy(t *testing.T) {
+	old := kernel.Audit77BTCClosesFn
+	kernel.Audit77BTCClosesFn = func(int) []float64 { return nil }
+	t.Cleanup(func() { kernel.Audit77BTCClosesFn = old })
+	for _, side := range []string{"long", "short"} {
+		t.Run(side, func(t *testing.T) {
+			at := riskTestTrader(store.RiskControlConfig{})
+			at.config.StrategyConfig = fix7Config()
+			// Default policy: long ON (documented unknown fail-open), short OFF.
+			at.config.StrategyConfig.RiskControl.BTCFilterLong = nil
+			at.config.StrategyConfig.RiskControl.BTCFilterShort = nil
+			at.recheckDataFn = func(string) (*market.Data, error) {
+				return fix7StrategyData(at.recheckConfiguredTimeframes("XUSDT"), side == "long"), nil
+			}
+			pe := &pendingEntry{Symbol: "XUSDT", Side: side, OrderID: "entry", PlacedAt: time.Now()}
+			if got := at.pendingDirectionBlocked(pe); got != "pending BTC regime data unavailable" {
+				t.Fatalf("residual changed: pending reason=%q", got)
+			}
+			m := &audit05Mock{cancelTerminal: true, status: map[string]interface{}{"status": "NEW", "executedQty": 0.0}}
+			at.trader = m
+			fix7AnchorDay(at)
+			at.setPendingEntry(pe)
+			at.processPendingEntries()
+			if m.cancelCalls != 1 || at.getPendingEntry(pe.Symbol, side) != nil {
+				t.Fatalf("pending not cancelled: calls=%d", m.cancelCalls)
+			}
+			t.Logf("REPRODUCED: BTC unknown cancelled %s pending with default long ON / short OFF", side)
+		})
+	}
+}
+
+type audit77QuoteMock struct {
+	audit05Mock
+	price float64
+}
+
+func (m *audit77QuoteMock) GetMarketPrice(string) (float64, error) { return m.price, nil }
+
+func TestAudit77RecheckRealWiringRetainsPending(t *testing.T) {
+	old := market.Audit77TimeframesFn
+	oldQuote := market.Audit77QuoteDataFn
+	t.Cleanup(func() { market.Audit77TimeframesFn, market.Audit77QuoteDataFn = old, oldQuote })
+	for _, primary := range []string{"15m", "5m"} {
+		t.Run(primary, func(t *testing.T) {
+			at := riskTestTrader(store.RiskControlConfig{})
+			at.config.StrategyConfig = fix7Config()
+			at.config.StrategyConfig.Indicators.Klines.PrimaryTimeframe = primary
+			at.config.StrategyConfig.Indicators.Klines.SelectedTimeframes = []string{primary, "1h", "4h", "1d"}
+			at.exchange = "bybit"
+			m := &audit77QuoteMock{audit05Mock: audit05Mock{status: map[string]interface{}{"status": "NEW", "executedQty": 0.0}}, price: 101}
+			at.trader = m
+			pe := fix7Pending(at)
+			calls := 0
+			market.Audit77TimeframesFn = func(symbol string, tfs []string, tf string, count int, venue string, price float64) (*market.Data, error) {
+				calls++
+				if symbol != "XUSDT" || tf != primary || count != 60 || venue != "bybit" || price != 101 || !reflect.DeepEqual(tfs, []string{primary, "1h", "4h", "1d"}) {
+					t.Fatalf("wrong fetch contract: %s %v %s %d %s %g", symbol, tfs, tf, count, venue, price)
+				}
+				data := fix7StrategyData(tfs, true)
+				for _, series := range data.TimeframeData {
+					series.Klines = series.Klines[len(series.Klines)-count:]
+				}
+				data.CurrentPrice = price
+				return data, nil
+			}
+			// The later SL-crossing check still uses a generic execution quote.
+			// Its short series must not accidentally become the direction input.
+			quoteCalls := 0
+			market.Audit77QuoteDataFn = func(symbol, venue string, price float64) (*market.Data, error) {
+				quoteCalls++
+				data := fix7ShortStrategyData(at.recheckConfiguredTimeframes(symbol), true)
+				data.CurrentPrice = price
+				return data, nil
+			}
+			// No AutoTrader.recheckDataFn injection: real recheck and quote plumbing run.
+			at.processPendingEntries()
+			if calls != 1 || quoteCalls != 1 || m.cancelCalls != 0 || at.getPendingEntry(pe.Symbol, pe.Side) == nil {
+				t.Fatalf("healthy pending not retained: fetch=%d cancel=%d reason=%q", calls, m.cancelCalls, at.pendingDirectionBlocked(pe))
+			}
+			t.Logf("FIX VERIFIED: primary=%s count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained", primary)
+		})
+	}
+}
+
+func TestAudit77RecheckHonorsMicroTrend(t *testing.T) {
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.config.StrategyConfig = fix7Config()
+	at.config.StrategyConfig.RiskControl.EntryTimingGate = true
+	at.recheckDataFn = func(string) (*market.Data, error) {
+		return fix7StrategyData(at.recheckConfiguredTimeframes("XUSDT"), false), nil
+	}
+	got := at.pendingDirectionBlocked(&pendingEntry{Symbol: "XUSDT", Side: "long"})
+	if !strings.Contains(got, "MICRO_TREND_NOT_LONG") {
+		t.Fatalf("micro trend gate not exercised: %q", got)
+	}
+	t.Log("FIX VERIFIED: configured EntryTimingGate=true still rejects falling 15m long")
+}
+
+func TestAudit77RefreshDedupesHedgeSides(t *testing.T) {
+	m := &fix06MultiMock{}
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.trader = m
+	ctx := &kernel.Context{}
+	if err := at.refreshExecutionAccount(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if m.orderCalls != 1 || len(ctx.Positions) != 2 {
+		t.Fatalf("hedge refresh: calls=%d positions=%+v", m.orderCalls, ctx.Positions)
+	}
+	for _, p := range ctx.Positions {
+		if p.Quantity != 1 || p.StopLossPrice <= 0 {
+			t.Fatalf("lost hedge-side coverage: %+v", p)
+		}
+	}
+	t.Log("FIX VERIFIED: account refresh queried XUSDT once and kept both protected hedge sides with absolute quantities")
+}

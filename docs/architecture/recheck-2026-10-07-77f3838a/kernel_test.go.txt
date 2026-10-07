@@ -1,0 +1,79 @@
+package kernel
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestAudit77BTCUnknownDirectionPolicy(t *testing.T) {
+	opt := lpOpt()
+	opt.BTCFilterLong, opt.BTCFilterShort = true, false
+	opt.BtcTrendCloses = nil
+	g := computeHardEntryGate(lpSig(100, 101, 95), opt)
+	for _, c := range append(append([]string{}, g.Long.Failed...), g.Short.Failed...) {
+		if strings.HasPrefix(c, "BTC_") {
+			t.Fatalf("default policy emitted BTC unknown ban: %s", c)
+		}
+	}
+	opt.BTCFilterShort = true
+	g = computeHardEntryGate(lpSig(100, 99, 105), opt)
+	if !hasCode(g.Short, "BTC_REGIME_UNKNOWN") {
+		t.Fatalf("short opt-in did not fail closed: %+v", g.Short)
+	}
+	t.Log("kernel verified: long enabled + unknown fails open; short disabled emits no BTC ban; short enabled emits BTC_REGIME_UNKNOWN")
+}
+
+func TestAudit77BTCWarmExpirySingleflight(t *testing.T) {
+	oldFn := binanceGetFn
+	btcClosesMu.Lock()
+	oldCache, oldFetched, oldAttempt, oldFlight := btc4hClosesCache, btc4hClosesFetched, btc4hLastAttempt, btc4hInflight
+	btc4hClosesCache, btc4hClosesFetched, btc4hLastAttempt, btc4hInflight = make([]float64, 300), time.Now().Add(-6*time.Minute), time.Time{}, nil
+	btcClosesMu.Unlock()
+	t.Cleanup(func() {
+		binanceGetFn = oldFn
+		btcClosesMu.Lock()
+		btc4hClosesCache, btc4hClosesFetched, btc4hLastAttempt, btc4hInflight = oldCache, oldFetched, oldAttempt, oldFlight
+		btcClosesMu.Unlock()
+	})
+	var calls int32
+	rows := make([][]interface{}, 301)
+	for i := range rows {
+		rows[i] = []interface{}{0, "100", "101", "99", "100.5"}
+	}
+	body, _ := json.Marshal(rows)
+	binanceGetFn = func(_ context.Context, _ string, out interface{}) error {
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(100 * time.Millisecond)
+		return json.Unmarshal(body, out)
+	}
+	var wg sync.WaitGroup
+	results := make([][]float64, 6)
+	start := make(chan struct{})
+	for i := range results {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); <-start; results[i] = binanceBTC4hCloses(300) }(i)
+	}
+	close(start)
+	wg.Wait()
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("warm expiry calls=%d", calls)
+	}
+	for i, r := range results {
+		if len(r) != 300 || r[0] != 100.5 {
+			t.Fatalf("caller %d result len=%d", i, len(r))
+		}
+	}
+	// A later cache-hit caller receives its own copy (leader ownership is
+	// intentionally outside this assertion).
+	cached := binanceBTC4hCloses(300)
+	cached[0] = 1
+	if got := binanceBTC4hCloses(300); got[0] != 100.5 {
+		t.Fatal("waiter slice aliases shared cache")
+	}
+	t.Log("FIX VERIFIED: six warm-expiry callers shared one fetch, all got 300 closes, cache-hit mutation did not corrupt cache")
+}

@@ -1,0 +1,23 @@
+$ go build ./...
+
+exit=0
+
+$ go test ./kernel ./market ./market/breakout ./trader ./store -count=1
+ok  	nofx/kernel	36.308s
+ok  	nofx/market	1.141s
+ok  	nofx/market/breakout	0.704s
+ok  	nofx/trader	3.761s
+ok  	nofx/store	0.737s
+
+exit=0
+
+$ go test -race ./kernel ./market/breakout ./trader -run '^Test(Fix3|Fix7|Fix06)' -count=1
+# nofx/kernel.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-2918252607/000023.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+# nofx/trader.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-3829709320/000031.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+ok  	nofx/kernel	2.375s
+ok  	nofx/market/breakout	3.504s
+ok  	nofx/trader	2.582s
+
+exit=0

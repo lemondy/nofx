@@ -104,6 +104,11 @@ type gainerHistoryFile struct {
 	Days map[string][]gainerHistEntry `json:"days"` // "2006-01-02" (UTC) -> entries
 }
 
+// gainerHistRetentionCap bounds the shared gainer-history file: large enough
+// for any supported short_scan_history_days configuration (consumers filter
+// per-call), small enough to keep the file bounded.
+const gainerHistRetentionCap = 90
+
 var (
 	gainerHistMu   sync.Mutex
 	gainerHistPath = "data/gainer_history.json"
@@ -114,7 +119,7 @@ func setGainerHistoryPath(p string) { gainerHistPath = p }
 // recordGainerHistory merges the live gainer board into the daily pool and
 // persists it. Best-effort: a failure logs and keeps trading. Only the
 // first gainerHistBoardKeep rows (the day's nominal Top-20) feed the pool.
-func recordGainerHistory(board []GainerQuote, now time.Time, historyDays int) {
+func recordGainerHistory(board []GainerQuote, now time.Time) {
 	if len(board) == 0 {
 		return
 	}
@@ -143,15 +148,13 @@ func recordGainerHistory(board []GainerQuote, now time.Time, historyDays int) {
 		entries = entries[:gainerHistPerDayCap]
 	}
 	hist.Days[day] = entries
-	// Prune past the window (+buffer). Retention follows the LARGEST window
-	// any caller uses — the old hard-coded default (7+2) silently truncated
-	// strategies configured with short_scan_history > 7 (review 2026-10-06
-	// P3-4: the knob promised 30 days, the file held 9). Which days are USED
-	// stays per-call (A4).
-	keep := DefaultShortScanHistoryDays
-	if historyDays > keep {
-		keep = historyDays
-	}
+	// Prune with a FIXED anti-bloat cap, deliberately larger than any
+	// supported window (recheck 2026-10-07 R3). This file is SHARED across
+	// strategies: pruning at the caller's window let a default-7d scan
+	// destroy a 30d consumer's history (and the previous "largest caller"
+	// scheme depended on call order). Which days are USED stays per-call
+	// (A4) — the prune only bounds file growth.
+	keep := gainerHistRetentionCap
 	cutoff := now.UTC().AddDate(0, 0, -(keep + gainerHistKeepBuffer - 1)).Format("2006-01-02")
 	for d := range hist.Days {
 		if d < cutoff {

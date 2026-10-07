@@ -46,7 +46,7 @@ func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		board = append(board, GainerQuote{Symbol: string(rune('V'+i)) + "USDT", ChgPct: float64(35 - i), Price: 1})
 	}
-	recordGainerHistory(board, now, DefaultShortScanHistoryDays)
+	recordGainerHistory(board, now)
 
 	// Second snapshot the same day: FADESUSDT faded 60 → 12 — the peak (60)
 	// must survive; NEWUSDT is a fresh top-20 entrant.
@@ -54,7 +54,7 @@ func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 		{Symbol: "FADESUSDT", ChgPct: 12, Price: 2},
 		{Symbol: "NEWUSDT", ChgPct: 55, Price: 3},
 	}
-	recordGainerHistory(board2, now, DefaultShortScanHistoryDays)
+	recordGainerHistory(board2, now)
 
 	hist := readGainerHistoryFile(t)
 	day := hist.Days[now.UTC().Format("2006-01-02")]
@@ -85,25 +85,27 @@ func TestRecordGainerHistoryMaxMergeAndBoardKeep(t *testing.T) {
 	}
 }
 
-// Days older than window+buffer are pruned on write; the buffer keeps
-// shrink-then-re-enable window changes from destroying data.
+// Prune is a FIXED anti-bloat cap (recheck R3): the file is shared across
+// strategies, so days inside the cap survive no matter which caller writes —
+// a default-7d scan must not destroy a 30d consumer's history. Consumption
+// remains per-call (A4).
 func TestRecordGainerHistoryPrune(t *testing.T) {
 	withTempGainerHistory(t)
 	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 	hist := &gainerHistoryFile{Days: map[string][]gainerHistEntry{
-		now.UTC().AddDate(0, 0, -8).Format("2006-01-02"): {{Symbol: "KEEPLUSDT", Chg: 80}}, // buffer edge (keep 7 + buffer 2 − 1) — kept
-		now.UTC().AddDate(0, 0, -9).Format("2006-01-02"): {{Symbol: "OLDUSDT", Chg: 90}},   // beyond — pruned
+		now.UTC().AddDate(0, 0, -8).Format("2006-01-02"):  {{Symbol: "KEEPLUSDT", Chg: 80}}, // far inside the 90d cap
+		now.UTC().AddDate(0, 0, -95).Format("2006-01-02"): {{Symbol: "OLDUSDT", Chg: 90}},   // beyond cap+buffer — pruned
 	}}
 	if err := saveGainerHistoryLocked(hist); err != nil {
 		t.Fatal(err)
 	}
-	recordGainerHistory([]GainerQuote{{Symbol: "NEWUSDT", ChgPct: 40, Price: 1}}, now, DefaultShortScanHistoryDays)
+	recordGainerHistory([]GainerQuote{{Symbol: "NEWUSDT", ChgPct: 40, Price: 1}}, now)
 	hist2 := readGainerHistoryFile(t)
 	if _, ok := hist2.Days[now.UTC().AddDate(0, 0, -8).Format("2006-01-02")]; !ok {
-		t.Fatal("buffer-edge day must survive")
+		t.Fatal("day inside the retention cap must survive")
 	}
-	if _, ok := hist2.Days[now.UTC().AddDate(0, 0, -9).Format("2006-01-02")]; ok {
-		t.Fatal("day beyond window+buffer must be pruned")
+	if _, ok := hist2.Days[now.UTC().AddDate(0, 0, -95).Format("2006-01-02")]; ok {
+		t.Fatal("day beyond the retention cap must be pruned")
 	}
 }
 

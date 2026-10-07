@@ -166,13 +166,15 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		if pe.Side == "short" && rc.BlockShort1dUptrend && kernel.TimeframeTrend(md, "1d") == "up" {
 			return "pending short: 1d trend is up"
 		}
-		btc := []float64(nil)
-		if rc.EffectiveBTCFilterLong() || rc.EffectiveBTCFilterShort() {
-			btc = kernel.BTC4hTrendCloses(300)
-			if len(btc) < 60 {
-				return "pending BTC regime data unavailable"
-			}
-		}
+		// R2 (recheck 2026-10-07): the old blanket cancel — any BTC filter
+		// enabled + data below 60 closes → cancel BOTH sides — contradicted
+		// the per-side policy the kernel gate enforces: the LONG side is
+		// documented fail-open ("a data gap must not freeze every altcoin
+		// long") and the SHORT hard pause is opt-in with its own unknown code
+		// (BTC_REGIME_UNKNOWN → absolute ban, registered this recheck).
+		// Passing the series through as-is lets ComputeSymbolSignals apply
+		// exactly those semantics; nil reaches the kernel safely.
+		btc := at.btcTrendClosesForRecheck()
 		sig, err := kernel.ComputeSymbolSignals(pe.Symbol, md, kernel.SignalOptions{
 			Now: time.Now(), PrimaryTF: primaryTF, CurrentPrice: md.CurrentPrice,
 			EntryTimingGate: rc.EntryTimingGate, PumpGuard4hPct: kernel.PumpGuard4h(&rc),
@@ -269,4 +271,13 @@ func (at *AutoTrader) recheckConfiguredTimeframes(symbol string) []string {
 		}
 	}
 	return kernel.WithRequiredSymbolTimeframes(tfs, symbol)
+}
+
+// btcTrendClosesForRecheck fetches BTC's 4h closes for the pending recheck.
+// Field seam (tests): nil = live kernel.BTC4hTrendCloses.
+func (at *AutoTrader) btcTrendClosesForRecheck() []float64 {
+	if at.btcTrendClosesFn != nil {
+		return at.btcTrendClosesFn(300)
+	}
+	return kernel.BTC4hTrendCloses(300)
 }

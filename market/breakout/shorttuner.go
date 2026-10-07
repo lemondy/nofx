@@ -250,6 +250,16 @@ func RunShortTuner(now time.Time) {
 	changed := legacyInvalidated
 	for i := range samples {
 		s := &samples[i]
+		// Re-apply the legacy invalidation on the FRESH read (recheck R4):
+		// phase 1 invalidated v1 labels on the PRE-labelling snapshot only —
+		// a v1 sample re-read from disk still carries Evaluated=true and the
+		// skip below would discard its freshly fetched label forever, looping
+		// the relabel budget every run without ever migrating the sample.
+		if s.Evaluated && s.LabelVersion != 2 {
+			s.Evaluated = false
+			s.Unpriceable = false
+			changed = true
+		}
 		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
 			continue
 		}

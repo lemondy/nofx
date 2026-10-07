@@ -1,0 +1,128 @@
+package breakout
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// Residual tests intentionally assert defects; PASS means reproduced.
+func TestAudit77ResidualMixedHistoryWindows(t *testing.T) {
+	oldPath := gainerHistPath
+	setGainerHistoryPath(filepath.Join(t.TempDir(), "gainers.json"))
+	t.Cleanup(func() { setGainerHistoryPath(oldPath) })
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -20)
+	day := old.Format("2006-01-02")
+	recordGainerHistory([]GainerQuote{{Symbol: "OLDUSDT", ChgPct: 25, Price: 1}}, old, 30)
+	board := []GainerQuote{{Symbol: "NEWUSDT", ChgPct: 30, Price: 1}}
+	recordGainerHistory(board, now, 30)
+	if _, ok := loadGainerHistory().Days[day]; !ok {
+		t.Fatal("30-day caller already lost day 20")
+	}
+	// The production scheduler calls ScanShorts(...,0,0): effective history=7.
+	recordGainerHistory(board, now, ResolveShortScanHistoryDays(0))
+	if _, ok := loadGainerHistory().Days[day]; ok {
+		t.Fatal("residual changed: default caller did not prune long-window data")
+	}
+	t.Log("REPRODUCED: 30-day history retained day 20; next default 7-day caller deleted it from the shared file")
+}
+
+type audit77Transport func(*http.Request) (*http.Response, error)
+
+func (f audit77Transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func audit77TunerFixture(t *testing.T, block func()) *int32 {
+	t.Helper()
+	dir := t.TempDir()
+	oldJournal, oldProposal, oldHTTP := shortTuningPath, shortWeightProposalPath, binanceHTTP
+	shortTuningPath, shortWeightProposalPath = filepath.Join(dir, "signals.jsonl"), filepath.Join(dir, "proposal.json")
+	t.Cleanup(func() { shortTuningPath, shortWeightProposalPath, binanceHTTP = oldJournal, oldProposal, oldHTTP })
+	calls := new(int32)
+	var once sync.Once
+	binanceHTTP = &http.Client{Transport: audit77Transport(func(r *http.Request) (*http.Response, error) {
+		atomic.AddInt32(calls, 1)
+		if block != nil {
+			once.Do(block)
+		}
+		body := []byte(`[]`)
+		if r.URL.Path == "/fapi/v1/klines" {
+			body, _ = json.Marshal([][]interface{}{{r.URL.Query().Get("startTime"), "100", "101", "89", "90", "0", "0"}})
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(string(body))), Request: r}, nil
+	})}
+	return calls
+}
+
+func TestAudit77ResidualLegacyLabelMerge(t *testing.T) {
+	calls := audit77TunerFixture(t, nil)
+	now := time.Now().UTC()
+	legacy := shortSample{TS: now.Add(-48 * time.Hour).UnixMilli(), Symbol: "LEGACYUSDT", Price: 100, Evaluated: true, LabelVersion: 1, Outcome: 99}
+	if err := writeSamples([]shortSample{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	for run := 1; run <= 2; run++ {
+		RunShortTuner(now)
+		samples := readSamples()
+		if len(samples) != 1 || !samples[0].Evaluated || samples[0].LabelVersion != 1 || samples[0].Outcome != 99 {
+			t.Fatalf("residual changed: legacy label updated: %+v", samples)
+		}
+		if got := atomic.LoadInt32(calls); got != int32(2*run) {
+			t.Fatalf("HTTP calls=%d, want %d", got, 2*run)
+		}
+		t.Logf("REPRODUCED run %d: HTTP labelling succeeded but journal remained evaluated=true version=1 outcome=99", run)
+	}
+}
+
+func TestAudit77TunerActuallyConcurrentAppend(t *testing.T) {
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	audit77TunerFixture(t, func() { close(entered); <-release })
+	now := time.Now().UTC()
+	due := shortSample{TS: now.Add(-48 * time.Hour).UnixMilli(), Symbol: "DUEUSDT", Price: 100}
+	if err := writeSamples([]shortSample{due}); err != nil {
+		t.Fatal(err)
+	}
+	go func() { RunShortTuner(now); close(done) }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("HTTP never entered")
+	}
+	appended := make(chan struct{})
+	go func() {
+		// Actual public journalling API while HTTP is still blocked.
+		SampleShortSignals([]ShortSignal{{Symbol: "FRESHUSDT", Price: 50}}, now)
+		close(appended)
+	}()
+	select {
+	case <-appended:
+	case <-time.After(3 * time.Second):
+		close(release)
+		<-done
+		<-appended
+		t.Fatal("journalling blocked behind HTTP")
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tuner did not finish")
+	}
+	samples := readSamples()
+	bySym := map[string]shortSample{}
+	for _, s := range samples {
+		bySym[s.Symbol] = s
+	}
+	if len(samples) != 2 || !bySym["DUEUSDT"].Evaluated || bySym["DUEUSDT"].LabelVersion != 2 || bySym["FRESHUSDT"].Evaluated {
+		t.Fatalf("concurrent merge failed: %+v", samples)
+	}
+	t.Log("FIX VERIFIED: SampleShortSignals completed during blocked HTTP; fresh append survived merge; due sample labelled v2")
+}

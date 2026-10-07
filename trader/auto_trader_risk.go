@@ -2253,7 +2253,7 @@ func absoluteBanCode(code string) bool {
 	switch code {
 	case "DATA_INSUFFICIENT", "POOR_HISTORY", "BSTOCK_DAILY_DATA_UNAVAILABLE",
 		"LOSS_STREAK_BANNED", "STOCK_WEEKEND", "BTC_4H_DOWNTREND",
-		"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING":
+		"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING", "BTC_REGIME_UNKNOWN":
 		return true
 	}
 	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||

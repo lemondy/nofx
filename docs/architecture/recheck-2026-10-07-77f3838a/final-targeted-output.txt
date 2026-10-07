@@ -1,0 +1,17 @@
+# nofx/trader.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-81691985/000031.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+=== RUN   TestAudit77RecheckRealWiringRetainsPending
+=== RUN   TestAudit77RecheckRealWiringRetainsPending/15m
+10-07 08:03:23 [INFO] trader/auto_trader_pending.go:580 📌 [] Limit entry XUSDT pending (1/3 cycles, age 1s of 30m0s)
+    audit77_overlay_test.go:123: FIX VERIFIED: primary=15m count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained
+=== RUN   TestAudit77RecheckRealWiringRetainsPending/5m
+10-07 08:03:23 [INFO] trader/auto_trader_pending.go:580 📌 [] Limit entry XUSDT pending (1/3 cycles, age 0s of 30m0s)
+    audit77_overlay_test.go:123: FIX VERIFIED: primary=5m count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained
+--- PASS: TestAudit77RecheckRealWiringRetainsPending (0.70s)
+    --- PASS: TestAudit77RecheckRealWiringRetainsPending/15m (0.70s)
+    --- PASS: TestAudit77RecheckRealWiringRetainsPending/5m (0.00s)
+=== RUN   TestAudit77RefreshDedupesHedgeSides
+    audit77_overlay_test.go:158: FIX VERIFIED: account refresh queried XUSDT once and kept both protected hedge sides with absolute quantities
+--- PASS: TestAudit77RefreshDedupesHedgeSides (0.00s)
+PASS
+ok  	nofx/trader	2.365s

@@ -1,0 +1,55 @@
+# nofx/kernel.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-2645632302/000023.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+# nofx/trader.test
+ld: warning: '/private/var/folders/qn/gq53d8ms5l9drwmc2ps2npqc0000gn/T/go-link-984113542/000031.o' has malformed LC_DYSYMTAB, expected 98 undefined symbols to start at index 1626, found 95 undefined symbols starting at index 1626
+=== RUN   TestAudit77BTCUnknownDirectionPolicy
+    audit77_overlay_test.go:28: kernel verified: long enabled + unknown fails open; short disabled emits no BTC ban; short enabled emits BTC_REGIME_UNKNOWN
+--- PASS: TestAudit77BTCUnknownDirectionPolicy (0.83s)
+=== RUN   TestAudit77BTCWarmExpirySingleflight
+    audit77_overlay_test.go:78: FIX VERIFIED: six warm-expiry callers shared one fetch, all got 300 closes, cache-hit mutation did not corrupt cache
+--- PASS: TestAudit77BTCWarmExpirySingleflight (0.10s)
+PASS
+ok  	nofx/kernel	2.513s
+=== RUN   TestAudit77ResidualMixedHistoryWindows
+    audit77_overlay_test.go:34: REPRODUCED: 30-day history retained day 20; next default 7-day caller deleted it from the shared file
+--- PASS: TestAudit77ResidualMixedHistoryWindows (0.00s)
+=== RUN   TestAudit77ResidualLegacyLabelMerge
+10-07 08:01:38 [INFO] breakout/shorttuner.go:337 🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched
+    audit77_overlay_test.go:79: REPRODUCED run 1: HTTP labelling succeeded but journal remained evaluated=true version=1 outcome=99
+10-07 08:01:38 [INFO] breakout/shorttuner.go:337 🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched
+    audit77_overlay_test.go:79: REPRODUCED run 2: HTTP labelling succeeded but journal remained evaluated=true version=1 outcome=99
+--- PASS: TestAudit77ResidualLegacyLabelMerge (0.02s)
+=== RUN   TestAudit77TunerActuallyConcurrentAppend
+10-07 08:01:38 [INFO] breakout/shorttuner.go:337 🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched
+    audit77_overlay_test.go:127: FIX VERIFIED: SampleShortSignals completed during blocked HTTP; fresh append survived merge; due sample labelled v2
+--- PASS: TestAudit77TunerActuallyConcurrentAppend (0.01s)
+PASS
+ok  	nofx/market/breakout	1.495s
+=== RUN   TestAudit77ResidualBTCUnknownMarketBypass
+    audit77_overlay_test.go:41: REPRODUCED: opt-in BTC unknown short ban passed filter/preflight; market dispatch passed with limit mode off and with independent exception evidence
+--- PASS: TestAudit77ResidualBTCUnknownMarketBypass (0.00s)
+=== RUN   TestAudit77ResidualBTCUnknownPendingPolicy
+=== RUN   TestAudit77ResidualBTCUnknownPendingPolicy/long
+10-07 08:01:40 [INFO] trader/auto_trader_pending.go:490 🗑️ [] Cancelling limit entry long XUSDT (id entry, age 1s): pending BTC regime data unavailable
+    audit77_overlay_test.go:70: REPRODUCED: BTC unknown cancelled long pending with default long ON / short OFF
+=== RUN   TestAudit77ResidualBTCUnknownPendingPolicy/short
+10-07 08:01:40 [INFO] trader/auto_trader_pending.go:490 🗑️ [] Cancelling limit entry short XUSDT (id entry, age 0s): pending BTC regime data unavailable
+    audit77_overlay_test.go:70: REPRODUCED: BTC unknown cancelled short pending with default long ON / short OFF
+--- PASS: TestAudit77ResidualBTCUnknownPendingPolicy (0.74s)
+    --- PASS: TestAudit77ResidualBTCUnknownPendingPolicy/long (0.73s)
+    --- PASS: TestAudit77ResidualBTCUnknownPendingPolicy/short (0.00s)
+=== RUN   TestAudit77RecheckRealWiringRetainsPending
+=== RUN   TestAudit77RecheckRealWiringRetainsPending/15m
+10-07 08:01:40 [INFO] trader/auto_trader_pending.go:580 📌 [] Limit entry XUSDT pending (1/3 cycles, age 0s of 30m0s)
+    audit77_overlay_test.go:120: FIX VERIFIED: primary=15m count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained
+=== RUN   TestAudit77RecheckRealWiringRetainsPending/5m
+10-07 08:01:40 [INFO] trader/auto_trader_pending.go:580 📌 [] Limit entry XUSDT pending (1/3 cycles, age 0s of 30m0s)
+    audit77_overlay_test.go:120: FIX VERIFIED: primary=5m count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained
+--- PASS: TestAudit77RecheckRealWiringRetainsPending (0.00s)
+    --- PASS: TestAudit77RecheckRealWiringRetainsPending/15m (0.00s)
+    --- PASS: TestAudit77RecheckRealWiringRetainsPending/5m (0.00s)
+=== RUN   TestAudit77RecheckHonorsMicroTrend
+    audit77_overlay_test.go:136: FIX VERIFIED: configured EntryTimingGate=true still rejects falling 15m long
+--- PASS: TestAudit77RecheckHonorsMicroTrend (0.00s)
+PASS
+ok  	nofx/trader	2.395s

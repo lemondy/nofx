@@ -139,6 +139,9 @@ type AutoTrader struct {
 	// recheckDataFn, when set (tests), replaces the strategy-scoped fetch the
 	// pending-direction recheck uses; nil = live getMarketTimeframes path.
 	recheckDataFn func(symbol string) (*market.Data, error)
+	// btcTrendClosesFn, when set (tests), replaces the BTC 4h closes fetch;
+	// nil = live kernel.BTC4hTrendCloses.
+	btcTrendClosesFn func(limit int) []float64
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)

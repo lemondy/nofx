@@ -1,0 +1,141 @@
+=== RUN   TestAudit77BTCUnknownDirectionPolicy
+    audit77_overlay_test.go:28: kernel verified: long enabled + unknown fails open; short disabled emits no BTC ban; short enabled emits BTC_REGIME_UNKNOWN
+--- PASS: TestAudit77BTCUnknownDirectionPolicy (0.61s)
+=== RUN   TestAudit77BTCWarmExpirySingleflight
+    audit77_overlay_test.go:78: FIX VERIFIED: six warm-expiry callers shared one fetch, all got 300 closes, cache-hit mutation did not corrupt cache
+--- PASS: TestAudit77BTCWarmExpirySingleflight (0.10s)
+PASS
+ok  	nofx/kernel	1.338s
+=== RUN   TestAudit77ResidualMixedHistoryWindows
+    audit77_overlay_test.go:34: REPRODUCED: 30-day history retained day 20; next default 7-day caller deleted it from the shared file
+--- PASS: TestAudit77ResidualMixedHistoryWindows (0.00s)
+=== RUN   TestAudit77ResidualLegacyLabelMerge
+10-07 08:03:02 [INFO] breakout/shorttuner.go:337 🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched
+    audit77_overlay_test.go:79: REPRODUCED run 1: HTTP labelling succeeded but journal remained evaluated=true version=1 outcome=99
+10-07 08:03:02 [INFO] breakout/shorttuner.go:337 🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched
+    audit77_overlay_test.go:79: REPRODUCED run 2: HTTP labelling succeeded but journal remained evaluated=true version=1 outcome=99
+--- PASS: TestAudit77ResidualLegacyLabelMerge (0.02s)
+=== RUN   TestAudit77TunerActuallyConcurrentAppend
+10-07 08:03:02 [INFO] breakout/shorttuner.go:337 🩸 Short tuner: weight research disabled (short_tuner_enabled=false) — outcome journal keeps accumulating, weights untouched
+    audit77_overlay_test.go:127: FIX VERIFIED: SampleShortSignals completed during blocked HTTP; fresh append survived merge; due sample labelled v2
+--- PASS: TestAudit77TunerActuallyConcurrentAppend (0.01s)
+=== RUN   TestVerify06ParentPanicAllowsNextScan
+10-07 08:03:02 [ERRO] breakout/scheduler.go:289 🐷 Breakout scan panicked (recovered): verify06 parent panic
+goroutine 10 [running]:
+runtime/debug.Stack()
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/debug/stack.go:26 +0x64
+nofx/market/breakout.(*Scheduler).runOnce.func1()
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:289 +0x4c
+panic({0x102813ce0?, 0x1028a1af0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/panic.go:783 +0x120
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan.func2(0x102c24108?)
+	/Users/zhangyun/workspace/nofx/market/breakout/audit77_previous_test.go:19 +0x3c
+nofx/market/breakout.fix06Transport.RoundTrip(0x1400007a4c8?, 0x1028a4800?)
+	/Users/zhangyun/workspace/nofx/market/breakout/review_fixes_20261006_test.go:23 +0x28
+net/http.send(0x14000001040, {0x1028a4800, 0x1400002b1b0}, {0x10266db68?, 0x8?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:259 +0x478
+net/http.(*Client).send(0x14000191d40, 0x14000001040, {0x1400007a778?, 0x1025fb61c?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:180 +0x88
+net/http.(*Client).do(0x14000191d40, 0x14000001040)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:729 +0x710
+net/http.(*Client).Do(...)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:587
+net/http.(*Client).Get(0x14000191d40, {0x1400001e6f0?, 0x1400007a9b8?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:484 +0x74
+nofx/market/breakout.fetchJSON({0x1400001e6f0?, 0x10274b725?}, {0x10280ce60, 0x1400000ea38})
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:301 +0x4c
+nofx/market/breakout.TopVolumeSymbols(0x1)
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:365 +0x84
+nofx/market/breakout.(*Scheduler).runOnce(0x14000193930, 0x1400007af00)
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:299 +0x88
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan(0x14000254000)
+	/Users/zhangyun/workspace/nofx/market/breakout/audit77_previous_test.go:21 +0x130
+testing.tRunner(0x14000254000, 0x1028a0300)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1997 +0x364
+
+10-07 08:03:02 [ERRO] breakout/scheduler.go:289 🐷 Breakout scan panicked (recovered): verify06 parent panic
+goroutine 10 [running]:
+runtime/debug.Stack()
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/debug/stack.go:26 +0x64
+nofx/market/breakout.(*Scheduler).runOnce.func1()
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:289 +0x4c
+panic({0x102813ce0?, 0x1028a1af0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/runtime/panic.go:783 +0x120
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan.func2(0x102c24108?)
+	/Users/zhangyun/workspace/nofx/market/breakout/audit77_previous_test.go:19 +0x3c
+nofx/market/breakout.fix06Transport.RoundTrip(0x1400016b428?, 0x1028a4800?)
+	/Users/zhangyun/workspace/nofx/market/breakout/review_fixes_20261006_test.go:23 +0x28
+net/http.send(0x14000001180, {0x1028a4800, 0x1400002b1b0}, {0x10266db68?, 0x8?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:259 +0x478
+net/http.(*Client).send(0x14000191d40, 0x14000001180, {0x1400016b6d8?, 0x1025fb61c?, 0x0?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:180 +0x88
+net/http.(*Client).do(0x14000191d40, 0x14000001180)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:729 +0x710
+net/http.(*Client).Do(...)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:587
+net/http.(*Client).Get(0x14000191d40, {0x1400001e720?, 0x1400016b918?})
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/net/http/client.go:484 +0x74
+nofx/market/breakout.fetchJSON({0x1400001e720?, 0x10274b725?}, {0x10280ce60, 0x1400000ea68})
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:301 +0x4c
+nofx/market/breakout.TopVolumeSymbols(0x1)
+	/Users/zhangyun/workspace/nofx/market/breakout/binance.go:365 +0x84
+nofx/market/breakout.(*Scheduler).runOnce(0x14000193930, 0x0)
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:299 +0x88
+nofx/market/breakout.(*Scheduler).RefreshNow(0x14000193930, 0x3b9aca00)
+	/Users/zhangyun/workspace/nofx/market/breakout/scheduler.go:542 +0x1b0
+nofx/market/breakout.TestVerify06ParentPanicAllowsNextScan(0x14000254000)
+	/Users/zhangyun/workspace/nofx/market/breakout/audit77_previous_test.go:27 +0x140
+testing.tRunner(0x14000254000, 0x1028a0300)
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/Users/zhangyun/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.3.darwin-arm64/src/testing/testing.go:1997 +0x364
+
+    audit77_previous_test.go:31: parent panic recovered; callback ran once after reset; next RefreshNow reached upstream again
+--- PASS: TestVerify06ParentPanicAllowsNextScan (0.00s)
+=== RUN   TestVerify06WorkerRecoveryEvidence
+    audit77_previous_test.go:115: analyze: three worker panics logged symbol and stack, semaphore/waitgroup drained, process survived
+    audit77_previous_test.go:115: shorts: three worker panics logged symbol and stack, semaphore/waitgroup drained, process survived
+--- PASS: TestVerify06WorkerRecoveryEvidence (0.01s)
+PASS
+ok  	nofx/market/breakout	0.275s
+=== RUN   TestAudit77ResidualBTCUnknownMarketBypass
+    audit77_overlay_test.go:41: REPRODUCED: opt-in BTC unknown short ban passed filter/preflight; market dispatch passed with limit mode off and with independent exception evidence
+--- PASS: TestAudit77ResidualBTCUnknownMarketBypass (0.00s)
+=== RUN   TestAudit77ResidualBTCUnknownPendingPolicy
+=== RUN   TestAudit77ResidualBTCUnknownPendingPolicy/long
+10-07 08:03:04 [INFO] trader/auto_trader_pending.go:490 🗑️ [] Cancelling limit entry long XUSDT (id entry, age 1s): pending BTC regime data unavailable
+    audit77_overlay_test.go:70: REPRODUCED: BTC unknown cancelled long pending with default long ON / short OFF
+=== RUN   TestAudit77ResidualBTCUnknownPendingPolicy/short
+10-07 08:03:04 [INFO] trader/auto_trader_pending.go:490 🗑️ [] Cancelling limit entry short XUSDT (id entry, age 0s): pending BTC regime data unavailable
+    audit77_overlay_test.go:70: REPRODUCED: BTC unknown cancelled short pending with default long ON / short OFF
+--- PASS: TestAudit77ResidualBTCUnknownPendingPolicy (0.57s)
+    --- PASS: TestAudit77ResidualBTCUnknownPendingPolicy/long (0.57s)
+    --- PASS: TestAudit77ResidualBTCUnknownPendingPolicy/short (0.00s)
+=== RUN   TestAudit77RecheckRealWiringRetainsPending
+=== RUN   TestAudit77RecheckRealWiringRetainsPending/15m
+10-07 08:03:04 [INFO] trader/auto_trader_pending.go:580 📌 [] Limit entry XUSDT pending (1/3 cycles, age 0s of 30m0s)
+    audit77_overlay_test.go:123: FIX VERIFIED: primary=15m count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained
+=== RUN   TestAudit77RecheckRealWiringRetainsPending/5m
+10-07 08:03:04 [INFO] trader/auto_trader_pending.go:580 📌 [] Limit entry XUSDT pending (1/3 cycles, age 0s of 30m0s)
+    audit77_overlay_test.go:123: FIX VERIFIED: primary=5m count=60 selected=4 frames, Bybit live quote; generic 20-bar invalidation quote also ran; NEW entry retained
+--- PASS: TestAudit77RecheckRealWiringRetainsPending (0.00s)
+    --- PASS: TestAudit77RecheckRealWiringRetainsPending/15m (0.00s)
+    --- PASS: TestAudit77RecheckRealWiringRetainsPending/5m (0.00s)
+=== RUN   TestAudit77RecheckHonorsMicroTrend
+    audit77_overlay_test.go:139: FIX VERIFIED: configured EntryTimingGate=true still rejects falling 15m long
+--- PASS: TestAudit77RecheckHonorsMicroTrend (0.00s)
+=== RUN   TestVerify06HealthyShortAllowsAccountPeers
+    audit77_previous_test.go:44: healthy negative-quantity short permits account peer execution, pending, and decision gates
+--- PASS: TestVerify06HealthyShortAllowsAccountPeers (0.00s)
+=== RUN   TestVerify06ShortRepairReadbackClearsFault
+    audit77_previous_test.go:72: short qty=-1 heldSL=0: gap=1 repaired, readback sufficient, prior fault cleared, second round healthy
+    audit77_previous_test.go:72: short qty=-1 heldSL=0.4: gap=0.6 repaired, readback sufficient, prior fault cleared, second round healthy
+--- PASS: TestVerify06ShortRepairReadbackClearsFault (0.00s)
+=== RUN   TestVerify06ShortExitReconciliationClearsFault
+10-07 08:03:04 [INFO] trader/auto_trader_risk.go:453 ✅ Emergency close short position succeeded, order ID: <nil>
+    audit77_previous_test.go:90: negative-quantity short crossed stop: exit sent; flat readback cleared fault
+--- PASS: TestVerify06ShortExitReconciliationClearsFault (0.00s)
+PASS
+ok  	nofx/trader	1.156s
