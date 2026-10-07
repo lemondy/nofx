@@ -598,7 +598,9 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 	// Set leverage if specified
 	if req.Leverage > 0 {
 		if err := t.SetLeverage(req.Symbol, req.Leverage); err != nil {
-			logger.Warnf("Failed to set leverage: %v", err)
+			// review 2026-10-07 B1-3: match market entries; do not submit
+			// an order with unconfirmed leverage.
+			return nil, err
 		}
 	}
 

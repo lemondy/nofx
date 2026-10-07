@@ -18,11 +18,22 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	t.positionsCacheMutex.RLock()
 	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.positionsCacheTime)
+		// review 2026-10-07 B1-4: capture the snapshot before invalidation can clear it.
+		positions := t.cachedPositions
 		t.positionsCacheMutex.RUnlock()
 		logger.Infof("✓ Using cached position information (cache age: %.1f seconds ago)", cacheAge.Seconds())
-		return t.cachedPositions, nil
+		return positions, nil
 	}
 	t.positionsCacheMutex.RUnlock()
+
+	// review 2026-10-07 B1-4: serialize cache misses with invalidation and
+	// recheck after acquiring the write lock. An in-flight fetch must finish
+	// publishing before invalidation, rather than repopulate a cleared cache.
+	t.positionsCacheMutex.Lock()
+	defer t.positionsCacheMutex.Unlock()
+	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
+		return t.cachedPositions, nil
+	}
 
 	// Cache expired or doesn't exist, call API
 	logger.Infof("🔄 Cache expired, calling Binance API to get position information...")
@@ -59,10 +70,8 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	}
 
 	// Update cache
-	t.positionsCacheMutex.Lock()
 	t.cachedPositions = result
 	t.positionsCacheTime = time.Now()
-	t.positionsCacheMutex.Unlock()
 
 	return result, nil
 }
