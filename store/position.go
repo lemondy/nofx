@@ -474,6 +474,14 @@ func (s *PositionStore) DeleteAllOpenPositions(traderID string) error {
 	return s.db.Where("trader_id = ? AND status = ?", traderID, "OPEN").Delete(&TraderPosition{}).Error
 }
 
+// GetOpenSymbolsByExchange discovers unsynced closes even when the exchange is flat.
+// review 2026-10-07 B2-C: include the account's durable OPEN rows in sync discovery.
+func (s *PositionStore) GetOpenSymbolsByExchange(exchangeID string) ([]string, error) {
+	var symbols []string
+	err := s.db.Model(&TraderPosition{}).Where("exchange_id = ? AND status = ?", exchangeID, "OPEN").Distinct().Pluck("symbol", &symbols).Error
+	return symbols, err
+}
+
 // GetOpenPositions gets all open positions
 func (s *PositionStore) GetOpenPositions(traderID string) ([]*TraderPosition, error) {
 	var positions []*TraderPosition

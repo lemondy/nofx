@@ -2184,14 +2184,12 @@ func (at *AutoTrader) anchorDailyBaseline(equity float64) {
 	// the non-durable anchor for one pass (and leaving a crash window where
 	// the registry said "anchored" but the store did not).
 	if at.store != nil {
-		// 2026-10-03 review P2: on a store ERROR (transient busy) do NOT
-		// publish this pass's equity into the process registry — a same-
-		// account peer would inherit a non-durable anchor. Keep it
-		// instance-local and let the next cycle retry the durable write.
+		// review 2026-10-07 B2-D: only a verified durable anchor may be published.
 		if anchored, err := at.store.RiskState().AnchorDayBaseline(key, today, equity); err == nil && anchored > 0 {
 			equity = anchored
-		} else if err != nil {
-			logger.Warnf("⚠️ [%s] day-anchor durable write failed: %v — anchor kept instance-local this cycle", at.name, err)
+		} else {
+			logger.Warnf("⚠️ [%s] day-anchor unavailable: %v — new risk blocked until a verified baseline is available", at.name, err)
+			return
 		}
 	}
 	dailyBaselineRegMu.Lock()
@@ -2211,7 +2209,7 @@ func (at *AutoTrader) anchorDailyBaseline(equity float64) {
 // daily_max_loss_pct from the first equity seen this UTC day. Empty string =
 // no halt. The baseline is anchored per-cycle via anchorDailyBaseline; the
 // lazy re-anchor here survives only as a fallback for a gate call before the
-// first snapshot of the day (fail-open, identical to the old behavior) —
+// first snapshot of the day —
 // F8: it now consults the shared/durable anchors FIRST so a reloaded
 // instance inherits an active halt instead of clearing it.
 func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity float64) string {
@@ -2225,8 +2223,11 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 			at.dayStartDay, at.dayStartEquity = today, baseline
 		} else {
 			at.anchorDailyBaseline(equity)
-			return ""
 		}
+	}
+	// review 2026-10-07 B2-D: use the existing open-only halt gate while the anchor is unknown.
+	if at.dayStartDay != today || at.dayStartEquity <= 0 {
+		return "day-start equity baseline unknown — opens halted until a verified baseline is available"
 	}
 	lossPct := (at.dayStartEquity - equity) / at.dayStartEquity * 100
 	if lossPct >= capPct {

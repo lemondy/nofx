@@ -217,7 +217,7 @@ func (s *OrderStore) UpdateOrderStatus(id int64, status string, filledQty, avgPr
 
 // CreateFill creates fill record
 func (s *OrderStore) CreateFill(fill *TraderFill) error {
-	if err := s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "exchange_id"}, {Name: "exchange_trade_id"}}, DoNothing: true}).Create(fill).Error; err != nil {
+	if _, err := s.CreateFillIfAbsent(fill); err != nil {
 		return err
 	}
 	existing, err := s.GetFillByExchangeTradeID(fill.ExchangeID, fill.ExchangeTradeID)
@@ -229,6 +229,43 @@ func (s *OrderStore) CreateFill(fill *TraderFill) error {
 	}
 	*fill = *existing
 	return nil
+}
+
+// CreateFillIfAbsent reports whether this call inserted the fill.
+// review 2026-10-07 B2-A: a successful ON CONFLICT no-op must not apply a trade twice.
+func (s *OrderStore) CreateFillIfAbsent(fill *TraderFill) (bool, error) {
+	result := s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "exchange_id"}, {Name: "exchange_trade_id"}}, DoNothing: true}).Create(fill)
+	return result.RowsAffected > 0, result.Error
+}
+
+// ApplyTrade atomically records one exchange fill and its position changes.
+// review 2026-10-07 B2-B: only a committed fill is an accounting receipt;
+// an existing order without a fill remains retryable. All builder stores use tx.
+func (s *OrderStore) ApplyTrade(order *TraderOrder, fill *TraderFill) (bool, error) {
+	applied := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		orders := NewOrderStore(tx)
+		if err := orders.CreateOrder(order); err != nil {
+			return err
+		}
+		fill.OrderID = order.ID
+		inserted, err := orders.CreateFillIfAbsent(fill)
+		if err != nil || !inserted {
+			return err
+		}
+		builder := NewPositionBuilder(NewPositionStore(tx))
+		if err := builder.ProcessTrade(
+			fill.TraderID, fill.ExchangeID, fill.ExchangeType,
+			fill.Symbol, order.PositionSide, order.OrderAction,
+			fill.Quantity, fill.Price, fill.Commission, fill.RealizedPnL,
+			fill.CreatedAt, fill.ExchangeOrderID,
+		); err != nil {
+			return err
+		}
+		applied = true
+		return nil
+	})
+	return applied && err == nil, err
 }
 
 // GetFillByExchangeTradeID gets fill by exchange trade ID
