@@ -136,11 +136,11 @@ func (at *AutoTrader) cancelAccountPendingRisk(reason string) {
 
 func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 	if gs := at.cycleGateStates[market.Normalize(pe.Symbol)]; gs != nil {
-		allowed := gs.LongAllowed
+		allowed, failed := gs.LongAllowed, gs.LongFailed
 		if pe.Side == "short" {
-			allowed = gs.ShortAllowed
+			allowed, failed = gs.ShortAllowed, gs.ShortFailed
 		}
-		if !allowed {
+		if !allowed && !at.pendingRROnlyBlockClears(pe, failed) {
 			return "pending direction gate disallowed"
 		}
 	}
@@ -280,4 +280,58 @@ func (at *AutoTrader) btcTrendClosesForRecheck() []float64 {
 		return at.btcTrendClosesFn(300)
 	}
 	return kernel.BTC4hTrendCloses(300)
+}
+
+// pendingRROnlyBlockClears reports whether a resting limit entry whose side
+// is blocked ONLY by RR_MAX_* codes still clears the strategy's min RR at
+// its OWN plan (limit price / stop / take-profit). Incident 2026-10-07
+// (STXUSDT 8641141308): the cycle gate prices RR at the LIVE price, so a
+// long resting BELOW market read RR_MAX_0.71 once price drifted up toward
+// the target and was cancelled — yet the order can only fill back at its
+// limit, where the same SL/TP plan nets RR≈2.38. RR is the one gate input
+// that depends on the entry basis; every other failure code (direction,
+// micro-trend, BTC filters, stop structure, …) still cancels as before.
+func (at *AutoTrader) pendingRROnlyBlockClears(pe *pendingEntry, failed []string) bool {
+	if pe == nil || len(failed) == 0 || at.config.StrategyConfig == nil {
+		return false
+	}
+	for _, code := range failed {
+		if !strings.HasPrefix(code, "RR_MAX_") {
+			return false
+		}
+	}
+	rc := at.config.StrategyConfig.RiskControl
+	minRR := rc.MinRiskRewardRatio
+	if minRR <= 0 {
+		return false
+	}
+	rr, ok := pendingPlanNetRR(pe.Side, pe.Price, pe.StopLoss, pe.TakeProfit, rc.EffectiveEntryRoundTripCostBps())
+	if !ok || rr < minRR-1e-9 {
+		return false
+	}
+	logger.Infof("📌 [%s] Limit entry %s %s kept: gate RR block is live-price based (%v), plan RR at limit %.4g = %.2f ≥ %.2f",
+		at.name, pe.Side, pe.Symbol, failed, pe.Price, rr, minRR)
+	return true
+}
+
+// pendingPlanNetRR is the gate's net RR formula (kernel scanRR:
+// (target% − cost%) / (stop% + cost%), cost% = bps/100) evaluated at a
+// resting order's own entry/stop/target. ok=false on an incoherent plan.
+func pendingPlanNetRR(side string, entry, stop, target, costBps float64) (float64, bool) {
+	if entry <= 0 || stop <= 0 || target <= 0 {
+		return 0, false
+	}
+	var distPct, stopPct float64
+	if side == "short" {
+		distPct = (entry - target) / entry * 100
+		stopPct = (stop - entry) / entry * 100
+	} else {
+		distPct = (target - entry) / entry * 100
+		stopPct = (entry - stop) / entry * 100
+	}
+	if distPct <= 0 || stopPct <= 0 {
+		return 0, false
+	}
+	costPct := math.Max(0, costBps) / 100
+	return (distPct - costPct) / (stopPct + costPct), true
 }
