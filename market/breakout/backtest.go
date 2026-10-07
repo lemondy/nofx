@@ -184,19 +184,16 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			}
 			up := combine(tfs, DirUp)
 			down := combine(tfs, DirDown)
-			dir, score := DirUp, up.Score
-			if down.Score > up.Score {
-				dir, score = DirDown, down.Score
+			// Share online chase haircuts before choosing a side; crowding is unmeasured (review 2026-10-07).
+			upScore, _ := finalDirectionScore(tfs, DirUp, up.Score, sh, nil)
+			downScore, _ := finalDirectionScore(tfs, DirDown, down.Score, sh, nil)
+			dir, score := DirUp, upScore
+			if downScore > upScore {
+				dir, score = DirDown, downScore
 			}
 			sigTime = time.UnixMilli(series[len(series)-1].OpenTime).Add(15 * time.Minute).UTC()
 			regime, regimeMult := regimeAt(regimeBars, sigTime, dir)
 			score *= regimeMult
-			// Online extended-pattern penalty (A2): Analyze() multiplies the
-			// selected side by extendedPenalty when the 1h pattern is
-			// extended — the backtest used to skip it entirely.
-			if tf1h := tfs["1h"][dir]; tf1h != nil && tf1h.Pattern == "extended" {
-				score *= extendedPenalty
-			}
 			if score < btReplayScoreFloor {
 				// F15 (2026-10-01 review): collect down to a FIXED floor
 				// below the whole searchable cutoff range (bestCutoff
@@ -219,7 +216,7 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 				Entry:       entry,
 				Pattern:     tf.Pattern,
 				ATRStrength: tf.ATRStrength,
-				VolMultiple: volSlotMultiple(series, 288),
+				VolMultiple: volSlotMultiple(series, 96), // 15m daily slot (review 2026-10-07).
 				Regime:      regime,
 			}
 			sig.Ret1h = forwardReturn(k15, i, btForwardBars1h, dir) - btCostRoundTrip

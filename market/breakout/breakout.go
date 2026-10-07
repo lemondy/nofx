@@ -108,7 +108,7 @@ type TFReport struct {
 	RawScore     float64   `json:"raw_score"`
 	Score        float64   `json:"score"` // raw × α × β (× confirm penalty)
 	Confirmed    bool      `json:"confirmed"`
-	CrossAgeBars int       `json:"cross_age_bars"` // bars since the FIRST close beyond the level in the hold window; -1 = no cross
+	CrossAgeBars int       `json:"cross_age_bars"` // bars since the FIRST inside-to-outside cross in the hold window; -1 = no cross (review 2026-10-07)
 	Pattern      string    `json:"pattern"`        // breakout / retest_hold / extended / approach
 	Confluence   int       `json:"confluence"`     // independent level sources clustered at the trigger level
 	RoomATR      float64   `json:"room_atr"`       // distance to the next opposing level (ATR units)
@@ -166,7 +166,6 @@ type shared struct {
 	funding   []FundingPoint
 	oiChg1h   *float64
 	oiChg4h   *float64
-	oiValChg  *float64
 	fundRate  *float64
 	fundPct   *float64
 	spotBull  *float64
@@ -180,7 +179,7 @@ func Analyze(symbol string, ds DataSource) (*Report, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daily klines: %w", err)
 	}
-	k15, err := ds.Klines("15m", 865) // 3 days (same-slot volume comparison needs 2 prior days)
+	k15, err := ds.Klines("15m", 865) // 9 days + 1 bar; 96 bars/day (review 2026-10-07)
 	if err != nil {
 		return nil, fmt.Errorf("15m klines: %w", err)
 	}
@@ -199,9 +198,10 @@ func Analyze(symbol string, ds DataSource) (*Report, error) {
 	}
 	if oi, err := ds.OIHistory("5m", 288); err == nil && len(oi) >= 13 {
 		sh.oi = oi
-		sh.oiChg1h = pctChangePtr(oiValueSeries(oi), 12)
-		sh.oiChg4h = pctChangePtr(oiValueSeries(oi), 48)
-		sh.oiValChg = sh.oiChg1h
+		// New positions depend on quantity, not price-driven notional growth (review 2026-10-07).
+		qty := oiQtySeries(oi)
+		sh.oiChg1h = pctChangePtr(qty, 12)
+		sh.oiChg4h = pctChangePtr(qty, 48)
 	}
 	if f, err := ds.FundingHistory(100); err == nil && len(f) > 0 {
 		sh.funding = f
@@ -248,9 +248,9 @@ func Analyze(symbol string, ds DataSource) (*Report, error) {
 
 	atr15 := atr(highs(k15), lows(k15), closes(k15), 14)
 	atr1h := atr(highs(k1h), lows(k1h), closes(k1h), 14)
-	rep.Context.ATR15m = lastOr(atr15, 1)
-	rep.Context.ATR1h = lastOr(atr1h, 1)
-	rep.Context.VolMultiple15m = volSlotMultiple(k15, 288)
+	rep.Context.ATR15m = safeATR(lastOr(atr15, 1), price)
+	rep.Context.ATR1h = safeATR(lastOr(atr1h, 1), k1h[len(k1h)-1].Close)
+	rep.Context.VolMultiple15m = volSlotMultiple(k15, 96) // 15m daily slot (review 2026-10-07).
 	rep.Context.TakerRatio1h = takerRatio(lastN(k15, 4))
 
 	rep.Timeframes["15m"] = map[string]*TFReport{
@@ -265,54 +265,50 @@ func Analyze(symbol string, ds DataSource) (*Report, error) {
 	rep.Breakout = combine(rep.Timeframes, DirUp)
 	rep.Breakdown = combine(rep.Timeframes, DirDown)
 
-	if rep.Breakdown.Score > rep.Breakout.Score {
-		rep.Selected = DirDown
-		rep.SelectedScore = rep.Breakdown.Score
-	} else {
-		rep.Selected = DirUp
-		rep.SelectedScore = rep.Breakout.Score
-	}
-
-	// Crowd penalty — direction-aware "is this side already overcrowded".
-	// Long side: funding percentile high + accounts skewed long + OI piling.
-	// Short side mirrors (funding percentile low, skew short).
-	lsPart := 0.0
+	var lsRatio *float64
 	if ls, err := ds.LongShortRatio("1h", 3); err == nil && len(ls) > 0 && ls[len(ls)-1].Ratio > 0 {
 		v := ls[len(ls)-1].Ratio
-		rep.CrowdLSRatio = &v
-		if rep.Selected == DirUp {
-			lsPart = clamp100(sigmoidScore(v-1, 0.5, 0.35))
-		} else {
-			lsPart = clamp100(sigmoidScore(1-v, 0.5, 0.35))
-		}
+		lsRatio = &v
 	}
-	if sh.fundPct != nil || sh.oiChg4h != nil {
-		fundPart, oiPart := 0.0, 0.0
-		if sh.fundPct != nil {
-			fp := *sh.fundPct
-			if rep.Selected == DirDown {
-				fp = 100 - fp
-			}
-			fundPart = clamp100(sigmoidScore(fp, 88, 9))
-		}
-		if sh.oiChg4h != nil {
-			oiPart = clamp100(sigmoidScore(*sh.oiChg4h, 8, 6))
-		}
-		crowding := crowdFundW*fundPart + crowdOIW*oiPart + crowdLSW*lsPart
-		rep.Crowding = round2(crowding)
-		if crowding > 0 {
-			rep.SelectedScore = rep.SelectedScore * (1 - crowdMaxPenalty*crowding/100)
-		}
+	// Compare both sides only after their own crowding and chase haircuts (review 2026-10-07).
+	upScore, upCrowding := finalDirectionScore(rep.Timeframes, DirUp, rep.Breakout.Score, sh, lsRatio)
+	downScore, downCrowding := finalDirectionScore(rep.Timeframes, DirDown, rep.Breakdown.Score, sh, lsRatio)
+	rep.Selected, rep.SelectedScore, rep.Crowding = DirUp, upScore, round2(upCrowding)
+	if downScore > upScore {
+		rep.Selected, rep.SelectedScore, rep.Crowding = DirDown, downScore, round2(downCrowding)
 	}
-
-	// Extended-chase penalty: the headline (1h/selected) pattern being
-	// "extended" means the cross is old and never retested — pure chasing.
-	if tf := rep.Timeframes["1h"][rep.Selected]; tf != nil && tf.Pattern == PatternExtended {
-		rep.SelectedScore = rep.SelectedScore * extendedPenalty
-	}
+	rep.CrowdLSRatio = lsRatio
 
 	rep.Grade = gradeOf(rep.SelectedScore)
 	return rep, nil
+}
+
+// finalDirectionScore applies each side's crowding and 1h extended penalties before selection (review 2026-10-07).
+func finalDirectionScore(tfs map[string]map[string]*TFReport, dir string, score float64, sh *shared, lsRatio *float64) (float64, float64) {
+	fundPart, oiPart, lsPart := 0.0, 0.0, 0.0
+	if sh.fundPct != nil {
+		fp := *sh.fundPct
+		if dir == DirDown {
+			fp = 100 - fp
+		}
+		fundPart = clamp100(sigmoidScore(fp, 88, 9))
+	}
+	if sh.oiChg4h != nil {
+		oiPart = clamp100(sigmoidScore(*sh.oiChg4h, 8, 6))
+	}
+	if lsRatio != nil && *lsRatio > 0 {
+		v := *lsRatio
+		if dir == DirDown {
+			v = 1 / v // Mirror long/short account skew (review 2026-10-07).
+		}
+		lsPart = clamp100(sigmoidScore(v-1, 0.5, 0.35))
+	}
+	crowding := crowdFundW*fundPart + crowdOIW*oiPart + crowdLSW*lsPart
+	score *= 1 - crowdMaxPenalty*crowding/100
+	if tf := tfs["1h"][dir]; tf != nil && tf.Pattern == PatternExtended {
+		score *= extendedPenalty
+	}
+	return score, crowding
 }
 
 // ScanResult is the compact per-symbol summary for scan endpoints.
@@ -415,8 +411,8 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 	c := closes(k)
 	h := highs(k)
 	l := lows(k)
-	atrNow := lastOr(atr(h, l, c, 14), 1)
 	price := c[n-1]
+	atrNow := safeATR(lastOr(atr(h, l, c, 14), 1), price)
 
 	rep := &TFReport{Timeframe: tf, CrossAgeBars: -1, Pattern: PatternApproach}
 	params := GetParams()
@@ -473,24 +469,21 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		if lv.Price <= 0 {
 			continue
 		}
-		// Age = bars since the FIRST close beyond the level inside the hold
-		// window. The old definition ("bars since the most recent far-side
-		// close") made every later close tautologically on-side: held and
-		// Confirmed were always true, confirmPenalty was dead code, and a
-		// break-lose-rebreak coin was re-aged as a pristine fresh breakout
-		// (review 2026-10-04 #1).
+		// Age = bars since the FIRST inside-to-outside close transition in
+		// the hold window. Already outside is not a cross; later rebreaks
+		// must not erase a failed hold after the first cross (review 2026-10-07).
 		var age int
 		var crossed bool
 		start := n - holdWindowBars
-		if start < 0 {
-			start = 0
+		if start < 1 {
+			start = 1
 		}
 		if dir == DirUp {
 			if price <= lv.Price {
 				continue
 			}
 			for i := start; i < n; i++ {
-				if c[i] > lv.Price {
+				if c[i-1] <= lv.Price && c[i] > lv.Price {
 					age = n - 1 - i
 					crossed = true
 					break
@@ -501,7 +494,7 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 				continue
 			}
 			for i := start; i < n; i++ {
-				if c[i] < lv.Price {
+				if c[i-1] >= lv.Price && c[i] < lv.Price {
 					age = n - 1 - i
 					crossed = true
 					break
@@ -690,7 +683,7 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 	}
 
 	// ── Dimension 2: volume & orderbook (20%) ──
-	slot := 288
+	slot := 96 // 15m bars per day (review 2026-10-07).
 	if tf == "1h" {
 		slot = 24
 	}
@@ -726,8 +719,9 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 		bull = -bull
 	}
 	sFlow := sigmoidScore(bull, 0.05, 0.04)
-	if sh.oiValChg != nil {
-		sFlow = 0.6*sFlow + 0.4*sigmoidScore(*sh.oiValChg, 0.4, 0.4)
+	// Quantity growth confirms new positions without a mark-price effect (review 2026-10-07).
+	if sh.oiChg1h != nil {
+		sFlow = 0.6*sFlow + 0.4*sigmoidScore(*sh.oiChg1h, 0.4, 0.4)
 	}
 	if sh.divergent {
 		sFlow *= 0.7
@@ -754,8 +748,9 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 			priceChg = c[n-1]/c[n-1-priceBars] - 1
 		}
 		moveInDir := (dir == DirUp && priceChg > 0.0005) || (dir == DirDown && priceChg < -0.0005)
-		oiUp := *sh.oiChg1h > 0.001
-		oiDown := *sh.oiChg1h < -0.001
+		// OI changes are percentage points: 0.1 means 0.1% (review 2026-10-07).
+		oiUp := *sh.oiChg1h > 0.1
+		oiDown := *sh.oiChg1h < -0.1
 		switch {
 		case moveInDir && oiUp:
 			rep.Alpha = alphaHealthyOI
@@ -794,7 +789,7 @@ func computeTF(tf string, dir string, k []Kline, levels []Level, sh *shared) *TF
 	// ── Dimension 6: momentum / volatility (10%) ──
 	r := rsiLast(c, 14)
 	histN := macdHistLast(c) / atrNow
-	mult := atrNow / math.Max(meanTR(h, l, c, 200), 1e-9)
+	mult := atrNow / math.Max(safeATR(meanTR(h, l, c, 200), price), 1e-9)
 	sMom := 0.4*sigmoidScore(r, 62, 10) + 0.4*sigmoidScore(histN, 0.05, 0.1) + 0.2*sigmoidScore(mult, 1.3, 0.4)
 	if dir == DirDown {
 		sMom = 0.4*sigmoidScore(100-r, 62, 10) + 0.4*sigmoidScore(-histN, 0.05, 0.1) + 0.2*sigmoidScore(mult, 1.3, 0.4)
@@ -963,6 +958,18 @@ func lastOr(xs []float64, def float64) float64 {
 	return xs[len(xs)-1]
 }
 
+// safeATR keeps flat or non-finite ranges from poisoning normalized scores (review 2026-10-07).
+func safeATR(v, price float64) float64 {
+	if v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0) {
+		return v
+	}
+	floor := math.Abs(price) * 1e-6
+	if math.IsNaN(floor) || math.IsInf(floor, 0) {
+		floor = 0
+	}
+	return math.Max(floor, 1e-12)
+}
+
 func maxOf(xs []float64) float64 {
 	m := math.Inf(-1)
 	for _, v := range xs {
@@ -1046,6 +1053,15 @@ func oiValueSeries(oi []OIPoint) []float64 {
 	out := make([]float64, len(oi))
 	for i, p := range oi {
 		out[i] = p.Value
+	}
+	return out
+}
+
+// oiQtySeries measures positions independently of their notional value (review 2026-10-07).
+func oiQtySeries(oi []OIPoint) []float64 {
+	out := make([]float64, len(oi))
+	for i, p := range oi {
+		out[i] = p.OI
 	}
 	return out
 }
