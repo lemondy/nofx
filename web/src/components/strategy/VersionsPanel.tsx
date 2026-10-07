@@ -149,7 +149,9 @@ export function VersionsPanel({
   return (
     <div className="p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-nofx-text-muted">{tv('subtitle', language)}</p>
+        <p className="text-xs text-nofx-text-muted">
+          {tv('subtitle', language)}
+        </p>
         <button
           onClick={fetchVersions}
           disabled={isLoading}
@@ -291,37 +293,38 @@ export function VersionsPanel({
                 ) : (
                   <div className="px-2.5 pb-2">
                     <button
-                      onClick={() =>
-                        setExpandedDiff(diffOpen ? null : v.id)
-                      }
+                      onClick={() => setExpandedDiff(diffOpen ? null : v.id)}
                       className="text-[10px] text-nofx-gold hover:underline mb-1"
                     >
                       {tv('diffTitle', language)} · {v.summary.length}
                       {diffOpen ? ' ▲' : ' ▼'}
                     </button>
                     <div className="space-y-0.5 font-mono">
-                      {shownDiff.map((d: StrategyConfigDiffEntry, i: number) => (
-                        <div
-                          key={`${d.path}-${i}`}
-                          className="text-[10px] leading-4 break-all"
-                        >
-                          <span className="text-nofx-text">{d.path}</span>
-                          <span className="text-nofx-text-muted"> : </span>
-                          <span className="text-nofx-danger line-through opacity-80">
-                            {renderDiffValue(d.old)}
-                          </span>
-                          <span className="text-nofx-text-muted"> → </span>
-                          <span className="text-nofx-success">
-                            {renderDiffValue(d.new)}
-                          </span>
-                        </div>
-                      ))}
+                      {shownDiff.map(
+                        (d: StrategyConfigDiffEntry, i: number) => (
+                          <div
+                            key={`${d.path}-${i}`}
+                            className="text-[10px] leading-4 break-all"
+                          >
+                            <span className="text-nofx-text">{d.path}</span>
+                            <span className="text-nofx-text-muted"> : </span>
+                            <span className="text-nofx-danger line-through opacity-80">
+                              {renderDiffValue(d.old)}
+                            </span>
+                            <span className="text-nofx-text-muted"> → </span>
+                            <span className="text-nofx-success">
+                              {renderDiffValue(d.new)}
+                            </span>
+                          </div>
+                        )
+                      )}
                       {!diffOpen && v.summary.length > 6 && (
                         <button
                           onClick={() => setExpandedDiff(v.id)}
                           className="text-[10px] text-nofx-text-muted hover:text-nofx-gold"
                         >
-                          …{v.summary.length - 6} {tv('diffTruncated', language)}
+                          …{v.summary.length - 6}{' '}
+                          {tv('diffTruncated', language)}
                         </button>
                       )}
                     </div>

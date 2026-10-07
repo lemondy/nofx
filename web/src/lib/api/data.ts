@@ -6,6 +6,7 @@ import type {
   Statistics,
   CompetitionData,
   PositionHistoryResponse,
+  RiskStatus,
 } from '../../types'
 import { API_BASE, httpClient } from './helpers'
 
@@ -25,6 +26,15 @@ export const dataApi = {
       : `${API_BASE}/account`
     const result = await httpClient.request<AccountInfo>(url, { silent })
     if (!result.success) throw new Error('Failed to fetch account info')
+    return result.data!
+  },
+
+  async getRiskStatus(traderId: string, silent?: boolean): Promise<RiskStatus> {
+    const result = await httpClient.request<RiskStatus>(
+      `${API_BASE}/risk-status?trader_id=${traderId}`,
+      { silent }
+    )
+    if (!result.success) throw new Error('Failed to fetch risk status')
     return result.data!
   },
 

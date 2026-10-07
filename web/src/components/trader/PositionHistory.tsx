@@ -246,11 +246,34 @@ function DirectionStatsCard({
 }
 
 // Position Row Component
-function PositionRow({ position }: { position: HistoricalPosition }) {
+// realizedR is the exit's R multiple against the OPENING stop; null when the
+// row has no usable planned stop (manual / legacy rows).
+export function realizedR(p: HistoricalPosition): number | null {
+  const entry = p.entry_price || 0
+  const exit = p.exit_price || 0
+  const sl = p.initial_stop_loss || 0
+  if (entry <= 0 || exit <= 0 || sl <= 0) return null
+  const risk = Math.abs(entry - sl)
+  if (risk <= 0 || risk / entry >= 0.5) return null
+  const isLong = (p.side || '').toUpperCase() === 'LONG'
+  return (isLong ? exit - entry : entry - exit) / risk
+}
+
+function PositionRow({
+  position,
+  language,
+}: {
+  position: HistoricalPosition
+  language: Language
+}) {
   const side = position.side || ''
   const isLong = side.toUpperCase() === 'LONG'
-  const realizedPnl = position.realized_pnl || 0
+  const grossPnl = position.realized_pnl || 0
+  // Rows show NET PnL (after fees) — the same caliber as the stats cards;
+  // gross stays in the tooltip (2026-10-07 review).
+  const realizedPnl = grossPnl - (position.fee || 0)
   const isProfitable = realizedPnl >= 0
+  const rMult = realizedR(position)
   const sideColor = isLong ? '#2E7D4F' : '#C0392B'
   const pnlColor = isProfitable ? '#2E7D4F' : '#C0392B'
 
@@ -340,8 +363,11 @@ function PositionRow({ position }: { position: HistoricalPosition }) {
         {formatNumber(entryPrice * displayQty)}
       </td>
 
-      {/* P&L */}
-      <td className="py-1.5 px-3 text-right text-sm">
+      {/* P&L (net) */}
+      <td
+        className="py-1.5 px-3 text-right text-sm"
+        title={`${t('positionHistory.grossPnl', language)}: ${grossPnl >= 0 ? '+' : ''}${formatNumber(grossPnl)}`}
+      >
         <div className="font-mono font-semibold" style={{ color: pnlColor }}>
           {isProfitable ? '+' : ''}
           {formatNumber(realizedPnl)}
@@ -350,6 +376,22 @@ function PositionRow({ position }: { position: HistoricalPosition }) {
           {pnlPct >= 0 ? '+' : ''}
           {pnlPct.toFixed(2)}%
         </div>
+      </td>
+
+      {/* R multiple vs the opening stop; excursions in the tooltip */}
+      <td
+        className="py-1.5 px-3 text-right font-mono text-sm"
+        style={{
+          color:
+            rMult === null ? '#6E6E60' : rMult >= 0 ? '#2E7D4F' : '#C0392B',
+        }}
+        title={
+          rMult === null
+            ? t('positionHistory.rUnavailable', language)
+            : `MFE ${(position.mfe_r || 0).toFixed(2)}R · MAE ${(position.mae_r || 0).toFixed(2)}R${position.exit_mode ? ` · ${position.exit_mode}` : ''}${position.close_reason ? ` · ${position.close_reason}` : ''}`
+        }
+      >
+        {rMult === null ? '—' : `${rMult >= 0 ? '+' : ''}${rMult.toFixed(2)}R`}
       </td>
 
       {/* Fee - show more precision for small fees */}
@@ -907,6 +949,13 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
                 <th
                   className="py-3 px-4 text-right text-xs font-semibold uppercase tracking-wider"
                   style={{ color: '#6E6E60' }}
+                  title={t('positionHistory.rMultipleHint', language)}
+                >
+                  R
+                </th>
+                <th
+                  className="py-3 px-4 text-right text-xs font-semibold uppercase tracking-wider"
+                  style={{ color: '#6E6E60' }}
                 >
                   {t('positionHistory.fee', language)}
                 </th>
@@ -926,7 +975,11 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
             </thead>
             <tbody>
               {filteredPositions.map((position) => (
-                <PositionRow key={position.id} position={position} />
+                <PositionRow
+                  key={position.id}
+                  position={position}
+                  language={language}
+                />
               ))}
             </tbody>
           </table>

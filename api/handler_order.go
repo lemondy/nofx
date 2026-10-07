@@ -137,6 +137,22 @@ func (s *Server) handleStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+// handleRiskStatus returns the trader's program-enforced risk state for the
+// dashboard (2026-10-07 review F1). Read-only.
+func (s *Server) handleRiskStatus(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		SafeBadRequest(c, "Invalid trader ID")
+		return
+	}
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		SafeNotFound(c, "Trader")
+		return
+	}
+	c.JSON(http.StatusOK, trader.RiskStatus())
+}
+
 // handleAccount Account information
 func (s *Server) handleAccount(c *gin.Context) {
 	_, traderID, err := s.getTraderFromQuery(c)

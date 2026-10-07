@@ -184,6 +184,12 @@ export interface HistoricalPosition {
   close_reason: string
   created_at: string
   updated_at: string
+  // Risk geometry (0 / absent on legacy or manual rows)
+  initial_stop_loss?: number
+  exit_mode?: string
+  mae_r?: number
+  mfe_r?: number
+  ai_managed?: boolean
 }
 
 // Matches Go TraderStats struct exactly
@@ -262,4 +268,46 @@ export interface GridRiskInfo {
   // Breakout state
   breakout_level: string
   breakout_direction: string
+}
+
+// Program-enforced risk state (GET /api/risk-status) — read-only.
+export interface RiskStatus {
+  generated_at: string
+  equity: number
+  day_start_equity: number
+  daily_loss_pct: number
+  daily_loss_cap_pct: number
+  daily_halted: boolean
+  initial_balance: number
+  account_drawdown_pct: number
+  account_drawdown_cap_pct: number
+  account_breaker_active: boolean
+  reduce_only: boolean
+  protection_fault?: string
+  loss_streak_enabled: boolean
+  loss_streak_max: number
+  loss_streak_bans: { symbol: string; until: string }[]
+  pending_entries: {
+    symbol: string
+    side: string
+    price: number
+    quantity: number
+    stop_loss: number
+    take_profit: number
+    placed_at: string
+    filled_qty: number
+  }[]
+  positions: {
+    symbol: string
+    side: string
+    entry_price: number
+    mark_price: number
+    initial_stop: number
+    current_stop: number
+    current_r: number
+    stop_locked_r: number
+    exit_mode: string
+    ai_managed: boolean
+    has_initial_stop: boolean
+  }[]
 }

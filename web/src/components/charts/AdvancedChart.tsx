@@ -121,6 +121,20 @@ const priceAxisPrecision = (value: number | undefined): number => {
   return 6
 }
 
+// mergeKlines folds a freshly fetched tail into the loaded history: bars with
+// a known time replace the stored bar (the forming candle updates), newer bars
+// append. Both inputs are ascending by time.
+export const mergeKlines = <T extends { time: number }>(
+  history: T[],
+  tail: T[]
+): T[] => {
+  if (tail.length === 0) return history
+  const firstTail = tail[0].time
+  let cut = history.length
+  while (cut > 0 && history[cut - 1].time >= firstTail) cut--
+  return history.slice(0, cut).concat(tail)
+}
+
 export function AdvancedChart({
   symbol = 'BTCUSDT',
   interval = '5m',
@@ -161,6 +175,7 @@ export function AdvancedChart({
     changePercent: number
   } | null>(null) // TradingView-style legend (hovered candle or latest)
   const klineListRef = useRef<any[]>([]) // Sorted kline array for legend lookups
+  const lastOrdersFetchRef = useRef(0) // order markers refresh at most every 60s
 
   // Market stats (current candle)
   const [marketStats, setMarketStats] = useState<{
@@ -223,9 +238,12 @@ export function AdvancedChart({
   ])
 
   // Fetch kline data from service
-  const fetchKlineData = async (symbol: string, interval: string) => {
+  const fetchKlineData = async (
+    symbol: string,
+    interval: string,
+    limit = 1500
+  ) => {
     try {
-      const limit = 1500
       const klineUrl = `/api/klines?symbol=${symbol}&interval=${interval}&limit=${limit}&exchange=${exchange}`
       const result = await httpClient.request(klineUrl, { silent: true })
 
@@ -278,43 +296,17 @@ export function AdvancedChart({
       // Determine ms vs seconds: if > 10^12, treat as milliseconds
       if (time > 1000000000000) {
         const seconds = Math.floor(time / 1000)
-        console.log(
-          '[AdvancedChart] ✅ Unix timestamp (ms→s):',
-          time,
-          '→',
-          seconds,
-          '(',
-          new Date(time).toISOString(),
-          ')'
-        )
         return seconds
       }
-      console.log(
-        '[AdvancedChart] ✅ Unix timestamp (s):',
-        time,
-        '(',
-        new Date(time * 1000).toISOString(),
-        ')'
-      )
       return time
     }
 
     const timeStr = String(time)
-    console.log('[AdvancedChart] Parsing time string:', timeStr)
 
     // Try standard ISO format
     const isoTime = new Date(timeStr).getTime()
     if (!isNaN(isoTime) && isoTime > 0) {
       const timestamp = Math.floor(isoTime / 1000)
-      console.log(
-        '[AdvancedChart] ✅ Parsed as ISO:',
-        timeStr,
-        '→',
-        timestamp,
-        '(',
-        new Date(timestamp * 1000).toISOString(),
-        ')'
-      )
       return timestamp
     }
 
@@ -333,15 +325,6 @@ export function AdvancedChart({
         )
       )
       const timestamp = Math.floor(date.getTime() / 1000)
-      console.log(
-        '[AdvancedChart] ✅ Parsed as custom format:',
-        timeStr,
-        '→',
-        timestamp,
-        '(',
-        new Date(timestamp * 1000).toISOString(),
-        ')'
-      )
       return timestamp
     }
 
@@ -355,19 +338,11 @@ export function AdvancedChart({
     symbol: string
   ): Promise<OrderMarker[]> => {
     try {
-      console.log(
-        '[AdvancedChart] Fetching orders for trader:',
-        traderID,
-        'symbol:',
-        symbol
-      )
       // Fetch filled orders, up to 200 for more history
       const result = await httpClient.request(
         `/api/orders?trader_id=${traderID}&symbol=${symbol}&status=FILLED&limit=200`,
         { silent: true }
       )
-
-      console.log('[AdvancedChart] Orders API response:', result)
 
       if (!result.success || !result.data) {
         console.warn('[AdvancedChart] No orders found, result:', result)
@@ -375,12 +350,9 @@ export function AdvancedChart({
       }
 
       const orders = result.data
-      console.log('[AdvancedChart] Raw orders data:', orders)
       const markers: OrderMarker[] = []
 
       orders.forEach((order: any) => {
-        console.log('[AdvancedChart] Processing order:', order)
-
         // Handle field names: support PascalCase and snake_case
         const filledAt =
           order.filled_at ||
@@ -431,15 +403,6 @@ export function AdvancedChart({
           positionSide = side === 'buy' ? 'long' : 'short'
         }
 
-        console.log('[AdvancedChart] Order marker:', {
-          time: timeSeconds,
-          price: avgPrice,
-          side: positionSide,
-          rawSide: side,
-          action,
-          orderAction,
-        })
-
         markers.push({
           time: timeSeconds,
           price: avgPrice,
@@ -450,7 +413,6 @@ export function AdvancedChart({
         })
       })
 
-      console.log('[AdvancedChart] Final markers:', markers)
       return markers
     } catch (err) {
       console.error('[AdvancedChart] Error fetching orders:', err)
@@ -464,18 +426,10 @@ export function AdvancedChart({
     symbol: string
   ): Promise<OpenOrder[]> => {
     try {
-      console.log(
-        '[AdvancedChart] Fetching open orders for trader:',
-        traderID,
-        'symbol:',
-        symbol
-      )
       const result = await httpClient.request(
         `/api/open-orders?trader_id=${traderID}&symbol=${symbol}`,
         { silent: true }
       )
-
-      console.log('[AdvancedChart] Open orders API response:', result)
 
       if (!result.success || !result.data) {
         console.warn('[AdvancedChart] No open orders found')
@@ -675,12 +629,6 @@ export function AdvancedChart({
     const loadData = async (isRefresh = false) => {
       if (!candlestickSeriesRef.current) return
 
-      console.log(
-        '[AdvancedChart] Loading data for',
-        symbol,
-        interval,
-        isRefresh ? '(refresh)' : ''
-      )
       // Only show loading on first load, avoid flicker on refresh
       if (!isRefresh) {
         setLoading(true)
@@ -688,9 +636,14 @@ export function AdvancedChart({
       setError(null)
 
       try {
-        // 1. Fetch kline data
-        const klineData = await fetchKlineData(symbol, interval)
-        console.log('[AdvancedChart] Loaded', klineData.length, 'klines')
+        // 1. Fetch kline data. Refreshes pull only the newest bars and merge
+        // them into the loaded history (2026-10-07 review: re-fetching 1500
+        // bars every 5s burned exchange weight for 1-2 changed candles).
+        const prev = klineListRef.current
+        const klineData =
+          isRefresh && prev && prev.length > 0
+            ? mergeKlines(prev, await fetchKlineData(symbol, interval, 3))
+            : await fetchKlineData(symbol, interval)
         if (klineData.length > 0) {
           const lastClose = klineData[klineData.length - 1].close
           const prec = priceAxisPrecision(lastClose)
@@ -772,31 +725,17 @@ export function AdvancedChart({
         updateIndicators(klineData)
 
         // 4. Fetch and display order markers
-        if (traderID && candlestickSeriesRef.current) {
-          console.log('[AdvancedChart] Starting to fetch orders...')
+        const ordersDue =
+          !isRefresh || Date.now() - lastOrdersFetchRef.current >= 60_000
+        if (traderID && candlestickSeriesRef.current && ordersDue) {
+          lastOrdersFetchRef.current = Date.now()
           const orders = await fetchOrders(traderID, symbol)
-          console.log('[AdvancedChart] Received orders:', orders)
 
           if (orders.length > 0) {
-            console.log(
-              '[AdvancedChart] Creating markers from',
-              orders.length,
-              'orders'
-            )
-
             // Extract sorted kline time array
             const klineTimes = klineData.map((k: any) => k.time as number)
             const klineMinTime = klineTimes[0] || 0
             const klineMaxTime = klineTimes[klineTimes.length - 1] || 0
-            console.log(
-              '[AdvancedChart] Kline time range:',
-              klineMinTime,
-              '-',
-              klineMaxTime,
-              '(',
-              klineTimes.length,
-              'candles)'
-            )
 
             // Binary search: find the kline candle for the order time
             // Return the largest kline time <= orderTime
@@ -891,23 +830,6 @@ export function AdvancedChart({
             // Sort by time (lightweight-charts requires chronological order)
             markers.sort((a, b) => (a.time as number) - (b.time as number))
 
-            console.log(
-              '[AdvancedChart] Valid markers:',
-              markers.length,
-              'out of',
-              orders.length
-            )
-
-            console.log(
-              '[AdvancedChart] Setting',
-              markers.length,
-              'markers on candlestick series'
-            )
-            console.log(
-              '[AdvancedChart] Markers data:',
-              JSON.stringify(markers, null, 2)
-            )
-
             try {
               // Store marker data for later toggle use
               currentMarkersDataRef.current = markers
@@ -925,17 +847,10 @@ export function AdvancedChart({
                   markersToShow
                 )
               }
-              console.log(
-                '[AdvancedChart] ✅ Markers updated! Count:',
-                markersToShow.length,
-                'Visible:',
-                showOrderMarkers
-              )
             } catch (err) {
               console.error('[AdvancedChart] ❌ Failed to set markers:', err)
             }
           } else {
-            console.log('[AdvancedChart] No orders found, clearing markers')
             try {
               if (seriesMarkersRef.current) {
                 seriesMarkersRef.current.setMarkers([])
@@ -944,11 +859,6 @@ export function AdvancedChart({
               console.error('[AdvancedChart] Failed to clear markers:', err)
             }
           }
-        } else {
-          console.log('[AdvancedChart] Skipping markers:', {
-            hasTraderID: !!traderID,
-            hasSeries: !!candlestickSeriesRef.current,
-          })
         }
 
         // Initial load: show only the most recent ~VISIBLE_BARS candles instead of
@@ -979,7 +889,10 @@ export function AdvancedChart({
     loadData(false) // Initial load
 
     // Real-time auto-refresh (every 5 seconds)
-    const refreshInterval = setInterval(() => loadData(true), 5000)
+    const refreshInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      loadData(true)
+    }, 5000)
     return () => clearInterval(refreshInterval)
   }, [symbol, interval, traderID, exchange])
 
@@ -1001,7 +914,6 @@ export function AdvancedChart({
         priceLinesRef.current = []
 
         const openOrders = await fetchOpenOrders(traderID, symbol)
-        console.log('[AdvancedChart] Open orders for price lines:', openOrders)
 
         if (openOrders.length > 0 && candlestickSeriesRef.current) {
           openOrders.forEach((order) => {
@@ -1048,11 +960,6 @@ export function AdvancedChart({
               priceLinesRef.current.push(priceLine)
             }
           })
-          console.log(
-            '[AdvancedChart] ✅ Created',
-            priceLinesRef.current.length,
-            'price lines for pending orders'
-          )
         }
       } catch (err) {
         console.error('[AdvancedChart] Error loading open orders:', err)
@@ -1080,12 +987,6 @@ export function AdvancedChart({
         ? currentMarkersDataRef.current
         : []
       seriesMarkersRef.current.setMarkers(markersToShow)
-      console.log(
-        '[AdvancedChart] 🔄 Toggled markers visibility:',
-        showOrderMarkers,
-        'Count:',
-        markersToShow.length
-      )
     } catch (err) {
       console.error('[AdvancedChart] ❌ Failed to toggle markers:', err)
     }

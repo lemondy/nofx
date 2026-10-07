@@ -347,6 +347,10 @@ After activating, create or update a trader with this strategy_id to apply it.`,
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: {"is_running":<bool>,"trader_id":"<string>"}`,
 				s.handleStatus)
+			s.routeWithSchema(protected, "GET", "/risk-status", "Program-enforced risk state",
+				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
+Returns: daily-loss halt, account drawdown breaker, loss-streak bans, resting limit entries and open positions in R units. Read-only.`,
+				s.handleRiskStatus)
 			s.routeWithSchema(protected, "GET", "/account", "Account balance and equity",
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: {"balance":<float>,"equity":<float>,"unrealized_pnl":<float>,"initial_balance":<float>,"total_return_pct":<float>}`,

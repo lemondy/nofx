@@ -12,6 +12,7 @@ import { LogOut, Loader2, Eye, EyeOff, Copy, Check } from 'lucide-react'
 import { DeepVoidBackground } from '../components/common/DeepVoidBackground'
 import { NofxSelect } from '../components/ui/select'
 import { GridRiskPanel } from '../components/strategy/GridRiskPanel'
+import { RiskStatusPanel } from '../components/trader/RiskStatusPanel'
 import type {
   SystemStatus,
   AccountInfo,
@@ -605,6 +606,13 @@ export function TraderDashboardPage({
             loading={!account && !accountFailed}
           />
         </div>
+
+        {/* Program-enforced risk state (AI strategies) */}
+        {status?.strategy_type !== 'grid_trading' && selectedTraderId && (
+          <div className="mb-6">
+            <RiskStatusPanel traderId={selectedTraderId} language={language} />
+          </div>
+        )}
 
         {/* Grid Risk Panel - Only show for grid trading strategy */}
         {status?.strategy_type === 'grid_trading' && selectedTraderId && (

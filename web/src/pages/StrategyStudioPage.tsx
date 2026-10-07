@@ -570,9 +570,7 @@ export function StrategyStudioPage() {
     // 2026-10-03 review P2: functional update — the old closure spread let
     // two rapid calls (the strategy-type switch fires TWO setEditingConfig)
     // overwrite each other's change, leaving a half-switched config.
-    setEditingConfig(prev =>
-      prev ? { ...prev, [section]: value } : prev
-    )
+    setEditingConfig((prev) => (prev ? { ...prev, [section]: value } : prev))
     setHasChanges(true)
   }
 
