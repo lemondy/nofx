@@ -7,6 +7,7 @@ import (
 	"nofx/logger"
 	"nofx/store"
 	"nofx/trader"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ type TraderManager struct {
 	// startFn starts an AutoTrader; nil means (*trader.AutoTrader).Start.
 	// Test seam only — production code never sets it. review 2026-10-07 B1-5
 	startFn func(*trader.AutoTrader) error
+	// accountInfoFn fetches one trader's account info for the competition
+	// fan-out; nil means (*trader.AutoTrader).GetAccountInfo. Test seam only —
+	// production code never sets it. review 2026-10-07 B2-2
+	accountInfoFn func(*trader.AutoTrader) (map[string]interface{}, error)
 }
 
 // SetStore wires the store (needed by EnsureTraderStarted to persist state).
@@ -316,6 +321,17 @@ func (tm *TraderManager) getConcurrentTraderData(traders []*trader.AutoTrader) [
 	// Create result channel
 	resultChan := make(chan traderResult, len(traders))
 
+	// review 2026-10-07 B2-2 (P1-2): channel sizing makes every send in the
+	// fan-out non-blocking, so a goroutine abandoned by the 10s timeout can
+	// never leak on its final send: resultChan is buffered to len(traders)
+	// and the collector receives exactly that many values, while
+	// accountChan/errorChan are buffered to 1 so the late result always
+	// lands even after the outer select has moved on.
+	getInfo := tm.accountInfoFn
+	if getInfo == nil {
+		getInfo = (*trader.AutoTrader).GetAccountInfo
+	}
+
 	// Concurrently fetch data for each trader
 	for i, t := range traders {
 		go func(index int, trader *trader.AutoTrader) {
@@ -328,7 +344,20 @@ func (tm *TraderManager) getConcurrentTraderData(traders []*trader.AutoTrader) [
 			errorChan := make(chan error, 1)
 
 			go func() {
-				account, err := trader.GetAccountInfo()
+				// review 2026-10-07 B2-2 (P1-2): this goroutine used to call
+				// GetAccountInfo bare — a single panic (nil map write in an
+				// exchange client, index bug, ...) crashed the whole live
+				// process. Recover it into this trader's error result;
+				// every other trader's fan-out is unaffected. The errorChan
+				// send after recovery cannot block (buffered above).
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Errorf("🚨 Panic fetching account info for trader %s (%s/%s): %v\n%s",
+							trader.GetName(), trader.GetID(), trader.GetExchange(), r, debug.Stack())
+						errorChan <- fmt.Errorf("account info panic: %v", r)
+					}
+				}()
+				account, err := getInfo(trader)
 				if err != nil {
 					errorChan <- err
 				} else {
