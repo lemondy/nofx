@@ -249,6 +249,7 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		engine.EffectiveMinPositionSize(),
 		positionSymbolsFromContext(ctx),
 		ctx.GateStates,
+		ctx.LimitAnchors,
 	)
 
 	if decision != nil {
@@ -257,39 +258,11 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		decision.UserPrompt = userPrompt
 		decision.AIRequestDurationMs = aiCallDuration.Milliseconds()
 		decision.RawResponse = aiResponse
-		// Anchor compliance: snap open_*_limit prices back to the
-		// pre-computed values the prompt showed when the model drifted.
-		if err == nil {
-			correctLimitAnchors(decision.Decisions, ctx.LimitAnchors, LimitAnchorTolerancePct)
-			// Stop-plan compliance (round-4 review R4-1): the same snap for
-			// stop_loss — without this wiring the executor's plan-parity
-			// floor exemption never sees a plan-equal stop, so every echoed
-			// model stop re-hits the noise-floor rejection (the ZEC/AVAX
-			// wasted-cycle loop this was written to end).
-			correctStopLossToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
-			// TP menu (user directive 09-29): point the gate state at the
-			// CHOSEN option before the snap, so the model's discrete menu
-			// pick (never a price) selects which precomputed target executes.
-			resolveTakeProfitOptions(decision.Decisions, ctx.GateStates)
-			// Reward-side symmetry (2026-09-27 external review P0): the stop
-			// is hard-snapped to the gated plan; the TP must be too, or the
-			// model's elastic TP silently degrades the gated R:R math.
-			correctTakeProfitToPlan(decision.Decisions, ctx.GateStates, StopPlanTolerancePct)
-			// Anchor correction can downgrade an already-validated open into a
-			// wait. Re-run action-aware validation so its stage and mandatory
-			// dataset annotations match the final action that will be executed.
-			err = validateDecisions(
-				decision.Decisions,
-				ctx.Account.TotalEquity,
-				riskConfig.BTCETHMaxLeverage,
-				riskConfig.AltcoinMaxLeverage,
-				riskConfig.BTCETHMaxPositionValueRatio,
-				riskConfig.AltcoinMaxPositionValueRatio,
-				engine.EffectiveMinPositionSize(),
-				positionSymbolsFromContext(ctx),
-				ctx.GateStates,
-			)
-		}
+		// review 2026-10-07 B1-6: the anchor / stop-plan / TP-plan correctors
+		// now run inside parseFullDecisionResponse BEFORE per-decision
+		// validation, so placeholder SL/TP/price values are repaired instead
+		// of rejected, and validation sees the final action. Nothing to redo
+		// here.
 	}
 
 	if err != nil {
@@ -460,7 +433,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 // AI Response Parsing
 // ============================================================================
 
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool, gateStates map[string]*GateState) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool, gateStates map[string]*GateState, limitAnchors map[string]*LimitAnchor) (*FullDecision, error) {
 	cotTrace := extractCoTTrace(aiResponse)
 
 	decisions, err := extractDecisions(aiResponse)
@@ -471,16 +444,67 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		}, fmt.Errorf("failed to extract decisions: %w", err)
 	}
 
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols, gateStates); err != nil {
+	// review 2026-10-07 B1-6: repair placeholder / drifted prices from the
+	// program-computed plans BEFORE validation, so a zero SL/TP/limit price is
+	// copied from the gate plan instead of failing the decision.
+	correctLimitAnchors(decisions, limitAnchors, LimitAnchorTolerancePct)
+	// Stop-plan compliance (round-4 review R4-1): snap stop_loss to the plan.
+	correctStopLossToPlan(decisions, gateStates, StopPlanTolerancePct)
+	// TP menu (user directive 09-29): point the gate state at the CHOSEN
+	// option before the snap.
+	resolveTakeProfitOptions(decisions, gateStates)
+	// Reward-side symmetry (2026-09-27 external review P0).
+	correctTakeProfitToPlan(decisions, gateStates, StopPlanTolerancePct)
+
+	// review 2026-10-07 B1-6: validate per decision. One bad decision (amount
+	// too small, invalid action) must not discard valid closes / stop moves
+	// for other symbols. A rejected decision is replaced by a non-executing
+	// hold (open position) or wait (flat) that carries the rejection reason,
+	// so the decision record shows it.
+	kept := make([]Decision, 0, len(decisions))
+	rejected := 0
+	var firstErr error
+	for i := range decisions {
+		d := decisions[i]
+		norm := market.Normalize(d.Symbol)
+		hasPos := positionSymbols[norm]
+		verr := validateDecision(&d, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, hasPos, gateStates[norm])
+		if verr == nil {
+			kept = append(kept, d)
+			continue
+		}
+		rejected++
+		if firstErr == nil {
+			firstErr = fmt.Errorf("decision #%d validation failed: %w", i+1, verr)
+		}
+		logger.Warnf("⚠️  [ValidationRejected] decision #%d %s %s dropped: %v", i+1, d.Symbol, d.Action, verr)
+		repl := Decision{
+			Symbol:         decisions[i].Symbol,
+			Action:         "wait",
+			Reasoning:      decisions[i].Reasoning,
+			NoTradeReasons: []string{fmt.Sprintf("VALIDATION_REJECTED: %s %s: %v", decisions[i].Action, decisions[i].Symbol, verr)},
+		}
+		if hasPos {
+			repl.Action = "hold"
+		}
+		if rerr := validateDecision(&repl, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, hasPos, gateStates[norm]); rerr != nil {
+			// Cannot even express the rejection as a wait/hold: drop it silently
+			// (already logged above) rather than risk executing it.
+			continue
+		}
+		kept = append(kept, repl)
+	}
+
+	if len(decisions) > 0 && rejected == len(decisions) {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
 			Decisions: decisions,
-		}, fmt.Errorf("decision validation failed: %w", err)
+		}, fmt.Errorf("decision validation failed: %w", firstErr)
 	}
 
 	return &FullDecision{
 		CoTTrace:  cotTrace,
-		Decisions: decisions,
+		Decisions: kept,
 	}, nil
 }
 
@@ -632,21 +656,53 @@ func validateJSONFormat(jsonStr string) error {
 		return fmt.Errorf("JSON must start with [{ (whitespace allowed), actual: %s", trimmed[:min(20, len(trimmed))])
 	}
 
-	if strings.Contains(jsonStr, "~") {
+	// review 2026-10-07 B1-6: only inspect characters OUTSIDE string literals —
+	// "~80%" or "1,234" inside a reason string is harmless free text.
+	outside := stripJSONStringLiterals(jsonStr)
+
+	if strings.Contains(outside, "~") {
 		return fmt.Errorf("JSON cannot contain range symbol ~, all numbers must be precise single values")
 	}
 
-	for i := 0; i < len(jsonStr)-4; i++ {
-		if jsonStr[i] >= '0' && jsonStr[i] <= '9' &&
-			jsonStr[i+1] == ',' &&
-			jsonStr[i+2] >= '0' && jsonStr[i+2] <= '9' &&
-			jsonStr[i+3] >= '0' && jsonStr[i+3] <= '9' &&
-			jsonStr[i+4] >= '0' && jsonStr[i+4] <= '9' {
-			return fmt.Errorf("JSON numbers cannot contain thousand separator comma, found: %s", jsonStr[i:min(i+10, len(jsonStr))])
+	for i := 0; i < len(outside)-4; i++ {
+		if outside[i] >= '0' && outside[i] <= '9' &&
+			outside[i+1] == ',' &&
+			outside[i+2] >= '0' && outside[i+2] <= '9' &&
+			outside[i+3] >= '0' && outside[i+3] <= '9' &&
+			outside[i+4] >= '0' && outside[i+4] <= '9' {
+			return fmt.Errorf("JSON numbers cannot contain thousand separator comma, found: %s", outside[i:min(i+10, len(outside))])
 		}
 	}
 
 	return nil
+}
+
+// stripJSONStringLiterals returns s with the contents of every "..." literal
+// blanked out (quotes kept, escapes honored), so structural checks only see
+// the characters in value/key positions.
+func stripJSONStringLiterals(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString, escaped := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+				b.WriteByte(c)
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 func min(a, b int) int {

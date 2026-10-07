@@ -621,12 +621,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		var updateTime int64
 		entryQuantity := 0.0
 		// Priority 1: Get from database (trader_positions table) - most accurate
-		if at.store != nil {
-			if dbPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, side); err == nil && dbPos != nil {
-				entryQuantity = dbPos.EntryQuantity
-				if dbPos.EntryTime > 0 {
-					updateTime = dbPos.EntryTime
-				}
+		if dbEntryTime, dbEntryQty, ok := at.lookupOpenPositionEntry(symbol, side); ok {
+			entryQuantity = dbEntryQty
+			if dbEntryTime > 0 {
+				updateTime = dbEntryTime
 			}
 		}
 		// Priority 2: Get from exchange API (Bybit: createdTime, OKX: createdTime)
@@ -1144,4 +1142,20 @@ func (at *AutoTrader) loadSymbolStats() map[string]*kernel.TraderHistoryStat {
 		}
 	}
 	return out
+}
+
+// lookupOpenPositionEntry loads the stored entry time / entry quantity of the
+// OPEN trader_positions row for (symbol, side). review 2026-10-07 B1-8:
+// trader_positions stores side as uppercase LONG/SHORT and SQLite "=" is
+// case-sensitive, so the lowercase side used by the cycle never matched and
+// hold age reset to process start on every restart.
+func (at *AutoTrader) lookupOpenPositionEntry(symbol, side string) (entryTime int64, entryQty float64, ok bool) {
+	if at.store == nil {
+		return 0, 0, false
+	}
+	dbPos, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, strings.ToUpper(side))
+	if err != nil || dbPos == nil {
+		return 0, 0, false
+	}
+	return dbPos.EntryTime, dbPos.EntryQuantity, true
 }
