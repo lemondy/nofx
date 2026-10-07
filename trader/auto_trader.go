@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"nofx/kernel"
-	"nofx/market"
 	"nofx/logger"
+	"nofx/market"
 	"nofx/mcp"
 	_ "nofx/mcp/provider"
 	"nofx/store"
@@ -125,23 +125,29 @@ type AutoTraderConfig struct {
 
 // AutoTrader automatic trader
 type AutoTrader struct {
-	id                         string // Trader unique identifier
-	name                       string // Trader display name
-	aiModel                    string // AI model name
-	exchange                   string // Trading platform type (binance/bybit/etc)
-	exchangeID                 string // Exchange account UUID
-	showInCompetition          bool   // Whether to show in competition page
-	config                     AutoTraderConfig
-	trader                     Trader                       // Use Trader interface (supports multiple platforms)
-	cycleGateStates            map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
-	protectionFailures         map[string]int
-	protectionFaults           map[string]string // guarded by runtimeMu; blocks new account risk until reconciled
+	id                 string // Trader unique identifier
+	name               string // Trader display name
+	aiModel            string // AI model name
+	exchange           string // Trading platform type (binance/bybit/etc)
+	exchangeID         string // Exchange account UUID
+	showInCompetition  bool   // Whether to show in competition page
+	config             AutoTraderConfig
+	trader             Trader                       // Use Trader interface (supports multiple platforms)
+	cycleGateStates    map[string]*kernel.GateState // THIS cycle's hard-gate verdicts — the executor's plan-parity checks read them (09-19)
+	protectionFailures map[string]int
+	protectionFaults   map[string]string // guarded by runtimeMu; blocks new account risk until reconciled
+	// candidateMeta snapshots this cycle's candidate pool (normalized symbol
+	// → candidate): markAIManaged reads it at fill time to attribute each
+	// position to its candidate sources. Rebuilt wholesale every cycle
+	// (guarded by candidateMetaMu — fills can arrive off the cycle goroutine).
+	candidateMetaMu sync.RWMutex
+	candidateMeta   map[string]kernel.CandidateCoin
 	// recheckDataFn, when set (tests), replaces the strategy-scoped fetch the
 	// pending-direction recheck uses; nil = live getMarketTimeframes path.
 	recheckDataFn func(symbol string) (*market.Data, error)
 	// btcTrendClosesFn, when set (tests), replaces the BTC 4h closes fetch;
 	// nil = live kernel.BTC4hTrendCloses.
-	btcTrendClosesFn func(limit int) []float64
+	btcTrendClosesFn           func(limit int) []float64
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)
@@ -833,6 +839,42 @@ func (at *AutoTrader) markAIManaged(symbol, side string, orders ...string) {
 		logger.Errorf("🤖 [%s] AI-managed MARK FAILED %s %s: %v — position treated as manual (hands-off) until marked", at.name, symbol, side, err)
 	} else {
 		logger.Infof("🤖 [%s] position marked AI-managed: %s %s — automation owns its lifecycle", at.name, symbol, side)
+		at.recordEntryAttribution(symbol, side, orderID)
+	}
+}
+
+// recordEntryAttribution persists which candidate-pool source(s) produced
+// this open (for per-source win-rate stats). Read-only over the cycle's
+// candidateMeta snapshot; a symbol absent from it (fill racing the pool
+// rebuild, restart in between) records "unknown". Best-effort: a failed
+// record is logged and swallowed — it must never affect the open itself.
+func (at *AutoTrader) recordEntryAttribution(symbol, side, orderID string) {
+	// No order ID = the one-time adoption of pre-existing positions, not a
+	// new AI entry — nothing to attribute (and no key to dedupe on).
+	if at.store == nil || orderID == "" {
+		return
+	}
+	attr := &store.EntryAttribution{
+		TraderID: at.id,
+		Symbol:   symbol,
+		Side:     strings.ToLower(side),
+		OrderID:  orderID,
+	}
+	at.candidateMetaMu.RLock()
+	if coin, ok := at.candidateMeta[market.Normalize(symbol)]; ok {
+		attr.Sources = strings.Join(coin.Sources, ",")
+		attr.ScannerDirection = coin.ScannerDirection
+		attr.ShortScore = coin.ShortScore
+		attr.ShortGrade = coin.ShortGrade
+		attr.ShortUniverse = coin.ShortUniverse
+		attr.ShortConfirmed = coin.ShortConfirmed
+	}
+	at.candidateMetaMu.RUnlock()
+	if attr.Sources == "" {
+		attr.Sources = "unknown"
+	}
+	if err := at.store.EntryAttribution().Record(attr); err != nil {
+		logger.Warnf("⚠️ [%s] entry attribution record failed (%s %s): %v", at.name, symbol, side, err)
 	}
 }
 

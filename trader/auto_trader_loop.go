@@ -131,9 +131,18 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	logger.Info(strings.Repeat("=", 70))
+	// Candidate-source attribution snapshot: rebuild the normalized-symbol
+	// map from THIS cycle's pool — wholesale replacement, so a symbol dropped
+	// from the pool can't attribute stale sources at a later fill.
+	// markAIManaged reads it read-only at fill time.
+	meta := make(map[string]kernel.CandidateCoin, len(ctx.CandidateCoins))
 	for _, coin := range ctx.CandidateCoins {
+		meta[market.Normalize(coin.Symbol)] = coin
 		record.CandidateCoins = append(record.CandidateCoins, coin.Symbol)
 	}
+	at.candidateMetaMu.Lock()
+	at.candidateMeta = meta
+	at.candidateMetaMu.Unlock()
 
 	logger.Infof("📊 Account equity: %.2f USDT | Available: %.2f USDT | Positions: %d",
 		ctx.Account.TotalEquity, ctx.Account.AvailableBalance, ctx.Account.PositionCount)

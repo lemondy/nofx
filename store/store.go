@@ -34,6 +34,7 @@ type Store struct {
 	entryAssess    *EntryAssessmentStore
 	aiCharge       *AIChargeStore
 	aiManaged      *AIManagedStore
+	entryAttrib    *EntryAttributionStore
 	journal        *TradeJournalStore
 	rule           *RuleStore
 	reviewPrompt   *ReviewPromptStore
@@ -193,6 +194,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.AIManaged().initTables(); err != nil {
 		return fmt.Errorf("failed to init ai-managed tables: %w", err)
+	}
+	if err := s.EntryAttribution().initTables(); err != nil {
+		return fmt.Errorf("failed to init entry attribution tables: %w", err)
 	}
 	if err := s.Rule().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize trading rule tables: %w", err)
@@ -394,6 +398,17 @@ func (s *Store) AIManaged() *AIManagedStore {
 		s.aiManaged = NewAIManagedStore(s.gdb)
 	}
 	return s.aiManaged
+}
+
+// EntryAttribution gets the per-open candidate-source attribution store
+// (which candidate pool each AI entry came from).
+func (s *Store) EntryAttribution() *EntryAttributionStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entryAttrib == nil {
+		s.entryAttrib = NewEntryAttributionStore(s.gdb)
+	}
+	return s.entryAttrib
 }
 
 // ReviewPrompt returns the per-user review prompt config store.
