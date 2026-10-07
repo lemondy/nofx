@@ -81,6 +81,37 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
+// lookupIPAddr is swappable in tests.
+var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
+var dnsRetryDelay = 300 * time.Millisecond
+
+// trustedPublicDomains are the built-in upstreams this application ships
+// with. A host matches when it equals a domain or is a subdomain of it.
+var trustedPublicDomains = []string{
+	// AI providers
+	"bigmodel.cn", "z.ai", "deepseek.com", "openai.com", "anthropic.com",
+	"x.ai", "moonshot.ai", "moonshot.cn", "minimax.io", "dashscope.aliyuncs.com",
+	"generativelanguage.googleapis.com",
+	// exchanges
+	"binance.com", "hyperliquid.xyz", "bybit.com", "okx.com", "bitget.com",
+	"gateio.ws", "gate.io", "kucoin.com", "asterdex.com", "zklighter.elliot.ai",
+	// market data
+	"nofxos.ai", "coinank.com", "alternative.me", "twelvedata.com", "alpaca.markets",
+}
+
+func isTrustedPublicHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	for _, d := range trustedPublicDomains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateURL checks if a URL is safe to request (not pointing to internal networks)
 // Returns an error if the URL is potentially dangerous
 func ValidateURL(rawURL string) error {
@@ -128,8 +159,14 @@ func ValidateURL(rawURL string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	resolver := net.Resolver{}
-	ips, err := resolver.LookupIPAddr(ctx, host)
+	ips, err := lookupIPAddr(ctx, host)
+	if err != nil && hasEnvProxy() && net.ParseIP(host) == nil {
+		// One short retry: a transient local DNS miss behind a proxy used to
+		// fail the whole AI decision cycle (2026-10-07 review N3: 88 lost
+		// cycles in 3 days on open.bigmodel.cn).
+		time.Sleep(dnsRetryDelay)
+		ips, err = lookupIPAddr(ctx, host)
+	}
 	if err != nil {
 		// If DNS resolution fails, we still need to check if it's an IP address directly
 		ip := net.ParseIP(host)
@@ -145,6 +182,14 @@ func ValidateURL(rawURL string) error {
 		// unresolvable name could resolve to a private IP on the proxy's
 		// side, so fail closed (2026-10-03 review P2).
 		if hasEnvProxy() {
+			// Built-in public API endpoints (AI providers, exchanges, market
+			// data) are not user-chosen destinations; their public DNS names
+			// cannot be steered to an internal address by the caller, so a
+			// local resolver hiccup must not block them. User-supplied hosts
+			// stay fail-closed.
+			if isTrustedPublicHost(lowerHost) {
+				return nil
+			}
 			return &SSRFError{URL: rawURL, Reason: "DNS resolution failed while a proxy is configured — destination cannot be verified"}
 		}
 		return nil
