@@ -72,7 +72,7 @@ type CandidateCoin struct {
 	// Short-side metadata (short_scan sourced candidates only):
 	ShortScore      float64  `json:"short_score,omitempty"`       // 0-100 short suitability
 	ShortGrade      string   `json:"short_grade,omitempty"`       // strong / medium / weak
-	ShortConfirmed  bool     `json:"short_confirmed,omitempty"`   // scanner topping confirmation (顶背离/假突破/破EMA20/费率回落) — feeds SHORT_TOP_CONFIRM_MISSING
+	ShortConfirmed  bool     `json:"short_confirmed,omitempty"`   // scanner topping confirmation (顶背离/假突破 only; EMA20 break and funding rollover are NOT included, review 2026-10-07) — feeds SHORT_TOP_CONFIRM_MISSING
 	ShortReasons    []string `json:"short_reasons,omitempty"`     // topping confirmations printed
 	ShortFundingAnn float64  `json:"short_funding_ann,omitempty"` // funding annualized % AT SCAN TIME
 	ShortScanAtMs   int64    `json:"short_scan_at_ms,omitempty"`  // when the scanner snapshot was taken
@@ -1073,7 +1073,9 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(fetch, "")
 	directionEmpty := len(anyCount) == 0
 	if directionEmpty || age > piggyDashMaxAge {
-		if !directionEmpty && len(symbols) == 0 {
+		// review 2026-10-07 S9: only a FRESH board may take this early return;
+		// a stale board with no match must fall through to the refresh below.
+		if !directionEmpty && len(symbols) == 0 && age <= piggyDashMaxAge {
 			logger.Infof("🐷 Piggy-dash board fresh but no %q match — not rescanning", direction)
 			return nil, fmt.Errorf("piggy-dash: no %q symbols on a fresh board", direction)
 		}
@@ -1122,6 +1124,29 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 		})
 	}
 	return candidates, nil
+}
+
+// shortScanPoolMinScore: review 2026-10-07 S1 — non-near_high candidates need
+// score >= 55 (medium+) to enter the pool.
+const shortScanPoolMinScore = 55.0
+
+// dedupeShortCandidates keeps one entry per symbol (the higher ShortScore;
+// first wins ties) preserving the relative order of the survivors. The
+// history pool and breakdown universe can emit the same symbol twice.
+func dedupeShortCandidates(in []CandidateCoin) []CandidateCoin {
+	best := make(map[string]int, len(in))
+	for i, c := range in {
+		if j, ok := best[c.Symbol]; !ok || c.ShortScore > in[j].ShortScore {
+			best[c.Symbol] = i
+		}
+	}
+	out := make([]CandidateCoin, 0, len(best))
+	for i, c := range in {
+		if best[c.Symbol] == i {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // getShortScanCoins returns the top 24h gainers ranked by short-suitability
@@ -1178,7 +1203,9 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 		// faced only weak evidence. weak+ only; the near_high slot above has
 		// its own ≥55 bar. Applies to every universe (gainer/hist/breakdown)
 		// — a sub-noise breakdown signal is not a continuation setup either.
-		if sig.Grade == "noise" {
+		// review 2026-10-07 S1: the journal showed score 40-55 averaging -0.43%
+		// (24h short return) vs +0.5% at 55-70, so the pool floor is medium+.
+		if sig.Score < shortScanPoolMinScore {
 			floorSkipped = append(floorSkipped, fmt.Sprintf("%s(%.0f)", sig.Symbol, sig.Score))
 			continue
 		}
@@ -1211,6 +1238,9 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	// pool — lower realized volatility and (journal baseline, small n)
 	// better win rate. Applied BEFORE the top-N cut so the weighting actually
 	// changes selection, not just prompt order.
+	// Dedupe BEFORE the boost/sort and the reserved near_high slot: a
+	// duplicate row must not push a distinct gainer out of the top-N cut.
+	candidates = dedupeShortCandidates(candidates)
 	e.applyUSStockSessionBoost(candidates, time.Now())
 	// Re-rank after the boost: the top-N cut below takes the slice head in
 	// scan order, so a boosted equity token must actually rise in the order
@@ -1255,8 +1285,8 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 			minOIMillions, len(skipped), skipped)
 	}
 	if len(floorSkipped) > 0 {
-		logger.Infof("🩸 Short-scan quality floor (grade=noise): skipped %d candidates %v",
-			len(floorSkipped), floorSkipped)
+		logger.Infof("🩸 Short-scan quality floor (score<%.0f): skipped %d candidates %v",
+			shortScanPoolMinScore, len(floorSkipped), floorSkipped)
 	}
 	var syms []string
 	for _, c := range candidates {
@@ -1270,6 +1300,17 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	return candidates, nil
 }
 
+// shortEvidenceAtMs: review 2026-10-07 S8 — slow-top (near_high) signals are
+// merged into the board from a cache up to ~60 min old; stamping them with
+// the board's scan time hid that. Prefer the signal's own GeneratedAt when it
+// is set and older than the board scan.
+func shortEvidenceAtMs(sig breakout.ShortSignal, scanAt time.Time) int64 {
+	if !sig.GeneratedAt.IsZero() && sig.GeneratedAt.Before(scanAt) {
+		return sig.GeneratedAt.UnixMilli()
+	}
+	return scanAt.UnixMilli()
+}
+
 // shortSignalToCandidate converts a scanner ShortSignal into a CandidateCoin.
 func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) CandidateCoin {
 	c := CandidateCoin{
@@ -1280,7 +1321,7 @@ func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) Candidat
 		ShortGrade:       sig.Grade,
 		ShortConfirmed:   sig.Confirmed,
 		ShortFundingAnn:  sig.FundingAnnualPct,
-		ShortScanAtMs:    scanAt.UnixMilli(),
+		ShortScanAtMs:    shortEvidenceAtMs(sig, scanAt),
 		ShortUniverse:    sig.Universe,
 		NearHighAlso:     sig.NearHighAlso,
 	}

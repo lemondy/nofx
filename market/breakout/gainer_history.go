@@ -216,25 +216,36 @@ func historyUniverseCandidates(hist *gainerHistoryFile, now time.Time, days int,
 		q    GainerQuote // live quote (the analysis input must be current)
 		peak float64     // recorded peak pump — the merit order
 	}
-	var rs []ranked
-	seen := make(map[string]bool, len(rs))
+	// review 2026-10-07 S7: aggregate the MAX recorded change per symbol over
+	// every in-window day BEFORE ranking. The old first-hit dedupe iterated a
+	// Go map, so the peak (and therefore the rank) depended on map order.
+	peaks := make(map[string]float64)
 	for day, entries := range hist.Days {
 		if day < cutoff {
 			continue
 		}
 		for _, e := range entries {
-			if covered[e.Symbol] || seen[e.Symbol] {
+			if covered[e.Symbol] {
 				continue
 			}
-			q, ok := index[e.Symbol]
-			if !ok {
+			if _, ok := index[e.Symbol]; !ok {
 				continue
 			}
-			seen[e.Symbol] = true
-			rs = append(rs, ranked{q: q, peak: e.Chg})
+			if p, ok := peaks[e.Symbol]; !ok || e.Chg > p {
+				peaks[e.Symbol] = e.Chg
+			}
 		}
 	}
-	sort.SliceStable(rs, func(i, j int) bool { return rs[i].peak > rs[j].peak })
+	rs := make([]ranked, 0, len(peaks))
+	for sym, peak := range peaks {
+		rs = append(rs, ranked{q: index[sym], peak: peak})
+	}
+	sort.Slice(rs, func(i, j int) bool {
+		if rs[i].peak != rs[j].peak {
+			return rs[i].peak > rs[j].peak
+		}
+		return rs[i].q.Symbol < rs[j].q.Symbol
+	})
 	if len(rs) > max {
 		rs = rs[:max]
 	}
