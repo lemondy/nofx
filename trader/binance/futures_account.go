@@ -15,11 +15,21 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	t.balanceCacheMutex.RLock()
 	if t.cachedBalance != nil && time.Since(t.balanceCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.balanceCacheTime)
+		// review 2026-10-07 B1-4: capture the snapshot before invalidation can clear it.
+		balance := t.cachedBalance
 		t.balanceCacheMutex.RUnlock()
 		logger.Infof("✓ Using cached account balance (cache age: %.1f seconds ago)", cacheAge.Seconds())
-		return t.cachedBalance, nil
+		return balance, nil
 	}
 	t.balanceCacheMutex.RUnlock()
+
+	// review 2026-10-07 B1-4: serialize cache misses with invalidation and
+	// recheck under the write lock so stale fetches cannot undo invalidation.
+	t.balanceCacheMutex.Lock()
+	defer t.balanceCacheMutex.Unlock()
+	if t.cachedBalance != nil && time.Since(t.balanceCacheTime) < t.cacheDuration {
+		return t.cachedBalance, nil
+	}
 
 	// Cache expired or doesn't exist, call API
 	logger.Infof("🔄 Cache expired, calling Binance API to get account balance...")
@@ -49,10 +59,8 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 		account.TotalUnrealizedProfit)
 
 	// Update cache
-	t.balanceCacheMutex.Lock()
 	t.cachedBalance = result
 	t.balanceCacheTime = time.Now()
-	t.balanceCacheMutex.Unlock()
 
 	return result, nil
 }

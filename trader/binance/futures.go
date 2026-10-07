@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"nofx/hook"
 	"nofx/logger"
 	"strings"
@@ -97,6 +98,9 @@ type FuturesTrader struct {
 	syncAuthAlerted atomic.Bool
 }
 
+// binanceHTTPTimeout bounds every Binance REST call (review 2026-10-07 B1-4).
+const binanceHTTPTimeout = 15 * time.Second
+
 // NewFuturesTrader creates futures trader
 func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
 	client := futures.NewClient(apiKey, secretKey)
@@ -104,6 +108,20 @@ func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
 	hookRes := hook.HookExec[hook.NewBinanceTraderResult](hook.NEW_BINANCE_TRADER, userId, client)
 	if hookRes != nil && hookRes.GetResult() != nil {
 		client = hookRes.GetResult()
+	}
+	// review 2026-10-07 B1-4: go-binance defaults to http.DefaultClient (no
+	// timeout) and every call here uses context.Background(). The position /
+	// balance caches now hold their write lock across a cache-miss fetch, so
+	// one hung connection would freeze every reader (protection monitor
+	// included). Bound every request; a hook-supplied client keeps its
+	// transport (proxy) and only gains the timeout.
+	switch {
+	case client.HTTPClient == nil || client.HTTPClient == http.DefaultClient:
+		client.HTTPClient = &http.Client{Timeout: binanceHTTPTimeout}
+	case client.HTTPClient.Timeout == 0:
+		hc := *client.HTTPClient
+		hc.Timeout = binanceHTTPTimeout
+		client.HTTPClient = &hc
 	}
 
 	// Sync time to avoid "Timestamp ahead" error

@@ -1349,6 +1349,12 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 			break
 		}
 	}
+	// review 2026-10-07 B1-1: Binance shorts retain a signed quantity;
+	// reduction accounting and order quantities always use its finite magnitude.
+	if math.IsNaN(qty) || math.IsInf(qty, 0) {
+		return fmt.Errorf("❌ %s has invalid %s position quantity: %g", decision.Symbol, side, qty)
+	}
+	qty = math.Abs(qty)
 	if qty <= 0 {
 		return fmt.Errorf("❌ %s has no open %s position", decision.Symbol, side)
 	}
