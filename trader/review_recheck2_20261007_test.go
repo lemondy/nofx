@@ -61,14 +61,14 @@ func TestFix8PendingBTCUnknownMirrorsPolicy(t *testing.T) {
 
 	// Long + filter enabled + unknown BTC → the documented fail-open keeps it.
 	atL, peL, mL := build("long", false)
-	atL.processPendingEntries()
+	atL.processPendingEntries(true)
 	if atL.getPendingEntry(peL.Symbol, peL.Side) == nil || mL.cancelCalls != 0 {
 		t.Fatalf("long placement must survive unknown BTC data (fail-open policy), cancelled=%d", mL.cancelCalls)
 	}
 
 	// Short + opt-in filter + unknown BTC → BTC_REGIME_UNKNOWN cancels it.
 	atS, _, mS := build("short", true)
-	atS.processPendingEntries()
+	atS.processPendingEntries(true)
 	if mS.cancelCalls == 0 {
 		t.Fatal("short placement under the opt-in filter must fail closed on unknown BTC data")
 	}

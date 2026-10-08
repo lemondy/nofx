@@ -148,6 +148,9 @@ type AutoTrader struct {
 	// btcTrendClosesFn, when set (tests), replaces the BTC 4h closes fetch;
 	// nil = live kernel.BTC4hTrendCloses.
 	btcTrendClosesFn           func(limit int) []float64
+	// marketDataFn, when set (tests), replaces the generic execution-quote
+	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
+	marketDataFn func(symbol string) (*market.Data, error)
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)

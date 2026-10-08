@@ -11,6 +11,10 @@ import (
 // unavailable, the caller must skip the trading operation rather than use a
 // stale candle close or another venue's price.
 func (at *AutoTrader) getMarketData(symbol string) (*market.Data, error) {
+	// Test seam (same pattern as recheckDataFn): nil = live path.
+	if at.marketDataFn != nil {
+		return at.marketDataFn(symbol)
+	}
 	price, err := at.trader.GetMarketPrice(symbol)
 	if err != nil {
 		return nil, fmt.Errorf("get %s execution price from %s: %w", symbol, at.exchange, err)

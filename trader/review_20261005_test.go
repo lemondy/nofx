@@ -128,7 +128,7 @@ func TestAudit05DailyHaltMustCancelPendingRisk(t *testing.T) {
 		t.Fatal("fixture did not halt")
 	}
 	at.pendingEntries = map[string]*pendingEntry{"XUSDT|long": {Symbol: "XUSDT", Side: "long", Price: 100, Quantity: 1, StopLoss: 95, TakeProfit: 110, OrderID: "pending", PlacedAt: time.Now()}}
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if m.cancelCalls == 0 {
 		t.Error("daily halt active, existing NEW entry remains live")
 	}
@@ -183,8 +183,8 @@ func TestFix05AccountCancelFaultClearsOnlyAfterReconciliation(t *testing.T) {
 		t.Fatal("nonterminal cancellation did not keep the account blocked and recovery plan")
 	}
 	m.status = map[string]interface{}{"status": "CANCELED", "executedQty": 0.0}
-	at.processPendingEntries()
-	at.processPendingEntries()
+	at.processPendingEntries(true)
+	at.processPendingEntries(true)
 	if at.protectionFaultReason() != "" || at.getPendingEntry("XUSDT", "long") != nil {
 		t.Fatal("confirmed terminal cancellation left a permanent account fault")
 	}
@@ -211,7 +211,7 @@ func TestFix05InvalidPartialFillMustPersistUntilExitConfirmed(t *testing.T) {
 	if m.closeCalls != 1 || m.cancelCalls == 0 || pe.ProtectedQty != 0 {
 		t.Fatal("invalid partial fill was not cancelled/exited, or was marked protected")
 	}
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if at.getPendingEntry("XUSDT", "long") != nil {
 		t.Fatal("confirmed terminal and flat order not retired")
 	}

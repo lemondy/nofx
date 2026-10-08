@@ -143,7 +143,7 @@ func TestReview03CanceledPartialFailureMustKeepPlan(t *testing.T) {
 	m := &review03Mock{slErr: errors.New("simulated SL rejection"), status: map[string]interface{}{"status": "CANCELED", "executedQty": 0.4, "avgPrice": 100.0}}
 	at := review03Trader(m)
 	at.setPendingEntry(review03Plan())
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if at.getPendingEntry("XUSDT", "long") == nil {
 		t.Fatal("canceled partially-filled order lost recovery plan despite failed SL")
 	}
@@ -162,7 +162,7 @@ func TestReview03FilledWithoutReceiptMustKeepPlan(t *testing.T) {
 	m := &review03Mock{status: map[string]interface{}{"status": "FILLED", "executedQty": 0.0, "avgPrice": 0.0}}
 	at := review03Trader(m)
 	at.setPendingEntry(review03Plan())
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if at.getPendingEntry("XUSDT", "long") == nil {
 		t.Fatal("FILLED without quantity/price dropped pending plan and reported protected without placing any SL/TP")
 	}

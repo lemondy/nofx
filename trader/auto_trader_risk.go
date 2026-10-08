@@ -104,7 +104,7 @@ func (at *AutoTrader) safeProtectionPass() {
 			logger.Errorf("🛡️ [%s] protection monitor pass panicked: %v", at.name, r)
 		}
 	}()
-	at.processPendingEntries()
+	at.processPendingEntries(false) // 30s pass: protection & fills only — no direction wobble cancels
 	at.processProtectionWatchdog()
 	if at.gridState != nil && at.config.StrategyConfig != nil && at.config.StrategyConfig.GridConfig != nil {
 		at.syncGridState()

@@ -220,7 +220,7 @@ func TestTerminalReceiptCannotReuseRevokedProtectionWatermark(t *testing.T) {
 	m.orders = nil
 	m.invisible = true
 	m.status = map[string]interface{}{"status": "CANCELED", "executedQty": 0.4, "avgPrice": 100.0}
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if at.getPendingEntry("XUSDT", "long") == nil || pe.ProtectedQty != 0 {
 		t.Fatal("disappeared coverage cleaned up with stale watermark")
 	}
@@ -232,7 +232,7 @@ func TestMalformedOrRegressingTerminalReceiptsKeepRecovery(t *testing.T) {
 		pe := review03Plan()
 		pe.ExecutedQty = 0.4
 		at.setPendingEntry(pe)
-		at.processPendingEntries()
+		at.processPendingEntries(true)
 		if at.getPendingEntry("XUSDT", "long") == nil {
 			t.Fatalf("untrusted receipt erased plan: %v", receipt)
 		}

@@ -39,7 +39,7 @@ func (at *AutoTrader) runCycle() error {
 
 	// Process limit-entry pending orders first: finalize fills, cancel
 	// expired/invalidated ones — their outcome shapes this cycle's context.
-	at.processPendingEntries()
+	at.processPendingEntries(true) // cycle boundary: full direction recheck
 
 	// Volatility-targeted rescale (80/120 band) + rule-based trailing stop.
 	at.processVolTargetAndTrailing()

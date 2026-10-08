@@ -80,7 +80,7 @@ func TestReview20261001ProtectionFailureMustNotAdvanceWatermark(t *testing.T) {
 func TestReview20261001FilledSLFailureMustKeepRecoveryPlan(t *testing.T) {
 	at := review20261001Trader(&review20261001Mock{slErr: errors.New("simulated SL rejection")})
 	at.setPendingEntry(&pendingEntry{Symbol: "XUSDT", Side: "long", Price: 100, Quantity: 1, StopLoss: 95, TakeProfit: 110, OrderID: "test", PlacedAt: time.Now()})
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if at.getPendingEntry("XUSDT", "long") == nil {
 		t.Fatal("filled entry's durable recovery plan dropped after SL placement failure")
 	}

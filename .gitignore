@@ -129,3 +129,6 @@ PR_DESCRIPTION.md
 config.db-shm
 config.db-wal
 cmd/placetp/placetp
+nofx.bak-*
+*.bak-2*
+nofx.bak-20261007-*

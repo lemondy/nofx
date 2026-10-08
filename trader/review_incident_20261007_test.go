@@ -115,7 +115,7 @@ func TestFix7PendingSurvivesRecheckWithStrategyData(t *testing.T) {
 		recheckRan = true
 		return fix7StrategyData(tfs, true), nil
 	}
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 
 	if !recheckRan {
 		t.Fatalf("injected recheck fetch never ran (seam bypassed) — halt=%q", at.pendingAccountHaltReason())
@@ -172,7 +172,7 @@ func TestFix7PendingStillCancelsOnDirectionLoss(t *testing.T) {
 		data.CurrentPrice = 99.0
 		return data, nil
 	}
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 
 	if m.cancelCalls == 0 {
 		t.Fatal("a direction-invalidated placement was left resting")
@@ -207,12 +207,73 @@ func TestFix7FilledPendingUnaffectedByRecheck(t *testing.T) {
 		recheckRan = true
 		return nil, fmt.Errorf("recheck must not run for filled orders")
 	}
-	at.processPendingEntries()
+	at.processPendingEntries(true)
 	if recheckRan {
 		t.Fatal("the direction recheck ran for a FILLED order")
 	}
 	if at.getPendingEntry("XUSDT", "long") != nil {
 		t.Fatal("filled placement not retired")
+	}
+}
+
+
+
+// Option ② (user decision 2026-10-08): the 30s protection pass must NOT
+// direction-cancel a resting entry — micro-trend/consensus wobble only
+// cancels at the cycle boundary. Fast paths (fill detection, SL-crossed
+// invalidation, account halt) stay on the 30s cadence.
+func TestFix9ThirtySecondPassKeepsDirectionValidEntry(t *testing.T) {
+	m := &audit05Mock{status: map[string]interface{}{"status": "NEW", "executedQty": 0.0}}
+	at := riskTestTrader(store.RiskControlConfig{EntryTimingGate: true})
+	at.config.StrategyConfig = fix7Config()
+	at.trader = m
+	at.pendingEntries = map[string]*pendingEntry{}
+	fix7AnchorDay(at)
+	tfs := at.recheckConfiguredTimeframes("XUSDT")
+	// FALLING 15m data: the cycle-boundary recheck WOULD cancel this long
+	// (MICRO_TREND / consensus) — but a 30s pass must leave it resting.
+	at.recheckDataFn = func(symbol string) (*market.Data, error) {
+		data := fix7StrategyData(tfs, false)
+		data.CurrentPrice = 99.0
+		return data, nil
+	}
+	at.setPendingEntry(&pendingEntry{Symbol: "XUSDT", Side: "long", Price: 100, Quantity: 1, StopLoss: 95, TakeProfit: 110, OrderID: "entry", PlacedAt: time.Now()})
+	at.processPendingEntries(false)
+	if m.cancelCalls != 0 {
+		t.Fatalf("30s pass direction-cancelled a resting entry (%d cancels) — option ② regression", m.cancelCalls)
+	}
+	if at.getPendingEntry("XUSDT", "long") == nil {
+		t.Fatal("30s pass dropped a direction-wobbled but resting entry")
+	}
+	// The same state on a CYCLE boundary still cancels (direction discipline
+	// is preserved, just de-frequenced).
+	at.processPendingEntries(true)
+	if m.cancelCalls == 0 {
+		t.Fatal("cycle-boundary recheck did not cancel the direction-invalidated entry")
+	}
+}
+
+// SL-crossed invalidation stays on the 30s pass: price crossing the stop
+// before entry is a hard fact, not a wobble.
+func TestFix9ThirtySecondPassStillInvalidatesCrossedStop(t *testing.T) {
+	m := &audit05Mock{cancelTerminal: true, status: map[string]interface{}{"status": "NEW", "executedQty": 0.0}}
+	at := riskTestTrader(store.RiskControlConfig{EntryTimingGate: true})
+	at.config.StrategyConfig = fix7Config()
+	at.trader = m
+	at.pendingEntries = map[string]*pendingEntry{}
+	fix7AnchorDay(at)
+	at.marketDataFn = func(symbol string) (*market.Data, error) {
+		data := fix7StrategyData([]string{"15m"}, true)
+		data.CurrentPrice = 94.0 // below the 95 stop: setup is dead
+		return data, nil
+	}
+	at.setPendingEntry(&pendingEntry{Symbol: "XUSDT", Side: "long", Price: 100, Quantity: 1, StopLoss: 95, TakeProfit: 110, OrderID: "entry", PlacedAt: time.Now()})
+	at.processPendingEntries(false)
+	if m.cancelCalls == 0 {
+		t.Fatal("price crossed the stop before entry — the 30s pass must invalidate immediately")
+	}
+	if at.getPendingEntry("XUSDT", "long") != nil {
+		t.Fatal("invalidated placement not retired")
 	}
 }
 

@@ -438,7 +438,14 @@ func nextSlotCount(openPositions int, pendingKeys []string, key string) int {
 // processPendingEntries runs once per decision cycle: finalizes fills
 // (SL/TP keep their structural prices), cancels expired or invalidated
 // orders, and drops externally-cancelled ones.
-func (at *AutoTrader) processPendingEntries() {
+// processPendingEntries runs the pending-entry lifecycle. directionRecheck:
+// the fresh-gate re-validation (micro-trend / consensus / absolute bans) is
+// a CYCLE-BOUNDARY concern (user decision 2026-10-08, option ②) — the 30s
+// protection pass passes false and keeps only the fast paths (account halt,
+// fills, SL-crossed invalidation, lifetime expiry, recovery). Re-validating
+// direction at 30s granularity killed placements on the first 15m wobble:
+// 6/15 cancelled at 21s-9m in the 10-07/10-08 sample, zero time to fill.
+func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 	if len(at.accountPendingEntries()) > 0 {
 		if reason := at.pendingAccountHaltReason(); reason != "" {
 			at.cancelAccountPendingRisk(reason)
@@ -480,7 +487,7 @@ func (at *AutoTrader) processPendingEntries() {
 			continue
 		}
 		st, _ := status["status"].(string)
-		if strings.EqualFold(st, "NEW") || strings.EqualFold(st, "PARTIALLY_FILLED") {
+		if directionRecheck && (strings.EqualFold(st, "NEW") || strings.EqualFold(st, "PARTIALLY_FILLED")) {
 			if reason := at.pendingDirectionBlocked(pe); reason != "" {
 				// Incident 2026-10-07: successful cancels used to be silent —
 				// only the FAILURE path logged. Without this line the 29
