@@ -30,6 +30,7 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 		TpFirst   int     `json:"tp_first"`
 		SlFirst   int     `json:"sl_first"`
 		Timeout   int     `json:"timeout"`
+		Unfilled  int     `json:"unfilled"`
 		NoData    int     `json:"no_data"`
 		WinRate   float64 `json:"win_rate_pct"`
 		SumR      float64 `json:"sum_r"`
@@ -70,6 +71,8 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 					t.SlFirst++
 				case "timeout":
 					t.Timeout++
+				case "unfilled":
+					t.Unfilled++
 				default:
 					t.NoData++
 				}

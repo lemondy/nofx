@@ -468,10 +468,7 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 		return
 	}
 
-	maxCycles := 3
-	if at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles > 0 {
-		maxCycles = at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles
-	}
+	maxCycles := at.limitEntryMaxCycles()
 	lifetime := limitEntryLifetime(maxCycles, at.config.ScanInterval)
 
 	for _, sym := range symbols {
@@ -661,6 +658,14 @@ func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
 	at.dropPendingEntry(pe.Symbol, pe.Side)
 	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>限价单终态已确认 %s</b>\n已成交 %.6g，残量保护已核验", notify.Escape(pe.Symbol), statusFloat(status, "executedQty")))
 	return nil
+}
+
+// review 2026-10-08 D: live and shadow entries share the configured cycle limit.
+func (at *AutoTrader) limitEntryMaxCycles() int {
+	if at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles > 0 {
+		return at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles
+	}
+	return 3
 }
 
 // limitEntryLifetime resolves a limit order's unfilled lifetime: the older

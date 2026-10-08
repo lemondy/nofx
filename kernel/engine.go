@@ -278,6 +278,8 @@ type GateState struct {
 	// (live price or limit anchor); TP is rr_scan.first_rr_ge_target.
 	LongEntryPrice  float64
 	ShortEntryPrice float64
+	LongEntryBasis  string
+	ShortEntryBasis string
 	LongTakeProfit  float64
 	ShortTakeProfit float64
 	LongFailed      []string

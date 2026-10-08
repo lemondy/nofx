@@ -2,6 +2,7 @@ package trader
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -21,9 +22,12 @@ import (
 // ============================================================================
 
 // gateShadowHorizon: how long after the block the counterfactual is resolved
-// against 1h candles. 8h covers the strategy's typical trade duration (the
+// against 15m candles. 8h covers the strategy's typical trade duration (the
 // 30d median hold is well under it) without dragging the evaluation queue.
 const gateShadowHorizon = 8 * time.Hour
+
+// shadowBarDur is the candle duration used by both shadow evaluation passes.
+const shadowBarDur = 15 * time.Minute
 
 // gateShadowHorizon48 (E1, QUANT_REVIEW 09-22): second pass. At 8h the live
 // data resolved 39/56 as `timeout` — structural TPs rarely trigger that
@@ -47,12 +51,13 @@ func (at *AutoTrader) recordGateShadowBlocks(states map[string]*kernel.GateState
 			dir     string
 			allowed bool
 			entry   float64
+			basis   string
 			sl      float64
 			tp      float64
 			failed  []string
 		}{
-			{"long", gs.LongAllowed, gs.LongEntryPrice, gs.LongStopPlanPrice, gs.LongTakeProfit, gs.LongFailed},
-			{"short", gs.ShortAllowed, gs.ShortEntryPrice, gs.ShortStopPlanPrice, gs.ShortTakeProfit, gs.ShortFailed},
+			{"long", gs.LongAllowed, gs.LongEntryPrice, gs.LongEntryBasis, gs.LongStopPlanPrice, gs.LongTakeProfit, gs.LongFailed},
+			{"short", gs.ShortAllowed, gs.ShortEntryPrice, gs.ShortEntryBasis, gs.ShortStopPlanPrice, gs.ShortTakeProfit, gs.ShortFailed},
 		} {
 			// Only COMPLETE counterfactuals are informative: no plan (the
 			// very reason for the block) leaves nothing to evaluate.
@@ -77,6 +82,7 @@ func (at *AutoTrader) recordGateShadowBlocks(states map[string]*kernel.GateState
 				CycleNumber:  cycleNumber,
 				BlockedCodes: strings.Join(d.failed, ","),
 				EntryPrice:   d.entry,
+				EntryBasis:   d.basis,
 				StopPrice:    d.sl,
 				TakeProfit:   d.tp,
 				PlanRR:       reward / risk,
@@ -93,7 +99,7 @@ func (at *AutoTrader) recordGateShadowBlocks(states map[string]*kernel.GateState
 	}
 }
 
-// evaluateGateShadowBlocks resolves matured counterfactuals against 1h
+// evaluateGateShadowBlocks resolves matured counterfactuals against 15m
 // candles: which of TP / SL was touched first within the horizon (a bar
 // touching BOTH counts as sl_first — conservative, the stop is assumed hit
 // intra-bar before the target). Two passes: 8h writes `outcome`, 48h writes
@@ -102,22 +108,24 @@ func (at *AutoTrader) evaluateGateShadowBlocks() {
 	if at.store == nil {
 		return
 	}
+	fillWindow := limitEntryLifetime(at.limitEntryMaxCycles(), at.config.ScanInterval)
 	// --- 8h pass ---
 	rows, err := at.store.GateShadow().ListMatured(at.id, time.Now().UTC().Add(-gateShadowHorizon))
 	if err != nil {
 		return
 	}
 	for _, row := range rows {
-		data, err := at.getMarketTimeframes(row.Symbol, []string{"1h"}, "1h", 32)
+		now := time.Now().UTC()
+		data, err := at.getMarketTimeframes(row.Symbol, []string{"15m"}, "15m", shadowKlineCount(row.CreatedAt, now))
 		if err != nil || data == nil {
 			continue // transient — retry next cycle
 		}
-		tf := data.TimeframeData["1h"]
+		tf := data.TimeframeData["15m"]
 		if tf == nil || len(tf.Klines) == 0 {
 			at.finishShadow(row, "no_data", 0)
 			continue
 		}
-		outcome, exit := resolveShadowOutcome(row, tf.Klines, row.CreatedAt)
+		outcome, exit := resolveShadowOutcome(row, tf.Klines, gateShadowHorizon, fillWindow, now)
 		at.finishShadow(row, outcome, exit)
 	}
 
@@ -127,37 +135,89 @@ func (at *AutoTrader) evaluateGateShadowBlocks() {
 		return
 	}
 	for _, row := range rows48 {
-		data, err := at.getMarketTimeframes(row.Symbol, []string{"1h"}, "1h", 56)
+		now := time.Now().UTC()
+		data, err := at.getMarketTimeframes(row.Symbol, []string{"15m"}, "15m", shadowKlineCount(row.CreatedAt, now))
 		if err != nil || data == nil {
 			continue // transient — retry next cycle
 		}
-		tf := data.TimeframeData["1h"]
+		tf := data.TimeframeData["15m"]
 		if tf == nil || len(tf.Klines) == 0 {
 			at.finishShadow48(row, "no_data", 0)
 			continue
 		}
-		outcome, exit := resolveShadowOutcome(row, tf.Klines, row.CreatedAt)
+		outcome, exit := resolveShadowOutcome(row, tf.Klines, gateShadowHorizon48, fillWindow, now)
 		at.finishShadow48(row, outcome, exit)
 	}
 }
 
-// resolveShadowOutcome walks 1h candles from the block's creation to the
-// first TP/SL touch (same-bar both-touch → sl_first), else times out at the
-// last close.
-func resolveShadowOutcome(row *store.GateShadowBlock, klines []market.KlineBar, start time.Time) (string, float64) {
-	outcome, exit := "timeout", 0.0
+// review 2026-10-08 E: reach back to the block even after a late evaluation.
+// Count 15m bars; the 1500-bar market/Binance cap covers about 15.6 days.
+// Older rows with incomplete coverage resolve as no_data.
+func shadowKlineCount(start, now time.Time) int {
+	count := math.Ceil(float64(now.Sub(start))/float64(shadowBarDur)) + 2
+	if count > 1500 {
+		return 1500
+	}
+	if count < 2 {
+		return 2
+	}
+	return int(count)
+}
+
+// resolveShadowOutcome walks a complete, closed 15m window, then resolves
+// fills and TP/SL touches. review 2026-10-08 D/E.
+func resolveShadowOutcome(row *store.GateShadowBlock, klines []market.KlineBar, horizon, fillWindow time.Duration, now time.Time) (outcome string, exit float64) {
+	start, end := row.CreatedAt, row.CreatedAt.Add(horizon)
+	expected := start.Truncate(shadowBarDur)
+	if expected.Before(start) {
+		expected = expected.Add(shadowBarDur)
+	}
+	lastClose := end.Truncate(shadowBarDur)
+	bars := make([]market.KlineBar, 0, len(klines))
 	for _, k := range klines {
-		barEnd := time.UnixMilli(k.Time).Add(time.Hour)
-		if barEnd.Before(start) {
-			continue // bar closed before the block existed
-		}
-		if k.High <= 0 {
+		open := time.UnixMilli(k.Time)
+		closeTime := open.Add(shadowBarDur)
+		// Drop the bar containing the block: its extremes may predate it.
+		// Dropping it loses at most 15m of the fill window (review 2026-10-08 E).
+		if open.Before(start) || closeTime.After(end) || closeTime.After(now) {
 			continue
 		}
+		// Validate coverage before scoring even an early TP/SL; missing
+		// first, interior or last candles must never produce a partial verdict.
+		if !open.Equal(expected) || k.High <= 0 || k.Low <= 0 || k.Close <= 0 {
+			return "no_data", 0
+		}
+		bars = append(bars, k)
+		expected = closeTime
+	}
+	if len(bars) == 0 || !expected.Equal(lastClose) {
+		return "no_data", 0
+	}
+
+	filled := row.EntryBasis != "limit_anchor" // live_price and legacy ""
+	// A bar may fill if its open precedes expiry; after dropping the
+	// containing bar, a 30m lifetime leaves 1–2 candidate 15m bars.
+	fillEnd := start.Add(fillWindow)
+	for _, k := range bars {
 		hitTP := (row.Direction == "long" && k.High >= row.TakeProfit) ||
 			(row.Direction == "short" && k.Low <= row.TakeProfit && k.Low > 0)
 		hitSL := (row.Direction == "long" && k.Low <= row.StopPrice) ||
 			(row.Direction == "short" && k.High >= row.StopPrice)
+		if !filled {
+			if !time.UnixMilli(k.Time).Before(fillEnd) {
+				return "unfilled", 0
+			}
+			filled = (row.Direction == "long" && k.Low <= row.EntryPrice) ||
+				(row.Direction == "short" && k.High >= row.EntryPrice)
+			if !filled {
+				continue
+			}
+			if hitSL {
+				return "sl_first", row.StopPrice
+			}
+			// Fill-bar TP may have printed before entry; count only its SL.
+			continue
+		}
 		if hitSL {
 			// same-bar both-touch → conservative sl_first
 			return "sl_first", row.StopPrice
@@ -165,12 +225,11 @@ func resolveShadowOutcome(row *store.GateShadowBlock, klines []market.KlineBar, 
 		if hitTP {
 			return "tp_first", row.TakeProfit
 		}
-		exit = k.Close
 	}
-	if outcome == "timeout" && exit == 0 {
-		exit = row.EntryPrice
+	if !filled {
+		return "unfilled", 0
 	}
-	return outcome, exit
+	return "timeout", bars[len(bars)-1].Close
 }
 
 func (at *AutoTrader) finishShadow(row *store.GateShadowBlock, outcome string, exit float64) {

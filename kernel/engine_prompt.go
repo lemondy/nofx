@@ -1822,6 +1822,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				if sig.HardGate.Long != nil {
 					gs.LongStopPlanPrice = sig.HardGate.Long.StopPlanPrice
 					gs.LongEntryPrice = sig.HardGate.Long.EntryPrice
+					gs.LongEntryBasis = sig.HardGate.Long.EntryBasis
 					gs.LongFailed = sig.HardGate.Long.Failed
 					gs.LongMarketException = sig.HardGate.Long.MarketException
 					gs.LongLimitAllowed = sig.HardGate.Long.LimitAllowed
@@ -1841,6 +1842,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				if sig.HardGate.Short != nil {
 					gs.ShortStopPlanPrice = sig.HardGate.Short.StopPlanPrice
 					gs.ShortEntryPrice = sig.HardGate.Short.EntryPrice
+					gs.ShortEntryBasis = sig.HardGate.Short.EntryBasis
 					gs.ShortFailed = sig.HardGate.Short.Failed
 					gs.ShortMarketException = sig.HardGate.Short.MarketException
 					gs.ShortLimitAllowed = sig.HardGate.Short.LimitAllowed
