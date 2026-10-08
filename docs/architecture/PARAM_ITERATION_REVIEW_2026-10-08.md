@@ -10,10 +10,10 @@
 | --- | --- | --- | --- | --- |
 | 1 | NEGATIVE_EDGE 健康门（`kernel/engine_prompt.go` `ResolveStrategyEdge`） | 滚动 PF<0.9 时开仓追加硬门 | **是，每周期** | A 已修；B 维持现状 |
 | 2 | 锚点偏移 ATR 缩放（`kernel/anchor_offset.go`） | 限价偏移 / 留白阈值随 ATR(1h) | 是（按当时波动率，不从结果学习） | 正确 |
-| 3 | Breakout 回测调参（`market/breakout/backtest.go` `TuneFromBacktest`） | strong/medium 阈值，每 7 天 | 否：只写 `data/breakout_backtest.json`，`ApplyParams` 无生产调用 | 安全；统计偏弱（J） |
+| 3 | Breakout 回测调参（`market/breakout/backtest.go` `TuneFromBacktest`） | strong/medium 阈值，每 7 天 | 否：只写 `data/breakout_backtest.json`，`ApplyParams` 无生产调用 | J 已修 |
 | 4 | 做空权重调参器（`market/breakout/shorttuner.go`） | 9 个做空因子权重 | 否：只写提案；代码不会设置 `ShortWeightsValidated` | G 已修 |
 | 5 | Gate 影子拦截（`trader/auto_trader_shadow.go`, `api/gate_shadow.go`） | min_rr / 共识 / 偏离等阈值的校准数据 | 否，仅观测 | C/D/E/F 已修 |
-| 6 | AI 复盘提规则（`api/handler_review.go`） | 硬/软规则 | 人工批准后生效，加载失败 fail-closed | 流程正确（K） |
+| 6 | AI 复盘提规则（`api/handler_review.go`） | 硬/软规则 | 人工批准后生效，加载失败 fail-closed | K 已修 |
 | 7 | 入场质量分桶（`store/entry_assessment.go` `BucketStats`） | 自评分→胜率校准 | 否，仅观测 | H 已修 |
 | 8 | 策略版本效果（`store/strategy_version.go`） | 各配置版本实盘表现 | 否，仅展示 | I 已修 |
 
@@ -57,6 +57,14 @@ D：入场价常为限价锚点，旧评估默认拦截时刻即成交，价格�
 
 只统计 AI 单（`excluded_manual / excluded_unattributed` 显示排除数）；<20 笔标 `low_sample`；胜率附 Wilson 95% 区间；`crossed_version` 标出平仓已在下一版本生效后的单数。前端版本面板同步展示。
 
+### J. Breakout 回测按独立交易计样本（2026-10-09）
+
+阈值统计改用"一币一仓、持有 24h"挑出的独立交易（同币相邻两笔间隔 ≥24h），样本门槛 40/15 按独立交易计；候选须在测试集上 t ≥ 2。跨币种相关未消除，t 仍偏乐观，继续只出研究提案。关键位按小时重建（注释已更正）。
+
+### K. AI 规则由程序实测核验（2026-10-09）
+
+硬规则提案在近 90 天全部已平仓 AI 单上用实盘同一套规则引擎核验（supported / weak / contradicted / unverifiable / soft）；应用时服务端重算，证据不足或矛盾直接拒绝，结果存入 `verified_stats`。规则列表显示 30 天触发数、待复查标记，可重新核验。
+
 ## 3. B：PF 混算手动单——维持现状（用户决定 2026-10-08）
 
 `PositionStore.getStats`（NEGATIVE_EDGE 的 PF 来源）不按归属过滤，订单同步会导入整个账户，手动单一并计入。连亏熔断已按 `ai_managed` 过滤，PF 这条路没有。
@@ -73,10 +81,10 @@ D：入场价常为限价锚点，旧评估默认拦截时刻即成交，价格�
 
 若日后切换：归属口径采用**复盘日志归属**（按开仓决策匹配，已回填历史，窗口完整）。持仓表 `trader_positions.ai_managed` 在 09-29 前全部为 0，用它过滤会把早期 AI 单当成手动单剔除；两套归属在 09-29 后有 13 笔不一致，切换前应先核对。
 
-## 4. 待修（会误导调参的方法偏差）
+## 4. 待修
 
-- **J Breakout 回测**：注释"每 UTC 天重建关键位"实为每小时（无害）；stride 3 根 15m 配 24h 标签，样本高度重叠，40/15 样本门槛并非独立样本；验证只比均值无显著性。只出提案，风险低。
-- **K AI 规则**：">=3 笔支撑"只在提示词中，代码不校验；规则无过期、无事后效果追踪；输入仅取已复盘单，有选择偏差。
+无。A、C–K 已于 2026-10-08/09 全部修复（见第 2 节）；B 按用户决定维持现状（见第 3 节）。
+
 
 ## 5. 正确之处
 
