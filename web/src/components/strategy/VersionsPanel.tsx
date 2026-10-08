@@ -227,6 +227,11 @@ export function VersionsPanel({
                     <span className="text-[10px] text-nofx-text-muted">
                       {tv('statsTitle', language)}
                     </span>
+                    {stats.low_sample && stats.trades > 0 && (
+                      <span className="text-[9px] px-1 rounded bg-nofx-text-muted/15 text-nofx-text-muted">
+                        {tv('lowSample', language)}
+                      </span>
+                    )}
                   </div>
                   {stats.trades === 0 ? (
                     <p className="text-xs text-nofx-text-muted opacity-70">
@@ -252,6 +257,14 @@ export function VersionsPanel({
                         </div>
                         <div className="text-xs font-medium text-nofx-text">
                           {stats.win_rate.toFixed(1)}%
+                          {/* review 2026-10-09 I: Wilson 95% interval */}
+                          {stats.win_rate_hi != null && (
+                            <span className="text-[9px] text-nofx-text-muted">
+                              {' '}
+                              ({(stats.win_rate_lo ?? 0).toFixed(0)}–
+                              {stats.win_rate_hi.toFixed(0)}%)
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div>
@@ -283,6 +296,22 @@ export function VersionsPanel({
                         </div>
                       </div>
                     </div>
+                  )}
+                  {/* review 2026-10-09 I: attribution / exclusion notes */}
+                  {((stats.crossed_version ?? 0) > 0 ||
+                    (stats.excluded_manual ?? 0) > 0 ||
+                    (stats.excluded_unattributed ?? 0) > 0) && (
+                    <p className="mt-1 text-[9px] text-nofx-text-muted opacity-80">
+                      {(stats.crossed_version ?? 0) > 0 &&
+                        `${tv('crossedVersion', language)} ${stats.crossed_version}`}
+                      {(stats.crossed_version ?? 0) > 0 &&
+                        ((stats.excluded_manual ?? 0) > 0 ||
+                          (stats.excluded_unattributed ?? 0) > 0) &&
+                        ' · '}
+                      {((stats.excluded_manual ?? 0) > 0 ||
+                        (stats.excluded_unattributed ?? 0) > 0) &&
+                        `${tv('excluded', language)} ${tv('excludedManual', language)} ${stats.excluded_manual ?? 0} / ${tv('excludedUnattributed', language)} ${stats.excluded_unattributed ?? 0}`}
+                    </p>
                   )}
                 </div>
                 {/* diff */}

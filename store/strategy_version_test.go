@@ -117,13 +117,13 @@ func TestVersionStatsForWindow(t *testing.T) {
 	now := time.Now().UnixMilli()
 	rows := []TradeJournalDB{
 		// inside window: win 2.0 gross − 0.2 fee = 1.8 net; R risk = |100−95|×2 = 10 → 0.18R
-		{TraderID: "T1", PositionID: 1, Symbol: "AUSDT", EntryTime: now - 1000, ExitTime: now, EntryPrice: 100, ExitPrice: 110, PlannedStopLoss: 95, Quantity: 2, RealizedPnL: 2.0, Fee: 0.2},
+		{AIManaged: vsBool(true), TraderID: "T1", PositionID: 1, Symbol: "AUSDT", EntryTime: now - 1000, ExitTime: now, EntryPrice: 100, ExitPrice: 110, PlannedStopLoss: 95, Quantity: 2, RealizedPnL: 2.0, Fee: 0.2},
 		// inside window: loss −1.0 gross − 0.1 fee = −1.1 net; R = −1.1/|50−51|×1 = −1.1
-		{TraderID: "T1", PositionID: 2, Symbol: "BUSDT", EntryTime: now - 900, ExitTime: now, EntryPrice: 50, ExitPrice: 49, PlannedStopLoss: 51, Quantity: 1, RealizedPnL: -1.0, Fee: 0.1},
+		{AIManaged: vsBool(true), TraderID: "T1", PositionID: 2, Symbol: "BUSDT", EntryTime: now - 900, ExitTime: now, EntryPrice: 50, ExitPrice: 49, PlannedStopLoss: 51, Quantity: 1, RealizedPnL: -1.0, Fee: 0.1},
 		// outside window (entry too early)
-		{TraderID: "T1", PositionID: 3, Symbol: "CUSDT", EntryTime: now - 99999, ExitTime: now, EntryPrice: 10, ExitPrice: 11, RealizedPnL: 5.0, Fee: 0.1},
+		{AIManaged: vsBool(true), TraderID: "T1", PositionID: 3, Symbol: "CUSDT", EntryTime: now - 99999, ExitTime: now, EntryPrice: 10, ExitPrice: 11, RealizedPnL: 5.0, Fee: 0.1},
 		// other trader, inside window — must count when included
-		{TraderID: "T2", PositionID: 4, Symbol: "AUSDT", EntryTime: now - 800, ExitTime: now, EntryPrice: 10, ExitPrice: 11, RealizedPnL: 1.0, Fee: 0.0},
+		{AIManaged: vsBool(true), TraderID: "T2", PositionID: 4, Symbol: "AUSDT", EntryTime: now - 800, ExitTime: now, EntryPrice: 10, ExitPrice: 11, RealizedPnL: 1.0, Fee: 0.0},
 	}
 	for i := range rows {
 		if err := st.TradeJournal().db.Create(&rows[i]).Error; err != nil {

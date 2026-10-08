@@ -312,6 +312,13 @@ export interface StrategyVersionStats {
   profit_factor: number
   avg_r: number
   r_count: number
+  // review 2026-10-09 I (optional: older servers omit them)
+  excluded_manual?: number
+  excluded_unattributed?: number
+  low_sample?: boolean
+  win_rate_lo?: number
+  win_rate_hi?: number
+  crossed_version?: number
 }
 
 export interface StrategyConfigVersion {

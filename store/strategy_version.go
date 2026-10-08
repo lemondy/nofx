@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -75,6 +76,40 @@ type VersionStats struct {
 	ProfitFactor float64 `json:"profit_factor"` // gross win / gross loss, 0 when no losses
 	AvgR         float64 `json:"avg_r"`         // net PnL ÷ opening risk (|entry−planned SL|×qty) when the plan exists
 	RCount       int     `json:"r_count"`       // trades with a computable R
+
+	// review 2026-10-09 I: ownership + sample-size + attribution signals.
+	ExcludedManual       int     `json:"excluded_manual"`       // ai_managed=false rows left out (user's manual trades)
+	ExcludedUnattributed int     `json:"excluded_unattributed"` // ai_managed IS NULL rows left out
+	LowSample            bool    `json:"low_sample"`            // Trades < VersionMinTrades
+	WinRateLo            float64 `json:"win_rate_lo"`           // Wilson 95% lower bound, percent
+	WinRateHi            float64 `json:"win_rate_hi"`           // Wilson 95% upper bound, percent
+	CrossedVersion       int     `json:"crossed_version"`       // counted trades exiting at/after the next version took effect
+}
+
+// VersionMinTrades is the sample-size bar below which a version's stats are
+// flagged low_sample — same bar as the NEGATIVE_EDGE minimum (user decision
+// 2026-10-08; review 2026-10-09 I).
+const VersionMinTrades = 20
+
+// wilson95 returns the Wilson score 95% interval (percent) for wins/n.
+func wilson95(wins, n int) (lo, hi float64) {
+	if n <= 0 {
+		return 0, 0
+	}
+	const z = 1.959964
+	nf := float64(n)
+	p := float64(wins) / nf
+	den := 1 + z*z/nf
+	centre := (p + z*z/(2*nf)) / den
+	half := z * math.Sqrt(p*(1-p)/nf+z*z/(4*nf*nf)) / den
+	lo, hi = (centre-half)*100, (centre+half)*100
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > 100 {
+		hi = 100
+	}
+	return lo, hi
 }
 
 func (s *StrategyStore) initVersionTables() error {
@@ -381,6 +416,10 @@ func (s *StrategyStore) RecordConfigChange(strategyID, oldConfigJSON string, old
 
 // StatsForWindow aggregates journal trades whose ENTRY time falls inside
 // [fromMs, toMs) (toMs = 0 → open-ended) across the given traders.
+// review 2026-10-09 I: only AI-opened rows (ai_managed = true) are counted —
+// manual / unattributed rows are tallied in Excluded* instead. Trades are
+// attributed by entry time; CrossedVersion counts counted trades that exited
+// at/after toMs (managed in part by the next version's parameters).
 func (s *TradeJournalStore) StatsForWindow(traderIDs []string, fromMs, toMs int64) (*VersionStats, error) {
 	stats := &VersionStats{}
 	if len(traderIDs) == 0 {
@@ -400,7 +439,18 @@ func (s *TradeJournalStore) StatsForWindow(traderIDs []string, fromMs, toMs int6
 
 	var grossWin, grossLoss, rSum float64
 	for _, e := range entries {
+		if e.AIManaged == nil {
+			stats.ExcludedUnattributed++
+			continue
+		}
+		if !*e.AIManaged {
+			stats.ExcludedManual++
+			continue
+		}
 		stats.Trades++
+		if toMs > 0 && e.ExitTime >= toMs {
+			stats.CrossedVersion++
+		}
 		net := e.RealizedPnL - e.Fee
 		stats.NetPnL += net
 		switch {
@@ -420,6 +470,8 @@ func (s *TradeJournalStore) StatsForWindow(traderIDs []string, fromMs, toMs int6
 	if stats.Trades > 0 {
 		stats.WinRate = float64(stats.Wins) / float64(stats.Trades) * 100
 	}
+	stats.LowSample = stats.Trades < VersionMinTrades
+	stats.WinRateLo, stats.WinRateHi = wilson95(stats.Wins, stats.Trades)
 	if stats.Wins > 0 {
 		stats.AvgWin = grossWin / float64(stats.Wins)
 	}
