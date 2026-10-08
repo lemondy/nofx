@@ -48,34 +48,9 @@ func TestShortWeightsDefaultsAndNormalization(t *testing.T) {
 
 func TestUpdateShortWeights(t *testing.T) {
 	base := DefaultShortWeights()
-	now := time.Now()
-
-	// Cohort: high "structure" scores predicted profitable shorts (positive
-	// outcome), high "overbought" predicted pain (negative outcome).
-	var samples []shortSample
-	// 40 samples: above the shortTunerMinComponentN=30 significance gate
-	// (P1, 2026-09-26 review — the update must not move weights on thin-n
-	// noise).
-	for i := 0; i < 40; i++ {
-		structure := 80.0
-		overbought := 20.0
-		outcome := 3.0 // profitable short
-		if i%2 == 1 {  // half the cohort with opposite readings/outcomes
-			structure, overbought = 20.0, 80.0
-			outcome = -2.0
-		}
-		_ = now
-		samples = append(samples, shortSample{
-			TS:        now.UTC().Truncate(48 * time.Hour).Add(time.Duration(i) * 48 * time.Hour).UnixMilli(),
-			Evaluated: true,
-			Outcome:   outcome,
-			Components: map[string]float64{
-				"structure":  structure,
-				"overbought": overbought,
-				"stretch":    50,
-			},
-		})
-	}
+	// Forty alternate-day blocks, each with ten distinct symbols. Structure
+	// predicts better shorts within each day; overbought predicts worse shorts.
+	samples := reviewRankICSamples(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 40, 10)
 	out, ok := updateShortWeights(samples, base, shortTunerEta)
 	if !ok {
 		t.Fatal("strong correlations must pass the significance gate")

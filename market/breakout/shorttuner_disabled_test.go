@@ -3,7 +3,6 @@ package breakout
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -45,36 +44,51 @@ func TestShortTunerUpdateDisabledByDefault(t *testing.T) {
 func TestRunShortTunerNoWeightWriteWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
 	journal := filepath.Join(dir, "signals.jsonl")
+	oldProposal := shortWeightProposalPath
+	shortWeightProposalPath = filepath.Join(dir, "proposal.json")
 	SetShortTuningPath(journal)
 	SetParamsPath(filepath.Join(dir, "params.json"))
 	t.Cleanup(func() {
 		SetShortTuningPath("data/shortscan_signals.jsonl")
+		shortWeightProposalPath = oldProposal
 		SetParamsPath("data/breakout_params.json")
 	})
 
-	// Stub the ticker endpoint RunShortTuner's evaluation uses.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	// Stub historical HTTP in memory, preserving labelling coverage without
+	// requiring a listening socket.
+	originalClient := binanceHTTP
+	binanceHTTP = &http.Client{Transport: fix06Transport(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/fapi/v1/fundingRate" {
-			w.Write([]byte("[]"))
-			return
+			return fix06Response("[]")
 		}
 		open, _ := strconv.ParseInt(r.URL.Query().Get("startTime"), 10, 64)
-		_ = json.NewEncoder(w).Encode([][]interface{}{{open, "100", "110", "99", "110", "100", open + 59999}})
-	}))
-	defer srv.Close()
-	originalClient := binanceHTTP
-	binanceHTTP = srv.Client()
+		body, err := json.Marshal([][]interface{}{{open, "100", "110", "99", "110", "100", open + 59999}})
+		if err != nil {
+			return nil, err
+		}
+		return fix06Response(string(body))
+	})}
 	t.Cleanup(func() { binanceHTTP = originalClient })
-	t.Setenv("BINANCE_FAPI_BASE", srv.URL)
+	t.Setenv("BINANCE_FAPI_BASE", "https://short-label.test")
 
 	before := shortWeights()
+	now := time.Now().UTC()
+	// Keep the disabled guard meaningful under rank IC: this already-labelled
+	// cohort would produce a proposal if research were enabled.
+	cohort := reviewRankICSamples(now.Add(-82*24*time.Hour), 40, 10)
+	if _, ok := updateShortWeights(cohort, before, shortTunerEta); !ok {
+		t.Fatal("disabled-switch fixture must be statistically significant")
+	}
 
-	// 30 matured samples (older than the 24h eval window) with a perfect
-	// positive correlation between one component and the outcome — the old
-	// rule would have moved weights immediately.
+	// Thirty additional matured samples still need historical labelling,
+	// independent of whether proposal generation is enabled.
 	base := time.Now().Add(-48 * time.Hour).UnixMilli()
 	var lines []byte
+	for _, sample := range cohort {
+		b, _ := json.Marshal(sample)
+		lines = append(lines, b...)
+		lines = append(lines, '\n')
+	}
 	for i := 0; i < 30; i++ {
 		s := shortSample{
 			TS:     base + int64(i)*1000,
@@ -82,7 +96,7 @@ func TestRunShortTunerNoWeightWriteWhenDisabled(t *testing.T) {
 			Score:  60,
 			Price:  100,
 			Components: map[string]float64{
-				"structure": float64(i), // monotonic → |corr| = 1
+				"structure": float64(i),
 			},
 		}
 		b, _ := json.Marshal(s)
@@ -106,11 +120,14 @@ func TestRunShortTunerNoWeightWriteWhenDisabled(t *testing.T) {
 	samples := readSamples()
 	evaluated := 0
 	for _, s := range samples {
-		if s.Evaluated {
+		if s.Symbol == "TESTUSDT" && s.Evaluated {
 			evaluated++
 		}
 	}
 	if evaluated != 30 {
 		t.Fatalf("expected 30 evaluated samples with update disabled, got %d", evaluated)
+	}
+	if _, err := os.Stat(shortWeightProposalPath); !os.IsNotExist(err) {
+		t.Fatalf("disabled research must not write a proposal: %v", err)
 	}
 }

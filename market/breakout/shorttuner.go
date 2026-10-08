@@ -18,16 +18,20 @@ import (
 
 // Short scanner forward research: hourly observations are labelled at a
 // fixed +24h horizon using historical prices, funding and disclosed costs.
-// Optional studies aggregate separated 24h time blocks and save bounded
-// weight proposals. They never publish live weights or advance a live cursor.
+// Optional studies measure cross-sectional rank IC in separated 24h blocks
+// and save bounded weight proposals. They never publish live weights or
+// advance a live cursor.
 // Live custom weights additionally require explicit validation/promotion.
 
 const (
-	shortTunerSampleEvery = time.Hour
-	shortTunerEvalAfter   = 24 * time.Hour
-	shortTunerMinSamples  = 30
-	shortTunerEta         = 0.25
-	shortTunerPruneAfter  = 180 * 24 * time.Hour
+	// Widen the ranked cohort to reduce range restriction while bounding label HTTP load.
+	shortTunerSampleTopN      = 30
+	shortTunerMinBlockSymbols = 8
+	shortTunerSampleEvery     = time.Hour
+	shortTunerEvalAfter       = 24 * time.Hour
+	shortTunerMinSamples      = 30
+	shortTunerEta             = 0.25
+	shortTunerPruneAfter      = 180 * 24 * time.Hour
 )
 
 var shortTunerMu sync.Mutex
@@ -114,6 +118,7 @@ type shortSample struct {
 	TS            int64              `json:"ts"`
 	Symbol        string             `json:"symbol"`
 	Score         float64            `json:"score"`
+	Rank          int                `json:"rank,omitempty"` // 1-based position in the ranked snapshot
 	Price         float64            `json:"price"`
 	Components    map[string]float64 `json:"components"`
 	Evaluated     bool               `json:"evaluated"`
@@ -121,7 +126,7 @@ type shortSample struct {
 	Unpriceable   bool               `json:"unpriceable,omitempty"` // delisted/no quote — excluded from correlations
 }
 
-// SampleShortSignals journals the current top-10 for future evaluation.
+// SampleShortSignals journals up to shortTunerSampleTopN ranked signals for future evaluation.
 // Hourly cadence is enforced internally; a no-op before the next sample.
 func SampleShortSignals(signals []ShortSignal, now time.Time) {
 	shortTunerMu.Lock()
@@ -136,15 +141,16 @@ func SampleShortSignals(signals []ShortSignal, now time.Time) {
 		}
 	}
 	n := len(signals)
-	if n > 10 {
-		n = 10
+	if n > shortTunerSampleTopN {
+		n = shortTunerSampleTopN
 	}
 	var buf []byte
-	for _, sig := range signals[:n] {
+	for i, sig := range signals[:n] {
 		rec := shortSample{
 			TS:     now.UnixMilli(),
 			Symbol: sig.Symbol,
 			Score:  sig.Score,
+			Rank:   i + 1,
 			Price:  sig.Price,
 			Components: map[string]float64{
 				"stretch":     sig.Components.Stretch,
@@ -175,7 +181,7 @@ func SampleShortSignals(signals []ShortSignal, now time.Time) {
 	}
 }
 
-// RunShortTuner evaluates matured samples and nudges the component weights.
+// RunShortTuner evaluates matured samples and saves research weight proposals.
 // Called on the scheduler's 30-min slow tick (and once at goroutine start) —
 // the old blind 24h ticker reset on every deploy and the tuner never fired
 // again after 09-07 (user request 2026-09-17). Idempotent: Evaluated flags
@@ -210,6 +216,7 @@ func RunShortTuner(now time.Time) {
 		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
 			continue
 		}
+		// 50 labels per 30-min tick = 2400/day, versus at most 30 × 24 = 720 new samples/day.
 		if evaluatedThisRun >= 50 {
 			break
 		}
@@ -221,10 +228,10 @@ func RunShortTuner(now time.Time) {
 	// Lock-free labelling: historical +24h prices, never the scheduler's
 	// current quote. Each result is keyed by (TS, Symbol) for the merge.
 	type labelResult struct {
-		price, funding    float64
-		labelAt           int64
-		errMsg                  string
-		failed                  bool
+		price, funding float64
+		labelAt        int64
+		errMsg         string
+		failed         bool
 	}
 	results := make(map[[2]interface{}]labelResult, len(due))
 	for _, d := range due {
@@ -328,11 +335,15 @@ func RunShortTuner(now time.Time) {
 		}
 		if len(eval) >= shortTunerMinSamples {
 			w := shortWeights()
-			newW, ok := updateShortWeights(eval, w, shortTunerEta)
+			newW, diagnostics, ok := updateShortWeightsWithDiagnostics(eval, w, shortTunerEta)
 			// Retain thin cohorts until enough non-overlapping time blocks accrue.
 			// Proposal generation does not consume the live promotion cursor.
 			if ok {
-				proposal := ShortWeightProposal{GeneratedAt: now.UTC(), Incumbent: w, Candidate: newW, Samples: len(eval), Applied: false, EvaluationScope: "fixed_24h_forward_labels_research_only"}
+				proposal := ShortWeightProposal{
+					GeneratedAt: now.UTC(), Incumbent: w, Candidate: newW,
+					Samples: len(eval), Applied: false, Diagnostics: diagnostics,
+					EvaluationScope: "cross_sectional_rank_ic_24h_close_not_sl_tp_research_only",
+				}
 				data, err := json.MarshalIndent(proposal, "", "  ")
 				if err == nil {
 					err = atomicWriteJSON(shortWeightProposalPath, data)
@@ -351,21 +362,44 @@ func RunShortTuner(now time.Time) {
 
 const shortTunerMinComponentN = 30
 
-// One observation per non-overlapping 24h block limits repeated-symbol and
-// overlapping-label pseudo replication. Fisher z > 3 is a conservative
-// normal-approximation gate after testing nine components (two-sided p<0.003).
+// ICStat describes the series of cross-sectional rank ICs, one per retained
+// UTC-day block. T is null with TInfinite=true for a constant nonzero IC series:
+// its standard error is zero, so the limiting t is infinite (not a JSON number).
+type ICStat struct {
+	N         int      `json:"n_blocks"`
+	MeanIC    float64  `json:"mean_ic"`
+	T         *float64 `json:"t"`
+	TInfinite bool     `json:"t_infinite,omitempty"`
+}
+
+// Require >=30 blocks and |t| > 3: a conservative two-sided bar (~p<0.003
+// under the normal approximation) for nine component tests. With finite n,
+// Student-t tails are heavier; this is a research gate, not a calibrated p-value.
+func (s ICStat) significant() bool {
+	return s.N >= shortTunerMinComponentN && (s.TInfinite || (s.T != nil && math.Abs(*s.T) > 3))
+}
+
 func updateShortWeights(samples []shortSample, base map[string]float64, eta float64) (map[string]float64, bool) {
-	type block struct {
+	weights, _, ok := updateShortWeightsWithDiagnostics(samples, base, eta)
+	return weights, ok
+}
+
+// Each symbol contributes one mean component/outcome pair per alternate UTC
+// day, regardless of how often it was sampled. Rank IC answers whether higher
+// component values select better shorts within that day, removing day shocks.
+func updateShortWeightsWithDiagnostics(samples []shortSample, base map[string]float64, eta float64) (map[string]float64, map[string]ICStat, bool) {
+	type point struct {
 		x, y float64
 		n    int
 	}
 	out := make(map[string]float64, len(shortWeightKeys))
+	diagnostics := make(map[string]ICStat, len(shortWeightKeys))
 	significant := false
 	for _, key := range shortWeightKeys {
-		groups := map[int64]*block{}
+		groups := map[int64]map[string]*point{}
 		for _, s := range samples {
 			x, ok := s.Components[key]
-			if !ok || s.TS <= 0 || math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(s.Outcome) || math.IsInf(s.Outcome, 0) {
+			if !ok || s.Symbol == "" || s.TS <= 0 || math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(s.Outcome) || math.IsInf(s.Outcome, 0) {
 				continue
 			}
 			// Entry windows from adjacent UTC days still overlap. Retain alternate
@@ -374,10 +408,13 @@ func updateShortWeights(samples []shortSample, base map[string]float64, eta floa
 			if day%2 != 0 {
 				continue
 			}
-			g := groups[day]
+			if groups[day] == nil {
+				groups[day] = map[string]*point{}
+			}
+			g := groups[day][s.Symbol]
 			if g == nil {
-				g = &block{}
-				groups[day] = g
+				g = &point{}
+				groups[day][s.Symbol] = g
 			}
 			g.x += x
 			g.y += s.Outcome
@@ -388,26 +425,110 @@ func updateShortWeights(samples []shortSample, base map[string]float64, eta floa
 			days = append(days, day)
 		}
 		sort.Slice(days, func(i, j int) bool { return days[i] < days[j] })
-		var xs, ys []float64
+		var ics []float64
 		for _, day := range days {
-			g := groups[day]
-			xs = append(xs, g.x/float64(g.n))
-			ys = append(ys, g.y/float64(g.n))
+			group := groups[day]
+			if len(group) < shortTunerMinBlockSymbols {
+				continue
+			}
+			// Stable symbol order also makes floating-point reductions reproducible.
+			symbols := make([]string, 0, len(group))
+			for symbol := range group {
+				symbols = append(symbols, symbol)
+			}
+			sort.Strings(symbols)
+			var xs, ys []float64
+			for _, symbol := range symbols {
+				g := group[symbol]
+				xs = append(xs, g.x/float64(g.n))
+				ys = append(ys, g.y/float64(g.n))
+			}
+			if ic, ok := spearman(xs, ys); ok {
+				ics = append(ics, ic)
+			}
 		}
-		corr := pearson(xs, ys)
-		r := math.Min(math.Abs(corr), 1-1e-12)
-		z := math.Atanh(r) * math.Sqrt(math.Max(0, float64(len(xs)-3)))
-		if len(xs) >= shortTunerMinComponentN && z > 3 {
+		stat := summarizeRankIC(ics)
+		diagnostics[key] = stat
+		out[key] = base[key]
+		if stat.significant() {
 			significant = true
-			out[key] = base[key] * math.Exp(eta*corr)
-		} else {
-			out[key] = base[key]
+			out[key] *= math.Exp(eta * stat.MeanIC)
 		}
 	}
 	if !significant {
-		return nil, false
+		return nil, diagnostics, false
 	}
-	return boundedShortWeights(out), true
+	return boundedShortWeights(out), diagnostics, true
+}
+
+func summarizeRankIC(ics []float64) ICStat {
+	t := 0.0
+	stat := ICStat{N: len(ics), T: &t}
+	if len(ics) == 0 {
+		return stat
+	}
+	for _, ic := range ics {
+		stat.MeanIC += ic
+	}
+	stat.MeanIC /= float64(len(ics))
+	if len(ics) < 2 {
+		return stat
+	}
+	var ss float64
+	for _, ic := range ics {
+		d := ic - stat.MeanIC
+		ss += d * d
+	}
+	if ss == 0 {
+		if stat.MeanIC != 0 {
+			stat.T, stat.TInfinite = nil, true
+		}
+		return stat
+	}
+	// Sample standard deviation (n-1), then standard error of the mean IC.
+	se := math.Sqrt(ss / float64(len(ics)-1) / float64(len(ics)))
+	t = stat.MeanIC / se
+	return stat
+}
+
+// averageRanks returns 1-based ranks, assigning the mean occupied rank to ties.
+func averageRanks(values []float64) []float64 {
+	order := make([]int, len(values))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return values[order[i]] < values[order[j]] })
+	ranks := make([]float64, len(values))
+	for i := 0; i < len(order); {
+		j := i + 1
+		for j < len(order) && values[order[j]] == values[order[i]] {
+			j++
+		}
+		rank := float64(i+1+j) / 2
+		for _, idx := range order[i:j] {
+			ranks[idx] = rank
+		}
+		i = j
+	}
+	return ranks
+}
+
+// spearman rejects undefined ICs (zero variance), rather than treating them as
+// zero evidence and counting the block toward the component's sample minimum.
+func spearman(xs, ys []float64) (float64, bool) {
+	if len(xs) < 2 || len(xs) != len(ys) {
+		return 0, false
+	}
+	rx, ry := averageRanks(xs), averageRanks(ys)
+	var variesX, variesY bool
+	for i := 1; i < len(rx); i++ {
+		variesX = variesX || rx[i] != rx[0]
+		variesY = variesY || ry[i] != ry[0]
+	}
+	if !variesX || !variesY {
+		return 0, false
+	}
+	return pearson(rx, ry), true
 }
 
 // Project onto a bounded simplex; normalization cannot undo either bound.
@@ -511,7 +632,8 @@ func writeSamples(samples []shortSample) error {
 
 // The last fully closed one-minute candle at +24h gives a fixed horizon
 // with <=60s resolution. Funding is signed for a short and fees/slippage
-// use the same disclosed estimate as the research replay.
+// use the same disclosed estimate as the research replay. This is a 24h close
+// label, not an SL/TP path or an execution/portfolio outcome.
 func historicalShortLabel(s shortSample) (float64, int64, float64, error) {
 	target := time.UnixMilli(s.TS).Add(shortTunerEvalAfter)
 	open := target.Truncate(time.Minute).Add(-time.Minute).UnixMilli()
@@ -556,10 +678,12 @@ func historicalShortLabel(s shortSample) (float64, int64, float64, error) {
 var shortWeightProposalPath = "data/shortscan_weight_proposal.json"
 
 type ShortWeightProposal struct {
-	GeneratedAt     time.Time          `json:"generated_at"`
-	Incumbent       map[string]float64 `json:"incumbent"`
-	Candidate       map[string]float64 `json:"candidate"`
-	Samples         int                `json:"samples"`
-	Applied         bool               `json:"applied"`
-	EvaluationScope string             `json:"evaluation_scope"`
+	GeneratedAt time.Time          `json:"generated_at"`
+	Incumbent   map[string]float64 `json:"incumbent"`
+	Candidate   map[string]float64 `json:"candidate"`
+	Samples     int                `json:"samples"`
+	Applied     bool               `json:"applied"`
+	// Labels use the +24h close, not an SL/TP path; proposals remain research-only.
+	EvaluationScope string            `json:"evaluation_scope"`
+	Diagnostics     map[string]ICStat `json:"diagnostics,omitempty"`
 }
