@@ -7,6 +7,7 @@ import type {
   TradingRule,
   RuleCheckLog,
   RuleProposal,
+  RuleVerification,
   RuleViolation,
   TraderInfo,
   AIReviewResult,
@@ -1167,6 +1168,15 @@ function RulesTab({
     }
   }
 
+  const reverifyRule = async (rule: TradingRule) => {
+    try {
+      await api.reverifyRule(rule.id, traderId)
+      load()
+    } catch {
+      /* ignore */
+    }
+  }
+
   const handleExtract = async () => {
     setExtracting(true)
     setApplyResult('')
@@ -1186,7 +1196,7 @@ function RulesTab({
     try {
       const res = await api.aiApplyRules(
         traderId,
-        proposals.map((p) => ({
+        proposals.filter((p) => !proposalBlocked(p)).map((p) => ({
           rule_type: p.rule_type,
           name: p.name,
           description: p.description,
@@ -1197,7 +1207,15 @@ function RulesTab({
           source_stats: p.source_stats,
         }))
       )
-      setApplyResult(rv('rulesApplied', { count: res.saved }))
+      const skipped = res.rejected?.length || 0
+      setApplyResult(
+        rv('rulesApplied', { count: res.saved }) +
+          (skipped
+            ? rv('rulesSkipped', { count: skipped }) +
+              ': ' +
+              res.rejected!.map((r) => r.reason).join('; ')
+            : '')
+      )
       setProposals(null)
       load()
     } catch (err) {
@@ -1314,6 +1332,7 @@ function RulesTab({
                 language={language}
                 onToggle={() => toggleEnabled(r)}
                 onDelete={() => deleteRule(r)}
+                onReverify={() => reverifyRule(r)}
               />
             ))}
           </div>
@@ -1420,11 +1439,13 @@ function RuleRow({
   language,
   onToggle,
   onDelete,
+  onReverify,
 }: {
   rule: TradingRule
   language: Language
   onToggle: () => void
   onDelete: () => void
+  onReverify?: () => void
 }) {
   const rv = (key: string, params?: Record<string, string | number>) =>
     t(`reviewPage.${key}`, language, params)
@@ -1462,6 +1483,19 @@ function RuleRow({
           <span className="text-[10px]" style={{ color: C.faint }}>
             {rv('ruleHits', { hits: rule.hit_count, blocks: rule.block_count })}
           </span>
+          {rule.triggers_30d !== undefined && (
+            <span className="text-[10px]" style={{ color: C.faint }}>
+              {rv('triggers30d', { n: rule.triggers_30d })}
+            </span>
+          )}
+          {rule.review_due && (
+            <span
+              className="px-1.5 py-0.5 rounded text-[10px]"
+              style={{ background: 'rgba(184,145,42,0.12)', color: C.warn }}
+            >
+              {rv('reviewDue')}
+            </span>
+          )}
         </div>
         {rule.rule_type === 'hard' && (
           <div className="text-[11px] mt-1 font-mono" style={{ color: C.blue }}>
@@ -1473,6 +1507,15 @@ function RuleRow({
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0">
+        {onReverify && rule.rule_type === 'hard' && rule.source === 'ai_review' && (
+          <button
+            onClick={onReverify}
+            className="text-[10px] px-2 py-1 rounded"
+            style={{ border: `1px solid ${C.border}`, color: C.muted }}
+          >
+            {rv('reverify')}
+          </button>
+        )}
         <button
           onClick={onToggle}
           className="w-9 h-5 rounded-full relative transition-colors"
@@ -1496,6 +1539,52 @@ function RuleRow({
   )
 }
 
+// review 2026-10-09 K: hard proposals the server cannot back with history
+// are not applicable (the apply endpoint re-checks and rejects them too).
+function proposalBlocked(p: RuleProposal): boolean {
+  const st = p.verification?.status
+  return p.rule_type === 'hard' && (st === 'weak' || st === 'contradicted')
+}
+
+function VerificationBadge({
+  v,
+  language,
+}: {
+  v: RuleVerification
+  language: Language
+}) {
+  const rv = (key: string, params?: Record<string, string | number>) =>
+    t(`reviewPage.${key}`, language, params)
+  const label: Record<string, string> = {
+    supported: rv('verifSupported'),
+    weak: rv('verifWeak'),
+    contradicted: rv('verifContradicted'),
+    unverifiable: rv('verifUnverifiable'),
+    soft: rv('verifSoft'),
+  }
+  const color =
+    v.status === 'supported'
+      ? C.up
+      : v.status === 'weak' || v.status === 'contradicted'
+        ? C.down
+        : C.muted
+  const detail = rv('verifDetail', {
+    matched: v.matched,
+    pop: v.population,
+    wins: v.wins,
+    net: v.net_pnl.toFixed(2),
+  })
+  return (
+    <span
+      className="px-1.5 py-0.5 rounded text-[10px]"
+      style={{ border: `1px solid ${color}`, color }}
+      title={v.reason || detail}
+    >
+      {label[v.status] || v.status}
+    </span>
+  )
+}
+
 function ProposalRow({
   proposal,
   language,
@@ -1503,7 +1592,8 @@ function ProposalRow({
   proposal: RuleProposal
   language: Language
 }) {
-  const rv = (key: string) => t(`reviewPage.${key}`, language)
+  const rv = (key: string, params?: Record<string, string | number>) =>
+    t(`reviewPage.${key}`, language, params)
   return (
     <div
       className="p-3 rounded-lg text-xs"
@@ -1523,7 +1613,26 @@ function ProposalRow({
           {proposal.rule_type === 'hard' ? rv('typeHard') : rv('typeSoft')}
         </span>
         <span className="font-semibold">{proposal.name}</span>
+        {proposal.verification && (
+          <VerificationBadge v={proposal.verification} language={language} />
+        )}
       </div>
+      {proposal.verification && proposal.verification.status !== 'soft' && (
+        <div className="text-[10px] mt-1" style={{ color: C.faint }}>
+          {proposal.verification.reason ||
+            rv('verifDetail', {
+              matched: proposal.verification.matched,
+              pop: proposal.verification.population,
+              wins: proposal.verification.wins,
+              net: proposal.verification.net_pnl.toFixed(2),
+            })}
+        </div>
+      )}
+      {proposalBlocked(proposal) && (
+        <div className="text-[10px] mt-1" style={{ color: C.down }}>
+          {rv('verifBlocked')}
+        </div>
+      )}
       {proposal.rule_type === 'hard' && proposal.condition && (
         <div className="text-[11px] mt-1 font-mono" style={{ color: C.blue }}>
           {proposal.condition}

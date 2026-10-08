@@ -621,6 +621,17 @@ func (s *TradeJournalStore) GetRecentReviewed(traderID string, n int) ([]*TradeJ
 	return entries, nil
 }
 
+// ListClosedAISince returns the trader's closed AI-managed journal rows that
+// exited at or after sinceMs (rule verification population, review 2026-10-09 K).
+func (s *TradeJournalStore) ListClosedAISince(traderID string, sinceMs int64) ([]*TradeJournalDB, error) {
+	var rows []*TradeJournalDB
+	if err := s.db.Where("trader_id = ? AND ai_managed = ? AND exit_time > 0 AND exit_time >= ?", traderID, true, sinceMs).
+		Order("exit_time ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // splitCommaList splits a comma-separated tag list
 func splitCommaList(s string) []string {
 	out := []string{}

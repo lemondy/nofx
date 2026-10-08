@@ -412,6 +412,9 @@ Soft rule Body: {"rule_type":"soft","name":"<string>","lesson_text":"<string>","
 			s.routeWithSchema(protected, "POST", "/review/rules/:id", "Update a trading rule",
 				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>. Same body as POST /api/review/rules (partial updates allowed, include "enabled":<bool> to toggle).`,
 				s.handleRuleUpdate)
+			s.routeWithSchema(protected, "POST", "/review/rules/:id/reverify", "Recompute and store the historical verification of one rule",
+				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>. Returns {"verification":{status,matched,wins,net_pnl,baseline_win_rate,baseline_net_per_trade,population},"verified_at":<ms>}.`,
+				s.handleRuleReverify)
 			s.routeWithSchema(protected, "DELETE", "/review/rules/:id", "Delete a trading rule",
 				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>`,
 				s.handleRuleDelete)
