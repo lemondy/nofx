@@ -567,7 +567,19 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		// Strategy health is language-independent program truth. Compute it
 		// once, then localize only the prose below so switching the prompt
 		// language cannot change the model's risk posture.
-		edge := StrategyHealthEdge(ctx.TradingStats.ProfitFactor)
+		edge := ResolveStrategyEdge(ctx.TradingStats)
+		// PF is undefined without a loser; print a marker, not a fake 0.00.
+		noLoss := noLosingTrade(ctx.TradingStats)
+		pfZH := fmt.Sprintf("%.2f", ctx.TradingStats.ProfitFactor)
+		pfEN := pfZH
+		thinZH, thinEN := "", ""
+		if negativeEdgeSuppressed(ctx.TradingStats) {
+			thinZH = fmt.Sprintf("(样本不足: %d<%d 笔,不判负期望)", ctx.TradingStats.TotalTrades, MinNegativeEdgeTrades)
+			thinEN = fmt.Sprintf("(thin sample: %d<%d trades, negative-edge not assessed)", ctx.TradingStats.TotalTrades, MinNegativeEdgeTrades)
+		}
+		if noLoss {
+			pfZH, pfEN = "n/a(窗口内无亏损单)", "n/a (no losing trade in window)"
+		}
 		expR := expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)
 		expSourceZH := "估算,亏损按-1R假设"
 		expSourceEN := "estimated, losses assumed -1R"
@@ -584,11 +596,11 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			} else {
 				sb.WriteString("## 历史交易统计(全部历史;账户行 PnL 为自启动以来累计,两者口径不同)\n")
 			}
-			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 胜率: %.1f%% | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
+			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 胜率: %.1f%% | 盈利因子: %s | 夏普比率: %.2f | 盈亏比: %.2f\n",
 				windowLabel,
 				ctx.TradingStats.TotalTrades,
 				ctx.TradingStats.WinRate,
-				ctx.TradingStats.ProfitFactor,
+				pfZH,
 				ctx.TradingStats.SharpeRatio,
 				winLossRatio))
 			// 净口径(user audit 2026-10-01): 总盈亏/平均盈亏已逐笔扣除手续费;
@@ -619,8 +631,8 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// = −1R while the real baseline measured −0.70R — a systematic
 			// pessimism the model read every cycle (E1, QUANT_REVIEW 09-22).
 			// The label states which caliber rendered.
-			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
-				edge, ctx.TradingStats.ProfitFactor, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
+			sb.WriteString(fmt.Sprintf("strategy_health: %s%s (PF %s, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
+				edge, thinZH, pfZH, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
 			if ctx.TradingStats.MeasuredRSamples > 0 && ctx.TradingStats.MeasuredRSamples < ctx.TradingStats.TotalTrades {
 				// R 样本覆盖率(user audit 2026-10-01: 165 笔 R 对 218 笔 USDT
 				// 统计,差值 = 无计划止损的手动/外部仓等,两套数字不可直接互推)
@@ -647,7 +659,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			}
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("表现: 良好 - 保持当前策略\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
+			} else if !noLoss && ctx.TradingStats.ProfitFactor < 1 {
 				sb.WriteString("表现: 需改进 - 提高盈亏比，优化止盈止损\n")
 			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
 				sb.WriteString("表现: 风险偏高 - 减少仓位，控制回撤\n")
@@ -663,10 +675,10 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// data line below honored stats_window_days, so an English-model
 			// reading a non-30d window saw a mislabeled caliber (E3, QUANT_REVIEW 09-22).
 			sb.WriteString(fmt.Sprintf("## Historical Trading Statistics (%s rolling window; the account PnL is a since-start cumulative — different bases)\n", enWindow))
-			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
+			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %s | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
 				enWindow,
 				ctx.TradingStats.TotalTrades,
-				ctx.TradingStats.ProfitFactor,
+				pfEN,
 				ctx.TradingStats.SharpeRatio,
 				winLossRatio))
 			sb.WriteString(fmt.Sprintf("Total PnL: %+.2f USDT | Avg Win: +%.2f | Avg Loss: -%.2f | Max Drawdown: %.1f%% (historical series peak within window, NOT current equity drawdown — see AccountBreaker in the account line)\n",
@@ -674,8 +686,8 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 				ctx.TradingStats.AvgWin,
 				ctx.TradingStats.AvgLoss,
 				ctx.TradingStats.MaxDrawdownPct))
-			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, window %s)\n",
-				edge, ctx.TradingStats.ProfitFactor, expR, expSourceEN, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, enWindow))
+			sb.WriteString(fmt.Sprintf("strategy_health: %s%s (PF %s, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, window %s)\n",
+				edge, thinEN, pfEN, expR, expSourceEN, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, enWindow))
 			if edge == "NEGATIVE_EDGE" {
 				clauses := []string{
 					fmt.Sprintf("|directional_score| >= %.0f (NEG_EDGE_SCORE_*)", NegativeEdgeMinScore(&e.config.RiskControl)),
@@ -693,7 +705,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// Performance hints based on profit factor, sharpe, and drawdown
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("Performance: GOOD - maintain current strategy\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
+			} else if !noLoss && ctx.TradingStats.ProfitFactor < 1 {
 				sb.WriteString("Performance: NEEDS IMPROVEMENT - improve win/loss ratio, optimize TP/SL\n")
 			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
 				sb.WriteString("Performance: HIGH RISK - reduce position size, control drawdown\n")
@@ -1086,7 +1098,44 @@ func (e *StrategyEngine) strategyEdge(ctx *Context) string {
 	if ctx == nil || ctx.TradingStats == nil || ctx.TradingStats.TotalTrades == 0 {
 		return "POSITIVE_EDGE"
 	}
-	return StrategyHealthEdge(ctx.TradingStats.ProfitFactor)
+	return ResolveStrategyEdge(ctx.TradingStats)
+}
+
+// noLosingTrade reports a window with trades but no loser: store leaves both
+// ProfitFactor and AvgLoss at 0 only then (a real losing window always has
+// AvgLoss > 0), so PF=0 here means "undefined", not "worst".
+func noLosingTrade(st *TradingStats) bool {
+	return st != nil && st.TotalTrades > 0 && st.ProfitFactor == 0 && st.AvgLoss == 0
+}
+
+// MinNegativeEdgeTrades: user decision 2026-10-08 — one or two losers in a
+// thin window armed the NEGATIVE_EDGE gate; below this sample it is not assessed.
+const MinNegativeEdgeTrades = 20
+
+// negativeEdgeSuppressed reports a PF-negative window downgraded for a thin
+// sample; the resolver and the stats-block marker share this one condition.
+func negativeEdgeSuppressed(st *TradingStats) bool {
+	return st != nil && st.TotalTrades > 0 && st.TotalTrades < MinNegativeEdgeTrades &&
+		!noLosingTrade(st) && StrategyHealthEdge(st.ProfitFactor) == "NEGATIVE_EDGE"
+}
+
+// ResolveStrategyEdge is the single edge resolver for prose and gate (review
+// 2026-10-08 A: all-win window read as PF 0 → NEGATIVE_EDGE). No data →
+// POSITIVE_EDGE (never arm on absence); no loser → by TotalPnL; else PF.
+func ResolveStrategyEdge(st *TradingStats) string {
+	if st == nil || st.TotalTrades == 0 {
+		return "POSITIVE_EDGE"
+	}
+	if noLosingTrade(st) {
+		if st.TotalPnL > 0 {
+			return "POSITIVE_EDGE"
+		}
+		return "NO_EDGE"
+	}
+	if negativeEdgeSuppressed(st) {
+		return "NO_EDGE"
+	}
+	return StrategyHealthEdge(st.ProfitFactor)
 }
 
 // formatMarketContext compresses the three market-wide ranking blocks (OI

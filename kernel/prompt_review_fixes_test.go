@@ -105,7 +105,7 @@ func TestExecutionPromptOmitsUntrustedNews(t *testing.T) {
 }
 
 func TestStrategyHealthIsLanguageIndependent(t *testing.T) {
-	stats := &TradingStats{TotalTrades: 10, WinRate: 30, ProfitFactor: 0.8, AvgWin: 1, AvgLoss: 1, WindowDays: 30}
+	stats := &TradingStats{TotalTrades: 20, WinRate: 30, ProfitFactor: 0.8, AvgWin: 1, AvgLoss: 1, WindowDays: 30}
 	ctx := &Context{TradingStats: stats, MarketDataMap: map[string]*market.Data{}}
 	for _, lang := range []string{"zh", "en"} {
 		cfg := store.GetDefaultStrategyConfig(lang)
