@@ -34,6 +34,7 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 		WinRate   float64 `json:"win_rate_pct"`
 		SumR      float64 `json:"sum_r"`
 		AvgR      float64 `json:"avg_r"`
+		RSamples  int     `json:"r_samples"`
 		PlannedRR float64 `json:"avg_planned_rr"`
 	}
 	overall := &tally{}
@@ -49,32 +50,19 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 			continue
 		}
 		for _, r := range rows {
-			risk := r.EntryPrice - r.StopPrice
-			if r.Direction == "short" {
-				risk = r.StopPrice - r.EntryPrice
-			}
-			pnlR := 0.0
-			if risk > 0 {
-				pnl := r.ExitPrice - r.EntryPrice
-				if r.Direction == "short" {
-					pnl = r.EntryPrice - r.ExitPrice
-				}
-				pnlR = pnl / risk
-			}
+			// review 2026-10-08 C: no_data rows (exit 0) polluted sum_r/avg_r.
+			// Each horizon contributes R only from its own verdict and exit;
+			// the 48h R never falls back to the 8h exit.
+			pnlR, okR := shadowR(r.Direction, r.Outcome, r.EntryPrice, r.StopPrice, r.ExitPrice)
 			outcome48 := r.Outcome48
-			pnlR48 := pnlR
-			if outcome48 != "" && risk > 0 {
-				// 48h R marks to market at the 48h exit, not the 8h one.
-				pnl := r.ExitPrice48 - r.EntryPrice
-				if r.Direction == "short" {
-					pnl = r.EntryPrice - r.ExitPrice48
-				}
-				pnlR48 = pnl / risk
-			}
-			add := func(t *tally, outcome string, sumR float64) {
+			pnlR48, okR48 := shadowR(r.Direction, outcome48, r.EntryPrice, r.StopPrice, r.ExitPrice48)
+			add := func(t *tally, outcome string, sumR float64, rOK bool) {
 				t.Total++
-				t.SumR += sumR
 				t.PlannedRR += r.PlanRR
+				if rOK {
+					t.SumR += sumR
+					t.RSamples++
+				}
 				switch outcome {
 				case "tp_first":
 					t.TpFirst++
@@ -86,9 +74,9 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 					t.NoData++
 				}
 			}
-			add(overall, r.Outcome, pnlR)
+			add(overall, r.Outcome, pnlR, okR)
 			if outcome48 != "" {
-				add(overall48, outcome48, pnlR48)
+				add(overall48, outcome48, pnlR48, okR48)
 			}
 			for _, code := range strings.Split(r.BlockedCodes, ",") {
 				code = strings.TrimSpace(code)
@@ -106,12 +94,12 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 				if byCode[code] == nil {
 					byCode[code] = &tally{}
 				}
-				add(byCode[code], r.Outcome, pnlR)
+				add(byCode[code], r.Outcome, pnlR, okR)
 				if outcome48 != "" {
 					if byCode48[code] == nil {
 						byCode48[code] = &tally{}
 					}
-					add(byCode48[code], outcome48, pnlR48)
+					add(byCode48[code], outcome48, pnlR48, okR48)
 				}
 			}
 			fetched++
@@ -122,8 +110,12 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 		if decided > 0 {
 			t.WinRate = float64(t.TpFirst) / float64(decided) * 100
 		}
+		// review 2026-10-08 C: no_data rows (exit 0) polluted sum_r/avg_r.
+		// AvgR divides by the rows that carry a usable R (r_samples), not Total.
+		if t.RSamples > 0 {
+			t.AvgR = t.SumR / float64(t.RSamples)
+		}
 		if t.Total > 0 {
-			t.AvgR = t.SumR / float64(t.Total)
 			t.PlannedRR = t.PlannedRR / float64(t.Total)
 		}
 	}
@@ -144,4 +136,28 @@ func (s *Server) handleGateShadowStats(c *gin.Context) {
 		"overall_48h":    overall48,
 		"by_code_48h":    byCode48,
 	})
+}
+
+// shadowR is one horizon's R multiple for a gate shadow row; ok=false when
+// that horizon has no usable R. Only a real verdict (tp_first, sl_first,
+// timeout) with a positive exit and a positive risk counts.
+// review 2026-10-08 C: no_data rows (exit 0) polluted sum_r/avg_r with a bogus
+// -EntryPrice/risk (long) or +EntryPrice/risk (short).
+func shadowR(direction, outcome string, entry, stop, exit float64) (float64, bool) {
+	if outcome != "tp_first" && outcome != "sl_first" && outcome != "timeout" {
+		return 0, false
+	}
+	if exit <= 0 {
+		return 0, false
+	}
+	risk := entry - stop
+	pnl := exit - entry
+	if direction == "short" {
+		risk = stop - entry
+		pnl = entry - exit
+	}
+	if risk <= 0 {
+		return 0, false
+	}
+	return pnl / risk, true
 }

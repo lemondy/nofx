@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -177,20 +178,10 @@ func (at *AutoTrader) finishShadow(row *store.GateShadowBlock, outcome string, e
 		logger.Infof("⚠️ [%s] gate shadow: mark %s #%d failed: %v", at.name, row.Symbol, row.ID, err)
 		return
 	}
-	risk := row.EntryPrice - row.StopPrice
-	if row.Direction == "short" {
-		risk = row.StopPrice - row.EntryPrice
-	}
-	pnlR := 0.0
-	if risk > 0 {
-		pnl := exit - row.EntryPrice
-		if row.Direction == "short" {
-			pnl = row.EntryPrice - exit
-		}
-		pnlR = pnl / risk
-	}
-	logger.Infof("👻 [%s] gate shadow resolved: %s %s (%s) → %s, %.2fR | would-be RR %.2f",
-		at.name, row.Symbol, row.Direction, row.BlockedCodes, outcome, pnlR, row.PlanRR)
+	// review 2026-10-08 C: no_data rows (exit 0) polluted sum_r/avg_r, so
+	// the log carries an R only for a real verdict (shadowRLabel gives n/a).
+	logger.Infof("👻 [%s] gate shadow resolved: %s %s (%s) → %s, %s | would-be RR %.2f",
+		at.name, row.Symbol, row.Direction, row.BlockedCodes, outcome, shadowRLabel(row, outcome, exit), row.PlanRR)
 }
 
 // finishShadow48 mirrors finishShadow for the 48h pass.
@@ -199,18 +190,27 @@ func (at *AutoTrader) finishShadow48(row *store.GateShadowBlock, outcome string,
 		logger.Infof("⚠️ [%s] gate shadow 48h: mark %s #%d failed: %v", at.name, row.Symbol, row.ID, err)
 		return
 	}
+	// review 2026-10-08 C: no_data rows (exit 0) polluted sum_r/avg_r, so
+	// the log carries an R only for a real verdict (shadowRLabel gives n/a).
+	logger.Infof("👻 [%s] gate shadow resolved(48h): %s %s (%s) → %s, %s | would-be RR %.2f (8h verdict: %s)",
+		at.name, row.Symbol, row.Direction, row.BlockedCodes, outcome, shadowRLabel(row, outcome, exit), row.PlanRR, row.Outcome)
+}
+
+// shadowRLabel renders the R column of a resolved-shadow log line, "n/a" when
+// the row has no usable R. review 2026-10-08 C: no_data rows (exit 0) polluted
+// sum_r/avg_r, so they log n/a instead of a bogus R (the outcomes this file
+// produces follow the same rule as shadowR in api/gate_shadow.go).
+func shadowRLabel(row *store.GateShadowBlock, outcome string, exit float64) string {
 	risk := row.EntryPrice - row.StopPrice
 	if row.Direction == "short" {
 		risk = row.StopPrice - row.EntryPrice
 	}
-	pnlR := 0.0
-	if risk > 0 {
-		pnl := exit - row.EntryPrice
-		if row.Direction == "short" {
-			pnl = row.EntryPrice - exit
-		}
-		pnlR = pnl / risk
+	if outcome == "no_data" || exit <= 0 || risk <= 0 {
+		return "n/a"
 	}
-	logger.Infof("👻 [%s] gate shadow resolved(48h): %s %s (%s) → %s, %.2fR | would-be RR %.2f (8h verdict: %s)",
-		at.name, row.Symbol, row.Direction, row.BlockedCodes, outcome, pnlR, row.PlanRR, row.Outcome)
+	pnl := exit - row.EntryPrice
+	if row.Direction == "short" {
+		pnl = row.EntryPrice - exit
+	}
+	return fmt.Sprintf("%.2fR", pnl/risk)
 }
