@@ -405,7 +405,8 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		Leverage: decision.Leverage, OrderID: res.OrderID, PlacedAt: time.Now(),
 		ExitMode: decision.ExitMode,
 	})
-	actionRecord.OrderID = 0 // string order id lives in the pending state
+	actionRecord.OrderID = 0                // string order id lives in the pending state
+	actionRecord.EntryOrderID = res.OrderID // quality-bucket exact join (review 2026-10-08 H)
 	logger.Infof("  ✓ Limit entry placed: %s %s %.6g @ %.6g (order %s), SL %.6g / TP %.6g",
 		decision.Symbol, side, placedQuantity, decision.Price, res.OrderID, decision.StopLoss, decision.TakeProfit)
 	return nil

@@ -34,6 +34,7 @@ func TestBucketStatsWaitDoesNotConsumeTrade(t *testing.T) {
 	if err := st.gdb.Create(&TradeJournalDB{
 		TraderID: "t1", Symbol: "AAAUSDT", Side: "LONG",
 		Quantity: 1, EntryPrice: 100, ExitPrice: 110, RealizedPnL: 10, PnLPct: 10,
+		AIManaged: func() *bool { b := true; return &b }(), // legacy join requires AI ownership (review 2026-10-08 H)
 		EntryTime: now.Add(-30 * time.Minute).UnixMilli(), ExitTime: now.UnixMilli(),
 	}).Error; err != nil {
 		t.Fatal(err)

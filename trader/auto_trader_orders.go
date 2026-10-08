@@ -267,6 +267,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// Record order ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+		actionRecord.EntryOrderID = strconv.FormatInt(orderID, 10) // review 2026-10-08 H
 	}
 
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
@@ -543,6 +544,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// Record order ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+		actionRecord.EntryOrderID = strconv.FormatInt(orderID, 10) // review 2026-10-08 H
 	}
 
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)

@@ -465,7 +465,17 @@ func (at *AutoTrader) runCycle() error {
 					gateRR, gateUsable = c.ShortRR, c.ShortUsable
 				}
 			}
+			// Exact order link for open actions (review 2026-10-08 H): tracked
+			// + empty id = the open never placed an order (failed/rejected).
+			orderTracked, entryOrderID := false, ""
+			if strings.HasPrefix(strings.ToLower(d.Action), "open") {
+				orderTracked = true
+				if actionRecord.Success {
+					entryOrderID = actionRecord.EntryOrderID
+				}
+			}
 			if err := at.store.EntryAssessment().Insert(&store.EntryAssessment{
+				OrderTracked: orderTracked, OrderID: entryOrderID,
 				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
 				Symbol: d.Symbol, Direction: direction, Action: d.Action,
 				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,

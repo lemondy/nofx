@@ -43,6 +43,12 @@ type EntryAssessment struct {
 	MgmtFlags       string  `gorm:"column:mgmt_flags;type:text" json:"mgmt_flags"`             // JSON array
 	EntryPath       string  `gorm:"column:entry_path;size:24" json:"entry_path"`               // e.g. "15m:down" / "15m:rally" / "bb_ride"
 	Price           float64 `gorm:"column:price;default:0" json:"price"`
+	// OrderID / OrderTracked (review 2026-10-08 H): exchange id of the entry
+	// order an open action placed. OrderTracked=false marks legacy rows written
+	// before the link existed (bounded heuristic join); tracked + empty id =
+	// no order was placed (failed/rejected open) and yields no outcome.
+	OrderID      string `gorm:"column:order_id;size:64;default:''" json:"order_id"`
+	OrderTracked bool   `gorm:"column:order_tracked;default:false" json:"order_tracked"`
 }
 
 func (EntryAssessment) TableName() string { return "entry_assessments" }
@@ -65,20 +71,33 @@ func (s *EntryAssessmentStore) Insert(rec *EntryAssessment) error {
 
 // QualityBucketStat is one entry-quality bucket's outcome summary.
 type QualityBucketStat struct {
-	Bucket      string  `json:"bucket"`
-	Assessments int     `json:"assessments"`
-	Traded      int     `json:"traded"`
-	Wins        int     `json:"wins"`
-	WinRate     float64 `json:"win_rate"`    // % of traded
-	AvgPnLPct   float64 `json:"avg_pnl_pct"` // mean journal PnL% (margin-based) of traded
-	TotalPnL    float64 `json:"total_pnl"`   // USDT
+	Bucket      string `json:"bucket"`
+	Assessments int    `json:"assessments"`
+	Traded      int    `json:"traded"` // = MatchedExact + MatchedLegacy
+	// Which caliber produced the numbers (review 2026-10-08 H): exact =
+	// order-id join to the position; legacy = bounded symbol+side+time+AI
+	// heuristic for rows written before order tracking.
+	MatchedExact  int     `json:"matched_exact"`
+	MatchedLegacy int     `json:"matched_legacy"`
+	Wins          int     `json:"wins"`
+	WinRate       float64 `json:"win_rate"`    // % of traded
+	AvgPnLPct     float64 `json:"avg_pnl_pct"` // mean journal PnL% (margin-based) of traded
+	TotalPnL      float64 `json:"total_pnl"`   // USDT
 }
 
-// BucketStats joins assessments with the trade journal: an assessment with an
-// open action "became" the earliest journal trade of the same trader+symbol+
-// direction whose entry_time is at/after the assessment timestamp (each
-// journal row consumed once). Waits count per bucket without outcomes — the
-// shadow-outcome engine is future work.
+// legacyMatchWindow bounds the legacy (untracked) heuristic join: covers the
+// default 30-min limit-order lifetime with margin (review 2026-10-08 H).
+const legacyMatchWindow = 2 * time.Hour
+
+// BucketStats joins assessments with realized outcomes. Open assessments with
+// order tracking join EXACTLY: assessment.order_id → closed position(s) with
+// that entry_order_id → their trade_journal row(s) (partial-fill splits sum
+// net PnL into one outcome); an unfilled / still-open / failed open has no
+// outcome. Legacy rows (written before tracking) keep a bounded heuristic:
+// same symbol+side, journal entry within [ts, ts+legacyMatchWindow], and
+// ai_managed=true (manual trades are never claimed). Each journal row is
+// consumed once, and exact matches are resolved first so a legacy row cannot
+// steal them (review 2026-10-08 H). Waits count per bucket without outcomes.
 func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat, error) {
 	var rows []EntryAssessment
 	if err := s.db.Where("trader_id = ?", traderID).Order("ts ASC").Find(&rows).Error; err != nil {
@@ -88,14 +107,28 @@ func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat
 	if err := s.db.Where("trader_id = ?", traderID).Order("entry_time ASC").Find(&journal).Error; err != nil {
 		return nil, err
 	}
+	var positions []TraderPosition
+	if err := s.db.Where("trader_id = ? AND status = ? AND entry_order_id <> ''", traderID, "CLOSED").
+		Find(&positions).Error; err != nil {
+		return nil, err
+	}
 
 	type jkey struct {
 		symbol, side string
 	}
 	byKey := map[jkey][]TradeJournalDB{}
+	byPos := map[int64]TradeJournalDB{}
 	for _, j := range journal {
 		k := jkey{j.Symbol, j.Side}
 		byKey[k] = append(byKey[k], j)
+		byPos[j.PositionID] = j
+	}
+	// entry order id → journal rows of the closed positions it filled.
+	byOrder := map[string][]TradeJournalDB{}
+	for _, p := range positions {
+		if j, ok := byPos[p.ID]; ok {
+			byOrder[p.EntryOrderID] = append(byOrder[p.EntryOrderID], j)
+		}
 	}
 
 	buckets := []struct {
@@ -107,6 +140,38 @@ func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat
 		stats[i] = QualityBucketStat{Bucket: b.name}
 	}
 	consumed := map[int64]bool{}
+
+	record := func(bi int, exact bool, js []TradeJournalDB) {
+		stats[bi].Traded++
+		if exact {
+			stats[bi].MatchedExact++
+		} else {
+			stats[bi].MatchedLegacy++
+		}
+		// NET caliber (2026-10-03 review P1): every other aggregate nets
+		// the fee — this calibration dataset (quality bucket → real win
+		// rate) still classified and summed on gross, systematically
+		// flattering the high-quality buckets.
+		var net, pct float64
+		for _, j := range js {
+			net += j.RealizedPnL - j.Fee
+			pct += j.PnLPct
+		}
+		if len(js) > 1 {
+			pct /= float64(len(js)) // split fills of one order: mean margin PnL%
+		}
+		if net > 0 {
+			stats[bi].Wins++
+		}
+		stats[bi].AvgPnLPct += pct
+		stats[bi].TotalPnL += net
+	}
+
+	type legacyOpen struct {
+		bi int
+		a  EntryAssessment
+	}
+	var legacy []legacyOpen
 
 	for _, a := range rows {
 		bi := -1
@@ -130,33 +195,50 @@ func (s *EntryAssessmentStore) BucketStats(traderID string) ([]QualityBucketStat
 		// wait rows outnumbering opens 10,238:315 the wait buckets were
 		// describing trades the wait explicitly did NOT take. Wait rows
 		// count toward Assessments but stay outcome-free.
-		aAction := strings.ToLower(a.Action)
-		if !strings.HasPrefix(aAction, "open") {
+		if !strings.HasPrefix(strings.ToLower(a.Action), "open") {
 			continue
 		}
+		if !a.OrderTracked {
+			legacy = append(legacy, legacyOpen{bi, a})
+			continue
+		}
+		if a.OrderID == "" {
+			continue // no order was placed
+		}
+		js := byOrder[a.OrderID]
+		if len(js) == 0 {
+			continue // unfilled or still open: no outcome yet
+		}
+		fresh := make([]TradeJournalDB, 0, len(js))
+		for _, j := range js {
+			if !consumed[j.ID] {
+				consumed[j.ID] = true
+				fresh = append(fresh, j)
+			}
+		}
+		if len(fresh) > 0 {
+			record(bi, true, fresh)
+		}
+	}
+
+	// Legacy pass runs after every exact match is consumed.
+	for _, l := range legacy {
+		a := l.a
 		side := "LONG"
 		if a.Direction == "short" {
 			side = "SHORT"
 		}
-		candidates := byKey[jkey{a.Symbol, side}]
 		tsMs := a.Ts.UnixMilli()
-		for ji, j := range candidates {
-			if consumed[j.ID] || j.EntryTime < tsMs {
+		endMs := tsMs + legacyMatchWindow.Milliseconds()
+		for _, j := range byKey[jkey{a.Symbol, side}] {
+			if consumed[j.ID] || j.EntryTime < tsMs || j.EntryTime > endMs {
 				continue
 			}
-			consumed[j.ID] = true
-			_ = ji
-			stats[bi].Traded++
-			// NET caliber (2026-10-03 review P1): every other aggregate nets
-			// the fee — this calibration dataset (quality bucket → real win
-			// rate) still classified and summed on gross, systematically
-			// flattering the high-quality buckets.
-			net := j.RealizedPnL - j.Fee
-			if net > 0 {
-				stats[bi].Wins++
+			if j.AIManaged == nil || !*j.AIManaged {
+				continue // manual or unattributed trades are never claimed
 			}
-			stats[bi].AvgPnLPct += j.PnLPct
-			stats[bi].TotalPnL += net
+			consumed[j.ID] = true
+			record(l.bi, false, []TradeJournalDB{j})
 			break
 		}
 	}
