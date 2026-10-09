@@ -455,6 +455,19 @@ func (e *StrategyEngine) dailyLossState(ctx *Context) string {
 	return fmt.Sprintf(" | DailyLoss: day-start %.2f (今日 %+.1f%%, 日内熔断线 −%.0f%%)", ctx.DayStartEquityUSDT, dayPct, capPct)
 }
 
+// Live market-context fetches BuildUserPrompt makes outside the Binance
+// seam (binanceGetFn). Package vars so tests can serve canned values instead
+// of whatever the live market says that day.
+var (
+	marketSentimentFn = market.GetMarketSentiment
+	cftcCotBitcoinFn  = func() *openbb.CotBitcoin {
+		if !openbb.Available() {
+			return nil
+		}
+		return openbb.CotBitcoinCached(context.Background())
+	}
+)
+
 func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	var sb strings.Builder
 
@@ -462,7 +475,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	// independent sources at the HEAD of the user prompt, with an explicit
 	// combine-don't-overindex rule. Rendered empty when every source failed —
 	// the block disappears rather than showing an empty shell.
-	if sentiment := market.GetMarketSentiment(); sentiment != nil {
+	if sentiment := marketSentimentFn(); sentiment != nil {
 		if body := sentiment.Render(); body != "" {
 			sb.WriteString("## 大盘情绪(组合解读,不要只看单一数字)\n")
 			sb.WriteString(body + "\n")
@@ -472,11 +485,9 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 	// CFTC is dated market context, so it belongs in the per-cycle user
 	// prompt. Keeping it out of the system prompt preserves the stable prefix
 	// used by provider prompt caches.
-	if openbb.Available() {
-		if cot := openbb.CotBitcoinCached(context.Background()); cot != nil {
-			sb.WriteString(fmt.Sprintf("## CFTC 比特币期货持仓周报 [%s]\n全部未平仓 %s 张 | 投机类净多 %s 张 | 套保类净多 %s 张。慢变量背景,不构成开/平仓触发,不得覆盖 hard_entry_gate。\n\n",
-				cot.ReportDate, openbb.Usd(cot.OpenInterestAll), openbb.Usd(cot.SpeculatorsNetLong), openbb.Usd(cot.HedgersNetLong)))
-		}
+	if cot := cftcCotBitcoinFn(); cot != nil {
+		sb.WriteString(fmt.Sprintf("## CFTC 比特币期货持仓周报 [%s]\n全部未平仓 %s 张 | 投机类净多 %s 张 | 套保类净多 %s 张。慢变量背景,不构成开/平仓触发,不得覆盖 hard_entry_gate。\n\n",
+			cot.ReportDate, openbb.Usd(cot.OpenInterestAll), openbb.Usd(cot.SpeculatorsNetLong), openbb.Usd(cot.HedgersNetLong)))
 	}
 
 	// System status

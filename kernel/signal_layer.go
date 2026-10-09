@@ -1722,7 +1722,7 @@ func sentimentGreedy(threshold int) bool {
 	}
 	// 2026-10-03: Crypto is a POINTER and stays nil while its fetch is in
 	// flight or has failed — the unconditional deref crashed the cycle.
-	if s := market.GetMarketSentiment(); s != nil && s.Crypto != nil {
+	if s := marketSentimentFn(); s != nil && s.Crypto != nil {
 		return s.Crypto.Value >= threshold
 	}
 	return false

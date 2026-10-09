@@ -48,6 +48,7 @@ func TestBlockedCandidateCompressesToOneLine(t *testing.T) {
 }
 
 func TestAllowedCandidateKeepsFullJSON(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	engine := NewStrategyEngine(&store.StrategyConfig{})
 	ctx := &Context{MarketDataMap: map[string]*market.Data{}}
 	now := time.Now()
