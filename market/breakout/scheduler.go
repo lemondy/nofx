@@ -178,6 +178,7 @@ func (s *Scheduler) Start() {
 		go func() {
 			refreshSlowTops()
 			RunShortTuner(time.Now())
+			RunTrendShortShadow(time.Now())
 			slowTicker := time.NewTicker(30 * time.Minute)
 			sampleTicker := time.NewTicker(time.Hour)
 			defer slowTicker.Stop()
@@ -187,6 +188,7 @@ func (s *Scheduler) Start() {
 				case <-slowTicker.C:
 					refreshSlowTops()
 					RunShortTuner(time.Now())
+					RunTrendShortShadow(time.Now())
 				case <-sampleTicker.C:
 					shorts, at := s.ShortSnapshot()
 					if len(shorts) > 0 {

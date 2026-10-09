@@ -357,42 +357,50 @@ func TopVolumeSymbols(limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	u := fapiBase() + "/fapi/v1/ticker/24hr"
-	var raw []struct {
-		Symbol      string `json:"symbol"`
-		QuoteVolume string `json:"quoteVolume"`
-	}
-	if err := fetchJSON(u, &raw); err != nil {
+	tickers, err := fetchBoardTickers()
+	if err != nil {
 		return nil, err
 	}
-	type pair struct {
-		sym string
-		vol float64
+	return topVolumeTickers(tickers, limit), nil
+}
+
+// boardTicker is shared by the boards and the shadow scan (one snapshot).
+type boardTicker struct {
+	Symbol             string `json:"symbol"`
+	QuoteVolume        string `json:"quoteVolume"`
+	PriceChangePercent string `json:"priceChangePercent"`
+	Count              int    `json:"count"`
+}
+
+func fetchBoardTickers() ([]boardTicker, error) {
+	var raw []boardTicker
+	if err := fetchJSON(fapiBase()+"/fapi/v1/ticker/24hr", &raw); err != nil {
+		return nil, err
 	}
-	var pairs []pair
+	var out []boardTicker
 	for _, t := range raw {
-		if !strings.HasSuffix(t.Symbol, "USDT") || strings.Contains(t.Symbol, "_") {
+		if !strings.HasSuffix(t.Symbol, "USDT") || strings.Contains(t.Symbol, "_") || !isASCIIAlnum(strings.TrimSuffix(t.Symbol, "USDT")) {
 			continue
 		}
-		// Skip non-tradable localized names (e.g. 龙虾USDT): ASCII letters/digits only.
-		if !isASCIIAlnum(t.Symbol[:len(t.Symbol)-4]) {
+		if toF(t.QuoteVolume) < 10_000_000 {
 			continue
 		}
-		v, _ := strconv.ParseFloat(t.QuoteVolume, 64)
-		if v < 10_000_000 { // skip illiquid pairs (< $10M/day)
-			continue
-		}
-		pairs = append(pairs, pair{t.Symbol, v})
+		out = append(out, t)
 	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].vol > pairs[j].vol })
+	return out, nil
+}
+
+func topVolumeTickers(tickers []boardTicker, limit int) []string {
+	rows := append([]boardTicker(nil), tickers...)
+	sort.Slice(rows, func(i, j int) bool { return toF(rows[i].QuoteVolume) > toF(rows[j].QuoteVolume) })
 	out := make([]string, 0, limit)
-	for _, p := range pairs {
-		out = append(out, p.sym)
+	for _, r := range rows {
 		if len(out) >= limit {
 			break
 		}
+		out = append(out, r.Symbol)
 	}
-	return out, nil
+	return out
 }
 
 // BoardLists derives the three Binance-app leaderboards from one 24hr ticker
@@ -410,57 +418,33 @@ func BoardLists(hotN, gainN, loseN int) (hot, gain, lose []string, err error) {
 	if loseN <= 0 {
 		loseN = 20
 	}
-	u := fapiBase() + "/fapi/v1/ticker/24hr"
-	var raw []struct {
-		Symbol             string `json:"symbol"`
-		PriceChangePercent string `json:"priceChangePercent"`
-		QuoteVolume        string `json:"quoteVolume"`
-		Count              int    `json:"count"` // 24h trade count — the popularity axis
-	}
-	if err := fetchJSON(u, &raw); err != nil {
+	tickers, err := fetchBoardTickers()
+	if err != nil {
 		return nil, nil, nil, err
 	}
-	type row struct {
-		symbol string
-		chg    float64
-		vol    float64
-		count  int
-	}
-	var all []row
-	for _, t := range raw {
-		if !strings.HasSuffix(t.Symbol, "USDT") || strings.Contains(t.Symbol, "_") {
-			continue
-		}
-		if !isASCIIAlnum(t.Symbol[:len(t.Symbol)-4]) {
-			continue
-		}
-		v, _ := strconv.ParseFloat(t.QuoteVolume, 64)
-		if v < 10_000_000 { // same liquidity floor as the volume universe
-			continue
-		}
-		chg, _ := strconv.ParseFloat(t.PriceChangePercent, 64)
-		all = append(all, row{t.Symbol, chg, v, t.Count})
-	}
-	byCount := append([]row(nil), all...)
-	sort.Slice(byCount, func(i, j int) bool { return byCount[i].count > byCount[j].count })
-	for _, r := range byCount {
-		if len(hot) < hotN {
-			hot = append(hot, r.symbol)
-		}
-	}
-	byGain := append([]row(nil), all...)
-	sort.Slice(byGain, func(i, j int) bool { return byGain[i].chg > byGain[j].chg })
-	for _, r := range byGain {
-		if len(gain) < gainN {
-			gain = append(gain, r.symbol)
-		}
-	}
-	byLose := append([]row(nil), all...)
-	sort.Slice(byLose, func(i, j int) bool { return byLose[i].chg < byLose[j].chg })
-	for _, r := range byLose {
-		if len(lose) < loseN {
-			lose = append(lose, r.symbol)
-		}
-	}
+	hot, gain, lose = boardListsFromTickers(tickers, hotN, gainN, loseN)
 	return hot, gain, lose, nil
+}
+
+func boardListsFromTickers(tickers []boardTicker, hotN, gainN, loseN int) (hot, gain, lose []string) {
+	rows := append([]boardTicker(nil), tickers...)
+	collect := func(n int) []string {
+		var out []string
+		for _, r := range rows {
+			if len(out) >= n {
+				break
+			}
+			out = append(out, r.Symbol)
+		}
+		return out
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Count > rows[j].Count })
+	hot = collect(hotN)
+	rows = append([]boardTicker(nil), tickers...)
+	sort.Slice(rows, func(i, j int) bool { return toF(rows[i].PriceChangePercent) > toF(rows[j].PriceChangePercent) })
+	gain = collect(gainN)
+	rows = append([]boardTicker(nil), tickers...)
+	sort.Slice(rows, func(i, j int) bool { return toF(rows[i].PriceChangePercent) < toF(rows[j].PriceChangePercent) })
+	lose = collect(loseN)
+	return
 }

@@ -279,3 +279,64 @@ func mean(xs []float64) float64 {
 	}
 	return s / float64(len(xs))
 }
+
+// adxLast computes Wilder ADX; kernel owns its own unexported implementation.
+func adxLast(bars []Kline, period int) float64 {
+	if period <= 0 || len(bars) < 2*period+1 {
+		return 0
+	}
+	tr := make([]float64, len(bars))
+	plusDM := make([]float64, len(bars))
+	minusDM := make([]float64, len(bars))
+	for i := 1; i < len(bars); i++ {
+		upMove := bars[i].High - bars[i-1].High
+		downMove := bars[i-1].Low - bars[i].Low
+		if upMove > downMove && upMove > 0 {
+			plusDM[i] = upMove
+		}
+		if downMove > upMove && downMove > 0 {
+			minusDM[i] = downMove
+		}
+		tr[i] = math.Max(bars[i].High-bars[i].Low,
+			math.Max(math.Abs(bars[i].High-bars[i-1].Close), math.Abs(bars[i].Low-bars[i-1].Close)))
+	}
+	var smTR, smPlus, smMinus float64
+	for i := 1; i <= period; i++ {
+		smTR += tr[i]
+		smPlus += plusDM[i]
+		smMinus += minusDM[i]
+	}
+	dx := make([]float64, 0, len(bars)-period)
+	appendDX := func() {
+		if smTR <= 0 {
+			dx = append(dx, 0)
+			return
+		}
+		pdi := 100 * smPlus / smTR
+		mdi := 100 * smMinus / smTR
+		if pdi+mdi == 0 {
+			dx = append(dx, 0)
+			return
+		}
+		dx = append(dx, 100*math.Abs(pdi-mdi)/(pdi+mdi))
+	}
+	appendDX()
+	for i := period + 1; i < len(bars); i++ {
+		smTR = smTR - smTR/float64(period) + tr[i]
+		smPlus = smPlus - smPlus/float64(period) + plusDM[i]
+		smMinus = smMinus - smMinus/float64(period) + minusDM[i]
+		appendDX()
+	}
+	if len(dx) < period {
+		return 0
+	}
+	adx := 0.0
+	for _, v := range dx[:period] {
+		adx += v
+	}
+	adx /= float64(period)
+	for _, v := range dx[period:] {
+		adx = (adx*float64(period-1) + v) / float64(period)
+	}
+	return adx
+}

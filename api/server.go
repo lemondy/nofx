@@ -129,6 +129,7 @@ func (s *Server) setupRoutes() {
 		s.route(api, "GET", "/breakout/scan", "Scan top-volume perps for breakout signals (?limit=10&concurrency=4)", s.handleBreakoutScan)
 		s.route(api, "GET", "/breakout/snapshot", "Background breakout snapshot (refreshed every 5 min)", s.handleBreakoutSnapshot)
 		s.route(api, "GET", "/breakout/short-scan", "Short-scan ranking: top 24h gainers scored for short suitability (?limit=)", s.handleBreakoutShortScan)
+		s.route(api, "GET", "/breakout/trend-short-shadow", "Read-only trend-continuation short shadow research statistics", s.handleTrendShortShadow)
 		s.route(api, "GET", "/breakout/params", "Tunable parameters and last backtest tuning summary", s.handleBreakoutParams)
 
 		// Public strategy market (no authentication required)

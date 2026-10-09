@@ -635,7 +635,11 @@ func writeSamples(samples []shortSample) error {
 // use the same disclosed estimate as the research replay. This is a 24h close
 // label, not an SL/TP path or an execution/portfolio outcome.
 func historicalShortLabel(s shortSample) (float64, int64, float64, error) {
-	target := time.UnixMilli(s.TS).Add(shortTunerEvalAfter)
+	return historicalShortHorizon(s, shortTunerEvalAfter)
+}
+
+func historicalShortHorizon(s shortSample, horizon time.Duration) (float64, int64, float64, error) {
+	target := time.UnixMilli(s.TS).Add(horizon)
 	open := target.Truncate(time.Minute).Add(-time.Minute).UnixMilli()
 	u := fmt.Sprintf("%s/fapi/v1/klines?symbol=%s&interval=1m&startTime=%d&endTime=%d&limit=1", fapiBase(), url.QueryEscape(s.Symbol), open, open+time.Minute.Milliseconds()-1)
 	var raw [][]interface{}
@@ -643,10 +647,10 @@ func historicalShortLabel(s shortSample) (float64, int64, float64, error) {
 		return 0, 0, 0, err
 	}
 	if len(raw) != 1 || len(raw[0]) < 7 {
-		return 0, 0, 0, fmt.Errorf("24h historical candle unavailable")
+		return 0, 0, 0, fmt.Errorf("historical candle unavailable")
 	}
 	if int64(toF(raw[0][0])) != open {
-		return 0, 0, 0, fmt.Errorf("24h historical candle misaligned")
+		return 0, 0, 0, fmt.Errorf("historical candle misaligned")
 	}
 	price := toF(raw[0][4])
 	labelAt := open + time.Minute.Milliseconds()

@@ -352,3 +352,16 @@ func (s *DecisionStore) GetLastCycleNumber(traderID string) (int, error) {
 	}
 	return *cycleNumber, nil
 }
+
+// CandidatePoolRecord contains only the columns needed by shadow overlap research.
+type CandidatePoolRecord struct {
+	Timestamp      time.Time
+	CandidateCoins string
+}
+
+// GetCandidatePoolsBetween loads every trader's candidate arrays in one query.
+func (s *DecisionStore) GetCandidatePoolsBetween(start, end time.Time) ([]CandidatePoolRecord, error) {
+	var rows []CandidatePoolRecord
+	err := s.db.Model(&DecisionRecordDB{}).Select("timestamp, candidate_coins").Where("timestamp >= ? AND timestamp <= ?", start.UTC(), end.UTC()).Order("timestamp ASC").Find(&rows).Error
+	return rows, err
+}
