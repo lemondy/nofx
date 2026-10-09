@@ -709,6 +709,12 @@ type SignalOptions struct {
 	// GetWithExchange data, which always carries 3m/4h/1h + aggregated 15m:
 	// the historical {15m,1h,4h} requirement is kept there.
 	ConfiguredTimeframes []string
+	// PositionSide threads the HELD position's direction ("long"/"short";
+	// empty = not held) into exit_rule_triggered — the rule evaluates the
+	// matching side's mirror only (2026-10-09 ONUSDT: a short in a working
+	// 15m downtrend must not see the long-side exit flag). Empty → the flag
+	// is false; the prompt builder looks the side up from Context.Positions.
+	PositionSide string
 }
 
 // ComputeSymbolSignals builds the normalized signal block for one symbol from
@@ -1071,7 +1077,18 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	sig.RoleTFs = ResolveRoleTimeframes(nil)
 	sig.RoleTFs.ExecutionTF = opt.PrimaryTF
 	if line := RegimeLine(data, sig.RoleTFs.TrendTF, now); line > 0 {
-		sig.RegimeLine = &RegimeLineSignal{TF: sig.RoleTFs.TrendTF, EMA50: line}
+		rl := &RegimeLineSignal{TF: sig.RoleTFs.TrendTF, EMA50: line}
+		// Precompute the comparisons so the model never re-derives "above
+		// the line" from raw decimals (2026-10-09 ONUSDT misread).
+		if td := data.TimeframeData[sig.RoleTFs.TrendTF]; td != nil {
+			if bars := ClosedKlines(td, now, market.TimeframeDuration(sig.RoleTFs.TrendTF)); len(bars) > 0 {
+				rl.CloseAbove = bars[len(bars)-1].Close > line
+			}
+		}
+		if data.CurrentPrice > 0 {
+			rl.LiveAbove = data.CurrentPrice > line
+		}
+		sig.RegimeLine = rl
 	}
 	// First-class market regime (closed 1h/4h bars only). This is computed
 	// before hard_entry_gate because market-order exceptions consume it.
@@ -1203,13 +1220,36 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 			primary.RSI14 != nil && *primary.RSI14 > 40 && *primary.RSI14 < 72 &&
 			primary.VolumeRatio != nil && *primary.VolumeRatio >= 1.0 &&
 			primary.LastClosedCandle == "bullish"
-		structLow := 0.0
+		structLow, structHigh := 0.0, 0.0
 		if primary.StructureLow != nil {
 			structLow = *primary.StructureLow
 		}
-		sig.ExitTriggered = (structLow > 0 && sig.Price < structLow) ||
+		if primary.StructureHigh != nil {
+			structHigh = *primary.StructureHigh
+		}
+		// Exit rules are DIRECTION-AWARE (2026-10-09 ONUSDT incident): the
+		// old block evaluated only the long-side semantics (break of the
+		// structure low / RSI>80 / trend down + bearish close) and rendered
+		// the flag for ANY held position — for a SHORT those conditions are
+		// the thesis WORKING (downtrend continuing), yet the model read
+		// "exit_rule_triggered": true as a program exit directive and closed
+		// a profitable short into a loss. Each side now gets its own mirror;
+		// an unknown side (not held) stays false — the render site's phantom
+		// suppression inherits this default.
+		longExit := (structLow > 0 && sig.Price < structLow) ||
 			(primary.RSI14 != nil && *primary.RSI14 > 80) ||
 			(primary.Trend == "down" && primary.LastClosedCandle == "bearish")
+		shortExit := (structHigh > 0 && sig.Price > structHigh) ||
+			(primary.RSI14 != nil && *primary.RSI14 < 20) ||
+			(primary.Trend == "up" && primary.LastClosedCandle == "bullish")
+		switch opt.PositionSide {
+		case "long":
+			sig.ExitTriggered = longExit
+		case "short":
+			sig.ExitTriggered = shortExit
+		default:
+			sig.ExitTriggered = false
+		}
 	}
 
 	// Loss-streak circuit breaker: the trader computes the ban from the

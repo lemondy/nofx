@@ -105,6 +105,13 @@ func executionFilterFromTimeframes(tfs map[string]*TFSignal, price float64) *Exe
 type RegimeLineSignal struct {
 	TF    string  `json:"tf"`
 	EMA50 float64 `json:"ema50"`
+	// Precomputed comparisons (2026-10-09 ONUSDT: the model read a close
+	// 0.07% BELOW the line — 0.1107 vs 0.110776 — as "升破" and closed a
+	// short on it). CloseAbove compares the last CLOSED trend-TF bar's
+	// close; LiveAbove compares the live ticker price. Cite these instead
+	// of re-comparing the decimals yourself.
+	LiveAbove  bool `json:"live_price_above"`
+	CloseAbove bool `json:"last_close_above"`
 }
 
 func suppressAnchorsAgainstRegimeLine(sig *SymbolSignal, enabled bool) {

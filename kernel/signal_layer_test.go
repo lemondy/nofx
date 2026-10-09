@@ -372,10 +372,12 @@ func TestPrimaryTFDrivesEntryExitRules(t *testing.T) {
 	// 15m is in a downtrend with a bearish close; 1d is in an uptrend.
 	// With primary_timeframe=15m the exit rule (down trend + bearish candle)
 	// must fire from the 15m block — the old longest-TF behavior (1d) hid it.
+	// The exit rule is direction-aware (2026-10-09 ONUSDT): this rule is the
+	// LONG side's invalidation, so the assertions pass PositionSide "long".
 	data := newData()
 	data.TimeframeData["15m"] = buildTrendTF("15m", now, 60, 105, false)
 	data.TimeframeData["1d"] = buildTrendTF("1d", now, 60, 60, true)
-	sig, err := ComputeSymbolSignals("TESTUSDT", data, SignalOptions{Now: now, PrimaryTF: "15m"})
+	sig, err := ComputeSymbolSignals("TESTUSDT", data, SignalOptions{Now: now, PrimaryTF: "15m", PositionSide: "long"})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -392,13 +394,13 @@ func TestPrimaryTFDrivesEntryExitRules(t *testing.T) {
 	data2 := newData()
 	data2.TimeframeData["15m"] = buildTrendTF("15m", now, 60, 105, false)
 	data2.TimeframeData["1d"] = buildTrendTF("1d", now, 60, 60, true)
-	sig2, err := ComputeSymbolSignals("TESTUSDT", data2, SignalOptions{Now: now, PrimaryTF: "4h"})
+	sig2, err := ComputeSymbolSignals("TESTUSDT", data2, SignalOptions{Now: now, PrimaryTF: "4h", PositionSide: "long"})
 	if err != nil {
 		t.Fatalf("compute fallback: %v", err)
 	}
 	dataOnly1d := newData()
 	dataOnly1d.TimeframeData["1d"] = buildTrendTF("1d", now, 60, 60, true)
-	sigOnly1d, err := ComputeSymbolSignals("TESTUSDT", dataOnly1d, SignalOptions{Now: now, PrimaryTF: "1d"})
+	sigOnly1d, err := ComputeSymbolSignals("TESTUSDT", dataOnly1d, SignalOptions{Now: now, PrimaryTF: "1d", PositionSide: "long"})
 	if err != nil {
 		t.Fatalf("compute 1d-only: %v", err)
 	}

@@ -1759,6 +1759,24 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			}
 		}
 	}
+	// exit_rule_triggered is direction-aware (2026-10-09 ONUSDT): thread the
+	// held position's side into the signal so the rule evaluates the matching
+	// mirror. An empty side (not held) leaves the flag false — the phantom
+	// suppression this replaces also covered the held case wrongly, by
+	// showing a SHORT the long-side exit semantics.
+	if ctx != nil {
+		for _, p := range ctx.Positions {
+			if market.Normalize(p.Symbol) == market.Normalize(data.Symbol) {
+				switch {
+				case strings.EqualFold(p.Side, "long"):
+					opt.PositionSide = "long"
+				case strings.EqualFold(p.Side, "short"):
+					opt.PositionSide = "short"
+				}
+				break
+			}
+		}
+	}
 	if sig, err := ComputeSymbolSignals(data.Symbol, data, opt); err == nil {
 		// Naming consistency: the JSON symbol MUST match the candidate heading
 		// and the decision symbol — market data may carry a prefixed exchange
@@ -1766,20 +1784,6 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// form. Decisions route through the candidate name.
 		if coin != nil && coin.Symbol != "" {
 			sig.Symbol = strings.ToUpper(coin.Symbol)
-		}
-		// exit_rule_triggered is only meaningful when the trader actually
-		// holds this symbol — otherwise it reads as a phantom exit signal.
-		if ctx != nil {
-			held := false
-			for _, p := range ctx.Positions {
-				if market.Normalize(p.Symbol) == market.Normalize(data.Symbol) {
-					held = true
-					break
-				}
-			}
-			if !held {
-				sig.ExitTriggered = false
-			}
 		}
 		// Remember the anchors the model is being shown, so post-parse
 		// compliance can snap open_*_limit prices back to the pre-computed
@@ -2035,6 +2039,8 @@ const signalBlockLegend = `时间口径: timeframe 名称是K线粒度;trend_win
 - bias.scanner 只是候选来源姿态;方向依据 structure/execution/directional_score。仅在 hard_entry_gate.allowed=true 且准备开仓时处理 signal_conflict;已被硬门阻断时直接 wait,不展开冲突分析。
 - support/resistance 与距离均按实时价生成;空数组表示对应方向没有结构参考。trend 与窗口收益方向不同可以是合法反弹/回撤,不自动构成冲突。
 - rr_scan.first_obstacle / first_obstacle_rr = 交易路径上最近的结构位及该位的净 RR(无论是否达到 min_rr)。止盈目标若在它之后,价格要先穿过它;first_obstacle_rr 很低说明前方很近就有墙——这是证据,不是禁开码,请在推理中说明你如何看待它。
+- exit_rule_triggered 按当前持仓方向计算,只在你持有该币时可能为 true:多头=价格跌破主TF结构低/RSI>80/主TF趋势转down且收阴;空头=镜像(升破结构高/RSI<20/趋势转up且收阳);无持仓恒 false。它是该方向反转的程序证据,不是平仓指令——引用时必须写明触发的是哪个条件并与 1h/4h 结构互证;程序值为 true 但你的结构判断不成立时可以继续 hold 并说明理由。
+- regime_line 是 trend_tf(默认1h)EMA50 收敛线;last_close_above(最近已收盘K线收盘 vs 线)与 live_price_above(实时价 vs 线)已由程序预计算。判断「升破/跌破」直接引用这两个布尔值,禁止自己比较小数——0.1107 与 0.110776 曾被读成「升破」。
 数据新鲜度优先级: Structured Signal timestamp > derivatives/liquidity > scanner/rankings。hint/榜单旧价格禁止参与 entry/SL/TP/RR 精确计算。ohlcv 只用于软证据,不得覆盖上述程序结论。
 `
 
