@@ -79,6 +79,8 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 		}
 		return en
 	}
+	preset := contextPreset(ctx)
+	required := map[string]bool{usstock.TF1d: true, preset.TrendTF: true, preset.EntryTF: true}
 	et, _ := time.LoadLocation("America/New_York")
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s ET | session=%s | %s=%t\n", ctx.Now.In(et).Format("2006-01-02 15:04:05 MST"), ctx.Session, label("new exposure allowed", "允许新增敞口"), sessionAllowed(ctx.Config, ctx.Session))
@@ -116,7 +118,7 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 	}
 	fmt.Fprintf(&b, "%s SPY/QQQ:\n", label("Market context", "大盘背景"))
 	for _, s := range ctx.Market {
-		writeSnapshot(&b, s, zh)
+		writeSnapshot(&b, s, zh, required)
 	}
 	fmt.Fprintf(&b, "%s:\n", label("Configured symbols", "配置标的"))
 	if ctx.Config != nil {
@@ -126,13 +128,13 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 				fmt.Fprintf(&b, "%s: DATA_INSUFFICIENT / MissingTF 1d and required timeframes\n", symbol)
 				continue
 			}
-			writeSnapshot(&b, s, zh)
+			writeSnapshot(&b, s, zh, required)
 		}
 	}
 	return b.String()
 }
 
-func writeSnapshot(b *strings.Builder, s *SymbolSnapshot, zh bool) {
+func writeSnapshot(b *strings.Builder, s *SymbolSnapshot, zh bool, required map[string]bool) {
 	if s == nil {
 		return
 	}
@@ -155,9 +157,18 @@ func writeSnapshot(b *strings.Builder, s *SymbolSnapshot, zh bool) {
 		fmt.Fprintf(b, "%s: %s; ", tf, source)
 	}
 	fmt.Fprintln(b)
-	if len(s.MissingTF) > 0 {
-		fmt.Fprintf(b, "MissingTF WARNING: %s (required TF missing blocks entry)", strings.Join(s.MissingTF, ","))
-		for _, tf := range s.MissingTF {
+	// Only timeframes the preset actually needs are worth a warning: optional
+	// timeframes the run cycle never fetched (e.g. 15m/4h for swing) must not
+	// read as a data problem and talk the model out of a valid entry.
+	var missing []string
+	for _, tf := range s.MissingTF {
+		if required[tf] {
+			missing = append(missing, tf)
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(b, "MissingTF WARNING: %s (required TF missing blocks entry)", strings.Join(missing, ","))
+		for _, tf := range missing {
 			if tf == usstock.TF1d {
 				fmt.Fprint(b, "; 1d<200: EMA200 unavailable; EMA20/50 only when available")
 				break

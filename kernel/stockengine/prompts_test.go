@@ -47,7 +47,8 @@ func TestUserPromptSourcesPositionsAndR(t *testing.T) {
 	c.Account.Exposure = 500
 	c.Snapshots[0].Underlying = "AAPL"
 	c.Snapshots[0].Sources[usstock.TF1h] = usstock.SourceBStock
-	c.Snapshots[0].MissingTF = []string{usstock.TF1w}
+	// 1d is required by every preset → warned; 15m is optional for swing → not.
+	c.Snapshots[0].MissingTF = []string{usstock.TF15m, usstock.TF1d}
 	c.Market = []*SymbolSnapshot{{Symbol: "SPYBUSDT", Underlying: "SPY", TrendDaily: "up"}, {Symbol: "QQQBUSDT", Underlying: "QQQ", TrendDaily: "range"}}
 	for _, lang := range []string{"zh", "en"} {
 		prompt := BuildUserPrompt(c, lang)
@@ -55,6 +56,9 @@ func TestUserPromptSourcesPositionsAndR(t *testing.T) {
 			if !strings.Contains(prompt, token) {
 				t.Fatalf("%s user prompt missing %s:\n%s", lang, token, prompt)
 			}
+		}
+		if !strings.Contains(prompt, "MissingTF WARNING: 1d (") {
+			t.Fatalf("%s: only the required 1d should be warned:\n%s", lang, prompt)
 		}
 		if lang == "zh" && !strings.Contains(prompt, "1d: Yahoo 正股 AAPL") {
 			t.Fatal(prompt)
