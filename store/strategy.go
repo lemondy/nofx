@@ -103,7 +103,8 @@ func (Strategy) TableName() string { return "strategies" }
 
 // StrategyConfig strategy configuration details (JSON structure)
 type StrategyConfig struct {
-	// Strategy type: "ai_trading" (default) or "grid_trading"
+	// Strategy type: "ai_trading" (default), "grid_trading" or "us_stock"
+	// (US equities via Binance spot bStock pairs, see StockConfig).
 	StrategyType string `json:"strategy_type,omitempty"`
 
 	// language setting: "zh" for Chinese, "en" for English
@@ -139,7 +140,61 @@ type StrategyConfig struct {
 
 	// Grid trading configuration (only used when StrategyType == "grid_trading")
 	GridConfig *GridStrategyConfig `json:"grid_config,omitempty"`
+
+	// US-stock configuration (only used when StrategyType == "us_stock").
+	StockConfig *StockConfig `json:"stock_config,omitempty"`
 }
+
+// StrategyTypeUSStock selects the US-equity strategy: long-only spot trading
+// of Binance bStock pairs (AAPLBUSDT, SPYBUSDT, ...), driven by its own run
+// cycle (design: docs/architecture/US_STOCK_BSTOCK_DESIGN_2026-10-09.md).
+const StrategyTypeUSStock = "us_stock"
+
+// StockConfig is the us_stock strategy configuration. Zero values mean "use
+// the preset default" (see StockPresetSwing / StockPresetPosition); the
+// resolvers live next to Validate.
+type StockConfig struct {
+	// Symbols: Binance spot bStock pairs to trade, e.g. "AAPLBUSDT".
+	Symbols []string `json:"symbols"`
+	// Preset: "swing" (default; days–weeks, 1d trend / 1h entry, decisions at
+	// 09:45, 12:30, 15:30 ET) or "position" (weeks–months, 1w trend / 1d
+	// entry, one decision at 15:30 ET).
+	Preset string `json:"preset,omitempty"`
+	// Sessions in which NEW exposure (open/add) may be taken. Exits and
+	// stop management run in every session. Default: regular only.
+	Sessions StockSessions `json:"sessions"`
+	// DataFallbackYahoo: when a timeframe has too few closed bStock bars,
+	// use the underlying's Yahoo Finance series for that timeframe. nil = true.
+	DataFallbackYahoo *bool `json:"data_fallback_yahoo,omitempty"`
+	// MaxDivergencePct: block opens when |bStock − underlying| / underlying
+	// exceeds this percent. 0 = default 1.0; negative = check disabled.
+	MaxDivergencePct float64 `json:"max_divergence_pct,omitempty"`
+	// Position limits, percent of account equity. 0 = default.
+	MaxPositionPct      float64 `json:"max_position_pct,omitempty"`       // default 20
+	MaxTotalExposurePct float64 `json:"max_total_exposure_pct,omitempty"` // default 80
+	MaxPositions        int     `json:"max_positions,omitempty"`          // default 5
+	// RiskPerTradePct: loss at the stop, percent of equity. 0 = default 1.0.
+	RiskPerTradePct float64 `json:"risk_per_trade_pct,omitempty"`
+	// Stop distance band in ATR(1d) multiples. 0 = preset default
+	// (swing 1.5–3.0, position 2.0–4.0).
+	StopATRMin float64 `json:"stop_atr_min,omitempty"`
+	StopATRMax float64 `json:"stop_atr_max,omitempty"`
+	// PaperTrading: run data, decisions and risk checks but place no orders.
+	// nil = true (first launch is paper by default — user decision 2026-10-09).
+	PaperTrading *bool `json:"paper_trading,omitempty"`
+}
+
+// StockSessions toggles the US sessions in which opens/adds are allowed.
+type StockSessions struct {
+	Regular    *bool `json:"regular,omitempty"`     // 09:30–16:00 ET; nil = true
+	PreMarket  bool  `json:"pre_market,omitempty"`  // 04:00–09:30 ET
+	AfterHours bool  `json:"after_hours,omitempty"` // 16:00–20:00 ET
+}
+
+const (
+	StockPresetSwing    = "swing"
+	StockPresetPosition = "position"
+)
 
 // GridStrategyConfig grid trading specific configuration
 type GridStrategyConfig struct {
