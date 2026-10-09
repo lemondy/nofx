@@ -1,0 +1,655 @@
+package trader
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"nofx/market/usstock"
+	"nofx/mcp"
+	"nofx/store"
+	"nofx/trader/types"
+)
+
+// us_stock (design 2026-10-09) tests: fake executor, fake AI, injected data.
+
+type stockFakeAI struct {
+	respond func(call int) string
+	calls   int
+}
+
+func (f *stockFakeAI) SetAPIKey(string, string, string) {}
+func (f *stockFakeAI) SetTimeout(time.Duration)         {}
+func (f *stockFakeAI) CallWithMessages(string, string) (string, error) {
+	f.calls++
+	return f.respond(f.calls), nil
+}
+func (f *stockFakeAI) CallWithRequest(*mcp.Request) (string, error) { return "", nil }
+func (f *stockFakeAI) CallWithRequestStream(*mcp.Request, func(string)) (string, error) {
+	return "", nil
+}
+func (f *stockFakeAI) CallWithRequestFull(*mcp.Request) (*mcp.LLMResponse, error) { return nil, nil }
+
+type sellCall struct {
+	Symbol string
+	Qty    float64
+}
+type protCall struct {
+	Symbol                   string
+	Qty, Stop, Limit, Profit float64
+}
+
+// fakeSpot is an in-memory SpotStockTrader. Unimplemented Trader methods panic
+// (nil embedded interface), proving the stock path does not use them.
+type fakeSpot struct {
+	types.Trader
+	mu         sync.Mutex
+	usdt       float64
+	hold       map[string]float64
+	price      float64
+	prot       map[string]*types.ProtectionOrders
+	buys       []float64
+	limitBuys  int
+	sells      []sellCall
+	zeroSells  int
+	setProt    []protCall
+	cancelAll  int
+	cancelProt int
+	preflights int
+	seq        int
+}
+
+func newFakeSpot(price float64) *fakeSpot {
+	return &fakeSpot{usdt: 10000, hold: map[string]float64{}, price: price, prot: map[string]*types.ProtectionOrders{}}
+}
+
+func (f *fakeSpot) GetBalance() (map[string]interface{}, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	eq := f.usdt
+	for _, q := range f.hold {
+		eq += q * f.price
+	}
+	return map[string]interface{}{"totalEquity": eq, "availableBalance": f.usdt, "totalWalletBalance": eq, "totalUnrealizedProfit": 0.0}, nil
+}
+func (f *fakeSpot) GetPositions() ([]map[string]interface{}, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []map[string]interface{}{}
+	for sym, q := range f.hold {
+		if q > 0.0009 {
+			out = append(out, map[string]interface{}{"symbol": sym, "side": "long", "positionAmt": q, "entryPrice": f.price, "markPrice": f.price,
+				"unRealizedProfit": 0.0, "leverage": 1.0, "liquidationPrice": 0.0})
+		}
+	}
+	return out, nil
+}
+func (f *fakeSpot) GetMarketPrice(string) (float64, error) { return f.price, nil }
+func (f *fakeSpot) FormatQuantity(_ string, q float64) (string, error) {
+	return fmt.Sprint(floorStep(q, 0.001)), nil
+}
+func (f *fakeSpot) Preflight(string) error { f.preflights++; return nil }
+func (f *fakeSpot) nextID() string         { f.seq++; return fmt.Sprint(1000 + f.seq) }
+func (f *fakeSpot) BuyMarketNotional(sym string, notional float64) (*types.SpotOrderResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buys = append(f.buys, notional)
+	qty := floorStep(notional/f.price, 0.001)
+	f.hold[sym] += qty
+	f.usdt -= qty * f.price
+	return &types.SpotOrderResult{Symbol: sym, OrderID: f.nextID(), Side: "BUY", Type: "MARKET", Status: "FILLED", ExecutedQty: qty,
+		AvgPrice: f.price, QuoteQty: qty * f.price}, nil
+}
+func (f *fakeSpot) BuyLimit(sym string, qty, price float64) (*types.SpotOrderResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.limitBuys++
+	return &types.SpotOrderResult{Symbol: sym, OrderID: f.nextID(), Side: "BUY", Type: "LIMIT", Status: "NEW", OrigQty: qty, Price: price}, nil
+}
+func (f *fakeSpot) SellMarket(sym string, qty float64) (*types.SpotOrderResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sells = append(f.sells, sellCall{sym, qty})
+	if qty == 0 {
+		f.zeroSells++
+		qty = f.hold[sym]
+	}
+	locked := 0.0
+	if p := f.prot[sym]; p != nil {
+		locked = p.Quantity
+	}
+	if qty > f.hold[sym]-locked+1e-9 {
+		return nil, fmt.Errorf("sell quantity %v exceeds free balance %v", qty, f.hold[sym]-locked)
+	}
+	f.hold[sym] -= qty
+	f.usdt += qty * f.price
+	return &types.SpotOrderResult{Symbol: sym, OrderID: f.nextID(), Side: "SELL", Type: "MARKET", Status: "FILLED", ExecutedQty: qty,
+		AvgPrice: f.price, QuoteQty: qty * f.price}, nil
+}
+func (f *fakeSpot) SetProtection(sym string, qty, stop, limit, tp float64) (*types.ProtectionOrders, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setProt = append(f.setProt, protCall{sym, qty, stop, limit, tp})
+	if stop >= f.price {
+		return nil, fmt.Errorf("invalid protection")
+	}
+	if qty > f.hold[sym]+1e-9 {
+		return nil, fmt.Errorf("protection quantity exceeds held balance")
+	}
+	f.prot[sym] = &types.ProtectionOrders{Symbol: sym, Quantity: qty, StopPrice: stop, StopLimitPrice: limit, TakeProfit: tp, StopOrderID: f.nextID()}
+	return f.prot[sym], nil
+}
+func (f *fakeSpot) GetProtection(sym string) (*types.ProtectionOrders, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.prot[sym]; p != nil {
+		c := *p
+		return &c, nil
+	}
+	return nil, nil
+}
+func (f *fakeSpot) CancelProtection(sym string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelProt++
+	delete(f.prot, sym)
+	return nil
+}
+func (f *fakeSpot) CancelAllOrders(string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelAll++
+	return nil
+}
+func (f *fakeSpot) CostBasis(string) (float64, float64, error) { return f.price, 0, nil }
+func (f *fakeSpot) GetOrderStatus(string, string) (map[string]interface{}, error) {
+	return map[string]interface{}{"status": "NEW", "executedQty": 0.0, "avgPrice": 0.0, "commission": 0.0}, nil
+}
+
+// ------------------------------------------------------------------ fixture
+
+var stockTestNow = time.Date(2026, 10, 14, 10, 0, 0, 0, stockET) // Wednesday, regular session
+
+type stockFixture struct {
+	at    *AutoTrader
+	spot  *fakeSpot
+	ai    *stockFakeAI
+	price float64
+	alert []string
+}
+
+const openAAPL = `Reasoning.
+[{"symbol":"AAPLBUSDT","action":"open_long","entry_type":"market","stop_loss":115,"take_profit":130,"confidence":80,"reasoning":"trend up"}]`
+const closeAAPL = `[{"symbol":"AAPLBUSDT","action":"close_long","confidence":70,"reasoning":"exit"}]`
+const holdAAPL = `[{"symbol":"AAPLBUSDT","action":"hold","confidence":70,"reasoning":"keep"}]`
+
+func stockTestBars(n int, step time.Duration, last float64, drift float64) []usstock.Bar {
+	bars := make([]usstock.Bar, n)
+	start := stockTestNow.Add(-time.Duration(n) * step)
+	for i := range bars {
+		c := last - float64(n-1-i)*drift
+		bars[i] = usstock.Bar{OpenTime: start.Add(time.Duration(i) * step), Open: c, High: c + 1, Low: c - 1, Close: c, Volume: 1000}
+	}
+	return bars
+}
+
+func newStockFixture(t *testing.T, paper bool, now time.Time, respond func(call int) string) *stockFixture {
+	t.Helper()
+	fx := &stockFixture{price: 120}
+	oldLookup, oldSeries, oldQuote, oldNotify := stockLookupSymbol, stockGetSeries, stockGetQuote, stockNotify
+	t.Cleanup(func() {
+		stockLookupSymbol, stockGetSeries, stockGetQuote, stockNotify = oldLookup, oldSeries, oldQuote, oldNotify
+	})
+	stockLookupSymbol = func(_ context.Context, sym string) (usstock.SymbolInfo, bool) {
+		switch sym {
+		case "AAPLBUSDT", "SPYBUSDT":
+			u := strings.TrimSuffix(sym, "BUSDT")
+			return usstock.SymbolInfo{Symbol: sym, BaseAsset: u + "B", Underlying: u, Status: "TRADING", TickSize: 0.01, StepSize: 0.001, MinQty: 0.001, MinNotional: 5}, true
+		}
+		return usstock.SymbolInfo{}, false
+	}
+	stockGetSeries = func(_ context.Context, sym, tf string, need int, _ bool) (*usstock.Series, error) {
+		step := map[string]time.Duration{usstock.TF1d: 24 * time.Hour, usstock.TF1w: 7 * 24 * time.Hour, usstock.TF1h: time.Hour}[tf]
+		drift := 0.1
+		if tf == usstock.TF1h {
+			drift = 0.01
+		}
+		return &usstock.Series{Symbol: sym, Underlying: strings.TrimSuffix(sym, "BUSDT"), Timeframe: tf, Source: usstock.SourceBStock,
+			Bars: stockTestBars(need, step, 120, drift)}, nil
+	}
+	stockGetQuote = func(_ context.Context, sym string) (*usstock.Quote, error) {
+		return &usstock.Quote{Symbol: sym, BStockPrice: fx.price, RefPrice: fx.price, RefTime: now.Add(-time.Minute), RefFresh: true, Session: usstock.SessionAt(now)}, nil
+	}
+	stockNotify = func(kind, title, msg string) { fx.alert = append(fx.alert, kind+"|"+msg) }
+
+	st, err := store.New(filepath.Join(t.TempDir(), "stock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.Trader().Create(&store.Trader{ID: "t1", UserID: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	fx.ai = &stockFakeAI{respond: respond}
+	fx.spot = newFakeSpot(120)
+	sc := &store.StockConfig{Symbols: []string{"AAPLBUSDT"}, PaperTrading: &paper}
+	at := &AutoTrader{id: "t1", userID: "u", name: "stock-test", store: st, mcpClient: fx.ai, initialBalance: 10000, isRunning: true,
+		stopMonitorCh: make(chan struct{}), stockNow: func() time.Time { return now },
+		config: AutoTraderConfig{ID: "t1", ScanInterval: time.Minute, StrategyConfig: &store.StrategyConfig{StrategyType: store.StrategyTypeUSStock, StockConfig: sc}}}
+	if !paper {
+		at.stockTrader = fx.spot
+		at.trader = fx.spot
+	}
+	if _, err := at.prepareStockRuntime(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fx.at = at
+	return fx
+}
+
+func (fx *stockFixture) cycle(t *testing.T) {
+	t.Helper()
+	if err := fx.at.runStockCycle(context.Background()); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+}
+
+func (fx *stockFixture) lastRecord(t *testing.T) *store.DecisionRecord {
+	t.Helper()
+	recs, err := fx.at.store.Decision().GetLatestRecords("t1", 20)
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("decision record: %v %d", err, len(recs))
+	}
+	last := recs[0]
+	for _, r := range recs { // the fixed test clock gives every record one timestamp
+		if r.ID > last.ID {
+			last = r
+		}
+	}
+	return last
+}
+
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
+
+// ---------------------------------------------------------------- scheduler
+
+func TestNextStockDecisionTime(t *testing.T) {
+	swing := []string{"09:45", "12:30", "15:30"}
+	et := func(y int, m time.Month, d, h, mi int) time.Time { return time.Date(y, m, d, h, mi, 0, 0, stockET) }
+	cases := []struct {
+		name  string
+		after time.Time
+		slots []string
+		want  time.Time
+	}{
+		{"same day next slot", et(2026, 10, 14, 10, 0), swing, et(2026, 10, 14, 12, 30)},
+		{"weekend skips to Monday", et(2026, 10, 9, 16, 0), swing, et(2026, 10, 12, 9, 45)},
+		{"holiday 2026-11-26 skipped", et(2026, 11, 25, 16, 0), swing, et(2026, 11, 27, 9, 45)},
+		{"half day 15:30 slot still fires after the 13:00 close", et(2026, 11, 27, 12, 31), swing, et(2026, 11, 27, 15, 30)},
+		{"position preset single slot", et(2026, 10, 14, 15, 30), []string{"15:30"}, et(2026, 10, 15, 15, 30)},
+	}
+	for _, c := range cases {
+		if got := nextStockDecisionTime(c.after, c.slots); !got.Equal(c.want) {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+	// DST: 09:45 ET is 13:45Z in EDT and 14:45Z in EST.
+	if got := nextStockDecisionTime(et(2026, 10, 30, 16, 0), swing); !got.Equal(time.Date(2026, 11, 2, 14, 45, 0, 0, time.UTC)) {
+		t.Errorf("EST after fall-back: %v", got.UTC())
+	}
+	if got := nextStockDecisionTime(et(2026, 3, 6, 16, 0), swing); !got.Equal(time.Date(2026, 3, 9, 13, 45, 0, 0, time.UTC)) {
+		t.Errorf("EDT after spring-forward: %v", got.UTC())
+	}
+}
+
+// -------------------------------------------------------------------- paper
+
+func TestStockPaperCycleOpenThenClose(t *testing.T) {
+	fx := newStockFixture(t, true, stockTestNow, func(call int) string {
+		if call == 1 {
+			return openAAPL
+		}
+		return closeAAPL
+	})
+	fx.spot.price = 120
+	fx.cycle(t)
+
+	open, err := fx.at.store.StockPaper().ListOpen("t1")
+	if err != nil || len(open) != 1 {
+		t.Fatalf("paper positions: %v %d", err, len(open))
+	}
+	p := open[0]
+	if p.Symbol != "AAPLBUSDT" || !near(p.Quantity, 16.666) || !near(p.AvgPrice, 120) || p.InitialStop != 115 || p.Stop != 115 || p.TakeProfit != 130 {
+		t.Fatalf("unexpected paper position %+v", p)
+	}
+	rec := fx.lastRecord(t)
+	if !rec.Success || len(rec.Decisions) != 1 || !rec.Decisions[0].Success || rec.Decisions[0].Action != "open_long" {
+		t.Fatalf("decision record %+v", rec)
+	}
+	for _, line := range rec.ExecutionLog {
+		if !strings.HasPrefix(line, "[PAPER]") {
+			t.Fatalf("execution log line without [PAPER] prefix: %q", line)
+		}
+	}
+	if len(fx.spot.buys)+len(fx.spot.sells)+len(fx.spot.setProt)+fx.spot.cancelAll != 0 {
+		t.Fatal("paper mode must not call the executor")
+	}
+	if rows, _ := fx.at.store.Position().GetOpenPositions("t1"); len(rows) != 0 {
+		t.Fatal("paper trades must not enter trader_positions")
+	}
+
+	fx.price = 126
+	fx.cycle(t)
+	if open, _ := fx.at.store.StockPaper().ListOpen("t1"); len(open) != 0 {
+		t.Fatal("paper position not closed")
+	}
+	closed, _ := fx.at.store.StockPaper().ListClosed("t1", 5)
+	if len(closed) != 1 || closed[0].Status != store.StockPaperClosed || !near(closed[0].ExitPrice, 126) || !near(closed[0].RealizedPnL, 6*16.666) {
+		t.Fatalf("closed paper position %+v", closed)
+	}
+	acct, _ := fx.at.store.StockPaper().GetAccount("t1")
+	if !near(acct.Cash, 10000+6*16.666) {
+		t.Fatalf("paper cash %v", acct.Cash)
+	}
+	if rec := fx.lastRecord(t); !rec.Decisions[0].Success || rec.Decisions[0].Action != "close_long" || len(fx.spot.sells) != 0 {
+		t.Fatalf("second cycle record %+v", rec)
+	}
+}
+
+func TestStockPaperTickStopAndTakeProfit(t *testing.T) {
+	fx := newStockFixture(t, true, stockTestNow, func(int) string { return openAAPL })
+	fx.cycle(t)
+	fx.price = 114
+	fx.at.stockProtectionTick(context.Background())
+	closed, _ := fx.at.store.StockPaper().ListClosed("t1", 5)
+	if len(closed) != 1 || closed[0].CloseReason != "stop_loss" || !near(closed[0].ExitPrice, 115) {
+		t.Fatalf("paper stop not simulated: %+v", closed)
+	}
+}
+
+// --------------------------------------------------------------------- live
+
+func TestStockLiveCycleOpenThenClose(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(call int) string {
+		if call == 1 {
+			return openAAPL
+		}
+		return closeAAPL
+	})
+	fx.cycle(t)
+
+	if fx.spot.preflights != 1 {
+		t.Fatalf("preflight calls %d", fx.spot.preflights)
+	}
+	if len(fx.spot.buys) != 1 || !near(fx.spot.buys[0], 1999.92) {
+		t.Fatalf("market buy notional %v", fx.spot.buys)
+	}
+	if len(fx.spot.setProt) != 1 {
+		t.Fatalf("protection calls %v", fx.spot.setProt)
+	}
+	pc := fx.spot.setProt[0]
+	if pc.Symbol != "AAPLBUSDT" || !near(pc.Qty, 16.666) || pc.Stop != 115 || !near(pc.Limit, 114.65) || pc.Profit != 130 {
+		t.Fatalf("protection %+v", pc)
+	}
+	rows, _ := fx.at.store.Position().GetOpenPositions("t1")
+	if len(rows) != 1 {
+		t.Fatalf("rows %d", len(rows))
+	}
+	r := rows[0]
+	if r.Side != "LONG" || !near(r.Quantity, 16.666) || r.InitialStopLoss != 115 || !r.AIManaged || r.Leverage != 1 || r.EntryOrderID == "" || r.ExchangeType != "binance" {
+		t.Fatalf("position row %+v", r)
+	}
+	if rec := fx.lastRecord(t); !rec.Decisions[0].Success || rec.Decisions[0].EntryOrderID != r.EntryOrderID {
+		t.Fatalf("record %+v", rec.Decisions)
+	}
+
+	fx.price, fx.spot.price = 126, 126
+	fx.cycle(t)
+	if fx.spot.zeroSells != 0 || len(fx.spot.sells) != 1 || !near(fx.spot.sells[0].Qty, 16.666) {
+		t.Fatalf("sells %+v", fx.spot.sells)
+	}
+	if rows, _ := fx.at.store.Position().GetOpenPositions("t1"); len(rows) != 0 {
+		t.Fatal("position row still open")
+	}
+	closed, _ := fx.at.store.Position().GetClosedPositions("t1", 5)
+	if len(closed) != 1 || closed[0].Status != "CLOSED" || !near(closed[0].ExitPrice, 126) || !near(closed[0].RealizedPnL, 6*16.666) {
+		t.Fatalf("closed row %+v", closed)
+	}
+	journal, total, err := fx.at.store.TradeJournal().List("t1", 10, 0, "", "")
+	if err != nil || total != 1 || journal[0].AIManaged == nil || !*journal[0].AIManaged || journal[0].PlannedStopLoss != 115 {
+		t.Fatalf("journal %v %d %+v", err, total, journal)
+	}
+	if fx.spot.cancelAll != 0 {
+		t.Fatal("CancelAllOrders must never be called from the stock path")
+	}
+}
+
+func TestStockRejectedVerdictPlacesNoOrders(t *testing.T) {
+	saturday := time.Date(2026, 10, 10, 11, 0, 0, 0, stockET)
+	fx := newStockFixture(t, false, saturday, func(int) string { return openAAPL })
+	fx.cycle(t)
+	if len(fx.spot.buys)+len(fx.spot.setProt)+len(fx.spot.sells) != 0 {
+		t.Fatal("rejected decision must not place orders")
+	}
+	rec := fx.lastRecord(t)
+	found := false
+	for _, l := range rec.ExecutionLog {
+		found = found || strings.Contains(l, "SESSION_CLOSED")
+	}
+	if !found || rec.Decisions[0].Success || !strings.Contains(rec.Decisions[0].Error, "SESSION_CLOSED") {
+		t.Fatalf("expected SESSION_CLOSED, log=%v decisions=%+v", rec.ExecutionLog, rec.Decisions)
+	}
+	rejectedAlert := false
+	for _, a := range fx.alert {
+		rejectedAlert = rejectedAlert || strings.HasPrefix(a, "ORDER|") && strings.Contains(a, "SESSION_CLOSED")
+	}
+	if !rejectedAlert {
+		t.Fatalf("expected a single rejected-opens summary, got %v", fx.alert)
+	}
+}
+
+// openLiveOwned seeds a live program position: the executor holds `balance`,
+// of which `owned` was bought by the program.
+func (fx *stockFixture) openLiveOwned(t *testing.T, owned, balance float64) {
+	t.Helper()
+	if _, err := fx.at.stockRecordBuy("AAPLBUSDT", owned, 120, 0, "seed1", 115, stockTestNow); err != nil {
+		t.Fatal(err)
+	}
+	fx.spot.hold["AAPLBUSDT"] = balance
+}
+
+func TestStockProtectionTickReplacesMissingAndFallsBack(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	fx.openLiveOwned(t, 16.666, 16.666)
+	ctx := context.Background()
+
+	fx.at.stockProtectionTick(ctx) // no protection yet → re-placed from the persisted opening stop
+	if len(fx.spot.setProt) != 1 || fx.spot.setProt[0].Stop != 115 || !near(fx.spot.setProt[0].Qty, 16.666) {
+		t.Fatalf("protection not re-placed: %+v", fx.spot.setProt)
+	}
+	alerted := false
+	for _, a := range fx.alert {
+		alerted = alerted || strings.HasPrefix(a, "ALERT|")
+	}
+	if !alerted {
+		t.Fatal("missing-protection alert expected")
+	}
+
+	fx.price, fx.spot.price = 114, 114 // below the stop, stop order still open
+	fx.at.stockProtectionTick(ctx)
+	if len(fx.spot.sells) != 0 {
+		t.Fatal("must wait for a second tick before the program fallback")
+	}
+	fx.at.stockProtectionTick(ctx)
+	if len(fx.spot.sells) != 1 || fx.spot.zeroSells != 0 || !near(fx.spot.sells[0].Qty, 16.666) {
+		t.Fatalf("fallback sell %+v", fx.spot.sells)
+	}
+	if rows, _ := fx.at.store.Position().GetOpenPositions("t1"); len(rows) != 0 {
+		t.Fatal("fallback sell must close the position row")
+	}
+}
+
+func TestStockManualBalanceIsNotSold(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return closeAAPL })
+	fx.openLiveOwned(t, 16.666, 21.666) // 5 AAPLB were bought manually
+	if _, err := fx.spot.SetProtection("AAPLBUSDT", 16.666, 115, 114.65, 130); err != nil {
+		t.Fatal(err)
+	}
+	fx.cycle(t)
+	if len(fx.spot.sells) != 1 || fx.spot.zeroSells != 0 || !near(fx.spot.sells[0].Qty, 16.666) {
+		t.Fatalf("close must sell only the program-owned quantity: %+v", fx.spot.sells)
+	}
+	if !near(fx.spot.hold["AAPLBUSDT"], 5) {
+		t.Fatalf("manual holding was touched: %v", fx.spot.hold["AAPLBUSDT"])
+	}
+	if fx.spot.cancelAll != 0 {
+		t.Fatal("CancelAllOrders called")
+	}
+	rec := fx.lastRecord(t)
+	manualLogged := false
+	for _, l := range rec.ExecutionLog {
+		manualLogged = manualLogged || strings.Contains(l, "manual/external holding")
+	}
+	if !manualLogged {
+		t.Fatalf("manual holding should be logged: %v", rec.ExecutionLog)
+	}
+}
+
+func TestStockBalanceBelowOwnedShrinksPosition(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	fx.openLiveOwned(t, 16.666, 10) // user sold 6.666 manually
+	if _, err := fx.spot.SetProtection("AAPLBUSDT", 10, 115, 114.65, 130); err != nil {
+		t.Fatal(err)
+	}
+	fx.cycle(t)
+	rows, _ := fx.at.store.Position().GetOpenPositions("t1")
+	if len(rows) != 1 || !near(rows[0].Quantity, 10) || !near(rows[0].EntryQuantity, 10) {
+		t.Fatalf("position not shrunk to the balance: %+v", rows)
+	}
+	if len(fx.spot.sells) != 0 {
+		t.Fatal("shrinking is bookkeeping only")
+	}
+	alerted := false
+	for _, a := range fx.alert {
+		alerted = alerted || strings.HasPrefix(a, "ALERT|") && strings.Contains(a, "外部减仓")
+	}
+	if !alerted {
+		t.Fatalf("external-reduction alert expected: %v", fx.alert)
+	}
+	logged := false
+	for _, l := range fx.lastRecord(t).ExecutionLog {
+		logged = logged || strings.Contains(l, "external reduction") && strings.Contains(l, "no PnL attributed")
+	}
+	if !logged {
+		t.Fatal("execution log should note the external reduction")
+	}
+	if closed, _ := fx.at.store.Position().GetClosedPositions("t1", 5); len(closed) != 0 {
+		t.Fatal("a partial external reduction must not close the row")
+	}
+}
+
+// ------------------------------------------------------------ Run() branch
+
+func TestRunStockBranchSkipsFuturesMonitors(t *testing.T) {
+	saturday := time.Date(2026, 10, 10, 11, 0, 0, 0, stockET) // session closed: no immediate cycle
+	fx := newStockFixture(t, true, saturday, func(int) string { return holdAAPL })
+	at := fx.at
+	at.isRunning = false
+	futures, stockLoops := 0, 0
+	started := make(chan struct{}, 1)
+	onFuturesMonitorsStart = func(*AutoTrader) { futures++ }
+	onStockLoopStart = func(*AutoTrader) { stockLoops++; started <- struct{}{} }
+	t.Cleanup(func() { onFuturesMonitorsStart, onStockLoopStart = nil, nil })
+
+	if err := at.beginRun(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- at.run() }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stock loop did not start")
+	}
+	at.Stop()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if futures != 0 || stockLoops != 1 {
+		t.Fatalf("futures monitors started=%d stock loops=%d", futures, stockLoops)
+	}
+
+	// Positive control: a grid trader still reaches the futures monitors.
+	grid := lifecycleFixture(t)
+	if err := grid.beginRun(); err != nil {
+		t.Fatal(err)
+	}
+	_ = grid.run()
+	grid.Stop()
+	if futures != 1 {
+		t.Fatalf("control: futures monitors hook fired %d times", futures)
+	}
+}
+
+func TestNewAutoTraderStockRequiresBinanceAndLinkedExecutor(t *testing.T) {
+	sc := &store.StrategyConfig{StrategyType: store.StrategyTypeUSStock, StockConfig: &store.StockConfig{Symbols: []string{"AAPLBUSDT"}}}
+	if _, err := NewAutoTrader(AutoTraderConfig{ID: "x", Exchange: "bybit", StrategyConfig: sc}, nil, "u"); err == nil || !strings.Contains(err.Error(), "Binance") {
+		t.Fatalf("expected exchange error, got %v", err)
+	}
+	live := false
+	sc.StockConfig.PaperTrading = &live
+	old := newSpotStockTrader
+	t.Cleanup(func() { newSpotStockTrader = old })
+	newSpotStockTrader = nil
+	if _, err := NewAutoTrader(AutoTraderConfig{ID: "x", Exchange: "binance", StrategyConfig: sc}, nil, "u"); err == nil || !strings.Contains(err.Error(), "not linked") {
+		t.Fatalf("expected not-linked error, got %v", err)
+	}
+	fake := newFakeSpot(100)
+	newSpotStockTrader = func(string, string) (types.SpotStockTrader, error) { return fake, nil }
+	at, err := NewAutoTrader(AutoTraderConfig{ID: "x", Name: "x", Exchange: "binance", StrategyConfig: sc}, nil, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at.stockTrader == nil || at.initialBalance != 10000 || !at.IsStockStrategy() {
+		t.Fatalf("live stock trader not built: %+v", at.initialBalance)
+	}
+}
+
+func TestStockLimitEntryRestsAndIsNeverCancelled(t *testing.T) {
+	limit := `[{"symbol":"AAPLBUSDT","action":"open_long","entry_type":"limit","limit_price":119,"stop_loss":115,"take_profit":130,"confidence":80,"reasoning":"pullback"}]`
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return limit })
+	fx.cycle(t)
+	if fx.spot.limitBuys != 1 || len(fx.spot.setProt) != 0 {
+		t.Fatalf("limit buys %d, protection %v", fx.spot.limitBuys, fx.spot.setProt)
+	}
+	pend, _ := fx.at.store.StockPaper().ListPending("t1")
+	if len(pend) != 1 || pend[0].Symbol != "AAPLBUSDT" || pend[0].Stop != 115 {
+		t.Fatalf("pending not persisted: %+v", pend)
+	}
+	fx.cycle(t) // the symbol has a resting entry: a second entry is refused
+	if fx.spot.limitBuys != 1 {
+		t.Fatal("second limit entry placed while one is resting")
+	}
+	if fx.spot.cancelAll != 0 || fx.spot.cancelProt != 0 {
+		t.Fatal("the stock path must not cancel the resting entry")
+	}
+}
+
+func TestStockExchangeSideStopFillIsBookedAtStop(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	fx.openLiveOwned(t, 16.666, 16.666)
+	fx.at.stockProtectionTick(context.Background()) // places protection, remembers stop 115
+	fx.spot.hold["AAPLBUSDT"] = 0                   // the exchange stop filled
+	delete(fx.spot.prot, "AAPLBUSDT")
+	fx.price, fx.spot.price = 114.5, 114.5
+	fx.at.stockProtectionTick(context.Background())
+	closed, _ := fx.at.store.Position().GetClosedPositions("t1", 5)
+	if len(closed) != 1 || closed[0].CloseReason != "stop_loss" || !near(closed[0].ExitPrice, 115) || closed[0].RealizedPnL >= 0 {
+		t.Fatalf("exchange stop fill not booked: %+v", closed)
+	}
+}

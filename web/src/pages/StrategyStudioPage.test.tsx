@@ -50,6 +50,9 @@ vi.mock('../components/strategy/StockConfigEditor', () => ({
     paper_trading: true,
   },
 }))
+vi.mock('../components/strategy/VersionsPanel', () => ({
+  VersionsPanel: () => <div data-testid="versions-panel" />,
+}))
 vi.mock('../components/strategy/TokenEstimateBar', () => ({
   TokenEstimateBar: () => null,
 }))
@@ -269,8 +272,17 @@ test('selecting US stocks shows StockConfigEditor with paper-on defaults and hid
   expect(screen.getByText('coinSource')).toBeInTheDocument()
   expect(screen.getByText('riskControl')).toBeInTheDocument()
   expect(screen.queryByTestId('stock-editor')).not.toBeInTheDocument()
+  // crypto strategies keep the prompt preview / AI test tabs
+  expect(screen.getByText('promptPreview')).toBeInTheDocument()
+  expect(screen.getByText('aiTestRun')).toBeInTheDocument()
 
   fireEvent.click(screen.getByTestId('strategy-type-us-stock'))
+
+  // us_stock prompts are built at run time: the crypto-engine tabs are hidden
+  expect(screen.queryByText('promptPreview')).not.toBeInTheDocument()
+  expect(screen.queryByText('aiTestRun')).not.toBeInTheDocument()
+  expect(screen.getByText('stockPromptRuntimeNote')).toBeInTheDocument()
+  expect(screen.getByTestId('versions-panel')).toBeInTheDocument()
 
   expect(screen.getByTestId('stock-editor')).toHaveTextContent(
     '"paper_trading":true'

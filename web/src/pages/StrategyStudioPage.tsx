@@ -657,6 +657,13 @@ export function StrategyStudioPage() {
 
   // Get current strategy type (default to ai_trading if not set)
   const currentStrategyType = editingConfig?.strategy_type || 'ai_trading'
+  // us_stock prompts are built at run time by the program, so the crypto
+  // prompt preview / AI test (which call the crypto engine) are not offered.
+  const isStockStrategy = currentStrategyType === 'us_stock'
+  const effectiveRightTab =
+    isStockStrategy && activeRightTab !== 'versions'
+      ? 'versions'
+      : activeRightTab
 
   const configSections = [
     // Grid Config - only for grid_trading
@@ -1234,32 +1241,36 @@ export function StrategyStudioPage() {
         <div className="w-[420px] flex-shrink-0 flex flex-col overflow-hidden">
           {/* Tabs */}
           <div className="flex-shrink-0 flex border-b border-nofx-gold/20">
-            <button
-              onClick={() => setActiveRightTab('prompt')}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                activeRightTab === 'prompt'
-                  ? 'border-b-2 border-purple-500 text-purple-500'
-                  : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
-              }`}
-            >
-              <Eye className="w-4 h-4" />
-              {tr('promptPreview')}
-            </button>
-            <button
-              onClick={() => setActiveRightTab('test')}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                activeRightTab === 'test'
-                  ? 'border-b-2 border-green-500 text-green-500'
-                  : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
-              }`}
-            >
-              <Play className="w-4 h-4" />
-              {tr('aiTestRun')}
-            </button>
+            {!isStockStrategy && (
+              <>
+                <button
+                  onClick={() => setActiveRightTab('prompt')}
+                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                    activeRightTab === 'prompt'
+                      ? 'border-b-2 border-purple-500 text-purple-500'
+                      : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
+                  }`}
+                >
+                  <Eye className="w-4 h-4" />
+                  {tr('promptPreview')}
+                </button>
+                <button
+                  onClick={() => setActiveRightTab('test')}
+                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                    activeRightTab === 'test'
+                      ? 'border-b-2 border-green-500 text-green-500'
+                      : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
+                  }`}
+                >
+                  <Play className="w-4 h-4" />
+                  {tr('aiTestRun')}
+                </button>
+              </>
+            )}
             <button
               onClick={() => setActiveRightTab('versions')}
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                activeRightTab === 'versions'
+                effectiveRightTab === 'versions'
                   ? 'border-b-2 border-nofx-gold text-nofx-gold'
                   : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
               }`}
@@ -1269,9 +1280,15 @@ export function StrategyStudioPage() {
             </button>
           </div>
 
+          {isStockStrategy && (
+            <p className="flex-shrink-0 px-3 py-2 text-xs text-nofx-text-muted border-b border-nofx-gold/10">
+              {tr('stockPromptRuntimeNote')}
+            </p>
+          )}
+
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto">
-            {activeRightTab === 'versions' ? (
+            {effectiveRightTab === 'versions' ? (
               selectedStrategy ? (
                 <VersionsPanel
                   strategyId={selectedStrategy.id}
@@ -1285,7 +1302,7 @@ export function StrategyStudioPage() {
                   <p className="text-sm">{tr('selectOrCreate')}</p>
                 </div>
               )
-            ) : activeRightTab === 'prompt' ? (
+            ) : effectiveRightTab === 'prompt' ? (
               /* Prompt Preview Tab */
               <div className="p-3 space-y-3">
                 {/* Controls */}

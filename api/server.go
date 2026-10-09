@@ -342,6 +342,15 @@ After activating, create or update a trader with this strategy_id to apply it.`,
 				`:id = EXACT id from GET /api/strategies. Creates a copy with " (copy)" appended to the name.`,
 				s.handleDuplicateStrategy)
 
+			// US stock (Binance bStock) strategy support
+			s.routeWithSchema(protected, "GET", "/usstock/symbols", "Tradable Binance bStock pairs for the us_stock strategy",
+				`Returns: {"symbols":[{"symbol":"AAPLBUSDT","underlying":"AAPL","base_asset":"AAPLB"}]}`,
+				s.handleUSStockSymbols)
+			s.routeWithSchema(protected, "GET", "/usstock/paper/:trader_id", "Paper-trading ledger of a us_stock trader",
+				`:trader_id = EXACT trader_id from GET /api/my-traders.
+Returns: {"account":{"cash":<float>,"initial_cash":<float>},"equity":<float>,"open_positions":[...],"closed_positions":[...]}`,
+				s.handleUSStockPaper)
+
 			// Data for specified trader (using query parameter ?trader_id=xxx)
 			// IMPORTANT: All ?trader_id= values must be the EXACT "trader_id" field from GET /api/my-traders
 			s.routeWithSchema(protected, "GET", "/status", "Trader running status",

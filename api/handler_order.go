@@ -212,7 +212,7 @@ func (s *Server) handlePositions(c *gin.Context) {
 	for _, pos := range positions {
 		symbol, _ := pos["symbol"].(string)
 		side, _ := pos["side"].(string)
-		if symbol == "" {
+		if symbol == "" || trader.IsStockStrategy() { // us_stock positions carry their own protection
 			continue
 		}
 		orders, err := trader.GetOpenOrders(symbol)

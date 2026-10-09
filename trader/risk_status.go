@@ -74,6 +74,9 @@ type PositionRStatus struct {
 // RiskStatus assembles the read model. Exchange reads go through the
 // adapters' normal (cached) balance/position calls.
 func (at *AutoTrader) RiskStatus() RiskStatus {
+	if at.IsStockStrategy() { // us_stock: futures-only breakers do not apply
+		return at.stockRiskStatus()
+	}
 	out := RiskStatus{GeneratedAt: time.Now().UTC(), InitialBalance: at.initialBalance}
 	if balance, err := at.trader.GetBalance(); err == nil {
 		out.Equity = gridAccountEquity(balance)

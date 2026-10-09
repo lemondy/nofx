@@ -466,7 +466,10 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 			exchangeDisplayName(exchangeCfg), strings.Join(sameAccountTraders, ", "))
 	}
 
-	{
+	// us_stock: the probe below would read the FUTURES wallet as initial
+	// balance. The baseline is resolved at trader build time instead (spot
+	// equity live, paper ledger cash in paper mode), so keep the user input.
+	if !s.strategyIsUSStock(userID, req.StrategyID) {
 		tempTrader, createErr := buildExchangeProbeTrader(exchangeCfg, userID)
 		if createErr != nil {
 			SafeBadRequestWithDetails(c, formatTraderCreationError(

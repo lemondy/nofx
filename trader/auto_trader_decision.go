@@ -106,6 +106,9 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 
 // GetAccountInfo gets account information (for API)
 func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
+	if at.IsStockStrategy() { // us_stock: spot / paper account, not futures margin
+		return at.stockAccountInfo()
+	}
 	balance, err := at.trader.GetBalance()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance: %w", err)
@@ -203,6 +206,9 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 
 // GetPositions gets position list (for API)
 func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
+	if at.IsStockStrategy() { // us_stock: program-owned spot positions
+		return at.stockPositionsAPI()
+	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get positions: %w", err)
@@ -534,5 +540,8 @@ func (at *AutoTrader) recordOrderFill(orderRecordID int64, exchangeOrderID, symb
 
 // GetOpenOrders returns open orders (pending SL/TP) from exchange
 func (at *AutoTrader) GetOpenOrders(symbol string) ([]OpenOrder, error) {
+	if at.IsStockStrategy() {
+		return at.stockOpenOrders(symbol)
+	}
 	return at.trader.GetOpenOrders(symbol)
 }

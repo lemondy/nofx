@@ -39,6 +39,7 @@ type Store struct {
 	rule           *RuleStore
 	reviewPrompt   *ReviewPromptStore
 	riskState      *RiskStateStore
+	stockPaper     *StockPaperStore
 	telegramConfig TelegramConfigStore
 
 	mu sync.RWMutex
@@ -206,6 +207,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.RiskState().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize risk state tables: %w", err)
+	}
+	if err := s.StockPaper().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize us_stock paper tables: %w", err)
 	}
 	return nil
 }
@@ -398,6 +402,18 @@ func (s *Store) AIManaged() *AIManagedStore {
 		s.aiManaged = NewAIManagedStore(s.gdb)
 	}
 	return s.aiManaged
+}
+
+// StockPaper gets the us_stock paper ledger (design 2026-10-09 §6): simulated
+// positions and cash, plus live resting-entry state. Kept out of
+// trader_positions / trade_journal on purpose.
+func (s *Store) StockPaper() *StockPaperStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stockPaper == nil {
+		s.stockPaper = NewStockPaperStore(s.gdb)
+	}
+	return s.stockPaper
 }
 
 // EntryAttribution gets the per-open candidate-source attribution store

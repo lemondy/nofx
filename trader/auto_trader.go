@@ -21,6 +21,7 @@ import (
 	"nofx/trader/kucoin"
 	"nofx/trader/lighter"
 	"nofx/trader/okx"
+	"nofx/trader/types"
 	"os"
 	"strings"
 	"sync"
@@ -217,6 +218,12 @@ type AutoTrader struct {
 	closeIntents          map[string]closeIntent // program close intents for exit classification (symbol|side → why)
 	closeIntentsMu        sync.Mutex
 	positionExitMode      map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
+
+	// us_stock (design 2026-10-09): live spot executor (nil in paper mode),
+	// injectable scheduler clock (nil = time.Now) and run state.
+	stockTrader types.SpotStockTrader
+	stockNow    func() time.Time
+	stock       stockRuntime
 }
 
 // Binance hedge legs must use isolated margin for this strategy. Other
@@ -299,15 +306,32 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	var trader Trader
 	var err error
 
-	// Record position mode (general)
-	marginModeStr := "Cross Margin"
-	if !config.IsCrossMargin {
-		marginModeStr = "Isolated Margin"
+	// us_stock (design 2026-10-09): spot bStock pairs, no futures init at all
+	// (no hedge/margin mode, leverage or futures trader construction).
+	stockMode := config.StrategyConfig != nil && config.StrategyConfig.StrategyType == store.StrategyTypeUSStock && config.StrategyConfig.StockConfig != nil
+	var stockExec types.SpotStockTrader
+	if stockMode {
+		if stockExec, err = newStockExecutor(&config); err != nil {
+			return nil, err
+		}
+		if stockExec != nil {
+			trader = stockExec
+		}
+		logger.Infof("🇺🇸 [%s] Using Binance spot bStock trading (paper=%v)", config.Name, config.StrategyConfig.StockConfig.IsPaper())
+	} else {
+		// Record position mode (general)
+		marginModeStr := "Cross Margin"
+		if !config.IsCrossMargin {
+			marginModeStr = "Isolated Margin"
+		}
+		logger.Infof("📊 [%s] Position mode: %s", config.Name, marginModeStr)
 	}
-	logger.Infof("📊 [%s] Position mode: %s", config.Name, marginModeStr)
 
 	switch config.Exchange {
 	case "binance":
+		if stockMode {
+			break
+		}
 		logger.Infof("🏦 [%s] Using Binance Futures trading", config.Name)
 		trader = binance.NewFuturesTrader(config.BinanceAPIKey, config.BinanceSecretKey, userID)
 	case "binance_stocks":
@@ -370,7 +394,11 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	}
 
 	// Validate initial balance configuration, auto-fetch from exchange if 0
-	if config.InitialBalance <= 0 {
+	if stockMode {
+		if config.InitialBalance, err = resolveStockInitialBalance(&config, st, userID, stockExec); err != nil {
+			return nil, err
+		}
+	} else if config.InitialBalance <= 0 {
 		logger.Infof("📊 [%s] Initial balance not set, attempting to fetch current balance from exchange...", config.Name)
 		account, err := trader.GetBalance()
 		if err != nil {
@@ -424,6 +452,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		showInCompetition:       config.ShowInCompetition,
 		config:                  config,
 		trader:                  trader,
+		stockTrader:             stockExec,
 		mcpClient:               mcpClient,
 		store:                   st,
 		strategyEngine:          strategyEngine,
@@ -454,6 +483,12 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		peakPnLCacheMutex:       sync.RWMutex{},
 		lastBalanceSyncTime:     time.Now(),
 		userID:                  userID,
+	}
+	if stockMode {
+		at.stock.cfg = config.StrategyConfig.StockConfig
+		at.stock.stopTicks = map[string]int{}
+		at.stock.lastProtect = map[string]stockProtect{}
+		at.stock.pendings = map[string]*stockPending{}
 	}
 	registerAccountTrader(at)
 	return at, nil
@@ -572,6 +607,15 @@ func (at *AutoTrader) run() (err error) {
 	logger.Info("🤖 AI will make full decisions on leverage, position size, stop loss/take profit, etc.")
 
 	at.seedConfigVersionBaseline()
+
+	// us_stock (design 2026-10-09): own scheduler and protection tick; none of
+	// the futures-only monitors / reconcilers / order sync below apply.
+	if at.IsStockStrategy() {
+		return at.runStockLoop()
+	}
+	if onFuturesMonitorsStart != nil {
+		onFuturesMonitorsStart(at)
+	}
 
 	// Start drawdown monitoring
 	at.startDrawdownMonitor()
@@ -704,6 +748,7 @@ func (at *AutoTrader) Stop() {
 		}
 	}
 	at.cancelAllPendingEntries("trader stopped")
+	at.cleanupStockOnStop()
 	at.executionMutex().Unlock()
 	if at.runDone != nil {
 		<-at.runDone
