@@ -420,9 +420,26 @@ func (at *AutoTrader) cleanupStockOnStop() {
 	for _, r := range rows {
 		syms = append(syms, fmt.Sprintf("%s(order %s)", r.Symbol, r.OrderID))
 	}
+	// Stopping the strategy must not leave unmanaged entries that could fill
+	// with nobody placing a stop: cancel the program's own resting entries.
+	var failed []string
+	for _, r := range rows {
+		if at.stockTrader == nil {
+			failed = append(failed, fmt.Sprintf("%s(order %s)", r.Symbol, r.OrderID))
+			continue
+		}
+		if err := at.stockTrader.CancelOrder(r.Symbol, r.OrderID); err != nil {
+			failed = append(failed, fmt.Sprintf("%s(order %s): %v", r.Symbol, r.OrderID, err))
+		}
+	}
 	msg := strings.Join(syms, ", ")
-	logger.Warnf("⚠️ [%s] us_stock stopped with resting limit entries: %s — cancel manually", at.name, msg)
-	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股策略已停止，限价入场单仍挂单</b>\n<i>%s — 程序不会撤销挂单，成交后需人工保护</i>", notify.Escape(msg)))
+	if len(failed) == 0 {
+		logger.Infof("📌 [%s] us_stock stopped — cancelled resting limit entries: %s", at.name, msg)
+		return
+	}
+	fmsg := strings.Join(failed, ", ")
+	logger.Warnf("⚠️ [%s] us_stock stopped; could not cancel resting limit entries: %s — cancel manually", at.name, fmsg)
+	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股策略已停止，限价入场单撤销失败</b>\n<i>%s — 请手动撤单，成交后需人工保护</i>", notify.Escape(fmsg)))
 }
 
 // ---------------------------------------------------------- number helpers

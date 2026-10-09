@@ -3,6 +3,7 @@ package trader
 import (
 	"context"
 	"fmt"
+	"nofx/market/usstock"
 	"strings"
 	"time"
 
@@ -142,8 +143,10 @@ func (at *AutoTrader) stockFallbackSell(ctx context.Context, h *stockHolding, no
 }
 
 // reconcileStockPendings books fills of resting limit entries (protecting the
-// filled quantity) and forgets terminal orders. The program never cancels the
-// resting order itself (only its protective orders).
+// filled quantity), expires entries still resting at the regular close of
+// the day they were placed (a stale GTC entry must not fill days later), and
+// forgets terminal orders. The pending row is kept until a status read shows
+// the order terminal, so a fill racing the cancel is still booked.
 func (at *AutoTrader) reconcileStockPendings(ctx context.Context, now time.Time, logf func(string, ...interface{})) {
 	for sym, p := range at.stock.pendings {
 		status, err := at.stockTrader.GetOrderStatus(sym, p.OrderID)
@@ -171,8 +174,31 @@ func (at *AutoTrader) reconcileStockPendings(ctx context.Context, now time.Time,
 		switch strings.ToUpper(fmt.Sprint(status["status"])) {
 		case "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH":
 			at.dropPending(sym)
+			continue
+		}
+		if expiry := stockPendingExpiry(p.PlacedAt); !now.Before(expiry) {
+			if err := at.stockTrader.CancelOrder(sym, p.OrderID); err != nil {
+				logf("resting entry %s order %s expired but cancel failed: %v", sym, p.OrderID, err)
+				continue
+			}
+			logf("resting limit entry %s order %s expired at the %s ET regular close — cancelled", sym, p.OrderID, expiry.In(stockET).Format("01-02 15:04"))
+			stockNotify("ORDER", at.name, fmt.Sprintf("<b>⌛ 美股限价入场单到期撤销 %s</b>\n<i>订单 %s 当日未成交</i>", notify.Escape(sym), notify.Escape(p.OrderID)))
 		}
 	}
+}
+
+// stockPendingExpiry is the regular-session close of the first trading day
+// whose close is after the placement instant: an entry placed during the
+// regular session (or pre-market) expires at that day's close; one placed
+// after hours or on a non-trading day lives through the next session.
+func stockPendingExpiry(placed time.Time) time.Time {
+	day := placed.In(stockET)
+	for i := 0; i < 10; i++ {
+		if _, closeAt, ok := usstock.SessionBounds(day.AddDate(0, 0, i)); ok && closeAt.After(placed) {
+			return closeAt
+		}
+	}
+	return placed.Add(24 * time.Hour)
 }
 
 // stockNetReceived caps a fill increment by the quantity that actually arrived

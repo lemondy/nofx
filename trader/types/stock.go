@@ -32,6 +32,11 @@ type SpotStockTrader interface {
 	// CancelProtection cancels the symbol's protective orders.
 	CancelProtection(symbol string) error
 
+	// CancelOrder cancels one PROGRAM-owned open order (nxbs_ client id) by
+	// exchange order id; it refuses to touch orders the user placed manually.
+	// Used to expire resting limit entries.
+	CancelOrder(symbol, orderID string) error
+
 	// CostBasis returns the FIFO average cost and quantity of the current
 	// holding, computed from the account's trade history.
 	CostBasis(symbol string) (avgPrice, quantity float64, err error)

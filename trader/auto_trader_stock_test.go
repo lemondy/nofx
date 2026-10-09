@@ -60,6 +60,7 @@ type fakeSpot struct {
 	setProt    []protCall
 	cancelAll  int
 	cancelProt int
+	cancelled  []string
 	preflights int
 	seq        int
 }
@@ -167,6 +168,10 @@ func (f *fakeSpot) CancelAllOrders(string) error {
 	return nil
 }
 func (f *fakeSpot) CostBasis(string) (float64, float64, error) { return f.price, 0, nil }
+func (f *fakeSpot) CancelOrder(symbol, orderID string) error {
+	f.cancelled = append(f.cancelled, symbol+":"+orderID)
+	return nil
+}
 func (f *fakeSpot) GetOrderStatus(string, string) (map[string]interface{}, error) {
 	return map[string]interface{}{"status": "NEW", "executedQty": 0.0, "avgPrice": 0.0, "commission": 0.0}, nil
 }
@@ -620,7 +625,7 @@ func TestNewAutoTraderStockRequiresBinanceAndLinkedExecutor(t *testing.T) {
 	}
 }
 
-func TestStockLimitEntryRestsAndIsNeverCancelled(t *testing.T) {
+func TestStockLimitEntryRestsUntilTheRegularClose(t *testing.T) {
 	limit := `[{"symbol":"AAPLBUSDT","action":"open_long","entry_type":"limit","limit_price":119,"stop_loss":115,"take_profit":130,"confidence":80,"reasoning":"pullback"}]`
 	fx := newStockFixture(t, false, stockTestNow, func(int) string { return limit })
 	fx.cycle(t)
@@ -635,8 +640,36 @@ func TestStockLimitEntryRestsAndIsNeverCancelled(t *testing.T) {
 	if fx.spot.limitBuys != 1 {
 		t.Fatal("second limit entry placed while one is resting")
 	}
-	if fx.spot.cancelAll != 0 || fx.spot.cancelProt != 0 {
-		t.Fatal("the stock path must not cancel the resting entry")
+	if fx.spot.cancelAll != 0 || fx.spot.cancelProt != 0 || len(fx.spot.cancelled) != 0 {
+		t.Fatal("the resting entry must survive within its day")
+	}
+	// At the regular close the unfilled entry expires: exactly that order is
+	// cancelled (never CancelAllOrders), and the row stays until the exchange
+	// reports the order terminal.
+	fx.at.stockNow = func() time.Time { return time.Date(2026, 10, 14, 16, 1, 0, 0, stockET) }
+	fx.at.stockProtectionTick(context.Background())
+	if len(fx.spot.cancelled) != 1 || fx.spot.cancelAll != 0 {
+		t.Fatalf("expired entry not cancelled exactly once: %v (cancelAll %d)", fx.spot.cancelled, fx.spot.cancelAll)
+	}
+}
+
+func TestStockPendingExpiry(t *testing.T) {
+	cases := []struct{ placed, want time.Time }{
+		// regular session → same day's close
+		{time.Date(2026, 10, 14, 10, 0, 0, 0, stockET), time.Date(2026, 10, 14, 16, 0, 0, 0, stockET)},
+		// after hours → next trading day's close
+		{time.Date(2026, 10, 14, 17, 0, 0, 0, stockET), time.Date(2026, 10, 15, 16, 0, 0, 0, stockET)},
+		// Friday after hours → Monday close
+		{time.Date(2026, 10, 16, 18, 0, 0, 0, stockET), time.Date(2026, 10, 19, 16, 0, 0, 0, stockET)},
+		// half day (2026-11-27) → 13:00 close
+		{time.Date(2026, 11, 27, 10, 0, 0, 0, stockET), time.Date(2026, 11, 27, 13, 0, 0, 0, stockET)},
+		// Thanksgiving placement → next trading day (half day) close
+		{time.Date(2026, 11, 26, 10, 0, 0, 0, stockET), time.Date(2026, 11, 27, 13, 0, 0, 0, stockET)},
+	}
+	for _, c := range cases {
+		if got := stockPendingExpiry(c.placed); !got.Equal(c.want) {
+			t.Errorf("placed %s: expiry %s, want %s", c.placed, got.In(stockET), c.want)
+		}
 	}
 }
 

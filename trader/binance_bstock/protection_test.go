@@ -348,3 +348,21 @@ func TestProtectionReplacementFailureExpiresCaches(t *testing.T) {
 		})
 	}
 }
+
+func TestCancelOrderRefusesManualOrders(t *testing.T) {
+	tr, f, _ := fixture(t)
+	manual := stopOrder(-1)
+	manual.ClientOrderID = "manual"
+	manual.OrderID = 55
+	f.orders = []*binance.Order{manual}
+	f.handle = func(r requestRecord) (interface{}, int, bool) {
+		if r.path == "/api/v3/order" && r.method == "GET" {
+			return manual, 200, true
+		}
+		return nil, 0, false
+	}
+	requireError(t, tr.CancelOrder("AAPLBUSDT", "55"), "not a program order")
+	if len(requestsTo(f, "/api/v3/order", "DELETE")) != 0 {
+		t.Fatal("manual order cancelled")
+	}
+}

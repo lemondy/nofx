@@ -206,6 +206,35 @@ func (t *BStockTrader) GetOrderStatus(symbol, orderID string) (map[string]interf
 	return map[string]interface{}{"orderId": o.OrderID, "symbol": o.Symbol, "status": string(o.Status), "avgPrice": avg, "executedQty": executed, "commission": commission, "commissionAsset": "USDT", "side": string(o.Side), "type": string(o.Type), "time": o.Time, "updateTime": o.UpdateTime}, nil
 }
 
+// CancelOrder cancels one program-owned open order. Orders without the nxbs_
+// prefix (the user's manual orders) are refused; already-terminal orders are
+// a no-op.
+func (t *BStockTrader) CancelOrder(symbol, orderID string) error {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	if _, err := t.rule(symbol); err != nil {
+		return err
+	}
+	orderNum, err := strconv.ParseInt(orderID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid order ID: %w", err)
+	}
+	o, err := t.client.NewGetOrderService().Symbol(symbol).OrderID(orderNum).Do(context.Background())
+	if err != nil {
+		return wrap("order status", err)
+	}
+	if !strings.HasPrefix(o.ClientOrderID, clientPrefix) {
+		return fmt.Errorf("order %s on %s is not a program order (client id %q); refusing to cancel", orderID, symbol, o.ClientOrderID)
+	}
+	switch o.Status {
+	case binance.OrderStatusTypeFilled, binance.OrderStatusTypeCanceled, binance.OrderStatusTypeExpired, binance.OrderStatusTypeRejected:
+		return nil
+	}
+	_, err = t.client.NewCancelOrderService().Symbol(symbol).OrderID(orderNum).NewClientOrderID(clientID()).Do(context.Background())
+	t.invalidate()
+	return wrap("cancel order", err)
+}
+
 // CancelAllOrders cancels the symbol's PROGRAM-owned open orders (nxbs_
 // client IDs) only — the user also trades manually on this account, and a
 // symbol-wide cancel would wipe their resting orders (us_stock design
