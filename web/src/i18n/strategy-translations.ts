@@ -1042,6 +1042,167 @@ export const chartTabs = {
 }
 
 // ============================================================================
+// US STOCK (BINANCE bStock) CONFIG TRANSLATIONS
+// ============================================================================
+export const stockConfig = {
+  symbolsSection: { zh: '选股', en: 'Symbols', id: 'Saham' },
+  symbols: {
+    zh: '交易标的（币安 bStock 现货）',
+    en: 'Symbols (Binance bStock spot)',
+    id: 'Simbol (bStock spot Binance)',
+  },
+  symbolsDesc: {
+    zh: '最多 20 只；只做多，使用现货 USDT 余额',
+    en: 'Up to 20; long-only, uses the spot USDT balance',
+    id: 'Maksimal 20; hanya long, memakai saldo USDT spot',
+  },
+  symbolSearch: {
+    zh: '搜索代码，如 AAPL',
+    en: 'Search ticker, e.g. AAPL',
+    id: 'Cari ticker, mis. AAPL',
+  },
+  symbolsLoading: {
+    zh: '加载标的列表…',
+    en: 'Loading symbols…',
+    id: 'Memuat simbol…',
+  },
+  symbolsFallback: {
+    zh: '标的列表暂不可用，请手动输入（逗号分隔，如 AAPLBUSDT, NVDABUSDT）',
+    en: 'Symbol list unavailable — enter manually (comma separated, e.g. AAPLBUSDT, NVDABUSDT)',
+    id: 'Daftar simbol tidak tersedia — isi manual (pisahkan koma, mis. AAPLBUSDT, NVDABUSDT)',
+  },
+  symbolsFallbackPlaceholder: {
+    zh: 'AAPLBUSDT, NVDABUSDT',
+    en: 'AAPLBUSDT, NVDABUSDT',
+    id: 'AAPLBUSDT, NVDABUSDT',
+  },
+  symbolsSelected: { zh: '已选', en: 'Selected', id: 'Dipilih' },
+  symbolsNoMatch: {
+    zh: '无匹配标的',
+    en: 'No matching symbols',
+    id: 'Tidak ada simbol yang cocok',
+  },
+  symbolsEmptyWarn: {
+    zh: '至少选择 1 只标的才能保存',
+    en: 'Select at least one symbol before saving',
+    id: 'Pilih minimal satu simbol sebelum menyimpan',
+  },
+  symbolsMax: {
+    zh: '最多选择 20 只',
+    en: 'At most 20 symbols',
+    id: 'Maksimal 20 simbol',
+  },
+  presetSection: { zh: '持仓周期', en: 'Holding Style', id: 'Gaya Holding' },
+  presetSwing: {
+    zh: '波段（默认）',
+    en: 'Swing (default)',
+    id: 'Swing (default)',
+  },
+  presetSwingDesc: {
+    zh: '数天–数周；日线趋势 + 1 小时入场；决策时点 9:45 / 12:30 / 15:30（美东）',
+    en: 'Days to weeks; 1d trend + 1h entry; decisions at 9:45 / 12:30 / 15:30 ET',
+    id: 'Hari hingga minggu; tren 1d + entry 1h; keputusan 9:45 / 12:30 / 15:30 ET',
+  },
+  presetPosition: { zh: '长线', en: 'Position', id: 'Posisi' },
+  presetPositionDesc: {
+    zh: '数周–数月；周线趋势 + 日线入场；每个交易日 15:30（美东）决策一次',
+    en: 'Weeks to months; 1w trend + 1d entry; one decision at 15:30 ET',
+    id: 'Minggu hingga bulan; tren 1w + entry 1d; satu keputusan pada 15:30 ET',
+  },
+  sessionsSection: { zh: '开仓时段', en: 'Entry Sessions', id: 'Sesi Entry' },
+  sessionRegular: {
+    zh: '常规时段（美东 9:30–16:00）',
+    en: 'Regular (9:30–16:00 ET)',
+    id: 'Reguler (9:30–16:00 ET)',
+  },
+  sessionPreMarket: {
+    zh: '盘前（4:00–9:30）',
+    en: 'Pre-market (4:00–9:30 ET)',
+    id: 'Pra-pasar (4:00–9:30 ET)',
+  },
+  sessionAfterHours: {
+    zh: '盘后（16:00–20:00）',
+    en: 'After-hours (16:00–20:00 ET)',
+    id: 'Setelah jam pasar (16:00–20:00 ET)',
+  },
+  sessionsNote: {
+    zh: '平仓与止损在任何时段都会执行；周末与美股休市日不开仓',
+    en: 'Exits and stops run in every session; no new positions on weekends and US market holidays',
+    id: 'Exit dan stop berjalan di semua sesi; tidak ada posisi baru pada akhir pekan dan hari libur pasar AS',
+  },
+  sessionsNoneWarn: {
+    zh: '至少需要启用一个时段',
+    en: 'Enable at least one session',
+    id: 'Aktifkan minimal satu sesi',
+  },
+  dataSection: { zh: '数据', en: 'Data', id: 'Data' },
+  yahooFallback: {
+    zh: 'K 线不足时使用 Yahoo 正股数据',
+    en: 'Use Yahoo underlying-stock data when klines are insufficient',
+    id: 'Gunakan data saham Yahoo saat kline tidak cukup',
+  },
+  yahooFallbackDesc: {
+    zh: 'bStock 日线/周线上市时间短，不足的周期整条改用正股数据（不拼接）',
+    en: 'bStock daily/weekly history is short; a short timeframe switches wholesale to the underlying (never stitched)',
+    id: 'Riwayat harian/mingguan bStock pendek; timeframe yang kurang beralih penuh ke saham dasar (tanpa digabung)',
+  },
+  maxDivergence: {
+    zh: '最大价差 %（bStock 与正股）',
+    en: 'Max divergence % (bStock vs underlying)',
+    id: 'Selisih maks % (bStock vs saham dasar)',
+  },
+  maxDivergenceDesc: {
+    zh: '超过则不开仓；留空=默认，负数=关闭检查',
+    en: 'Block opens beyond this; empty = default, negative = check disabled',
+    id: 'Blokir entry jika melebihi; kosong = default, negatif = nonaktif',
+  },
+  riskSection: { zh: '风控', en: 'Risk', id: 'Risiko' },
+  maxPositionPct: {
+    zh: '单票最大仓位 %（权益）',
+    en: 'Max position % (equity)',
+    id: 'Posisi maks % (ekuitas)',
+  },
+  maxTotalExposurePct: {
+    zh: '总持仓上限 %（权益）',
+    en: 'Max total exposure % (equity)',
+    id: 'Eksposur total maks % (ekuitas)',
+  },
+  maxPositions: { zh: '最多持仓数', en: 'Max positions', id: 'Posisi maks' },
+  riskPerTradePct: {
+    zh: '单笔风险 %（止损亏损/权益）',
+    en: 'Risk per trade % (loss at stop / equity)',
+    id: 'Risiko per trade % (rugi di stop / ekuitas)',
+  },
+  stopAtrMin: {
+    zh: '止损距离下限（×ATR 日线）',
+    en: 'Stop distance min (×ATR 1d)',
+    id: 'Jarak stop min (×ATR 1d)',
+  },
+  stopAtrMax: {
+    zh: '止损距离上限（×ATR 日线）',
+    en: 'Stop distance max (×ATR 1d)',
+    id: 'Jarak stop maks (×ATR 1d)',
+  },
+  defaultHint: { zh: '默认', en: 'default', id: 'default' },
+  paperSection: { zh: '运行模式', en: 'Run Mode', id: 'Mode Jalan' },
+  paperTrading: {
+    zh: '仅模拟（不下单）',
+    en: 'Paper only (no orders)',
+    id: 'Hanya simulasi (tanpa order)',
+  },
+  paperTradingDesc: {
+    zh: '完整跑数据、决策与风控，但不下单，只记录本应下的单；建议先观察几天',
+    en: 'Runs data, decisions and risk checks but places no orders; recommended for the first few days',
+    id: 'Menjalankan data, keputusan dan cek risiko tanpa order; disarankan untuk beberapa hari pertama',
+  },
+  liveWarning: {
+    zh: '实盘模式：将在币安现货账户真实下单（需开通现货交易权限）。',
+    en: 'LIVE mode: real orders will be placed on the Binance spot account (spot trading permission required).',
+    id: 'Mode LIVE: order nyata akan dikirim ke akun spot Binance (perlu izin spot trading).',
+  },
+}
+
+// ============================================================================
 // HELPER FUNCTION
 // ============================================================================
 
@@ -1060,6 +1221,7 @@ export const zhStrategy = {
   ...Object.fromEntries(Object.entries(coinSource).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(Object.entries(gridConfig).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(Object.entries(gridRisk).map(([k, v]) => [k, v.zh])),
+  ...Object.fromEntries(Object.entries(stockConfig).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(Object.entries(riskControl).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(
     Object.entries(promptSections).map(([k, v]) => [k, v.zh])
@@ -1075,6 +1237,7 @@ export const enStrategy = {
   ...Object.fromEntries(Object.entries(coinSource).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(Object.entries(gridConfig).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(Object.entries(gridRisk).map(([k, v]) => [k, v.en])),
+  ...Object.fromEntries(Object.entries(stockConfig).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(Object.entries(riskControl).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(
     Object.entries(promptSections).map(([k, v]) => [k, v.en])

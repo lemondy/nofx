@@ -39,8 +39,8 @@ export interface PromptSectionsConfig {
 }
 
 export interface StrategyConfig {
-  // Strategy type: "ai_trading" (default) or "grid_trading"
-  strategy_type?: 'ai_trading' | 'grid_trading'
+  // Strategy type: "ai_trading" (default), "grid_trading" or "us_stock"
+  strategy_type?: 'ai_trading' | 'grid_trading' | 'us_stock'
   // Language setting: "zh" for Chinese, "en" for English
   // Determines the language used for data formatting and prompt generation
   language?: 'zh' | 'en'
@@ -54,6 +54,46 @@ export interface StrategyConfig {
   prompt_sections?: PromptSectionsConfig
   // Grid trading configuration (only used when strategy_type is 'grid_trading')
   grid_config?: GridStrategyConfig
+  // US-stock (Binance bStock spot) configuration (only used when strategy_type is 'us_stock')
+  stock_config?: StockConfig
+}
+
+// US-stock strategy configuration; mirrors Go store.StockConfig JSON tags.
+// Numeric 0 / omitted = use the preset default (see StockConfigEditor placeholders).
+export interface StockSessions {
+  // 09:30-16:00 ET; omitted = true
+  regular?: boolean
+  // 04:00-09:30 ET
+  pre_market?: boolean
+  // 16:00-20:00 ET
+  after_hours?: boolean
+}
+
+export interface StockConfig {
+  // Binance spot bStock pairs, e.g. "AAPLBUSDT" (max 20)
+  symbols: string[]
+  // "swing" (default) | "position"
+  preset?: 'swing' | 'position'
+  sessions: StockSessions
+  // Use Yahoo underlying data when bStock klines are too short; omitted = true
+  data_fallback_yahoo?: boolean
+  // Divergence guard in percent; 0 = default 1.0, negative = disabled
+  max_divergence_pct?: number
+  max_position_pct?: number
+  max_total_exposure_pct?: number
+  max_positions?: number
+  risk_per_trade_pct?: number
+  stop_atr_min?: number
+  stop_atr_max?: number
+  // Paper trading (no orders); omitted = true
+  paper_trading?: boolean
+}
+
+// One row of GET /api/usstock/symbols
+export interface USStockSymbol {
+  symbol: string // "AAPLBUSDT"
+  underlying: string // "AAPL"
+  base_asset: string // "AAPLB"
 }
 
 // Grid trading specific configuration

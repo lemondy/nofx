@@ -42,6 +42,10 @@ import {
   GridConfigEditor,
   defaultGridConfig,
 } from '../components/strategy/GridConfigEditor'
+import {
+  StockConfigEditor,
+  defaultStockConfig,
+} from '../components/strategy/StockConfigEditor'
 import { TokenEstimateBar } from '../components/strategy/TokenEstimateBar'
 import { VersionsPanel } from '../components/strategy/VersionsPanel'
 import { DeepVoidBackground } from '../components/common/DeepVoidBackground'
@@ -87,6 +91,7 @@ export function StrategyStudioPage() {
   // Accordion states for left panel
   const [expandedSections, setExpandedSections] = useState({
     gridConfig: true,
+    stockConfig: true,
     coinSource: true,
     indicators: false,
     riskControl: false,
@@ -670,6 +675,22 @@ export function StrategyStudioPage() {
         />
       ),
     },
+    // US Stock Config - only for us_stock (Binance bStock spot)
+    {
+      key: 'stockConfig' as const,
+      icon: BarChart3,
+      color: '#B8912A',
+      title: tr('stockConfig'),
+      forStrategyType: 'us_stock' as const,
+      content: editingConfig?.stock_config && (
+        <StockConfigEditor
+          config={editingConfig.stock_config}
+          onChange={(stockConfig) => updateConfig('stock_config', stockConfig)}
+          disabled={selectedStrategy?.is_default}
+          language={language}
+        />
+      ),
+    },
     // AI Trading sections
     {
       key: 'coinSource' as const,
@@ -1071,13 +1092,14 @@ export function StrategyStudioPage() {
                       {tr('strategyType')}
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <button
                       onClick={() => {
                         if (!selectedStrategy?.is_default) {
                           updateConfig('strategy_type', 'ai_trading')
                           // Clear grid config when switching to AI trading
                           updateConfig('grid_config', undefined)
+                          updateConfig('stock_config', undefined)
                         }
                       }}
                       disabled={selectedStrategy?.is_default}
@@ -1126,6 +1148,38 @@ export function StrategyStudioPage() {
                       </div>
                       <p className="text-xs text-nofx-text-muted text-left">
                         {tr('gridTradingDesc')}
+                      </p>
+                    </button>
+                    <button
+                      data-testid="strategy-type-us-stock"
+                      onClick={() => {
+                        if (!selectedStrategy?.is_default) {
+                          updateConfig('strategy_type', 'us_stock')
+                          // Initialize stock config if not exists (paper ON,
+                          // regular session only, no symbols yet)
+                          if (!editingConfig.stock_config) {
+                            updateConfig('stock_config', defaultStockConfig)
+                          }
+                        }
+                      }}
+                      disabled={selectedStrategy?.is_default}
+                      className={`p-3 rounded-lg border transition-all ${
+                        editingConfig.strategy_type === 'us_stock'
+                          ? 'border-nofx-gold bg-nofx-gold/10'
+                          : 'border-nofx-border hover:border-nofx-gold/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <BarChart3
+                          className="w-4 h-4"
+                          style={{ color: '#B8912A' }}
+                        />
+                        <span className="text-sm font-medium text-nofx-text">
+                          {tr('usStock')}
+                        </span>
+                      </div>
+                      <p className="text-xs text-nofx-text-muted text-left">
+                        {tr('usStockDesc')}
                       </p>
                     </button>
                   </div>
