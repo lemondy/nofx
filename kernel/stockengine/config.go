@@ -5,71 +5,26 @@ import (
 	"nofx/store"
 )
 
-// TODO(integration): replace with store resolvers.
-// These local resolvers intentionally preserve zero-value defaults and nil booleans.
-func effectivePreset(cfg *store.StockConfig) string {
-	if cfg == nil || cfg.Preset == "" {
-		return store.StockPresetSwing
-	}
-	return cfg.Preset
-}
-func allowRegular(cfg *store.StockConfig) bool {
-	return cfg == nil || cfg.Sessions.Regular == nil || *cfg.Sessions.Regular
-}
-func allowPreMarket(cfg *store.StockConfig) bool  { return cfg != nil && cfg.Sessions.PreMarket }
-func allowAfterHours(cfg *store.StockConfig) bool { return cfg != nil && cfg.Sessions.AfterHours }
-func yahooFallback(cfg *store.StockConfig) bool {
-	return cfg == nil || cfg.DataFallbackYahoo == nil || *cfg.DataFallbackYahoo
-}
-func isPaper(cfg *store.StockConfig) bool {
-	return cfg == nil || cfg.PaperTrading == nil || *cfg.PaperTrading
-}
-func defaultFloat(v, fallback float64) float64 {
-	if v == 0 {
-		return fallback
-	}
-	return v
-}
+// Config knobs resolve through the store's StockConfig resolvers (one
+// definition shared with validation and the UI defaults); these thin wrappers
+// keep the engine's call sites short.
+func effectivePreset(cfg *store.StockConfig) string { return cfg.EffectivePreset() }
+func allowRegular(cfg *store.StockConfig) bool      { return cfg.AllowRegular() }
+func allowPreMarket(cfg *store.StockConfig) bool    { return cfg.AllowPreMarket() }
+func allowAfterHours(cfg *store.StockConfig) bool   { return cfg.AllowAfterHours() }
+func yahooFallback(cfg *store.StockConfig) bool     { return cfg.YahooFallback() }
+func isPaper(cfg *store.StockConfig) bool           { return cfg.IsPaper() }
 func effectiveMaxDivergencePct(cfg *store.StockConfig) float64 {
-	if cfg == nil {
-		return 1
-	}
-	return defaultFloat(cfg.MaxDivergencePct, 1)
+	return cfg.EffectiveMaxDivergencePct()
 }
-func effectiveMaxPositionPct(cfg *store.StockConfig) float64 {
-	if cfg == nil {
-		return 20
-	}
-	return defaultFloat(cfg.MaxPositionPct, 20)
-}
+func effectiveMaxPositionPct(cfg *store.StockConfig) float64 { return cfg.EffectiveMaxPositionPct() }
 func effectiveMaxTotalExposurePct(cfg *store.StockConfig) float64 {
-	if cfg == nil {
-		return 80
-	}
-	return defaultFloat(cfg.MaxTotalExposurePct, 80)
+	return cfg.EffectiveMaxTotalExposurePct()
 }
-func effectiveMaxPositions(cfg *store.StockConfig) int {
-	if cfg == nil || cfg.MaxPositions == 0 {
-		return 5
-	}
-	return cfg.MaxPositions
-}
-func effectiveRiskPerTradePct(cfg *store.StockConfig) float64 {
-	if cfg == nil {
-		return 1
-	}
-	return defaultFloat(cfg.RiskPerTradePct, 1)
-}
+func effectiveMaxPositions(cfg *store.StockConfig) int        { return cfg.EffectiveMaxPositions() }
+func effectiveRiskPerTradePct(cfg *store.StockConfig) float64 { return cfg.EffectiveRiskPerTradePct() }
 func effectiveStopATRBand(cfg *store.StockConfig) (float64, float64) {
-	lo, hi := 1.5, 3.0
-	if effectivePreset(cfg) == store.StockPresetPosition {
-		lo, hi = 2, 4
-	}
-	if cfg != nil {
-		lo = defaultFloat(cfg.StopATRMin, lo)
-		hi = defaultFloat(cfg.StopATRMax, hi)
-	}
-	return lo, hi
+	return cfg.EffectiveStopATRBand()
 }
 
 // ResolvePreset resolves the style, ET decision rhythm and ATR stop band.
