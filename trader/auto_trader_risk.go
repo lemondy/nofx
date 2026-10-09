@@ -1916,60 +1916,9 @@ func (at *AutoTrader) ClearExitMode(symbol, side string) {
 	delete(at.positionExitMode, symbol+"_"+side)
 }
 
-// regimeLineOf returns the SLOW EMA (regime line) of the timing timeframe —
-// the structural line a dip/bounce entry must respect: longs on pullback
-// need price ABOVE it (a dip that broke it is a candidate reversal), shorts
-// on rally need price BELOW it (a bounce that broke it is a candidate
-// reversal). Mirrors computeTFSignal's adaptive slow period; 0 when
-// insufficient.
-func regimeLineOf(data *market.Data, tf string) float64 {
-	tfData, ok := data.TimeframeData[tf]
-	if !ok || tfData == nil {
-		return 0
-	}
-	dur := market.TimeframeDuration(tf)
-	if dur <= 0 {
-		return 0
-	}
-	kl := kernel.ClosedKlines(tfData, time.Now(), dur)
-	kb := make([]market.Kline, len(kl))
-	for i, b := range kl {
-		kb[i] = market.Kline{OpenTime: b.Time, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume}
-	}
-	n := len(kb)
-	if n < 12 {
-		return 0
-	}
-	slowP := 50
-	if n < 50 {
-		slowP = 20
-	}
-	if n < 25 {
-		slowP = 12
-	}
-	return market.ExportCalculateEMA(kb, slowP)
-}
-
-// finestSubHourTrend returns the finest sub-hour timeframe present in the
-// data (15m preferred, else 30m) and its deterministic trend.
+// finestSubHourTrend shares kernel micro timing for gates and entry-path tags.
 func finestSubHourTrend(data *market.Data) (string, string) {
-	bestTF := ""
-	bestDur := time.Duration(0)
-	if data != nil {
-		for tf := range data.TimeframeData {
-			d := market.TimeframeDuration(tf)
-			if d <= 0 || d > time.Hour {
-				continue
-			}
-			if bestDur == 0 || d < bestDur {
-				bestTF, bestDur = tf, d
-			}
-		}
-	}
-	if bestTF == "" {
-		return "", ""
-	}
-	return bestTF, kernel.TimeframeTrend(data, bestTF)
+	return kernel.ExecutionMicroTrend(data, time.Now())
 }
 
 // ============================================================================
@@ -2257,7 +2206,7 @@ func absoluteBanCode(code string) bool {
 	switch code {
 	case "DATA_INSUFFICIENT", "POOR_HISTORY", "BSTOCK_DAILY_DATA_UNAVAILABLE",
 		"LOSS_STREAK_BANNED", "STOCK_WEEKEND", "BTC_4H_DOWNTREND",
-		"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING", "BTC_REGIME_UNKNOWN":
+		"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING", "BTC_REGIME_UNKNOWN", "REGIME_LINE_BROKEN":
 		return true
 	}
 	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
@@ -2495,7 +2444,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 			}
 		}
 		if rc.EntryTimingGate {
-			if tf, trend := finestSubHourTrend(ctx.MarketDataMap[d.Symbol]); tf != "" {
+			if tf, trend := kernel.ExecutionMicroTrend(ctx.MarketDataMap[d.Symbol], time.Now()); tf != "" {
 				isLongAction := strings.HasPrefix(d.Action, "open_long")
 				isShortAction := strings.HasPrefix(d.Action, "open_short")
 				// Symmetric policy (audit 09-13): longs enter on
@@ -2517,19 +2466,12 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 					at.setFilterReason(d, "entry timing gate (sub-hour trend misaligned)")
 					continue
 				}
-				// Regime-line guard for dip/bounce entries (audit 09-13
-				// #3): pullback/rally windows are only valid while the
-				// slow EMA (regime line) holds — price beyond it means
-				// the pullback/bounce may be a REVERSAL, not an entry.
-				if trend == "pullback" || trend == "rally" {
+				// 2026-10-09 regime line → trend TF (user option B).
+				if (isLongAction || isShortAction) && kernel.RegimeLineApplies(isLongAction, trend) {
 					if md := ctx.MarketDataMap[d.Symbol]; md != nil {
-						line := regimeLineOf(md, tf)
-						// Evaluate the FILL SITE, not the live tick (2026-10-03
-						// review): a limit entry happens at its anchor — a
-						// retest limit ABOVE the regime line is a valid dip
-						// entry even when the live tick has dipped below the
-						// line for a few minutes. Market entries keep the live
-						// price.
+						lineTF := kernel.ResolveRoleTimeframes(at.config.StrategyConfig).TrendTF
+						line := kernel.RegimeLine(md, lineTF, time.Now())
+						// Backstop retains fill-site semantics: limit anchor, else live tick.
 						px := md.CurrentPrice
 						basis := ""
 						if strings.HasSuffix(d.Action, "_limit") && d.Price > 0 {
@@ -2537,16 +2479,17 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 							basis = "(锚位)"
 						}
 						if line > 0 && px > 0 {
-							broken := (isLongAction && px < line) || (isShortAction && px > line)
+							broken := kernel.RegimeLineBreached(isLongAction, px, line)
 							if broken {
 								streak, push := at.gateNotifyRecord("regimeline:"+d.Symbol+":"+d.Action, time.Now())
-								logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: %s regime line %.6g broken by %.6g — possible reversal, not an entry window (streak %d)",
-									at.name, d.Action, d.Symbol, tf, line, px, streak)
+								logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: %s regime line (EMA50) %.6g broken by %.6g — possible reversal, not an entry window (streak %d)",
+									at.name, d.Action, d.Symbol, lineTF, line, px, streak)
 								if push {
 									notify.Notify("ALERT", at.name, fmt.Sprintf(
-										"<b>🛡️ 已拦截 %s %s</b>\n%s 回踩/反弹入场,但 %s 慢线(regime line)<code>%.6g</code> 已被 <code>%.6g</code> 跌/升破%s——可能是趋势反转而非入场窗\n\n<i>%s</i>",
-										notify.Escape(d.Symbol), map[bool]string{true: "做多", false: "做空"}[isLongAction], tf, tf, line, px, basis, notify.Escape(d.Reasoning)))
+										"<b>🛡️ 已拦截 %s %s</b>\n%s 回踩/反弹入场,但 %s 慢线(EMA50)<code>%.6g</code> 已被 <code>%.6g</code> 跌/升破%s——可能是趋势反转而非入场窗\n\n<i>%s</i>",
+										notify.Escape(d.Symbol), map[bool]string{true: "做多", false: "做空"}[isLongAction], tf, lineTF, line, px, basis, notify.Escape(d.Reasoning)))
 								}
+								at.setFilterReason(d, fmt.Sprintf("%s regime line (EMA50) %.6g breached by %.6g%s — possible reversal", lineTF, line, px, basis))
 								continue
 							}
 						}

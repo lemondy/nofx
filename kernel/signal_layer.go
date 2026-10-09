@@ -160,7 +160,8 @@ type SymbolSignal struct {
 	PrimaryTF           string  `json:"primary_tf"`
 	// Explicit timeframe roles (⑨): one field, three jobs — which TF drives
 	// execution timing, which carries the tradeable trend, which sets regime.
-	RoleTFs RoleTimeframes `json:"role_tfs"`
+	RoleTFs    RoleTimeframes    `json:"role_tfs"`
+	RegimeLine *RegimeLineSignal `json:"regime_line,omitempty"`
 	// MarketRegime is the deterministic trend x volatility classification
 	// derived from CLOSED 1h/4h bars. It is execution evidence, not an LLM
 	// sentiment label: market-order chase exceptions fail closed unless the
@@ -476,7 +477,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU, WIDE_STOP_x_GT_y, BTC_4H_DOWNTREND, BTC_WEAK_LONG_x_VS_y, EMA20_STRETCH_x_GT_y, BTC_4H_STRONGBULL, SHORT_TOP_CONFIRM_MISSING
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, REGIME_LINE_BROKEN, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU, WIDE_STOP_x_GT_y, BTC_4H_DOWNTREND, BTC_WEAK_LONG_x_VS_y, EMA20_STRETCH_x_GT_y, BTC_4H_STRONGBULL, SHORT_TOP_CONFIRM_MISSING
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -1030,39 +1031,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	sig.SignalConflict = conflict
 
 	// ⑧ Execution filter — mirror of the trader's micro-trend gate.
-	var microTrend string
-	var microTF string
-	if t15 := sig.Timeframes["15m"]; t15 != nil && t15.Trend != "" && t15.Trend != "unknown" {
-		microTF, microTrend = "15m", t15.Trend
-	} else if t30 := sig.Timeframes["30m"]; t30 != nil {
-		microTF, microTrend = "30m", t30.Trend
-	}
-	if microTF != "" {
-		ef := &ExecutionFilter{MicroTF: microTF, MicroTrend: microTrend}
-		ef.LongAllowed = microTrend == "up" || microTrend == "pullback"
-		ef.ShortAllowed = microTrend == "down" || microTrend == "rally"
-		// 09-19 audit 六-②: an EMA gap inside 0.25×ATR(micro) is NOISE, not a
-		// trend — WLFI's 0.094% gap on 0.41% ATR flipped the gate every few
-		// bars and licensed counter-consensus shorts. Below the threshold the
-		// micro window is directionless (range semantics: both blocked).
-		tfm := sig.Timeframes[microTF]
-		if tfm != nil && tfm.EMAFast != nil && tfm.EMASlow != nil && tfm.ATRPct > 0 && sig.Price > 0 {
-			gapPct := math.Abs(*tfm.EMAFast-*tfm.EMASlow) / sig.Price * 100
-			if gapPct < 0.25*tfm.ATRPct {
-				ef.LongAllowed, ef.ShortAllowed = false, false
-				ef.MicroTrend = "range"
-				ef.Reason = fmt.Sprintf("EMA gap %.2f%% < 0.25×ATR %.2f%% — micro direction is noise", gapPct, tfm.ATRPct)
-			}
-		}
-		if ef.LongAllowed && !ef.ShortAllowed {
-			ef.Reason = "micro trend aligned for longs only"
-		} else if ef.ShortAllowed && !ef.LongAllowed {
-			ef.Reason = "micro trend aligned for shorts only"
-		} else if ef.Reason == "" {
-			ef.Reason = "micro trend is " + ef.MicroTrend + " — no directional alignment"
-		}
-		sig.ExecutionFilter = ef
-	}
+	sig.ExecutionFilter = executionFilterFromTimeframes(sig.Timeframes, sig.Price)
 
 	// 09-19 audit: execution↔structure opposition. ZEC 09-18 read
 	// directional_score +100 (4 bull / 0 bear) while the execution filter
@@ -1099,7 +1068,11 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	}
 
 	// ⑨ Role timeframes.
-	sig.RoleTFs = RoleTimeframes{ExecutionTF: opt.PrimaryTF, TrendTF: "1h", RegimeTF: "4h"}
+	sig.RoleTFs = ResolveRoleTimeframes(nil)
+	sig.RoleTFs.ExecutionTF = opt.PrimaryTF
+	if line := RegimeLine(data, sig.RoleTFs.TrendTF, now); line > 0 {
+		sig.RegimeLine = &RegimeLineSignal{TF: sig.RoleTFs.TrendTF, EMA50: line}
+	}
 	// First-class market regime (closed 1h/4h bars only). This is computed
 	// before hard_entry_gate because market-order exceptions consume it.
 	sig.MarketRegime = computeMarketRegime(data, now)
@@ -1216,6 +1189,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	if sig.LongPullback != nil && sig.LongPullback.Active {
 		sig.LimitBuyPrice = sig.LongPullback.Entry
 	}
+	// 2026-10-09 regime line → trend TF (user option B): after retest
+	// override, before any entry-price/stop/RR consumer or prompt rendering.
+	suppressAnchorsAgainstRegimeLine(sig, opt.EntryTimingGate)
 	sig.BBRide = computeBBRide(data, now)
 	sig.ShortRide = computeBBShortRide(data, now)
 
@@ -1753,6 +1729,7 @@ func negativeEdgeAligned(sig *SymbolSignal, isLong bool) bool {
 // METHODOLOGY stop (stop_plan), data sufficiency, min-size dead zone,
 // loss-streak ban, stock weekend. allowed = nothing failed.
 func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
+	suppressAnchorsAgainstRegimeLine(sig, opt.EntryTimingGate)
 	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
 	bstockDailyReady := true
 	if market.IsBStockSymbol(sig.Symbol) {
@@ -1814,6 +1791,10 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			}
 		}
 		if opt.EntryTimingGate && sig.ExecutionFilter != nil {
+			if sig.RegimeLine != nil && RegimeLineApplies(isLong, sig.ExecutionFilter.MicroTrend) &&
+				RegimeLineBreached(isLong, sig.Price, sig.RegimeLine.EMA50) {
+				add("REGIME_LINE_BROKEN")
+			}
 			if isLong && !sig.ExecutionFilter.LongAllowed {
 				add("MICRO_TREND_NOT_LONG")
 			}
