@@ -1,0 +1,151 @@
+package stockengine
+
+import (
+	"fmt"
+	"strings"
+	"time"
+	_ "time/tzdata"
+
+	"nofx/market/usstock"
+	"nofx/store"
+)
+
+const decisionContract = `[{"symbol":"AAPLBUSDT","action":"open_long","entry_type":"market","limit_price":0,"stop_loss":95,"take_profit":110,"reduce_fraction":0,"confidence":80,"reasoning":"short summary"}]`
+
+// BuildSystemPrompt describes the style and the program-enforced output rules.
+func BuildSystemPrompt(cfg *store.StockConfig, preset Preset, lang string) string {
+	if preset.Name == "" {
+		preset = ResolvePreset(cfg)
+	}
+	position := preset.Name == store.StockPresetPosition
+	horizon, trail := "days to weeks; review after 30 trading days", "daily EMA20 or 2×ATR(1d)"
+	zhHorizon, zhTrail := "数天至数周；30 个交易日后复核", "日线 EMA20 或 2×ATR(1d)"
+	if position {
+		horizon, trail = "weeks to months; no fixed maximum holding days", "daily EMA50 or 3×ATR(1d)"
+		zhHorizon, zhTrail = "数周至数月；无固定最长持仓天数", "日线 EMA50 或 3×ATR(1d)"
+	}
+	divergence := fmt.Sprintf("|divergence| ≤ %.2f%%", effectiveMaxDivergencePct(cfg))
+	zhDivergence := fmt.Sprintf("|偏离| ≤ %.2f%%", effectiveMaxDivergencePct(cfg))
+	if effectiveMaxDivergencePct(cfg) < 0 {
+		divergence = "divergence limit disabled"
+		zhDivergence = "偏离阈值已禁用"
+	}
+	sessions := fmt.Sprintf("regular=%t, pre=%t, after=%t", allowRegular(cfg), allowPreMarket(cfg), allowAfterHours(cfg))
+	if strings.EqualFold(lang, "zh") || strings.HasPrefix(strings.ToLower(lang), "zh-") {
+		return fmt.Sprintf(`你是美股中长线交易员，在 Binance bStock 现货交易，只做多、无杠杆。预设 %s，持仓周期：%s。趋势周期 %s，入场周期 %s；每个交易日美东时间 %s 决策，避免追逐日内噪声。
+程序强制规则：新开仓/加仓允许时段 %s，休市禁止新增敞口；平仓任何时段允许。必需周期数据充分（1d 至少 200 根，EMA200 不足也阻止入场），入场参考报价必须新鲜，%s。止损必须 >0 且低于入场价，距离在 [%.2f, %.2f]×ATR(1d)；限价 >0 且不高于现价 1.01 倍；止盈如设置必须高于入场价。单票上限 %.2f%%，总敞口上限 %.2f%%，最多 %d 只，单笔风险 %.2f%% 权益。程序计算数量和最小名义金额（5 USDT），模型绝不输出 quantity。加仓必须盈利且现价高于初始止损；减仓比例在 (0,1)；止损只能上移收紧。
+退出纪律：结构止损放在日线确认摆动低点下方并满足 ATR 带，否则等待；盈利达到 1R 后移动至保本，按 %s 跟踪。不得在初始止损以下摊低成本。
+输出契约 OUTPUT CONTRACT：先给简短推理摘要，再给一个 JSON 数组；字段只能使用 symbol, action, entry_type, limit_price, stop_loss, take_profit, reduce_fraction, confidence, reasoning，价格用 bStock USDT。每个配置标的恰好一个决策。已持仓只用 hold/add_long/reduce_long/close_long/adjust_stop；未持仓只用 open_long/wait。entry_type 为 market 或 limit；confidence 为 0–100。示例：
+%s`, preset.Name, zhHorizon, preset.TrendTF, preset.EntryTF, strings.Join(preset.DecisionTimes, ","), sessions, zhDivergence, preset.StopATRMin, preset.StopATRMax, effectiveMaxPositionPct(cfg), effectiveMaxTotalExposurePct(cfg), effectiveMaxPositions(cfg), effectiveRiskPerTradePct(cfg), zhTrail, decisionContract)
+	}
+	return fmt.Sprintf(`You are a US-equity mid/long-term trader on Binance bStock spot: long-only, no leverage. Preset %s; horizon: %s. Trend timeframe %s, entry timeframe %s; decide at %s ET on trading days. Avoid chasing intraday noise.
+PROGRAM-ENFORCED rules: new exposure (open/add) allowed sessions %s; closed sessions prohibit new exposure; closes are allowed in every session. Required timeframes must be sufficient (1d needs 200 bars; missing EMA200 blocks entries). A fresh reference quote is required; %s. Stop >0 and below entry, distance within [%.2f, %.2f]×ATR(1d); limit >0 and ≤ market price×1.01; take-profit, if set, must exceed entry. Position cap %.2f%%, total exposure cap %.2f%%, maximum %d positions, risk per trade %.2f%% of equity. The program sizes orders and enforces 5 USDT minimum notional; the model never outputs quantity. Adds require profit and price above InitialStop; reduce_fraction is in (0,1); stops may only tighten upward.
+Exit discipline: structural stop below the confirmed daily swing low, within the ATR band, otherwise wait. Move to breakeven after 1R; trail by %s. No averaging down below the initial stop.
+OUTPUT CONTRACT: a short reasoning summary followed by a JSON array. Use exactly these JSON field names: symbol, action, entry_type, limit_price, stop_loss, take_profit, reduce_fraction, confidence, reasoning. Prices are bStock USDT units. Every configured symbol gets exactly one decision. Held symbols use hold/add_long/reduce_long/close_long/adjust_stop; non-held symbols use open_long/wait. entry_type is market or limit; confidence is 0–100. Example:
+%s`, preset.Name, horizon, preset.TrendTF, preset.EntryTF, strings.Join(preset.DecisionTimes, ","), sessions, divergence, preset.StopATRMin, preset.StopATRMax, effectiveMaxPositionPct(cfg), effectiveMaxTotalExposurePct(cfg), effectiveMaxPositions(cfg), effectiveRiskPerTradePct(cfg), trail, decisionContract)
+}
+
+// BuildUserPrompt presents injected ET time, account, positions and compact data.
+func BuildUserPrompt(ctx *Context, lang string) string {
+	if ctx == nil {
+		return "No context / 无上下文"
+	}
+	zh := strings.HasPrefix(strings.ToLower(lang), "zh")
+	label := func(en, cn string) string {
+		if zh {
+			return cn
+		}
+		return en
+	}
+	et, _ := time.LoadLocation("America/New_York")
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s ET | session=%s | %s=%t\n", ctx.Now.In(et).Format("2006-01-02 15:04:05 MST"), ctx.Session, label("new exposure allowed", "允许新增敞口"), sessionAllowed(ctx.Config, ctx.Session))
+	exposurePct := 0.0
+	if ctx.Account.Equity > 0 {
+		exposurePct = ctx.Account.Exposure / ctx.Account.Equity * 100
+	}
+	fmt.Fprintf(&b, "%s: equity=%.2f USDT available=%.2f exposure=%.2f (%.2f%%)\n", label("Account", "账户"), ctx.Account.Equity, ctx.Account.Available, ctx.Account.Exposure, exposurePct)
+	fmt.Fprintf(&b, "%s:\n", label("Positions", "持仓"))
+	if len(ctx.Positions) == 0 {
+		fmt.Fprintln(&b, label("none", "无"))
+	}
+	for _, p := range ctx.Positions {
+		price := p.Price
+		if s := snapshotFor(ctx, p.Symbol); s != nil && positive(s.Price) {
+			price = s.Price
+		}
+		pnl := 0.0
+		if p.AvgPrice > 0 {
+			pnl = (price/p.AvgPrice - 1) * 100
+		}
+		r := "n/a"
+		if p.InitialStop > 0 && p.AvgPrice > p.InitialStop {
+			r = fmt.Sprintf("%.2fR", (price-p.AvgPrice)/(p.AvgPrice-p.InitialStop))
+		}
+		days := "n/a"
+		if !p.OpenedAt.IsZero() {
+			d := ctx.Now.Sub(p.OpenedAt).Hours() / 24
+			if d < 0 {
+				d = 0
+			}
+			days = fmt.Sprintf("%.1f", d)
+		}
+		fmt.Fprintf(&b, "%s qty=%.6f avg=%.2f price=%.2f unrealized=%.2f%% R=%s held_days=%s (calendar) initial_stop=%.2f live_stop=%.2f TP=%.2f\n", p.Symbol, p.Quantity, p.AvgPrice, price, pnl, r, days, p.InitialStop, p.StopPrice, p.TakeProfit)
+	}
+	fmt.Fprintf(&b, "%s SPY/QQQ:\n", label("Market context", "大盘背景"))
+	for _, s := range ctx.Market {
+		writeSnapshot(&b, s, zh)
+	}
+	fmt.Fprintf(&b, "%s:\n", label("Configured symbols", "配置标的"))
+	if ctx.Config != nil {
+		for _, symbol := range ctx.Config.Symbols {
+			s := snapshotFor(ctx, symbol)
+			if s == nil {
+				fmt.Fprintf(&b, "%s: DATA_INSUFFICIENT / MissingTF 1d and required timeframes\n", symbol)
+				continue
+			}
+			writeSnapshot(&b, s, zh)
+		}
+	}
+	return b.String()
+}
+
+func writeSnapshot(b *strings.Builder, s *SymbolSnapshot, zh bool) {
+	if s == nil {
+		return
+	}
+	fmt.Fprintf(b, "%s (%s) price=%.2f trend[d/w/entry]=%s/%s/%s EMA20/50/200=%.2f/%.2f/%.2f ATR1d=%.2f (%.2f%%) 52w[low/high]=%.2f/%.2f from_high=%.2f%% vol20/50=%.2f ret20d=%.2f%% swing[low/high]=%.2f/%.2f\n", s.Symbol, s.Underlying, s.Price, s.TrendDaily, s.TrendWeekly, s.TrendEntry, s.EMA20, s.EMA50, s.EMA200, s.ATR1d, s.ATR1dPct, s.Low52w, s.High52w, s.PctFrom52wHigh, s.VolumeRatio20_50, s.Return20dPct, s.SwingLow, s.SwingHigh)
+	fmt.Fprint(b, "sources: ")
+	for _, tf := range []string{usstock.TF15m, usstock.TF1h, usstock.TF4h, usstock.TF1d, usstock.TF1w} {
+		source, ok := s.Sources[tf]
+		if !ok {
+			continue
+		}
+		if source == usstock.SourceYahoo {
+			if zh {
+				source = "Yahoo 正股 " + s.Underlying
+			} else {
+				source = "Yahoo underlying " + s.Underlying
+			}
+		} else if source == usstock.SourceBStock {
+			source = "bStock"
+		}
+		fmt.Fprintf(b, "%s: %s; ", tf, source)
+	}
+	fmt.Fprintln(b)
+	if len(s.MissingTF) > 0 {
+		fmt.Fprintf(b, "MissingTF WARNING: %s (required TF missing blocks entry)", strings.Join(s.MissingTF, ","))
+		for _, tf := range s.MissingTF {
+			if tf == usstock.TF1d {
+				fmt.Fprint(b, "; 1d<200: EMA200 unavailable; EMA20/50 only when available")
+				break
+			}
+		}
+		fmt.Fprintln(b)
+	}
+	if q := s.Quote; q != nil {
+		fmt.Fprintf(b, "quote: bStock=%.2f ref=%.2f divergence=%.2f%% fresh=%t ref_time=%s session=%s\n", q.BStockPrice, q.RefPrice, q.DivergencePct, q.RefFresh, q.RefTime.Format(time.RFC3339), q.Session)
+	} else {
+		fmt.Fprintln(b, "quote: missing / BSTOCK_REF_STALE")
+	}
+}
