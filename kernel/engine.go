@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -1387,6 +1388,25 @@ func fmtFloatPct(v float64) string {
 	return strconv.FormatFloat(v, 'f', 0, 64)
 }
 
+// ai500FallbackTTL bounds how old a last-good AI500 list may be when vergex
+// fails: long enough to ride over a transient 403, short enough not to go stale.
+const ai500FallbackTTL = 15 * time.Minute
+
+// ai500LastGood is the most recent successful AI500 list. It is package-level,
+// not per engine: the list is global and StrategyEngine is recreated per cycle.
+var ai500LastGood struct {
+	mu      sync.Mutex
+	symbols []string
+	at      time.Time
+}
+
+// Test seams for getAI500Coins: the vergex fetch and the clock.
+var ai500Now = time.Now
+
+var ai500Fetch = func(e *StrategyEngine, limit int) ([]string, error) {
+	return e.vergexClient.GetAI500Symbols(limit)
+}
+
 // getAI500Coins returns AI500 picks from vergex trending — the same source as
 // the data page's "AI500 Picks" card (browser-relayed payloads).
 // Vergex is the only source: NofxOS public keys were deprecated server-side.
@@ -1395,11 +1415,23 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 		limit = 30
 	}
 
-	symbols, err := e.vergexClient.GetAI500Symbols(limit)
+	symbols, err := ai500Fetch(e, limit)
 	if err != nil {
-		return nil, err
+		// 2026-10-09: transient vergex 403 dropped the AI500 source for a whole
+		// cycle — reuse the last-good list while it is younger than the TTL.
+		cached, age, ok := ai500LastGoodSymbols(limit)
+		if !ok {
+			return nil, err
+		}
+		logger.Infof("📊 AI500 (vergex) failed (%v) — using last-good list from %s ago (%d coins, TTL %s)", err, age.Round(time.Second), len(cached), ai500FallbackTTL)
+		symbols = cached
+	} else {
+		// An empty success must not wipe a usable last-good list.
+		if len(symbols) > 0 {
+			ai500Remember(symbols)
+		}
+		logger.Infof("📊 AI500 (vergex) returned %d coins (limit %d)", len(symbols), limit)
 	}
-	logger.Infof("📊 AI500 (vergex) returned %d coins (limit %d)", len(symbols), limit)
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
@@ -1409,6 +1441,34 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 		})
 	}
 	return candidates, nil
+}
+
+// ai500Remember stores a copy of a successful AI500 list and the time it arrived.
+func ai500Remember(symbols []string) {
+	cp := append([]string(nil), symbols...)
+	ai500LastGood.mu.Lock()
+	ai500LastGood.symbols = cp
+	ai500LastGood.at = ai500Now()
+	ai500LastGood.mu.Unlock()
+}
+
+// ai500LastGoodSymbols returns up to limit cached symbols and their age. ok is
+// false when nothing is cached or the cached list is at least ai500FallbackTTL old.
+func ai500LastGoodSymbols(limit int) (symbols []string, age time.Duration, ok bool) {
+	ai500LastGood.mu.Lock()
+	defer ai500LastGood.mu.Unlock()
+	if ai500LastGood.at.IsZero() {
+		return nil, 0, false
+	}
+	age = ai500Now().Sub(ai500LastGood.at)
+	if age >= ai500FallbackTTL {
+		return nil, 0, false
+	}
+	n := len(ai500LastGood.symbols)
+	if n > limit {
+		n = limit
+	}
+	return append([]string(nil), ai500LastGood.symbols[:n]...), age, true
 }
 
 // getOITopCoins returns the top OI-increase coins from vergex trending (1h
