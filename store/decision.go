@@ -15,16 +15,18 @@ type DecisionStore struct {
 
 // DecisionRecordDB internal GORM model for decision_records table
 type DecisionRecordDB struct {
-	ID                  int64     `gorm:"primaryKey;autoIncrement"`
-	TraderID            string    `gorm:"column:trader_id;not null;index:idx_decision_records_trader_time"`
-	CycleNumber         int       `gorm:"column:cycle_number;not null"`
-	Timestamp           time.Time `gorm:"not null;index:idx_decision_records_trader_time,sort:desc;index:idx_decision_records_timestamp,sort:desc"`
-	SystemPrompt        string    `gorm:"column:system_prompt;default:''"`
-	InputPrompt         string    `gorm:"column:input_prompt;default:''"`
-	CoTTrace            string    `gorm:"column:cot_trace;default:''"`
-	DecisionJSON        string    `gorm:"column:decision_json;default:''"`
-	RawResponse         string    `gorm:"column:raw_response;default:''"`
-	CandidateCoins      string    `gorm:"column:candidate_coins;default:''"`
+	ID             int64     `gorm:"primaryKey;autoIncrement"`
+	TraderID       string    `gorm:"column:trader_id;not null;index:idx_decision_records_trader_time"`
+	CycleNumber    int       `gorm:"column:cycle_number;not null"`
+	Timestamp      time.Time `gorm:"not null;index:idx_decision_records_trader_time,sort:desc;index:idx_decision_records_timestamp,sort:desc"`
+	SystemPrompt   string    `gorm:"column:system_prompt;default:''"`
+	InputPrompt    string    `gorm:"column:input_prompt;default:''"`
+	CoTTrace       string    `gorm:"column:cot_trace;default:''"`
+	DecisionJSON   string    `gorm:"column:decision_json;default:''"`
+	RawResponse    string    `gorm:"column:raw_response;default:''"`
+	CandidateCoins string    `gorm:"column:candidate_coins;default:''"`
+	// 2026-10-10 per-candidate block reasons (JSON []CandidateVerdict).
+	CandidateVerdicts   string    `gorm:"column:candidate_verdicts;type:text;default:''"`
 	ExecutionLog        string    `gorm:"column:execution_log;default:''"`
 	Decisions           string    `gorm:"column:decisions;default:'[]'"`
 	Success             bool      `gorm:"default:false"`
@@ -37,6 +39,16 @@ type DecisionRecordDB struct {
 func (DecisionRecordDB) TableName() string { return "decision_records" }
 
 // DecisionRecord decision record (external API struct)
+// CandidateVerdict is one candidate's outcome for a cycle (2026-10-10
+// per-candidate block reasons). Status: "evaluated" | "blocked" | "filtered".
+type CandidateVerdict struct {
+	Symbol      string   `json:"symbol"`
+	Status      string   `json:"status"`
+	LongFailed  []string `json:"long_failed,omitempty"`
+	ShortFailed []string `json:"short_failed,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+}
+
 type DecisionRecord struct {
 	ID                  int64              `json:"id"`
 	TraderID            string             `json:"trader_id"`
@@ -48,6 +60,7 @@ type DecisionRecord struct {
 	DecisionJSON        string             `json:"decision_json"`
 	RawResponse         string             `json:"raw_response"` // Raw AI response for debugging
 	CandidateCoins      []string           `json:"candidate_coins"`
+	CandidateVerdicts   []CandidateVerdict `json:"candidate_verdicts,omitempty"` // 2026-10-10 per-candidate block reasons
 	ExecutionLog        []string           `json:"execution_log"`
 	Success             bool               `json:"success"`
 	ErrorMessage        string             `json:"error_message"`
@@ -152,6 +165,9 @@ func (db *DecisionRecordDB) toRecord() *DecisionRecord {
 		ConfigHash:          db.ConfigHash,
 	}
 	json.Unmarshal([]byte(db.CandidateCoins), &record.CandidateCoins)
+	if db.CandidateVerdicts != "" {
+		json.Unmarshal([]byte(db.CandidateVerdicts), &record.CandidateVerdicts)
+	}
 	json.Unmarshal([]byte(db.ExecutionLog), &record.ExecutionLog)
 	json.Unmarshal([]byte(db.Decisions), &record.Decisions)
 	return record
@@ -167,6 +183,11 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 
 	// Serialize arrays to JSON
 	candidateCoinsJSON, _ := json.Marshal(record.CandidateCoins)
+	candidateVerdictsJSON := ""
+	if len(record.CandidateVerdicts) > 0 {
+		b, _ := json.Marshal(record.CandidateVerdicts)
+		candidateVerdictsJSON = string(b)
+	}
 	executionLogJSON, _ := json.Marshal(record.ExecutionLog)
 	decisionsJSON, _ := json.Marshal(record.Decisions)
 
@@ -180,6 +201,7 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 		DecisionJSON:        record.DecisionJSON,
 		RawResponse:         record.RawResponse,
 		CandidateCoins:      string(candidateCoinsJSON),
+		CandidateVerdicts:   candidateVerdictsJSON,
 		ExecutionLog:        string(executionLogJSON),
 		Decisions:           string(decisionsJSON),
 		Success:             record.Success,

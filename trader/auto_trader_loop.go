@@ -169,6 +169,10 @@ func (at *AutoTrader) runCycle() error {
 			fmt.Sprintf("AI call duration: %d ms", record.AIRequestDurationMs))
 	}
 
+	// 2026-10-10 per-candidate block reasons: gate states exist once the prompt
+	// is built (model-decided and regime-skip cycles alike).
+	record.CandidateVerdicts = kernel.BuildCandidateVerdicts(ctx)
+
 	// Save chain of thought, decisions, and input prompt even if there's an error (for debugging)
 	if aiDecision != nil {
 		record.SystemPrompt = aiDecision.SystemPrompt // Save system prompt

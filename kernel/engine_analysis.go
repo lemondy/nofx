@@ -367,6 +367,10 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 	// mutates ctx.CandidateCoins in place, and `range` over the same slice
 	// walked the shifted array, skipping the element AFTER each removal
 	// (consecutive removals skipped several candidates' fetch entirely).
+	ctx.CandidateOrder = ctx.CandidateOrder[:0]
+	for _, c := range ctx.CandidateCoins {
+		ctx.CandidateOrder = append(ctx.CandidateOrder, c.Symbol)
+	}
 	for _, coin := range snapshotCandidateCoins(ctx) {
 		if _, exists := ctx.MarketDataMap[coin.Symbol]; exists {
 			continue
@@ -376,6 +380,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		data, err := market.GetWithTimeframesForVenue(coin.Symbol, symbolTimeframes, primaryTimeframe, klineCount, venue)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for %s: %v", coin.Symbol, err)
+			markFiltered(ctx, coin.Symbol, "market data unavailable/stale")
 			continue
 		}
 
@@ -407,6 +412,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 					// an OI floor, the fetch pass filters with one). Keeping
 					// un-fetched coins in ctx.CandidateCoins desyncs the UI
 					// pool, the prompt header count and the regime-skip census.
+					markFiltered(ctx, coin.Symbol, fmt.Sprintf("OI %.2fM < %.1fM", oiValueInMillions, minOIThresholdMillions))
 					removeCandidate(ctx, coin.Symbol)
 					continue
 				}
@@ -419,6 +425,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 		// missed them; stop them here instead.
 		if strings.Contains(strings.ToUpper(data.Symbol), ":") {
 			logger.Infof("🚫 Excluded XYZ (tokenized) symbol from market data: %s (candidate %s)", data.Symbol, coin.Symbol)
+			markFiltered(ctx, coin.Symbol, "tokenized symbol excluded")
 			removeCandidate(ctx, coin.Symbol)
 			continue
 		}

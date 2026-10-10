@@ -85,6 +85,14 @@ export interface DecisionRecord {
   account_state: AccountSnapshot
   positions: any[]
   candidate_coins: string[]
+  // 2026-10-10 per-candidate block reasons (absent on old records)
+  candidate_verdicts?: Array<{
+    symbol: string
+    status: 'evaluated' | 'blocked' | 'filtered' | string
+    long_failed?: string[]
+    short_failed?: string[]
+    reason?: string
+  }>
   decisions: DecisionAction[]
   execution_log: string[]
   success: boolean

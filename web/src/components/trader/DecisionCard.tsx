@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import type { DecisionRecord, DecisionAction } from '../../types'
 import { t, type Language } from '../../i18n/translations'
+import { gateCodeLabel } from '../../lib/gateCodeLabels'
 
 interface DecisionCardProps {
   decision: DecisionRecord
@@ -311,36 +312,98 @@ function CandidateWatchlist({
 
   if (undecided.length === 0) return null
 
+  // 2026-10-10 per-candidate block reasons. Old records have no verdicts and
+  // render exactly as before. Filtered coins may be absent from
+  // candidate_coins (dropped before the pool was persisted), so add them.
+  const verdicts = new Map(
+    (decision.candidate_verdicts || []).map((v) => [v.symbol.toUpperCase(), v])
+  )
+  const rows = [...undecided]
+  verdicts.forEach((v, sym) => {
+    if (
+      v.status === 'filtered' &&
+      !rows.some((r) => r.toUpperCase() === sym) &&
+      !decidedSymbols.has(sym)
+    ) {
+      rows.push(v.symbol)
+    }
+  })
+  const filteredCount = rows.filter(
+    (s) => verdicts.get(s.toUpperCase())?.status === 'filtered'
+  ).length
+  const evaluatedCount = rows.length - filteredCount
+
+  const codes = (list: string[] | undefined) =>
+    !list || list.length === 0
+      ? '—'
+      : list.map((c, i) => {
+          const { label, raw } = gateCodeLabel(c, language)
+          return (
+            <span key={c + i} title={raw}>
+              {i > 0 ? ', ' : ''}
+              {label}
+            </span>
+          )
+        })
+
   return (
     <div
       className="rounded-lg p-4 mb-4"
       style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
     >
       <div className="text-xs font-semibold mb-3" style={{ color: '#6E6E60' }}>
-        🎯 {t('candidateCoinsThisCycle', language)} ({undecided.length})
+        🎯 {t('candidateCoinsThisCycle', language)} ({evaluatedCount})
+        {filteredCount > 0 && (
+          <span className="ml-2 font-normal" style={{ opacity: 0.7 }}>
+            {t('candidatesFiltered', language, { n: filteredCount })}
+          </span>
+        )}
       </div>
       <div className="space-y-2.5">
         {/* Coins the model stood down on this cycle */}
-        {undecided.map((symbol) => (
-          <div key={symbol} className="flex items-center gap-3">
-            <span
-              className="font-mono font-bold text-sm cursor-pointer hover:underline shrink-0"
-              style={{ color: '#6E6E60' }}
-              onClick={() => onSymbolClick?.(symbol)}
-            >
-              {symbol.replace('USDT', '')}
-            </span>
-            <span
-              className="px-2 py-0.5 rounded text-[10px] font-bold shrink-0"
-              style={{
-                background: 'rgba(132, 142, 156, 0.15)',
-                color: '#6E6E60',
-              }}
-            >
-              ⏳ {t('standingBy', language)}
-            </span>
-          </div>
-        ))}
+        {rows.map((symbol) => {
+          const v = verdicts.get(symbol.toUpperCase())
+          const isFiltered = v?.status === 'filtered'
+          return (
+            <div key={symbol} className="flex items-start gap-3">
+              <span
+                className="font-mono font-bold text-sm cursor-pointer hover:underline shrink-0"
+                style={{ color: '#6E6E60' }}
+                onClick={() => onSymbolClick?.(symbol)}
+              >
+                {symbol.replace('USDT', '')}
+              </span>
+              <span
+                className="px-2 py-0.5 rounded text-[10px] font-bold shrink-0"
+                style={{
+                  background: 'rgba(132, 142, 156, 0.15)',
+                  color: '#6E6E60',
+                  opacity: isFiltered ? 0.7 : 1,
+                }}
+              >
+                {isFiltered
+                  ? t('candidateFilteredBadge', language)
+                  : `⏳ ${t('standingBy', language)}`}
+              </span>
+              {v && (
+                <span
+                  className="text-[11px] min-w-0 break-words"
+                  style={{ color: '#6E6E60' }}
+                >
+                  {isFiltered ? (
+                    v.reason
+                  ) : (
+                    <>
+                      {t('candidateLongLabel', language)}: {codes(v.long_failed)}
+                      {' | '}
+                      {t('candidateShortLabel', language)}: {codes(v.short_failed)}
+                    </>
+                  )}
+                </span>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

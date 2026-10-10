@@ -208,10 +208,15 @@ type Context struct {
 	// was SHOWN (allowed per direction) at prompt-build time. wait_state is
 	// derived from these + wait_bias — the model no longer outputs it
 	// (schema-redundancy audit 09-16).
-	GateStates      map[string]*GateState `json:"-"`
-	BTCETHLeverage  int                   `json:"-"`
-	AltcoinLeverage int                   `json:"-"`
-	Timeframes      []string              `json:"-"`
+	GateStates map[string]*GateState `json:"-"`
+	// FilteredCandidates: normalized symbol -> why the coin was dropped before
+	// prompt rendering; CandidateOrder: the pool as it was BEFORE the fetch
+	// pass removed coins (2026-10-10 per-candidate block reasons).
+	FilteredCandidates map[string]string `json:"-"`
+	CandidateOrder     []string          `json:"-"`
+	BTCETHLeverage     int               `json:"-"`
+	AltcoinLeverage    int               `json:"-"`
+	Timeframes         []string          `json:"-"`
 }
 
 // LimitAnchor carries the pre-computed limit-entry prices for one symbol —
