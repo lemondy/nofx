@@ -13,6 +13,7 @@ import type { TraderInfo, Exchange } from '../../types'
 import type { Language } from '../../i18n/translations'
 import { t } from '../../i18n/translations'
 import { PunkAvatar, getTraderAvatar } from '../common/PunkAvatar'
+import { Badge } from '../ui/badge'
 import {
   getModelDisplayName,
   getExchangeDisplayName,
@@ -329,28 +330,11 @@ function TraderRow({
         )}
         {/* Status */}
         <div className="text-center">
-          <div
-            className={`px-2 md:px-3 py-1 rounded text-xs font-bold ${
-              trader.is_running
-                ? 'bg-up-soft text-up'
-                : 'bg-down-soft text-down'
-            }`}
-            style={
-              trader.is_running
-                ? {
-                    background: 'var(--up-soft)',
-                    color: 'var(--up)',
-                  }
-                : {
-                    background: 'var(--down-soft)',
-                    color: 'var(--down)',
-                  }
-            }
-          >
+          <Badge variant={trader.is_running ? 'up' : 'down'}>
             {trader.is_running
               ? t('running', language)
               : t('stopped', language)}
-          </div>
+          </Badge>
         </div>
 
         {/* Actions */}

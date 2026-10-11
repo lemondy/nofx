@@ -65,7 +65,7 @@ export function ConfigStatusGrid({
   const getExchangeStateMeta = (state: ExchangeAccountState | undefined) => {
     if (!state) {
       return {
-        label: language === 'zh' ? '未检查' : 'NOT CHECKED',
+        label: language === 'zh' ? '未检查' : 'Not checked',
         className: 'text-fg-3 border-line-strong/80 bg-surface/40',
       }
     }
@@ -78,27 +78,27 @@ export function ConfigStatusGrid({
         }
       case 'disabled':
         return {
-          label: language === 'zh' ? '已禁用' : 'DISABLED',
+          label: language === 'zh' ? '已禁用' : 'Disabled',
           className: 'text-fg-3 border-line-strong/80 bg-surface/40',
         }
       case 'missing_credentials':
         return {
-          label: language === 'zh' ? '配置不完整' : 'INCOMPLETE',
+          label: language === 'zh' ? '配置不完整' : 'Incomplete',
           className: 'text-warn border-warn/30 bg-warn-soft',
         }
       case 'invalid_credentials':
         return {
-          label: language === 'zh' ? '密钥无效' : 'INVALID KEYS',
+          label: language === 'zh' ? '密钥无效' : 'Invalid keys',
           className: 'text-down border-down/30 bg-down-soft',
         }
       case 'permission_denied':
         return {
-          label: language === 'zh' ? '无余额权限' : 'NO PERMISSION',
+          label: language === 'zh' ? '无余额权限' : 'No permission',
           className: 'text-warn border-warn/30 bg-warn-soft',
         }
       default:
         return {
-          label: language === 'zh' ? '暂时无法获取' : 'UNAVAILABLE',
+          label: language === 'zh' ? '暂时无法获取' : 'Unavailable',
           className: 'text-fg-2 border-line-strong/60 bg-surface-hover/50',
         }
     }
@@ -141,10 +141,10 @@ export function ConfigStatusGrid({
                   </div>
 
                   <div className="min-w-0">
-                    <div className="font-mono text-sm text-fg-2 group-hover:text-nofx-gold transition-colors">
+                    <div className="text-sm font-medium text-fg group-hover:text-brand transition-colors">
                       {getShortName(model.name)}
                     </div>
-                    <div className="text-[10px] text-fg-3 font-mono flex items-center gap-2">
+                    <div className="text-[11px] text-fg-3 flex items-center gap-2">
                       {model.customModelName ||
                         AI_PROVIDER_CONFIG[model.provider]?.defaultModel ||
                         ''}
@@ -250,24 +250,24 @@ export function ConfigStatusGrid({
                   </div>
 
                   <div className="min-w-0">
-                    <div className="font-mono text-sm text-fg-2 group-hover:text-nofx-gold transition-colors truncate">
+                    <div className="text-sm font-medium text-fg group-hover:text-brand transition-colors truncate">
                       {exchange.exchange_type?.toUpperCase() ||
                         getShortName(exchange.name)}
-                      <span className="text-[10px] text-fg-3 ml-2 border border-line px-1 rounded">
+                      <span className="text-[11px] font-normal text-fg-3 ml-2 border border-line px-1 rounded">
                         {exchange.account_name || t('defaultAccount', language)}
                       </span>
                     </div>
-                    <div className="text-[10px] text-fg-3 font-mono flex items-center gap-2">
+                    <div className="text-[11px] text-fg-3 flex items-center gap-2">
                       {exchange.type?.toUpperCase() || 'CEX'}
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-mono">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
                       <span
-                        className={`rounded border px-1.5 py-0.5 ${stateMeta.className}`}
+                        className={`rounded border px-1.5 py-0.5 ${state?.status === 'ok' ? 'num' : ''} ${stateMeta.className}`}
                       >
                         {isExchangeAccountStatesLoading && !state
                           ? language === 'zh'
                             ? '检查中...'
-                            : 'CHECKING...'
+                            : 'Checking...'
                           : stateMeta.label}
                       </span>
                       {state?.status !== 'ok' && state?.error_message ? (
