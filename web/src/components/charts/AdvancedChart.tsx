@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   createChart,
   IChartApi,
+  IPriceLine,
   ISeriesApi,
   Time,
   UTCTimestamp,
@@ -19,8 +20,11 @@ import {
   calculateBollingerBands,
   type Kline,
 } from '../../utils/indicators'
-import { Settings, BarChart2 } from 'lucide-react'
-import { getChartTheme, useThemeVersion } from '../../lib/chartTheme'
+import { AlertTriangle, BarChart2, Settings, X } from 'lucide-react'
+import { useThemeVersion, type ChartTheme } from '../../lib/chartTheme'
+import { getCandleChartTheme } from './candleTheme'
+import { Badge, Button, formatSigned } from '../ui'
+import { cn } from '../../lib/cn'
 
 // Order marker interface
 interface OrderMarker {
@@ -45,6 +49,10 @@ interface OpenOrder {
   quantity: number
   status: string
 }
+
+// Colour role of an open-order price line: stop loss = down, take profit = up,
+// anything else (limit) = brand
+type PriceLineTone = 'up' | 'down' | 'brand'
 
 interface AdvancedChartProps {
   symbol: string
@@ -122,6 +130,15 @@ const priceAxisPrecision = (value: number | undefined): number => {
   return 6
 }
 
+// Volume histogram: one bar per candle, coloured by candle direction. Colours
+// are baked into each bar, so the histogram is rebuilt when the theme changes.
+const buildVolumeData = (klines: Kline[], th: ChartTheme) =>
+  klines.map((k: Kline) => ({
+    time: k.time as Time,
+    value: k.volume || 0,
+    color: k.close >= k.open ? th.volumeUp : th.volumeDown,
+  }))
+
 // mergeKlines folds a freshly fetched tail into the loaded history: bars with
 // a known time replace the stored bar (the forming candle updates), newer bars
 // append. Both inputs are ascending by time.
@@ -159,7 +176,9 @@ export function AdvancedChart({
   const klineDataRef = useRef<
     Map<number, { volume: number; quoteVolume: number }>
   >(new Map()) // Store kline extra data
-  const priceLinesRef = useRef<any[]>([]) // Store open order price lines
+  const priceLinesRef = useRef<
+    Array<{ line: IPriceLine; tone: PriceLineTone }>
+  >([]) // Store open order price lines
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -449,7 +468,7 @@ export function AdvancedChart({
   useEffect(() => {
     if (!chartContainerRef.current) return
 
-    const th = getChartTheme()
+    const th = getCandleChartTheme()
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth || 800,
       height: chartContainerRef.current.clientHeight || height,
@@ -529,7 +548,7 @@ export function AdvancedChart({
 
     chartRef.current = chart
 
-    // Create candlestick series
+    // Create candlestick series — solid up / down bodies and wicks
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor: th.up,
       downColor: th.down,
@@ -613,11 +632,13 @@ export function AdvancedChart({
     }
   }, []) // Chart is created once, ResizeObserver handles dimension changes
 
-  // Re-apply colors when the app theme (dark/light) changes
+  // Re-apply colours when the app theme (dark/light) changes. Only options and
+  // colours are touched here: klines, indicators and order markers are
+  // recoloured from memory, so a theme toggle does not refetch anything.
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    const th = getChartTheme()
+    const th = getCandleChartTheme()
     chart.applyOptions({
       layout: { background: { color: th.background }, textColor: th.text },
       grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
@@ -642,6 +663,34 @@ export function AdvancedChart({
       wickUpColor: th.up,
       wickDownColor: th.down,
     })
+
+    // Volume bars carry per-bar colours: rebuild them from the loaded klines
+    const volumeEnabled = indicators.find((i) => i.id === 'volume')?.enabled
+    if (
+      volumeSeriesRef.current &&
+      volumeEnabled &&
+      klineListRef.current.length > 0
+    ) {
+      volumeSeriesRef.current.setData(buildVolumeData(klineListRef.current, th))
+    }
+
+    // Open-order price lines keep their role (SL / TP / limit)
+    priceLinesRef.current.forEach(({ line, tone }) => {
+      line.applyOptions({ color: th[tone] })
+    })
+
+    // Order markers: buy sits below its bar (up), sell above its bar (down)
+    if (currentMarkersDataRef.current.length > 0) {
+      currentMarkersDataRef.current = currentMarkersDataRef.current.map(
+        (m) => ({
+          ...m,
+          color: m.position === 'belowBar' ? th.up : th.down,
+        })
+      )
+      seriesMarkersRef.current?.setMarkers(
+        showOrderMarkers ? currentMarkersDataRef.current : []
+      )
+    }
   }, [themeVersion])
 
   // Load data and indicators
@@ -740,14 +789,9 @@ export function AdvancedChart({
             (i) => i.id === 'volume'
           )?.enabled
           if (volumeEnabled) {
-            const volTheme = getChartTheme()
-            const volumeData = klineData.map((k: Kline) => ({
-              time: k.time,
-              value: k.volume || 0,
-              color:
-                k.close >= k.open ? volTheme.volumeUp : volTheme.volumeDown,
-            }))
-            volumeSeriesRef.current.setData(volumeData)
+            volumeSeriesRef.current.setData(
+              buildVolumeData(klineData, getCandleChartTheme())
+            )
           } else {
             // Clear data when volume is disabled
             volumeSeriesRef.current.setData([])
@@ -841,7 +885,7 @@ export function AdvancedChart({
                 markers.push({
                   time: candleTime as Time,
                   position: 'belowBar' as const,
-                  color: getChartTheme().up,
+                  color: getCandleChartTheme().up,
                   shape: 'circle' as const,
                   text: counts.buys > 1 ? `B${counts.buys}` : 'B',
                   size: 1,
@@ -852,7 +896,7 @@ export function AdvancedChart({
                 markers.push({
                   time: candleTime as Time,
                   position: 'aboveBar' as const,
-                  color: getChartTheme().down,
+                  color: getCandleChartTheme().down,
                   shape: 'circle' as const,
                   text: counts.sells > 1 ? `S${counts.sells}` : 'S',
                   size: 1,
@@ -927,7 +971,7 @@ export function AdvancedChart({
       loadData(true)
     }, 5000)
     return () => clearInterval(refreshInterval)
-  }, [symbol, interval, traderID, exchange, themeVersion])
+  }, [symbol, interval, traderID, exchange])
 
   // Refresh open order price lines separately (every 60s, avoid frequent exchange API calls)
   useEffect(() => {
@@ -937,7 +981,7 @@ export function AdvancedChart({
     const loadOpenOrders = async () => {
       try {
         // Clear old price lines first
-        priceLinesRef.current.forEach((line) => {
+        priceLinesRef.current.forEach(({ line }) => {
           try {
             candlestickSeriesRef.current?.removePriceLine(line)
           } catch (e) {
@@ -963,19 +1007,18 @@ export function AdvancedChart({
             const isLimit = order.type === 'LIMIT'
 
             // Set price line style
-            const lineTheme = getChartTheme()
-            let lineColor = lineTheme.brand // Default yellow
+            let tone: PriceLineTone = 'brand' // Default yellow
             const lineStyle = 2 // dashed
             let title = ''
 
             if (isStopLoss) {
-              lineColor = lineTheme.down // red - stop loss
+              tone = 'down' // red - stop loss
               title = `SL ${order.quantity}`
             } else if (isTakeProfit) {
-              lineColor = lineTheme.up // green - take profit
+              tone = 'up' // green - take profit
               title = `TP ${order.quantity}`
             } else if (isLimit) {
-              lineColor = lineTheme.brand // yellow - limit order
+              tone = 'brand' // yellow - limit order
               title = `Limit ${order.side} ${order.quantity}`
             } else {
               title = `${order.type} ${order.quantity}`
@@ -983,7 +1026,7 @@ export function AdvancedChart({
 
             const priceLine = candlestickSeriesRef.current?.createPriceLine({
               price: linePrice,
-              color: lineColor,
+              color: getCandleChartTheme()[tone],
               lineWidth: 1,
               lineStyle: lineStyle,
               axisLabelVisible: true,
@@ -991,7 +1034,7 @@ export function AdvancedChart({
             })
 
             if (priceLine) {
-              priceLinesRef.current.push(priceLine)
+              priceLinesRef.current.push({ line: priceLine, tone })
             }
           })
         }
@@ -1010,7 +1053,7 @@ export function AdvancedChart({
       clearTimeout(initialTimeout)
       clearInterval(openOrdersInterval)
     }
-  }, [symbol, traderID, themeVersion])
+  }, [symbol, traderID])
 
   // Handle order marker show/hide separately to avoid reloading data
   useEffect(() => {
@@ -1123,59 +1166,30 @@ export function AdvancedChart({
       : null)
 
   return (
-    <div
-      className="relative shadow-xl"
-      style={{
-        background:
-          'linear-gradient(180deg, var(--surface-2) 0%, var(--surface-2) 100%)',
-        borderRadius: '12px',
-        overflow: 'hidden',
-        border: '1px solid var(--line)',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      {/* Compact Professional Header */}
-      <div
-        className="flex items-center justify-between px-4 py-2"
-        style={{
-          borderBottom: '1px solid var(--line)',
-          background: 'var(--surface-2)',
-          flexShrink: 0,
-        }}
-      >
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-surface">
+      {/* Compact header: symbol + price on the left, chart toggles on the right */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-line bg-surface-2 px-3 py-1.5">
         {/* Left: Symbol Info + Price */}
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           {/* Symbol & Interval */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-fg">{symbol}</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-line text-fg-3">
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-sm font-semibold text-fg">{symbol}</span>
+            <Badge variant="neutral" size="xs">
               {interval}
-            </span>
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase"
-              style={{
-                background:
-                  exchange === 'hyperliquid'
-                    ? 'rgba(80, 227, 194, 0.1)'
-                    : 'rgba(243, 186, 47, 0.1)',
-                color: exchange === 'hyperliquid' ? '#50E3C2' : '#F3BA2F',
-              }}
-            >
+            </Badge>
+            <Badge variant="neutral" size="xs" className="uppercase">
               {exchange?.toUpperCase()}
-            </span>
+            </Badge>
           </div>
 
           {/* Price Display */}
           {marketStats && (
-            <div className="flex items-center gap-3 pl-3 border-l border-line">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 sm:border-l sm:border-line sm:pl-3">
               <span
-                className="text-base font-bold tabular-nums"
-                style={{
-                  color:
-                    marketStats.priceChange >= 0 ? 'var(--up)' : 'var(--down)',
-                }}
+                className={cn(
+                  'num text-base font-semibold',
+                  marketStats.priceChange >= 0 ? 'text-up' : 'text-down'
+                )}
               >
                 {marketStats.price.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
@@ -1183,39 +1197,31 @@ export function AdvancedChart({
                     exchange === 'forex' || exchange === 'metals' ? 4 : 2,
                 })}
               </span>
-              <span
-                className="text-xs font-medium px-1.5 py-0.5 rounded tabular-nums"
-                style={{
-                  background:
-                    marketStats.priceChange >= 0
-                      ? 'var(--up-soft)'
-                      : 'var(--down-soft)',
-                  color:
-                    marketStats.priceChange >= 0 ? 'var(--up)' : 'var(--down)',
-                }}
+              <Badge
+                variant={marketStats.priceChange >= 0 ? 'up' : 'down'}
+                className="num"
               >
-                {marketStats.priceChange >= 0 ? '+' : ''}
-                {marketStats.priceChangePercent.toFixed(2)}%
-              </span>
+                {formatSigned(marketStats.priceChangePercent, { suffix: '%' })}
+              </Badge>
 
               {/* Compact H/L */}
               <div className="flex items-center gap-2 text-[11px] text-fg-3">
                 <span>
                   H{' '}
-                  <span className="text-fg-2">
+                  <span className="num text-fg-2">
                     {marketStats.high.toFixed(2)}
                   </span>
                 </span>
                 <span>
                   L{' '}
-                  <span className="text-fg-2">
+                  <span className="num text-fg-2">
                     {marketStats.low.toFixed(2)}
                   </span>
                 </span>
                 {marketStats.volume > 0 && baseUnit && (
                   <span>
                     Vol{' '}
-                    <span className="text-fg-2">
+                    <span className="num text-fg-2">
                       {formatVolume(marketStats.volume)}
                     </span>
                   </span>
@@ -1226,172 +1232,139 @@ export function AdvancedChart({
         </div>
 
         {/* Right: Controls */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           {loading && (
-            <span className="text-[10px] text-yellow-400 animate-pulse mr-2">
+            <span className="mr-1 animate-pulse text-[11px] text-fg-3">
               {t('advancedChart.updating', language)}
             </span>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowIndicatorPanel(!showIndicatorPanel)}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-all"
-            style={{
-              background: showIndicatorPanel
-                ? 'var(--info-soft)'
-                : 'transparent',
-              color: showIndicatorPanel ? 'var(--info)' : 'var(--fg-3)',
-            }}
+            className={cn(
+              'h-6 gap-1 px-2 text-[11px]',
+              showIndicatorPanel && 'bg-info-soft text-info'
+            )}
           >
-            <Settings className="w-3 h-3" />
+            <Settings className="h-3 w-3" />
             <span>{t('advancedChart.indicators', language)}</span>
-          </button>
+          </Button>
 
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowOrderMarkers(!showOrderMarkers)}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-all"
-            style={{
-              background: showOrderMarkers ? 'var(--up-soft)' : 'transparent',
-              color: showOrderMarkers ? 'var(--up)' : 'var(--fg-3)',
-            }}
+            className={cn(
+              'h-6 px-2 text-[11px]',
+              showOrderMarkers && 'bg-up-soft text-up'
+            )}
             title={t('advancedChart.orderMarkers', language)}
           >
             <span>B/S</span>
-          </button>
+          </Button>
         </div>
       </div>
 
-      {/* Indicator panel - professional design */}
+      {/* Indicator panel */}
       {showIndicatorPanel && (
-        <div
-          className="absolute top-16 right-4 z-10 rounded-lg shadow-2xl "
-          style={{
-            background:
-              'linear-gradient(135deg, var(--surface-hover) 0%, var(--surface-2) 100%)',
-            border:
-              '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
-            maxHeight: '500px',
-            minWidth: '280px',
-            overflowY: 'auto',
-          }}
-        >
+        <div className="absolute right-3 top-12 z-20 max-h-[500px] min-w-[260px] overflow-y-auto rounded-lg border border-line bg-surface shadow-pop">
           {/* Title bar */}
-          <div
-            className="flex items-center justify-between px-4 py-3 border-b"
-            style={{ borderColor: 'var(--line)' }}
-          >
+          <div className="flex items-center justify-between border-b border-line px-3 py-2.5">
             <div className="flex items-center gap-2">
-              <BarChart2 className="w-4 h-4 text-yellow-400" />
-              <h4 className="text-sm font-bold text-fg">
+              <BarChart2 className="h-4 w-4 text-brand" />
+              <h4 className="text-sm font-semibold text-fg">
                 {t('advancedChart.technicalIndicators', language)}
               </h4>
             </div>
             <button
               onClick={() => setShowIndicatorPanel(false)}
-              className="text-fg-3 hover:text-fg transition-colors"
+              className="text-fg-3 transition-colors hover:text-fg"
             >
-              <span className="text-lg">×</span>
+              <X className="h-4 w-4" />
             </button>
           </div>
 
           {/* Indicator list */}
-          <div className="p-3 space-y-1">
+          <div className="space-y-0.5 p-2">
             {indicators.map((indicator) => (
               <label
                 key={indicator.id}
-                className="flex items-center gap-3 p-2.5 rounded-md hover:bg-fg/5 cursor-pointer transition-all group"
+                className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-surface-hover"
               >
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    checked={indicator.enabled}
-                    onChange={() => toggleIndicator(indicator.id)}
-                    className="w-4 h-4 rounded border-line-strong text-yellow-500 focus:ring-2 focus:ring-yellow-500/50"
-                  />
-                </div>
-                <div
-                  className="w-8 h-3 rounded-sm border border-nofx-line"
+                <input
+                  type="checkbox"
+                  checked={indicator.enabled}
+                  onChange={() => toggleIndicator(indicator.id)}
+                  className="h-4 w-4 cursor-pointer rounded border-line-strong accent-brand"
+                />
+                <span
+                  className="h-3 w-8 rounded-sm border border-line"
                   style={{ backgroundColor: indicator.color }}
-                ></div>
-                <span className="text-sm text-fg-2 group-hover:text-fg transition-colors flex-1">
+                />
+                <span className="flex-1 text-sm text-fg-2 transition-colors group-hover:text-fg">
                   {indicator.name}
                 </span>
                 {indicator.enabled && (
-                  <span className="text-xs text-yellow-400">●</span>
+                  <span className="text-xs text-brand">●</span>
                 )}
               </label>
             ))}
           </div>
 
           {/* Bottom hint */}
-          <div
-            className="px-4 py-2 text-xs text-fg-3 border-t"
-            style={{ borderColor: 'var(--line)' }}
-          >
+          <div className="border-t border-line px-3 py-2 text-xs text-fg-3">
             {t('advancedChart.clickToToggle', language)}
           </div>
         </div>
       )}
 
       {/* Chart container */}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <div
-          ref={chartContainerRef}
-          style={{ height: '100%', width: '100%' }}
-        />
+      <div className="relative min-h-0 flex-1">
+        <div ref={chartContainerRef} className="h-full w-full" />
 
         {/* TradingView-style OHLC legend (always visible, follows crosshair) */}
         {legend && (
-          <div
-            style={{
-              position: 'absolute',
-              left: '12px',
-              top: '8px',
-              pointerEvents: 'none',
-              userSelect: 'none',
-              zIndex: 10,
-              fontSize: '12px',
-              lineHeight: '18px',
-            }}
-          >
-            <div style={{ color: 'var(--fg)', fontWeight: 500 }}>
+          <div className="pointer-events-none absolute left-3 top-2 z-10 select-none text-xs leading-[18px]">
+            <div className="font-medium text-fg">
               {symbol.replace(/USDT$/, '')} · {interval} ·{' '}
               {exchange?.toUpperCase()}
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 8px' }}>
+            <div className="flex flex-wrap gap-x-2">
               {(() => {
                 const bull = legend.close >= legend.open
-                const c = bull ? 'var(--up)' : 'var(--down)'
+                const c = bull ? 'text-up' : 'text-down'
                 const oLabel = language === 'zh' ? '开' : 'O'
                 const hLabel = language === 'zh' ? '高' : 'H'
                 const lLabel = language === 'zh' ? '低' : 'L'
                 const cLabel = language === 'zh' ? '收' : 'C'
                 return (
                   <>
-                    <span style={{ color: c }}>
+                    <span className={cn('num', c)}>
                       {oLabel}={formatLegendPrice(legend.open)}
                     </span>
-                    <span style={{ color: c }}>
+                    <span className={cn('num', c)}>
                       {hLabel}={formatLegendPrice(legend.high)}
                     </span>
-                    <span style={{ color: c }}>
+                    <span className={cn('num', c)}>
                       {lLabel}={formatLegendPrice(legend.low)}
                     </span>
-                    <span style={{ color: c }}>
+                    <span className={cn('num', c)}>
                       {cLabel}={formatLegendPrice(legend.close)}
                     </span>
-                    <span style={{ color: c }}>
+                    <span className={cn('num', c)}>
                       {legend.change >= 0 ? '+' : ''}
                       {formatLegendPrice(legend.change)} (
                       {legend.changePercent >= 0 ? '+' : ''}
                       {legend.changePercent.toFixed(2)}%)
                     </span>
                     {legend.volume > 0 && baseUnit && (
-                      <span style={{ color: 'var(--fg-3)' }}>
+                      <span className="num text-fg-3">
                         V({baseUnit}) {formatVolume(legend.volume)}
                       </span>
                     )}
                     {legend.quoteVolume > 0 && quoteUnit && (
-                      <span style={{ color: 'var(--fg-3)' }}>
+                      <span className="num text-fg-3">
                         V({quoteUnit}) {formatVolume(legend.quoteVolume)}
                       </span>
                     )}
@@ -1403,28 +1376,8 @@ export function AdvancedChart({
         )}
 
         {/* NOFX watermark */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '20%',
-            right: '5%',
-            pointerEvents: 'none',
-            userSelect: 'none',
-            zIndex: 1,
-          }}
-        >
-          <div
-            style={{
-              fontSize: '56px',
-              fontWeight: '700',
-              color: 'color-mix(in srgb, var(--brand) 12%, transparent)',
-              letterSpacing: '4px',
-              fontFamily:
-                'system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-              textShadow:
-                '0 2px 30px color-mix(in srgb, var(--brand) 20%, transparent)',
-            }}
-          >
+        <div className="pointer-events-none absolute bottom-[20%] right-[5%] z-[1] select-none">
+          <div className="text-[56px] font-bold tracking-[4px] text-brand/[0.12]">
             NOFX
           </div>
         </div>
@@ -1432,15 +1385,10 @@ export function AdvancedChart({
 
       {/* Error message */}
       {error && (
-        <div
-          className="absolute inset-0 flex items-center justify-center"
-          style={{
-            background: 'color-mix(in srgb, var(--surface) 90%, transparent)',
-          }}
-        >
+        <div className="absolute inset-0 flex items-center justify-center bg-surface/90">
           <div className="text-center">
-            <div className="text-2xl mb-2">⚠️</div>
-            <div style={{ color: 'var(--down)' }}>{error}</div>
+            <AlertTriangle className="mx-auto mb-2 h-6 w-6 text-down" />
+            <div className="text-sm text-down">{error}</div>
           </div>
         </div>
       )}

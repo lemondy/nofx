@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   LineChart,
   Line,
@@ -22,6 +22,15 @@ import {
   TrendingUp as ArrowUp,
   TrendingDown as ArrowDown,
 } from 'lucide-react'
+import { cn } from '../../lib/cn'
+import {
+  Card,
+  EmptyState,
+  NofxSelect,
+  Segmented,
+  Skeleton,
+  formatSigned,
+} from '../ui'
 
 interface EquityPoint {
   timestamp: string
@@ -36,10 +45,12 @@ interface EquityChartProps {
   embedded?: boolean // 嵌入模式（不显示外层卡片）
 }
 
+type DisplayMode = 'dollar' | 'percent'
+
 export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
   const { language } = useLanguage()
   const { user, token } = useAuth()
-  const [displayMode, setDisplayMode] = useState<'dollar' | 'percent'>('dollar')
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('dollar')
   // 时间范围选择（周期数切片，数据仍在内存里 — 纯展示层过滤）
   const [range, setRange] = useState<number | 'all'>(2000)
 
@@ -67,74 +78,62 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
     }
   )
 
+  // 外层容器: 嵌入模式(ChartTabs 内)不加卡片外观
+  const frame = (children: ReactNode, animate = false) =>
+    embedded ? (
+      <div className="p-3 sm:p-4">{children}</div>
+    ) : (
+      <Card className={cn('p-3 sm:p-4', animate && 'animate-fade-in')}>
+        {children}
+      </Card>
+    )
+
   // Loading state - show skeleton
   if (isLoading) {
-    return (
-      <div className={embedded ? 'p-6' : 'binance-card p-6'}>
+    return frame(
+      <>
         {!embedded && (
-          <h3
-            className="text-lg font-semibold mb-6"
-            style={{ color: 'var(--fg)' }}
-          >
+          <h3 className="mb-4 text-sm font-semibold text-fg sm:text-base">
             {t('accountEquityCurve', language)}
           </h3>
         )}
-        <div className="animate-pulse">
-          <div className="skeleton h-64 w-full rounded"></div>
-        </div>
-      </div>
+        <Skeleton className="h-64 w-full" />
+      </>
     )
   }
 
   if (error) {
-    return (
-      <div className={embedded ? 'p-6' : 'binance-card p-6'}>
-        <div
-          className="flex items-center gap-3 p-4 rounded"
-          style={{
-            background: 'var(--down-soft)',
-            border:
-              '1px solid color-mix(in srgb, var(--down) 20%, transparent)',
-          }}
-        >
-          <AlertTriangle className="w-6 h-6" style={{ color: 'var(--down)' }} />
-          <div>
-            <div className="font-semibold" style={{ color: 'var(--down)' }}>
-              {t('loadingError', language)}
-            </div>
-            <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
-              {error.message}
-            </div>
+    return frame(
+      <div className="flex items-center gap-3 rounded-md border border-down/20 bg-down-soft p-3">
+        <AlertTriangle className="h-5 w-5 shrink-0 text-down" />
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-down">
+            {t('loadingError', language)}
           </div>
+          <div className="text-xs text-fg-3">{error.message}</div>
         </div>
       </div>
     )
   }
 
-  // 过滤掉无效数据：total_equity为0或小于1的数据点（API失败导致）
+  // 过滤掉无效数据点：total_equity为0或小于1的数据点（API失败导致）
   const validHistory = history?.filter((point) => point.total_equity > 1) || []
 
   if (!validHistory || validHistory.length === 0) {
-    return (
-      <div className={embedded ? 'p-6' : 'binance-card p-6'}>
+    return frame(
+      <>
         {!embedded && (
-          <h3
-            className="text-lg font-semibold mb-6"
-            style={{ color: 'var(--fg)' }}
-          >
+          <h3 className="mb-4 text-sm font-semibold text-fg sm:text-base">
             {t('accountEquityCurve', language)}
           </h3>
         )}
-        <div className="text-center py-16" style={{ color: 'var(--fg-3)' }}>
-          <div className="mb-4 flex justify-center opacity-50">
-            <BarChart3 className="w-16 h-16" />
-          </div>
-          <div className="text-lg font-semibold mb-2">
-            {t('noHistoricalData', language)}
-          </div>
-          <div className="text-sm">{t('dataWillAppear', language)}</div>
-        </div>
-      </div>
+        <EmptyState
+          icon={<BarChart3 className="h-10 w-10" />}
+          title={t('noHistoricalData', language)}
+          description={t('dataWillAppear', language)}
+          className="py-12"
+        />
+      </>
     )
   }
 
@@ -226,26 +225,21 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
     if (active && payload && payload.length) {
       const data = payload[0].payload
       return (
-        <div
-          className="rounded p-3 shadow-xl"
-          style={{
-            background: 'var(--surface-hover)',
-            border: '1px solid var(--line)',
-          }}
-        >
-          <div className="text-xs mb-1" style={{ color: 'var(--fg-3)' }}>
+        <div className="rounded-md border border-line bg-surface p-2.5 shadow-pop">
+          <div className="mb-1 text-xs text-fg-3">
             Cycle #{data.cycle != null ? data.cycle : '—'}
           </div>
-          <div className="font-bold mono" style={{ color: 'var(--fg)' }}>
+          <div className="num font-semibold text-fg">
             {data.raw_equity.toFixed(2)} USDT
           </div>
           <div
-            className="text-sm mono font-bold"
-            style={{ color: data.raw_pnl >= 0 ? 'var(--up)' : 'var(--down)' }}
+            className={cn(
+              'num text-sm font-semibold',
+              data.raw_pnl >= 0 ? 'text-up' : 'text-down'
+            )}
           >
-            {data.raw_pnl >= 0 ? '+' : ''}
-            {data.raw_pnl.toFixed(2)} USDT ({data.raw_pnl_pct >= 0 ? '+' : ''}
-            {data.raw_pnl_pct}%)
+            {formatSigned(data.raw_pnl, { suffix: ' USDT' })} (
+            {formatSigned(data.raw_pnl_pct, { suffix: '%' })})
           </div>
         </div>
       )
@@ -253,157 +247,76 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
     return null
   }
 
-  return (
-    <div
-      className={
-        embedded ? 'p-3 sm:p-5' : 'binance-card p-3 sm:p-5 animate-fade-in'
-      }
-    >
+  return frame(
+    <>
       {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-        <div className="flex-1">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1">
           {!embedded && (
-            <h3
-              className="text-base sm:text-lg font-bold mb-2"
-              style={{ color: 'var(--fg)' }}
-            >
+            <h3 className="mb-1.5 text-sm font-semibold text-fg sm:text-base">
               {t('accountEquityCurve', language)}
             </h3>
           )}
-          <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-4">
-            <span
-              className="text-2xl sm:text-3xl font-bold mono"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-baseline sm:gap-3">
+            <span className="num text-2xl font-semibold text-fg sm:text-[28px]">
               {account?.total_equity.toFixed(2) || '0.00'}
-              <span
-                className="text-base sm:text-lg ml-1"
-                style={{ color: 'var(--fg-3)' }}
-              >
-                USDT
-              </span>
+              <span className="ml-1 text-sm font-normal text-fg-3">USDT</span>
             </span>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex flex-wrap items-center gap-2">
               <span
-                className="text-sm sm:text-lg font-bold mono px-2 sm:px-3 py-1 rounded flex items-center gap-1"
-                style={{
-                  color: isProfit ? 'var(--up)' : 'var(--down)',
-                  background: isProfit ? 'var(--up-soft)' : 'var(--down-soft)',
-                  border: `1px solid ${
-                    isProfit
-                      ? 'color-mix(in srgb, var(--up) 20%, transparent)'
-                      : 'color-mix(in srgb, var(--down) 20%, transparent)'
-                  }`,
-                }}
+                className={cn(
+                  'num inline-flex items-center gap-1 rounded px-2 py-0.5 text-sm font-semibold',
+                  isProfit ? 'bg-up-soft text-up' : 'bg-down-soft text-down'
+                )}
               >
                 {isProfit ? (
-                  <ArrowUp className="w-4 h-4" />
+                  <ArrowUp className="h-3.5 w-3.5" />
                 ) : (
-                  <ArrowDown className="w-4 h-4" />
+                  <ArrowDown className="h-3.5 w-3.5" />
                 )}
-                {isProfit ? '+' : ''}
-                {currentValue.raw_pnl_pct}%
+                {formatSigned(currentValue.raw_pnl_pct, { suffix: '%' })}
               </span>
-              <span
-                className="text-xs sm:text-sm mono"
-                style={{ color: 'var(--fg-3)' }}
-              >
-                ({isProfit ? '+' : ''}
-                {currentValue.raw_pnl.toFixed(2)} USDT)
+              <span className="num text-xs text-fg-3">
+                ({formatSigned(currentValue.raw_pnl, { suffix: ' USDT' })})
               </span>
             </div>
           </div>
         </div>
 
         {/* Display Mode Toggle */}
-        <div
-          className="flex gap-0.5 sm:gap-1 rounded p-0.5 sm:p-1 self-start sm:self-auto"
-          style={{
-            background: 'var(--surface-2)',
-            border: '1px solid var(--line)',
-          }}
-        >
-          <button
-            onClick={() => setDisplayMode('dollar')}
-            className="px-3 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-bold transition-all flex items-center gap-1"
-            style={
-              displayMode === 'dollar'
-                ? {
-                    background: 'var(--brand)',
-                    color: 'var(--brand-fg)',
-                    boxShadow:
-                      '0 2px 8px color-mix(in srgb, var(--brand) 40%, transparent)',
-                  }
-                : { background: 'transparent', color: 'var(--fg-3)' }
-            }
-          >
-            <DollarSign className="w-4 h-4" /> USDT
-          </button>
-          <button
-            onClick={() => setDisplayMode('percent')}
-            className="px-3 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-bold transition-all flex items-center gap-1"
-            style={
-              displayMode === 'percent'
-                ? {
-                    background: 'var(--brand)',
-                    color: 'var(--brand-fg)',
-                    boxShadow:
-                      '0 2px 8px color-mix(in srgb, var(--brand) 40%, transparent)',
-                  }
-                : { background: 'transparent', color: 'var(--fg-3)' }
-            }
-          >
-            <Percent className="w-4 h-4" />
-          </button>
-        </div>
+        <Segmented
+          value={displayMode}
+          onChange={setDisplayMode}
+          className="self-start sm:self-auto"
+          items={[
+            {
+              key: 'dollar',
+              label: 'USDT',
+              icon: <DollarSign className="h-3.5 w-3.5" />,
+            },
+            {
+              key: 'percent',
+              label: <Percent className="h-3.5 w-3.5" />,
+            },
+          ]}
+        />
 
         {/* Time Range Selector（下拉：支持比预设更短的周期范围） */}
-        <select
+        <NofxSelect
           value={String(range)}
-          onChange={(e) =>
-            setRange(e.target.value === 'all' ? 'all' : Number(e.target.value))
-          }
-          className="px-3 py-2 rounded text-xs sm:text-sm font-bold self-start sm:self-auto"
-          style={{
-            background: 'var(--surface-2)',
-            border: '1px solid var(--line)',
-            color: 'var(--fg)',
-          }}
-          title={
-            language === 'zh' ? '显示范围（周期数）' : 'Display range (cycles)'
-          }
-        >
-          {RANGE_OPTIONS.map((opt) => (
-            <option key={String(opt.value)} value={String(opt.value)}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          onChange={(val) => setRange(val === 'all' ? 'all' : Number(val))}
+          options={RANGE_OPTIONS.map((opt) => ({
+            value: String(opt.value),
+            label: opt.label,
+          }))}
+          className="h-8 min-w-[120px] self-start rounded-md border border-line bg-surface-2 px-2.5 text-xs font-semibold text-fg transition-colors hover:border-line-strong sm:self-auto"
+        />
       </div>
 
       {/* Chart */}
-      <div
-        className="my-2"
-        style={{
-          borderRadius: '8px',
-          overflow: 'hidden',
-          position: 'relative',
-        }}
-      >
+      <div className="relative my-2 overflow-hidden rounded-md">
         {/* NOFX Watermark */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '15px',
-            right: '15px',
-            fontSize: '20px',
-            fontWeight: 'bold',
-            color: 'color-mix(in srgb, var(--brand) 15%, transparent)',
-            zIndex: 10,
-            pointerEvents: 'none',
-            fontFamily: 'monospace',
-          }}
-        >
+        <div className="pointer-events-none absolute right-4 top-4 z-10 font-num text-xl font-bold text-brand/15">
           NOFX
         </div>
         <ResponsiveContainer width="100%" height={280}>
@@ -417,10 +330,14 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
                 <stop offset="95%" stopColor="var(--brand)" stopOpacity={0.2} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="var(--line)"
+              strokeOpacity={0.6}
+            />
             <XAxis
               dataKey="time"
-              stroke="var(--fg-3)"
+              stroke="var(--line)"
               tick={{ fill: 'var(--fg-3)', fontSize: 11 }}
               tickLine={{ stroke: 'var(--line)' }}
               interval={Math.floor(chartData.length / 10)}
@@ -429,7 +346,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               height={60}
             />
             <YAxis
-              stroke="var(--fg-3)"
+              stroke="var(--line)"
               tick={{ fill: 'var(--fg-3)', fontSize: 12 }}
               tickLine={{ stroke: 'var(--line)' }}
               domain={calculateYDomain()}
@@ -437,10 +354,13 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
                 displayMode === 'dollar' ? `$${value.toFixed(0)}` : `${value}%`
               }
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip
+              content={<CustomTooltip />}
+              cursor={{ stroke: 'var(--line-strong)', strokeDasharray: '3 3' }}
+            />
             <ReferenceLine
               y={displayMode === 'dollar' ? initialBalance : 0}
-              stroke="var(--line)"
+              stroke="var(--line-strong)"
               strokeDasharray="3 3"
               label={{
                 value:
@@ -472,89 +392,39 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
       </div>
 
       {/* Footer Stats */}
-      <div
-        className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 pt-3"
-        style={{ borderTop: '1px solid var(--line)' }}
-      >
-        <div
-          className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{
-            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: 'var(--fg-3)' }}
-          >
-            {t('initialBalance', language)}
+      <div className="mt-3 grid grid-cols-2 gap-2 border-t border-line pt-3 sm:grid-cols-4">
+        {[
+          {
+            label: t('initialBalance', language),
+            value: `${initialBalance.toFixed(2)} USDT`,
+          },
+          {
+            label: t('currentEquity', language),
+            value: `${currentValue.raw_equity.toFixed(2)} USDT`,
+          },
+          {
+            label: t('historicalCycles', language),
+            value: `${validHistory.length} ${t('cycles', language)}`,
+          },
+          {
+            label: t('displayRange', language),
+            value:
+              range === 'all'
+                ? t('allData', language)
+                : `${t('recent', language)} ${range}`,
+          },
+        ].map((item) => (
+          <div key={item.label} className="rounded-md bg-surface-2 p-2">
+            <div className="text-[11px] uppercase tracking-wider text-fg-3">
+              {item.label}
+            </div>
+            <div className="num mt-0.5 text-xs font-semibold text-fg sm:text-sm">
+              {item.value}
+            </div>
           </div>
-          <div
-            className="text-xs sm:text-sm font-bold mono"
-            style={{ color: 'var(--fg)' }}
-          >
-            {initialBalance.toFixed(2)} USDT
-          </div>
-        </div>
-        <div
-          className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{
-            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: 'var(--fg-3)' }}
-          >
-            {t('currentEquity', language)}
-          </div>
-          <div
-            className="text-xs sm:text-sm font-bold mono"
-            style={{ color: 'var(--fg)' }}
-          >
-            {currentValue.raw_equity.toFixed(2)} USDT
-          </div>
-        </div>
-        <div
-          className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{
-            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: 'var(--fg-3)' }}
-          >
-            {t('historicalCycles', language)}
-          </div>
-          <div
-            className="text-xs sm:text-sm font-bold mono"
-            style={{ color: 'var(--fg)' }}
-          >
-            {validHistory.length} {t('cycles', language)}
-          </div>
-        </div>
-        <div
-          className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{
-            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: 'var(--fg-3)' }}
-          >
-            {t('displayRange', language)}
-          </div>
-          <div
-            className="text-xs sm:text-sm font-bold mono"
-            style={{ color: 'var(--fg)' }}
-          >
-            {range === 'all'
-              ? t('allData', language)
-              : `${t('recent', language)} ${range}`}
-          </div>
-        </div>
+        ))}
       </div>
-    </div>
+    </>,
+    true
   )
 }

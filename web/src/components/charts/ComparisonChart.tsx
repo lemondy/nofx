@@ -18,6 +18,8 @@ import { getTraderColor } from '../../utils/traderColors'
 import { useLanguage } from '../../contexts/LanguageContext'
 import { t } from '../../i18n/translations'
 import { BarChart3, TrendingUp, TrendingDown, Zap } from 'lucide-react'
+import { cn } from '../../lib/cn'
+import { Change, EmptyState, Segmented, formatSigned } from '../ui'
 
 // Time period options: 1D, 3D, 7D, 30D, All
 const TIME_PERIODS = [
@@ -213,22 +215,10 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <div className="relative">
-          <div
-            className="w-16 h-16 border-4 border-t-transparent rounded-full animate-spin"
-            style={{
-              borderColor: 'var(--brand)',
-              borderTopColor: 'transparent',
-            }}
-          />
-          <TrendingUp
-            className="w-6 h-6 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-            style={{ color: 'var(--brand)' }}
-          />
+          <div className="h-16 w-16 animate-spin rounded-full border-4 border-brand border-t-transparent" />
+          <TrendingUp className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 text-brand" />
         </div>
-        <div
-          className="text-sm mt-4 font-medium"
-          style={{ color: 'var(--fg-3)' }}
-        >
+        <div className="mt-4 text-sm font-medium text-fg-3">
           {t('loadingChartData', language) || 'Loading chart data...'}
         </div>
       </div>
@@ -237,26 +227,16 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
 
   if (combinedData.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <div
-          className="w-20 h-20 rounded-2xl flex items-center justify-center mb-4"
-          style={{ background: 'var(--brand-soft)' }}
-        >
-          <BarChart3
-            className="w-10 h-10"
-            style={{ color: 'var(--brand)', opacity: 0.6 }}
-          />
-        </div>
-        <div className="text-lg font-bold mb-2" style={{ color: 'var(--fg)' }}>
-          {t('noHistoricalData', language)}
-        </div>
-        <div
-          className="text-sm text-center max-w-xs"
-          style={{ color: 'var(--fg-3)' }}
-        >
-          {t('dataWillAppear', language)}
-        </div>
-      </div>
+      <EmptyState
+        icon={
+          <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-brand-soft text-brand">
+            <BarChart3 className="h-6 w-6" />
+          </span>
+        }
+        title={t('noHistoricalData', language)}
+        description={t('dataWillAppear', language)}
+        className="py-20"
+      />
     )
   }
 
@@ -305,28 +285,14 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       })
 
       return (
-        <div
-          className="rounded-xl p-4 shadow-2xl "
-          style={{
-            background: 'color-mix(in srgb, var(--surface) 95%, transparent)',
-            border:
-              '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
-            minWidth: '200px',
-          }}
-        >
-          <div
-            className="flex items-center gap-2 mb-3 pb-2"
-            style={{ borderBottom: '1px solid var(--line)' }}
-          >
-            <Zap className="w-3.5 h-3.5" style={{ color: 'var(--brand)' }} />
-            <span
-              className="text-xs font-medium"
-              style={{ color: 'var(--brand)' }}
-            >
+        <div className="min-w-[200px] rounded-md border border-line bg-surface p-3 shadow-pop">
+          <div className="mb-2.5 flex items-center gap-1.5 border-b border-line pb-2">
+            <Zap className="h-3.5 w-3.5 text-fg-3" />
+            <span className="num text-xs font-medium text-fg-2">
               {dateStr} {data.time}
             </span>
           </div>
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             {traders.map((trader) => {
               const pnlPct = data[`${trader.trader_id}_pnl_pct`]
               const equity = data[`${trader.trader_id}_equity`]
@@ -338,37 +304,30 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                   key={trader.trader_id}
                   className="flex items-center justify-between gap-4"
                 >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-2.5 h-2.5 rounded-full"
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
                       style={{ background: traderColor(trader.trader_id) }}
                     />
-                    <span
-                      className="text-xs font-medium truncate max-w-[100px]"
-                      style={{ color: 'var(--fg)' }}
-                    >
+                    <span className="max-w-[100px] truncate text-xs font-medium text-fg">
                       {trader.trader_name}
                     </span>
                   </div>
                   <div className="text-right">
                     <div
-                      className="text-sm font-bold mono flex items-center gap-1"
-                      style={{
-                        color: isPositive ? 'var(--up)' : 'var(--down)',
-                      }}
+                      className={cn(
+                        'num flex items-center justify-end gap-1 text-sm font-semibold',
+                        isPositive ? 'text-up' : 'text-down'
+                      )}
                     >
                       {isPositive ? (
-                        <TrendingUp className="w-3 h-3" />
+                        <TrendingUp className="h-3 w-3" />
                       ) : (
-                        <TrendingDown className="w-3 h-3" />
+                        <TrendingDown className="h-3 w-3" />
                       )}
-                      {isPositive ? '+' : ''}
-                      {pnlPct.toFixed(2)}%
+                      {formatSigned(pnlPct, { suffix: '%' })}
                     </div>
-                    <div
-                      className="text-[10px] mono"
-                      style={{ color: 'var(--fg-3)' }}
-                    >
+                    <div className="num text-[11px] text-fg-3">
                       ${equity?.toFixed(2)}
                     </div>
                   </div>
@@ -409,65 +368,46 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       : '0.00'
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Time Period Selector + Mini Stats Bar */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Time Period Buttons */}
-        <div className="flex items-center gap-1">
-          {TIME_PERIODS.map((period) => (
-            <button
-              key={period.key}
-              onClick={() => setSelectedPeriod(period.key)}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg transition-all"
-              style={{
-                background:
-                  selectedPeriod === period.key
-                    ? 'var(--brand-soft)'
-                    : 'color-mix(in srgb, var(--line) 50%, transparent)',
-                color:
-                  selectedPeriod === period.key
-                    ? 'var(--brand)'
-                    : 'var(--fg-3)',
-                border: `1px solid ${selectedPeriod === period.key ? 'color-mix(in srgb, var(--brand) 40%, transparent)' : 'var(--line)'}`,
-              }}
-            >
-              {t(`comparisonChart.${period.key}`, language)}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          size="sm"
+          value={selectedPeriod}
+          onChange={setSelectedPeriod}
+          items={TIME_PERIODS.map((period) => ({
+            key: period.key,
+            label: t(`comparisonChart.${period.key}`, language),
+          }))}
+        />
 
         {/* Mini Stats Bar */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           {traderStats.slice(0, 3).map((trader, idx) => (
             <div
               key={trader.trader_id}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full transition-all hover:scale-105"
-              style={{
-                background:
-                  idx === 0
-                    ? 'var(--brand-soft)'
-                    : 'color-mix(in srgb, var(--line) 50%, transparent)',
-                border: `1px solid ${idx === 0 ? 'color-mix(in srgb, var(--brand) 30%, transparent)' : 'var(--line)'}`,
-              }}
+              className={cn(
+                'flex items-center gap-2 rounded-full border px-2.5 py-1',
+                idx === 0
+                  ? 'border-brand/30 bg-brand-soft'
+                  : 'border-line bg-surface-2'
+              )}
             >
-              <div
-                className="w-2 h-2 rounded-full"
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
                 style={{ background: traderColor(trader.trader_id) }}
               />
-              <span
-                className="text-xs font-medium truncate max-w-[80px]"
-                style={{ color: 'var(--fg)' }}
-              >
+              <span className="max-w-[80px] truncate text-xs font-medium text-fg">
                 {trader.trader_name}
               </span>
               <span
-                className="text-xs font-bold mono"
-                style={{
-                  color: trader.currentPnl >= 0 ? 'var(--up)' : 'var(--down)',
-                }}
+                className={cn(
+                  'num text-xs font-semibold',
+                  trader.currentPnl >= 0 ? 'text-up' : 'text-down'
+                )}
               >
-                {trader.currentPnl >= 0 ? '+' : ''}
-                {trader.currentPnl.toFixed(2)}%
+                {formatSigned(trader.currentPnl, { suffix: '%' })}
               </span>
             </div>
           ))}
@@ -475,29 +415,9 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       </div>
 
       {/* Chart */}
-      <div
-        className="relative rounded-xl overflow-hidden"
-        style={{
-          background:
-            'linear-gradient(180deg, color-mix(in srgb, var(--surface) 80%, transparent) 0%, var(--surface) 100%)',
-        }}
-      >
+      <div className="relative overflow-hidden rounded-lg border border-line bg-surface">
         {/* Watermark */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            fontSize: '80px',
-            fontWeight: 'bold',
-            color: 'color-mix(in srgb, var(--brand) 3%, transparent)',
-            zIndex: 1,
-            pointerEvents: 'none',
-            fontFamily: 'monospace',
-            letterSpacing: '0.1em',
-          }}
-        >
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-[1] -translate-x-1/2 -translate-y-1/2 font-num text-[80px] font-bold tracking-[0.1em] text-brand/[0.03]">
           NOFX
         </div>
 
@@ -528,19 +448,12 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                   />
                 </linearGradient>
               ))}
-              {/* Glow filter */}
-              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="2" result="coloredBlur" />
-                <feMerge>
-                  <feMergeNode in="coloredBlur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
             </defs>
 
             <CartesianGrid
               strokeDasharray="3 3"
-              stroke="var(--surface-hover)"
+              stroke="var(--line)"
+              strokeOpacity={0.6}
               vertical={false}
             />
 
@@ -563,12 +476,15 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
               width={50}
             />
 
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip
+              content={<CustomTooltip />}
+              cursor={{ stroke: 'var(--line-strong)', strokeDasharray: '3 3' }}
+            />
 
             {/* Zero reference line */}
             <ReferenceLine
               y={0}
-              stroke="var(--line)"
+              stroke="var(--line-strong)"
               strokeDasharray="8 4"
               strokeWidth={1}
             />
@@ -595,15 +511,13 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                 strokeWidth={idx === 0 ? 3 : 2}
                 dot={false}
                 activeDot={{
-                  r: 6,
+                  r: 5,
                   fill: traderColor(trader.trader_id),
                   stroke: 'var(--surface)',
                   strokeWidth: 2,
-                  filter: 'url(#glow)',
                 }}
                 name={trader.trader_name}
                 connectNulls
-                style={{ filter: idx === 0 ? 'url(#glow)' : undefined }}
               />
             ))}
 
@@ -618,14 +532,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                   ) || []
 
                 return (
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'center',
-                      gap: '20px',
-                      flexWrap: 'wrap',
-                    }}
-                  >
+                  <div className="flex flex-wrap justify-center gap-5">
                     {filteredPayload.map((entry: any, index: number) => {
                       const trader = traders.find(
                         (t) => t.trader_name === entry.value
@@ -638,37 +545,21 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                       return (
                         <div
                           key={`legend-${index}`}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                          }}
+                          className="flex items-center gap-1.5"
                         >
-                          <div
-                            style={{
-                              width: '8px',
-                              height: '8px',
-                              borderRadius: '50%',
-                              backgroundColor: entry.color,
-                            }}
-                          />
                           <span
-                            style={{
-                              color: 'var(--fg)',
-                              fontSize: '12px',
-                              fontWeight: 500,
-                            }}
-                          >
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: entry.color }}
+                          />
+                          <span className="text-xs font-medium text-fg">
                             {entry.value}
                             <span
-                              style={{
-                                color: pnl >= 0 ? 'var(--up)' : 'var(--down)',
-                                marginLeft: '6px',
-                                fontFamily: 'monospace',
-                              }}
+                              className={cn(
+                                'num ml-1.5',
+                                pnl >= 0 ? 'text-up' : 'text-down'
+                              )}
                             >
-                              ({pnl >= 0 ? '+' : ''}
-                              {pnl.toFixed(2)}%)
+                              ({formatSigned(pnl, { suffix: '%' })})
                             </span>
                           </span>
                         </div>
@@ -683,86 +574,35 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       </div>
 
       {/* Bottom Stats */}
-      <div className="grid grid-cols-4 gap-2">
-        <div
-          className="p-3 rounded-lg text-center"
-          style={{
-            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
-            border:
-              '1px solid color-mix(in srgb, var(--brand) 10%, transparent)',
-          }}
-        >
-          <div
-            className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: 'var(--fg-3)' }}
-          >
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="rounded-md border border-line bg-surface-2 p-2.5 text-center">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-fg-3">
             {t('leader', language)}
           </div>
-          <div
-            className="text-sm font-bold truncate"
-            style={{ color: 'var(--brand)' }}
-          >
+          <div className="truncate text-sm font-semibold text-brand">
             {leader?.trader_name || '-'}
           </div>
         </div>
-        <div
-          className="p-3 rounded-lg text-center"
-          style={{
-            background: 'color-mix(in srgb, var(--up) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: 'var(--fg-3)' }}
-          >
+        <div className="rounded-md border border-line bg-surface-2 p-2.5 text-center">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-fg-3">
             {t('leadPnL', language) || 'Lead PnL'}
           </div>
-          <div
-            className="text-sm font-bold mono"
-            style={{
-              color:
-                (leader?.currentPnl || 0) >= 0 ? 'var(--up)' : 'var(--down)',
-            }}
-          >
-            {(leader?.currentPnl || 0) >= 0 ? '+' : ''}
-            {(leader?.currentPnl || 0).toFixed(2)}%
-          </div>
+          <Change
+            value={leader?.currentPnl || 0}
+            className="text-sm font-semibold"
+          />
         </div>
-        <div
-          className="p-3 rounded-lg text-center"
-          style={{
-            background: 'color-mix(in srgb, var(--info) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: 'var(--fg-3)' }}
-          >
+        <div className="rounded-md border border-line bg-surface-2 p-2.5 text-center">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-fg-3">
             {t('currentGap', language)}
           </div>
-          <div
-            className="text-sm font-bold mono"
-            style={{ color: 'var(--info)' }}
-          >
-            {gap}%
-          </div>
+          <div className="num text-sm font-semibold text-info">{gap}%</div>
         </div>
-        <div
-          className="p-3 rounded-lg text-center"
-          style={{
-            background: 'color-mix(in srgb, var(--ai) 5%, transparent)',
-          }}
-        >
-          <div
-            className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: 'var(--fg-3)' }}
-          >
+        <div className="rounded-md border border-line bg-surface-2 p-2.5 text-center">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-fg-3">
             {t('dataPoints', language)}
           </div>
-          <div
-            className="text-sm font-bold mono"
-            style={{ color: 'var(--ai)' }}
-          >
+          <div className="num text-sm font-semibold text-fg">
             {displayData.length}
           </div>
         </div>

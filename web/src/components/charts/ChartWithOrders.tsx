@@ -8,9 +8,14 @@ import {
   CandlestickSeries,
   createSeriesMarkers,
 } from 'lightweight-charts'
+import { AlertTriangle, CandlestickChart } from 'lucide-react'
 import { useLanguage } from '../../contexts/LanguageContext'
 import { httpClient } from '../../lib/httpClient'
 import { t } from '../../i18n/translations'
+import { useThemeVersion, type ChartTheme } from '../../lib/chartTheme'
+import { getCandleChartTheme } from './candleTheme'
+import { Card, CardHeader } from '../ui'
+import { cn } from '../../lib/cn'
 
 // Order marker interface
 interface OrderMarker {
@@ -20,6 +25,14 @@ interface OrderMarker {
   orderAction: string // OPEN_LONG, CLOSE_LONG, STOP_LOSS, TAKE_PROFIT, etc.
   status: string // NEW, FILLED, CANCELED, etc.
   symbol: string
+}
+
+// Chart marker kept as plain values, so its colour can be re-derived when the
+// theme changes (buy = up, sell = down)
+interface ChartOrderMarker {
+  time: Time
+  isBuy: boolean
+  text: string
 }
 
 // Kline data interface
@@ -40,6 +53,16 @@ interface ChartWithOrdersProps {
   exchange?: string // Exchange type: binance, bybit, okx, bitget, hyperliquid, aster, lighter
 }
 
+const toSeriesMarkers = (markers: ChartOrderMarker[], th: ChartTheme) =>
+  markers.map((m) => ({
+    time: m.time,
+    position: 'belowBar' as const,
+    color: m.isBuy ? th.up : th.down,
+    shape: 'circle' as const,
+    text: m.text,
+    size: 1,
+  }))
+
 export function ChartWithOrders({
   symbol = 'BTCUSDT',
   interval = '5m',
@@ -48,10 +71,12 @@ export function ChartWithOrders({
   exchange = 'binance', // Default to binance
 }: ChartWithOrdersProps) {
   const { language } = useLanguage()
+  const themeVersion = useThemeVersion()
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const seriesMarkersRef = useRef<any>(null) // Markers primitive for v5
+  const markersRef = useRef<ChartOrderMarker[]>([]) // Current order markers
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [tooltipData, setTooltipData] = useState<any>(null)
@@ -245,26 +270,36 @@ export function ChartWithOrders({
     console.log('[ChartWithOrders] Initializing chart for', symbol, interval)
 
     try {
+      const th = getCandleChartTheme()
+
       // Create chart
       const chart = createChart(chartContainerRef.current, {
         width: chartContainerRef.current.clientWidth,
         height: height,
         layout: {
-          background: { color: '#F2EFE6' },
-          textColor: '#1E1E1A',
+          background: { color: th.background },
+          textColor: th.text,
         },
         grid: {
-          vertLines: { color: 'rgba(192, 185, 162, 0.5)' },
-          horzLines: { color: 'rgba(192, 185, 162, 0.5)' },
+          vertLines: { color: th.grid },
+          horzLines: { color: th.grid },
         },
         crosshair: {
           mode: 1, // Normal crosshair
+          vertLine: {
+            color: th.crosshair,
+            labelBackgroundColor: th.crosshairLabel,
+          },
+          horzLine: {
+            color: th.crosshair,
+            labelBackgroundColor: th.crosshairLabel,
+          },
         },
         rightPriceScale: {
-          borderColor: '#C0B9A2',
+          borderColor: th.border,
         },
         timeScale: {
-          borderColor: '#C0B9A2',
+          borderColor: th.border,
           timeVisible: true,
           secondsVisible: false,
         },
@@ -284,14 +319,14 @@ export function ChartWithOrders({
 
       chartRef.current = chart
 
-      // Create candlestick series (using v5 API)
+      // Create candlestick series (using v5 API) — solid up / down bodies
       const candlestickSeries = chart.addSeries(CandlestickSeries, {
-        upColor: '#2E7D4F',
-        downColor: '#C0392B',
-        borderUpColor: '#2E7D4F',
-        borderDownColor: '#C0392B',
-        wickUpColor: '#2E7D4F',
-        wickDownColor: '#C0392B',
+        upColor: th.up,
+        downColor: th.down,
+        borderUpColor: th.up,
+        borderDownColor: th.down,
+        wickUpColor: th.up,
+        wickDownColor: th.down,
       })
 
       candlestickSeriesRef.current = candlestickSeries as any
@@ -341,6 +376,43 @@ export function ChartWithOrders({
       setError('Failed to initialize chart')
     }
   }, [height])
+
+  // Re-apply colours when the app theme changes; klines and markers are kept
+  // as they are, so the theme toggle does not refetch anything.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const th = getCandleChartTheme()
+    chart.applyOptions({
+      layout: { background: { color: th.background }, textColor: th.text },
+      grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+      crosshair: {
+        vertLine: {
+          color: th.crosshair,
+          labelBackgroundColor: th.crosshairLabel,
+        },
+        horzLine: {
+          color: th.crosshair,
+          labelBackgroundColor: th.crosshairLabel,
+        },
+      },
+      rightPriceScale: { borderColor: th.border },
+      timeScale: { borderColor: th.border },
+    })
+    candlestickSeriesRef.current?.applyOptions({
+      upColor: th.up,
+      downColor: th.down,
+      borderUpColor: th.up,
+      borderDownColor: th.down,
+      wickUpColor: th.up,
+      wickDownColor: th.down,
+    })
+    if (seriesMarkersRef.current) {
+      seriesMarkersRef.current.setMarkers(
+        toSeriesMarkers(markersRef.current, th)
+      )
+    }
+  }, [themeVersion])
 
   // Load data
   useEffect(() => {
@@ -433,15 +505,7 @@ export function ChartWithOrders({
           }
 
           // Convert orders to chart markers, aligned to kline time
-          const markers: Array<{
-            time: Time
-            position: 'belowBar'
-            color: string
-            shape: 'circle'
-            text: string
-            price: number
-            size: number
-          }> = []
+          const markers: ChartOrderMarker[] = []
 
           orders.forEach((order) => {
             // Align order time to kline interval (floor)
@@ -465,12 +529,8 @@ export function ChartWithOrders({
             const isBuy = order.side === 'BUY'
             markers.push({
               time: alignedTime as Time,
-              position: 'belowBar' as const,
-              color: isBuy ? '#2E7D4F' : '#C0392B',
-              shape: 'circle' as const,
+              isBuy,
               text: isBuy ? 'B' : 'S',
-              price: order.price,
-              size: 1,
             })
           })
 
@@ -488,15 +548,20 @@ export function ChartWithOrders({
           )
 
           try {
+            markersRef.current = markers
+            const seriesMarkers = toSeriesMarkers(
+              markers,
+              getCandleChartTheme()
+            )
             // Using v5 API: createSeriesMarkers
             if (seriesMarkersRef.current) {
               // If already exists, update markers
-              seriesMarkersRef.current.setMarkers(markers)
+              seriesMarkersRef.current.setMarkers(seriesMarkers)
             } else {
               // First time creating markers
               seriesMarkersRef.current = createSeriesMarkers(
                 candlestickSeriesRef.current,
-                markers
+                seriesMarkers
               )
             }
             console.log('[ChartWithOrders] ✅ Markers set successfully!')
@@ -529,66 +594,36 @@ export function ChartWithOrders({
   }, [symbol, interval, traderID, language])
 
   return (
-    <div
-      className="relative"
-      style={{
-        background: 'var(--surface-2)',
-        borderRadius: '8px',
-        overflow: 'hidden',
-      }}
-    >
-      {/* Title bar */}
-      <div
-        className="flex items-center justify-between p-4"
-        style={{ borderBottom: '1px solid var(--line)' }}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-xl">📈</span>
-          <h3 className="text-lg font-bold" style={{ color: 'var(--fg)' }}>
-            {symbol} {interval}
-          </h3>
-        </div>
-        {loading && (
-          <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
-            {t('chartWithOrders.loading', language)}
-          </div>
-        )}
-      </div>
+    <Card className="relative overflow-hidden">
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <CandlestickChart className="h-4 w-4 shrink-0 text-fg-3" />
+            <span className="num">
+              {symbol} {interval}
+            </span>
+          </span>
+        }
+        actions={
+          loading ? (
+            <span className="text-xs text-fg-3">
+              {t('chartWithOrders.loading', language)}
+            </span>
+          ) : undefined
+        }
+      />
 
       {/* Chart container */}
-      <div style={{ position: 'relative' }}>
+      <div className="relative">
         <div ref={chartContainerRef} />
 
         {/* OHLC Tooltip */}
         {tooltipData && (
           <div
             ref={tooltipRef}
-            style={{
-              position: 'absolute',
-              left: '10px',
-              top: '10px',
-              padding: '8px 12px',
-              background: 'color-mix(in srgb, var(--surface) 95%, transparent)',
-              border:
-                '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
-              borderRadius: '6px',
-              color: 'var(--fg)',
-              fontSize: '12px',
-              fontFamily: 'monospace',
-              pointerEvents: 'none',
-              zIndex: 10,
-              backdropFilter: 'blur(10px)',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
-            }}
+            className="pointer-events-none absolute left-2.5 top-2.5 z-10 rounded-md border border-line bg-surface/95 px-3 py-2 text-xs text-fg shadow-pop"
           >
-            <div
-              style={{
-                marginBottom: '6px',
-                color: 'var(--brand)',
-                fontWeight: 'bold',
-                fontSize: '11px',
-              }}
-            >
+            <div className="mb-1.5 text-[11px] font-semibold text-fg-2">
               {new Date((tooltipData.time as number) * 1000).toLocaleString(
                 language === 'zh' ? 'zh-CN' : 'en-US',
                 {
@@ -599,38 +634,30 @@ export function ChartWithOrders({
                 }
               )}
             </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'auto 1fr',
-                gap: '4px 12px',
-                fontSize: '11px',
-              }}
-            >
-              <span style={{ color: 'var(--fg-3)' }}>O:</span>
-              <span style={{ color: 'var(--fg)', fontWeight: '500' }}>
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+              <span className="text-fg-3">O:</span>
+              <span className="num font-medium text-fg">
                 {tooltipData.open?.toFixed(2)}
               </span>
 
-              <span style={{ color: 'var(--fg-3)' }}>H:</span>
-              <span style={{ color: 'var(--up)', fontWeight: '500' }}>
+              <span className="text-fg-3">H:</span>
+              <span className="num font-medium text-up">
                 {tooltipData.high?.toFixed(2)}
               </span>
 
-              <span style={{ color: 'var(--fg-3)' }}>L:</span>
-              <span style={{ color: 'var(--down)', fontWeight: '500' }}>
+              <span className="text-fg-3">L:</span>
+              <span className="num font-medium text-down">
                 {tooltipData.low?.toFixed(2)}
               </span>
 
-              <span style={{ color: 'var(--fg-3)' }}>C:</span>
+              <span className="text-fg-3">C:</span>
               <span
-                style={{
-                  color:
-                    tooltipData.close >= tooltipData.open
-                      ? 'var(--up)'
-                      : 'var(--down)',
-                  fontWeight: 'bold',
-                }}
+                className={cn(
+                  'num font-semibold',
+                  tooltipData.close >= tooltipData.open
+                    ? 'text-up'
+                    : 'text-down'
+                )}
               >
                 {tooltipData.close?.toFixed(2)}
               </span>
@@ -641,37 +668,25 @@ export function ChartWithOrders({
 
       {/* Error display */}
       {error && (
-        <div
-          className="absolute inset-0 flex items-center justify-center"
-          style={{
-            background: 'color-mix(in srgb, var(--surface) 90%, transparent)',
-          }}
-        >
+        <div className="absolute inset-0 flex items-center justify-center bg-surface/90">
           <div className="text-center">
-            <div className="text-2xl mb-2">⚠️</div>
-            <div style={{ color: 'var(--down)' }}>{error}</div>
+            <AlertTriangle className="mx-auto mb-2 h-6 w-6 text-down" />
+            <div className="text-sm text-down">{error}</div>
           </div>
         </div>
       )}
 
       {/* Legend */}
-      <div
-        className="flex items-center gap-4 p-4 text-xs"
-        style={{ borderTop: '1px solid var(--line)', color: 'var(--fg-3)' }}
-      >
-        <div className="flex items-center gap-2">
-          <span className="font-bold" style={{ color: 'var(--up)' }}>
-            B
-          </span>
+      <div className="flex items-center gap-4 border-t border-line px-3 py-2 text-xs text-fg-3">
+        <div className="flex items-center gap-1.5">
+          <span className="font-bold text-up">B</span>
           <span>{t('chartWithOrders.buy', language)}</span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="font-bold" style={{ color: 'var(--down)' }}>
-            S
-          </span>
+        <div className="flex items-center gap-1.5">
+          <span className="font-bold text-down">S</span>
           <span>{t('chartWithOrders.sell', language)}</span>
         </div>
       </div>
-    </div>
+    </Card>
   )
 }

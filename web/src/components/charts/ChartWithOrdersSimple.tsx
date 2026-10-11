@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { AlertTriangle, CandlestickChart, CircleCheck } from 'lucide-react'
 import { httpClient } from '../../lib/httpClient'
+import { Card, CardHeader, Stat } from '../ui'
 
 interface ChartWithOrdersSimpleProps {
   symbol: string
@@ -81,97 +83,62 @@ export function ChartWithOrdersSimple({
   }, [symbol, interval, traderID])
 
   return (
-    <div
-      className="relative"
-      style={{
-        background: 'var(--surface-2)',
-        borderRadius: '8px',
-        overflow: 'hidden',
-        minHeight: height,
-      }}
-    >
+    <Card className="relative overflow-hidden" style={{ minHeight: height }}>
       {/* 标题栏 */}
-      <div
-        className="flex items-center justify-between p-4"
-        style={{ borderBottom: '1px solid var(--line)' }}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-xl">📈</span>
-          <h3 className="text-lg font-bold" style={{ color: 'var(--fg)' }}>
-            {symbol} {interval} (测试模式)
-          </h3>
-        </div>
-        {loading && (
-          <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
-            加载中...
-          </div>
-        )}
-      </div>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <CandlestickChart className="h-4 w-4 shrink-0 text-fg-3" />
+            <span className="num">
+              {symbol} {interval} (测试模式)
+            </span>
+          </span>
+        }
+        actions={
+          loading ? (
+            <span className="text-xs text-fg-3">加载中...</span>
+          ) : undefined
+        }
+      />
 
       {/* 测试信息 */}
-      <div className="p-8 space-y-4">
+      <div className="space-y-3 p-4">
         {error ? (
-          <div className="text-center">
-            <div className="text-2xl mb-2">⚠️</div>
-            <div style={{ color: 'var(--down)' }}>{error}</div>
+          <div className="flex flex-col items-center py-6 text-center">
+            <AlertTriangle className="mb-2 h-6 w-6 text-down" />
+            <div className="text-sm text-down">{error}</div>
           </div>
         ) : (
           <>
-            <div
-              className="p-4 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-              }}
-            >
-              <div className="text-sm mb-2" style={{ color: 'var(--fg-3)' }}>
-                币安K线数据
-              </div>
-              <div
-                className="text-2xl font-bold"
-                style={{ color: 'var(--up)' }}
-              >
-                {klineCount} 根K线
-              </div>
+            <div className="rounded-md border border-line bg-surface-2 p-3">
+              <Stat
+                label="币安K线数据"
+                value={`${klineCount} 根K线`}
+                tone="up"
+                size="lg"
+              />
             </div>
 
             {traderID && (
-              <div
-                className="p-4 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                }}
-              >
-                <div className="text-sm mb-2" style={{ color: 'var(--fg-3)' }}>
-                  历史订单数据
-                </div>
-                <div
-                  className="text-2xl font-bold"
-                  style={{ color: 'var(--brand)' }}
-                >
-                  {orderCount} 笔订单
-                </div>
+              <div className="rounded-md border border-line bg-surface-2 p-3">
+                <Stat
+                  label="历史订单数据"
+                  value={`${orderCount} 笔订单`}
+                  size="lg"
+                />
               </div>
             )}
 
-            <div
-              className="p-4 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-              }}
-            >
-              <div className="text-sm mb-2" style={{ color: 'var(--fg-3)' }}>
-                状态
-              </div>
-              <div className="text-lg" style={{ color: 'var(--fg)' }}>
-                ✅ 数据获取正常，图表组件开发中
+            <div className="rounded-md border border-line bg-surface-2 p-3">
+              <div className="text-xs text-fg-3">状态</div>
+              <div className="mt-0.5 flex items-center gap-2 text-sm text-fg">
+                <CircleCheck className="h-4 w-4 shrink-0 text-up" />
+                数据获取正常，图表组件开发中
               </div>
             </div>
           </>
         )}
       </div>
-    </div>
+    </Card>
   )
 }
