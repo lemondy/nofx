@@ -8,6 +8,8 @@ export interface TabItem<K extends string = string> {
   count?: number | string
   icon?: React.ReactNode
   disabled?: boolean
+  /** Accessible name, required for icon-only items */
+  ariaLabel?: string
 }
 
 interface TabsBaseProps<K extends string> {
@@ -38,6 +40,7 @@ export function Tabs<K extends string = string>({
             type="button"
             aria-selected={active}
             disabled={it.disabled}
+            aria-label={it.ariaLabel}
             onClick={() => onChange(it.key)}
             className={cn(
               '-mb-px inline-flex h-9 items-center gap-1.5 whitespace-nowrap border-b-2 px-0.5 text-[13px] font-semibold transition-colors',
@@ -90,6 +93,7 @@ export function Segmented<K extends string = string>({
             type="button"
             aria-pressed={active}
             disabled={it.disabled}
+            aria-label={it.ariaLabel}
             onClick={() => onChange(it.key)}
             className={cn(
               'inline-flex items-center gap-1 whitespace-nowrap rounded font-semibold transition-colors',

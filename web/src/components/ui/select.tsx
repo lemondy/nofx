@@ -15,6 +15,9 @@ interface NofxSelectProps {
   disabled?: boolean
   className?: string
   style?: React.CSSProperties
+  /** Accessible name / hover hint for the trigger */
+  'aria-label'?: string
+  title?: string
 }
 
 export function NofxSelect({
@@ -24,6 +27,8 @@ export function NofxSelect({
   disabled,
   className,
   style,
+  'aria-label': ariaLabel,
+  title,
 }: NofxSelectProps) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLDivElement>(null)
@@ -61,6 +66,10 @@ export function NofxSelect({
   return (
     <div ref={triggerRef} className={cn('relative', className)} style={style}>
       <div
+        role="combobox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        title={title}
         className={cn(
           'flex items-center justify-between gap-1.5 w-full h-full cursor-pointer',
           disabled && 'opacity-50 cursor-not-allowed'

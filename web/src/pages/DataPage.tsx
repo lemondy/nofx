@@ -520,7 +520,16 @@ function FeaturedCard({
   return (
     <Card dense>
       <CardHeader
-        title={<span style={{ color: accent }}>{t(titleKey, language)}</span>}
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: accent }}
+            />
+            {t(titleKey, language)}
+          </span>
+        }
         actions={
           sessionLabel ? (
             <Badge
@@ -1793,7 +1802,7 @@ export function DataPage() {
           </h2>
         </div>
         {/* Featured picks */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-3">
           <FeaturedCard
             cacheKey="ai500"
             titleKey="dataPage.ai500"
