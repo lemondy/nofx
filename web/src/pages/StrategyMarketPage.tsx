@@ -241,20 +241,22 @@ export function StrategyMarketPage() {
                           <EyeOff size={12} />
                         )}
                         {strategy.config_visible
-                          ? 'PUBLIC_ACCESS'
+                          ? tr('configPublic')
                           : tr('configHidden')}
                       </Badge>
                     }
                   />
                   <CardBody className="flex flex-1 flex-col gap-3">
                     <p className="min-h-9 text-xs text-fg-3 line-clamp-2">
-                      {strategy.description || 'NO_DESCRIPTION_AVAILABLE'}
+                      {strategy.description || tr('noDescription')}
                     </p>
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="min-w-0">
                         <div className="text-fg-3">{tr('author')}</div>
                         <div className="truncate text-fg-2">
-                          @{strategy.author_email?.split('@')[0] || 'UNKNOWN'}
+                          @
+                          {strategy.author_email?.split('@')[0] ||
+                            tr('unknownAuthor')}
                         </div>
                       </div>
                       <div className="text-right">
@@ -276,7 +278,7 @@ export function StrategyMarketPage() {
                               ))
                             ) : (
                               <span className="text-xs text-fg-3">
-                                NO_INDICATORS
+                                {tr('noIndicators')}
                               </span>
                             )}
                           </div>

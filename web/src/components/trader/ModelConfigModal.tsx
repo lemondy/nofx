@@ -244,7 +244,7 @@ function ModelSelectionStep({
             </div>
             <div className="flex items-center gap-3">
               <span
-                className="rounded-full border border-nofx-line px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em]"
+                className="rounded-full border border-line px-2.5 py-1 text-[11px] font-medium"
                 style={{ color: 'var(--fg-3)' }}
               >
                 {otherProviders.length} API
