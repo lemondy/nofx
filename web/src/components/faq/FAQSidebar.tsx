@@ -22,32 +22,33 @@ export function FAQSidebar({
         scrollbarColor: 'var(--line) var(--surface-hover)',
       }}
     >
-      <div className="space-y-6">
+      <div className="space-y-3">
         {categories.map((category) => (
           <div
             key={category.id}
-            className="nofx-glass p-4 rounded-xl border border-nofx-line/50"
+            className="rounded-lg border border-line bg-surface p-3"
           >
             {/* Category Title */}
-            <div className="flex items-center gap-2 mb-3 px-3">
-              <category.icon className="w-5 h-5 text-nofx-gold" />
-              <h3 className="text-sm font-bold uppercase tracking-wide text-nofx-gold">
+            <div className="mb-2 flex items-center gap-2 px-2">
+              <category.icon className="h-4 w-4 text-brand" />
+              <h3 className="text-xs font-semibold text-fg">
                 {t(category.titleKey, language)}
               </h3>
             </div>
 
             {/* Category Items */}
-            <ul className="space-y-1">
+            <ul className="space-y-0.5">
               {category.items.map((item) => {
                 const isActive = activeItemId === item.id
                 return (
                   <li key={item.id}>
                     <button
+                      type="button"
                       onClick={() => onItemClick(category.id, item.id)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all border-l-[3px] ${
+                      className={`w-full rounded-md px-2 py-1.5 text-left text-[13px] transition-colors ${
                         isActive
-                          ? 'bg-nofx-gold/10 text-nofx-gold border-nofx-gold pl-[9px]'
-                          : 'bg-transparent text-nofx-text-muted border-transparent pl-3 hover:bg-nofx-gold/5 hover:text-nofx-text-main'
+                          ? 'bg-brand-soft text-brand'
+                          : 'text-fg-3 hover:bg-surface-hover hover:text-fg'
                       }`}
                     >
                       {t(item.questionKey, language)}

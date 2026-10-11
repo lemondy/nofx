@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { HelpCircle } from 'lucide-react'
-import { DeepVoidBackground } from '../common/DeepVoidBackground'
+import { Button, buttonVariants } from '../ui'
 import { t, type Language } from '../../i18n/translations'
 import { FAQSearchBar } from './FAQSearchBar'
 import { FAQSidebar } from './FAQSidebar'
@@ -58,24 +58,24 @@ export function FAQLayout({ language }: FAQLayoutProps) {
   }
 
   return (
-    <DeepVoidBackground className="py-6 pt-24" disableAnimation>
-      <div className="w-full px-4 md:px-8">
+    <div className="min-h-screen bg-bg py-4 pt-20">
+      <div className="mx-auto w-full max-w-[1280px] px-4 md:px-6">
         {/* Page Header */}
-        <div className="text-center mb-12">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center bg-gradient-to-br from-nofx-gold to-brand shadow-[0_8px_24px_color-mix(in_srgb,var(--brand)_40%,transparent)]">
-              <HelpCircle className="w-8 h-8 text-bg" />
+        <div className="mb-6 text-center">
+          <div className="mb-3 flex items-center justify-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-soft">
+              <HelpCircle className="h-5 w-5 text-brand" />
             </div>
           </div>
-          <h1 className="text-4xl font-bold mb-4 text-nofx-text-main">
+          <h1 className="mb-1 text-xl font-semibold text-fg">
             {t('faqTitle', language)}
           </h1>
-          <p className="text-lg mb-8 text-nofx-text-muted">
+          <p className="mb-4 text-[13px] text-fg-3">
             {t('faqSubtitle', language)}
           </p>
 
           {/* Search Bar */}
-          <div className="max-w-2xl mx-auto">
+          <div className="mx-auto max-w-xl">
             <FAQSearchBar
               searchTerm={searchTerm}
               onSearchChange={setSearchTerm}
@@ -87,9 +87,9 @@ export function FAQLayout({ language }: FAQLayoutProps) {
         </div>
 
         {/* Main Content */}
-        <div className="flex gap-8">
+        <div className="flex gap-4">
           {/* Sidebar - Hidden on mobile, visible on desktop */}
-          <aside className="hidden lg:block w-64 flex-shrink-0">
+          <aside className="hidden w-64 flex-shrink-0 lg:block">
             <FAQSidebar
               categories={filteredCategories}
               activeItemId={activeItemId}
@@ -99,7 +99,7 @@ export function FAQLayout({ language }: FAQLayoutProps) {
           </aside>
 
           {/* Content Area */}
-          <main className="flex-1 min-w-0">
+          <main className="min-w-0 flex-1">
             {filteredCategories.length > 0 ? (
               <FAQContent
                 categories={filteredCategories}
@@ -107,55 +107,38 @@ export function FAQLayout({ language }: FAQLayoutProps) {
                 onActiveItemChange={setActiveItemId}
               />
             ) : (
-              <div className="text-center py-12">
-                <p className="text-lg" style={{ color: 'var(--fg-3)' }}>
+              <div className="py-12 text-center">
+                <p className="text-sm text-fg-3">
                   {language === 'zh'
                     ? '没有找到匹配的问题'
                     : 'No matching questions found'}
                 </p>
-                <button
+                <Button
+                  variant="primary"
+                  className="mt-3"
                   onClick={() => setSearchTerm('')}
-                  className="mt-4 px-6 py-2 rounded-lg font-semibold transition-all hover:opacity-90"
-                  style={{
-                    background:
-                      'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
-                    color: 'var(--brand-fg)',
-                  }}
                 >
                   {language === 'zh' ? '清除搜索' : 'Clear Search'}
-                </button>
+                </Button>
               </div>
             )}
           </main>
         </div>
 
         {/* Contact Section */}
-        <div
-          className="mt-16 p-8 rounded-lg text-center"
-          style={{
-            background:
-              'linear-gradient(135deg, var(--brand-soft) 0%, color-mix(in srgb, var(--brand) 5%, transparent) 100%)',
-            border:
-              '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
-          }}
-        >
-          <h3 className="text-xl font-bold mb-3" style={{ color: 'var(--fg)' }}>
+        <div className="mt-8 rounded-lg border border-line bg-surface p-5 text-center">
+          <h3 className="mb-1 text-sm font-semibold text-fg">
             {t('faqStillHaveQuestions', language)}
           </h3>
-          <p className="mb-6" style={{ color: 'var(--fg-3)' }}>
+          <p className="mb-3 text-[13px] text-fg-3">
             {t('faqContactUs', language)}
           </p>
-          <div className="flex items-center justify-center gap-4">
+          <div className="flex items-center justify-center gap-2">
             <a
               href="https://github.com/NoFxAiOS/nofx"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-6 py-3 rounded-lg font-semibold transition-all hover:scale-105"
-              style={{
-                background: 'var(--surface-hover)',
-                color: 'var(--fg)',
-                border: '1px solid var(--line)',
-              }}
+              className={buttonVariants({ variant: 'secondary' })}
             >
               GitHub
             </a>
@@ -163,18 +146,13 @@ export function FAQLayout({ language }: FAQLayoutProps) {
               href="https://t.me/nofx_dev_community"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-6 py-3 rounded-lg font-semibold transition-all hover:scale-105"
-              style={{
-                background:
-                  'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
-                color: 'var(--brand-fg)',
-              }}
+              className={buttonVariants({ variant: 'primary' })}
             >
               {t('community', language)}
             </a>
           </div>
         </div>
       </div>
-    </DeepVoidBackground>
+    </div>
   )
 }

@@ -54,22 +54,22 @@ export function FAQContent({
   }
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-4">
       {categories.map((category) => (
         <div
           key={category.id}
-          className="nofx-glass p-8 rounded-xl border border-nofx-line/50"
+          className="rounded-lg border border-line bg-surface p-5"
         >
           {/* Category Header */}
-          <div className="flex items-center gap-3 mb-6 pb-3 border-b border-nofx-line">
-            <category.icon className="w-7 h-7 text-nofx-gold" />
-            <h2 className="text-2xl font-bold text-nofx-text-main">
+          <div className="mb-4 flex items-center gap-2 border-b border-line pb-3">
+            <category.icon className="h-5 w-5 text-brand" />
+            <h2 className="text-base font-semibold text-fg">
               {t(category.titleKey, language)}
             </h2>
           </div>
 
           {/* FAQ Items */}
-          <div className="space-y-8">
+          <div className="space-y-6">
             {category.items.map((item) => (
               <section
                 key={item.id}
@@ -79,21 +79,21 @@ export function FAQContent({
                 className="scroll-mt-24"
               >
                 {/* Question */}
-                <h3 className="text-xl font-semibold mb-3 text-nofx-text-main">
+                <h3 className="mb-2 text-sm font-semibold text-fg">
                   {t(item.questionKey, language)}
                 </h3>
 
                 {/* Answer */}
-                <div className="prose prose-invert max-w-none text-nofx-text-muted leading-relaxed">
+                <div className="prose prose-invert max-w-[80ch] text-fg-2 leading-relaxed text-[13px]">
                   {item.id === 'github-projects-tasks' ? (
                     <div className="space-y-3">
-                      <div className="text-base">
+                      <div className="text-[13px]">
                         {language === 'zh' ? '链接：' : 'Links:'}{' '}
                         <a
                           href="https://github.com/orgs/NoFxAiOS/projects/3"
                           target="_blank"
                           rel="noreferrer"
-                          style={{ color: 'var(--brand)' }}
+                          className="text-brand hover:underline"
                         >
                           {language === 'zh' ? '路线图' : 'Roadmap'}
                         </a>
@@ -102,12 +102,12 @@ export function FAQContent({
                           href="https://github.com/orgs/NoFxAiOS/projects/5"
                           target="_blank"
                           rel="noreferrer"
-                          style={{ color: 'var(--brand)' }}
+                          className="text-brand hover:underline"
                         >
                           {language === 'zh' ? '任务看板' : 'Task Dashboard'}
                         </a>
                       </div>
-                      <ol className="list-decimal pl-5 space-y-1 text-base">
+                      <ol className="list-decimal pl-5 space-y-1 text-[13px]">
                         {language === 'zh' ? (
                           <>
                             <li>
@@ -218,19 +218,10 @@ export function FAQContent({
                         )}
                       </ol>
 
-                      <div
-                        className="rounded p-3 mt-3"
-                        style={{
-                          background: 'var(--brand-soft)',
-                          border:
-                            '1px solid color-mix(in srgb, var(--brand) 25%, transparent)',
-                        }}
-                      >
+                      <div className="mt-3 rounded-md border border-brand/25 bg-brand-soft p-3">
                         {language === 'zh' ? (
                           <div className="text-sm">
-                            <strong style={{ color: 'var(--brand)' }}>
-                              提示：
-                            </strong>{' '}
+                            <strong className="text-brand">提示：</strong>{' '}
                             参与贡献将享有激励制度（如
                             Bounty/奖金、荣誉徽章与鸣谢、优先
                             Review/合并与内测资格 等）。 可在任务中优先选择带
@@ -238,7 +229,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               bounty 标签
                             </a>
@@ -247,7 +238,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               Bounty Claim
                             </a>
@@ -255,9 +246,7 @@ export function FAQContent({
                           </div>
                         ) : (
                           <div className="text-sm">
-                            <strong style={{ color: 'var(--brand)' }}>
-                              Note:
-                            </strong>{' '}
+                            <strong className="text-brand">Note:</strong>{' '}
                             Contribution incentives are available (e.g., cash
                             bounties, badges & shout-outs, priority
                             review/merge, beta access). Prefer tasks with
@@ -265,7 +254,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               bounty label
                             </a>
@@ -274,7 +263,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               Bounty Claim
                             </a>
@@ -285,13 +274,13 @@ export function FAQContent({
                     </div>
                   ) : item.id === 'contribute-pr-guidelines' ? (
                     <div className="space-y-3">
-                      <div className="text-base">
+                      <div className="text-[13px]">
                         {language === 'zh' ? '参考文档：' : 'References:'}{' '}
                         <a
                           href="https://github.com/NoFxAiOS/nofx/blob/dev/CONTRIBUTING.md"
                           target="_blank"
                           rel="noreferrer"
-                          className="text-nofx-gold hover:underline"
+                          className="text-brand hover:underline"
                         >
                           CONTRIBUTING.md
                         </a>
@@ -300,12 +289,12 @@ export function FAQContent({
                           href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/PR_TITLE_GUIDE.md"
                           target="_blank"
                           rel="noreferrer"
-                          className="text-nofx-gold hover:underline"
+                          className="text-brand hover:underline"
                         >
                           PR_TITLE_GUIDE.md
                         </a>
                       </div>
-                      <ol className="list-decimal pl-5 space-y-1 text-base">
+                      <ol className="list-decimal pl-5 space-y-1 text-[13px]">
                         {language === 'zh' ? (
                           <>
                             <li>
@@ -379,17 +368,17 @@ export function FAQContent({
                         )}
                       </ol>
 
-                      <div className="rounded p-3 mt-3 bg-nofx-gold/10 border border-nofx-gold/25">
+                      <div className="rounded p-3 mt-3 bg-brand-soft border border-brand/25">
                         {language === 'zh' ? (
                           <div className="text-sm">
-                            <strong className="text-nofx-gold">Note:</strong>{' '}
+                            <strong className="text-brand">Note:</strong>{' '}
                             我们为高质量贡献提供激励（Bounty/奖金、荣誉徽章与鸣谢、优先
                             Review/合并与内测资格 等）。 详情可关注带
                             <a
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               bounty 标签
                             </a>
@@ -398,7 +387,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               Bounty Claim 模板
                             </a>
@@ -406,17 +395,15 @@ export function FAQContent({
                           </div>
                         ) : (
                           <div className="text-sm">
-                            <strong style={{ color: 'var(--brand)' }}>
-                              Note:
-                            </strong>{' '}
-                            We offer contribution incentives (bounties, badges,
+                            <strong className="text-brand">Note:</strong> We
+                            offer contribution incentives (bounties, badges,
                             shout-outs, priority review/merge, beta access).
                             Look for tasks with
                             <a
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               bounty label
                             </a>
@@ -425,7 +412,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: 'var(--brand)' }}
+                              className="text-brand hover:underline"
                             >
                               Bounty Claim
                             </a>
@@ -435,12 +422,12 @@ export function FAQContent({
                       </div>
                     </div>
                   ) : (
-                    <p className="text-base">{t(item.answerKey, language)}</p>
+                    <p className="text-[13px]">{t(item.answerKey, language)}</p>
                   )}
                 </div>
 
                 {/* Divider */}
-                <div className="mt-6 h-px bg-fg/5" />
+                <div className="mt-5 h-px bg-line" />
               </section>
             ))}
           </div>

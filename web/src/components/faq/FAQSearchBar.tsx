@@ -13,20 +13,21 @@ export function FAQSearchBar({
 }: FAQSearchBarProps) {
   return (
     <div className="relative group">
-      <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-nofx-text-muted group-focus-within:text-nofx-gold transition-colors" />
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-3 group-focus-within:text-brand transition-colors" />
       <input
         type="text"
         value={searchTerm}
         onChange={(e) => onSearchChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full pl-12 pr-12 py-3 rounded-lg text-base transition-all focus:outline-none bg-surface border border-nofx-line text-nofx-text-main placeholder-nofx-text-muted/50 focus:border-nofx-gold/50 focus:ring-1 focus:ring-nofx-gold/20 hover:border-nofx-gold/30 font-mono"
+        className="h-10 w-full rounded-md border border-line bg-surface-2 pl-10 pr-10 text-sm text-fg outline-none transition-colors placeholder:text-fg-3 hover:border-line-strong focus:border-brand focus:ring-1 focus:ring-brand/40"
       />
       {searchTerm && (
         <button
+          type="button"
           onClick={() => onSearchChange('')}
-          className="absolute right-4 top-1/2 transform -translate-y-1/2 text-nofx-text-muted hover:text-fg transition-colors"
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg transition-colors"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
       )}
     </div>

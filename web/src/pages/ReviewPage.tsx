@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { t } from '../i18n/translations'
 import type {
@@ -14,29 +15,42 @@ import type {
   ReviewPromptConfig,
 } from '../types'
 import type { Language } from '../i18n/translations'
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardBody,
+  Change,
+  PnL,
+  Tabs,
+  Segmented,
+  Stat,
+  EmptyState,
+} from '../components/ui'
 
-// Binance-style dark palette (matches DataPage conventions)
-const C = {
-  bg: 'var(--bg)',
-  card: 'var(--surface)',
-  cardHover: 'var(--surface-hover)',
-  border: 'var(--line)',
-  rowBorder: 'var(--line)',
-  text: 'var(--fg)',
-  muted: 'var(--fg-3)',
-  faint: 'var(--fg-3)',
-  up: 'var(--up)',
-  down: 'var(--down)',
-  gold: 'var(--brand)',
-  blue: 'var(--info)',
-  warn: 'var(--brand)',
-}
-
-const CARD_STYLE: React.CSSProperties = {
-  background: C.card,
-  border: `1px solid ${C.border}`,
-  borderRadius: 12,
-}
+const INPUT_CLS =
+  'h-8 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-fg outline-none placeholder:text-fg-3 hover:border-line-strong focus:border-brand focus:ring-1 focus:ring-brand/40'
+const TEXTAREA_CLS =
+  'w-full rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-fg outline-none placeholder:text-fg-3 hover:border-line-strong focus:border-brand focus:ring-1 focus:ring-brand/40 resize-none'
+const LABEL_CLS = 'mb-1 block text-xs font-medium text-fg-3'
+const CHIP_BASE =
+  'inline-flex h-7 items-center rounded-md border px-3 text-xs font-medium transition-colors'
+const chipCls = (
+  active: boolean,
+  tone: 'brand' | 'info' | 'down' | 'warn' = 'brand'
+) =>
+  active
+    ? tone === 'info'
+      ? `${CHIP_BASE} border-info/50 bg-info-soft text-info`
+      : tone === 'down'
+        ? `${CHIP_BASE} border-down/50 bg-down-soft text-down`
+        : tone === 'warn'
+          ? `${CHIP_BASE} border-warn/50 bg-warn-soft text-warn`
+          : `${CHIP_BASE} border-brand/50 bg-brand-soft text-brand`
+    : `${CHIP_BASE} border-line text-fg-3 hover:bg-surface-hover hover:text-fg`
+const MODAL_OVERLAY =
+  'fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--overlay)]'
 
 type ReviewTab = 'journal' | 'stats' | 'rules' | 'ai'
 
@@ -128,29 +142,20 @@ export function ReviewPage({ language }: { language: Language }) {
   ]
 
   return (
-    <div className="min-h-screen" style={{ background: C.bg, color: C.text }}>
-      <div className="max-w-[1440px] mx-auto px-6 py-6">
+    <div className="min-h-screen bg-bg text-fg">
+      <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-4">
         {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-4 mb-5">
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
           <div>
-            <h1 className="text-xl font-bold">{rv('title')}</h1>
-            <p className="text-xs mt-1" style={{ color: C.muted }}>
-              {rv('subtitle')}
-            </p>
+            <h1 className="text-xl font-semibold">{rv('title')}</h1>
+            <p className="text-xs mt-0.5 text-fg-3">{rv('subtitle')}</p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs" style={{ color: C.muted }}>
-              {rv('trader')}
-            </span>
+            <span className="text-xs text-fg-3">{rv('trader')}</span>
             <select
               value={selectedTraderId || ''}
               onChange={(e) => setSelectedTraderId(e.target.value)}
-              className="text-xs rounded px-3 py-2 outline-none"
-              style={{
-                background: C.card,
-                border: `1px solid ${C.border}`,
-                color: C.text,
-              }}
+              className="h-8 rounded-md border border-line bg-surface-2 px-2 text-[13px] text-fg outline-none hover:border-line-strong focus:border-brand"
             >
               {traders.length === 0 && <option value="">--</option>}
               {traders.map((tr) => (
@@ -163,36 +168,15 @@ export function ReviewPage({ language }: { language: Language }) {
         </div>
 
         {/* Tabs */}
-        <div
-          className="flex gap-1 mb-5 border-b"
-          style={{ borderColor: C.border }}
-        >
-          {tabs.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setTab(item.key)}
-              className="px-4 py-2.5 text-sm font-medium transition-colors rounded-t"
-              style={{
-                color: tab === item.key ? C.gold : C.muted,
-                borderBottom:
-                  tab === item.key
-                    ? `2px solid ${C.gold}`
-                    : '2px solid transparent',
-                background:
-                  tab === item.key
-                    ? 'color-mix(in srgb, var(--brand) 6%, transparent)'
-                    : 'transparent',
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="mb-4"
+          items={tabs}
+          value={tab}
+          onChange={(k) => setTab(k)}
+        />
 
         {!selectedTraderId ? (
-          <div className="py-20 text-center text-sm" style={{ color: C.muted }}>
-            {rv('noTraders')}
-          </div>
+          <EmptyState title={rv('noTraders')} className="py-16" />
         ) : (
           <>
             {tab === 'journal' && (
@@ -271,20 +255,16 @@ function JournalTab({
     }
   }
 
+  const th = 'h-8 bg-surface-2 px-3 text-xs font-medium text-fg-3 sticky top-0'
   return (
     <div>
       {/* Toolbar */}
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <div className="flex items-center gap-2">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="text-xs rounded px-3 py-2 outline-none"
-            style={{
-              background: C.card,
-              border: `1px solid ${C.border}`,
-              color: C.text,
-            }}
+            className="h-8 rounded-md border border-line bg-surface-2 px-2 text-[13px] text-fg outline-none hover:border-line-strong focus:border-brand"
           >
             <option value="">{rv('filterAll')}</option>
             <option value="pending">{rv('filterPending')}</option>
@@ -294,88 +274,50 @@ function JournalTab({
             value={symbolFilter}
             onChange={(e) => setSymbolFilter(e.target.value.toUpperCase())}
             placeholder={rv('filterSymbolPlaceholder')}
-            className="text-xs rounded px-3 py-2 outline-none w-32"
-            style={{
-              background: C.card,
-              border: `1px solid ${C.border}`,
-              color: C.text,
-            }}
+            className="h-8 w-32 rounded-md border border-line bg-surface-2 px-3 text-[13px] text-fg outline-none placeholder:text-fg-3 hover:border-line-strong focus:border-brand"
           />
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs" style={{ color: C.muted }}>
+          <span className="num text-xs text-fg-3">
             {rv('totalCount', { count: total })}
           </span>
-          <button
+          <Button
+            variant="primary"
             onClick={handleSync}
             disabled={syncing}
-            className="text-xs font-semibold rounded px-4 py-2 transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: 'var(--brand-fg)' }}
+            loading={syncing}
           >
             {syncing ? rv('syncing') : rv('syncFromPositions')}
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Table */}
-      <div style={CARD_STYLE} className="overflow-x-auto">
+      <Card className="overflow-x-auto">
         {loading ? (
-          <div className="py-16 text-center text-sm" style={{ color: C.muted }}>
+          <div className="py-12 text-center text-sm text-fg-3">
             {t('loading', language)}
           </div>
         ) : entries.length === 0 ? (
-          <div className="py-16 text-center text-sm" style={{ color: C.muted }}>
-            {rv('emptyJournal')}
-          </div>
+          <EmptyState title={rv('emptyJournal')} className="py-12" />
         ) : (
-          <table className="w-full text-xs whitespace-nowrap">
+          <table className="w-full border-collapse text-[13px] whitespace-nowrap">
             <thead>
-              <tr
-                style={{
-                  color: C.muted,
-                  borderBottom: `1px solid ${C.border}`,
-                }}
-              >
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colSymbol')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colSource')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colDirection')}
-                </th>
-                <th className="text-right font-medium px-4 py-3">
-                  {rv('colEntry')}
-                </th>
-                <th className="text-right font-medium px-4 py-3">
-                  {rv('colExit')}
-                </th>
-                <th className="text-right font-medium px-4 py-3">
-                  {rv('colLeverage')}
-                </th>
-                <th className="text-right font-medium px-4 py-3">
-                  {rv('colPnL')}
-                </th>
-                <th className="text-right font-medium px-4 py-3">
-                  {rv('colPnlPct')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colTime')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colPlan')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colAdherence')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colEmotion')}
-                </th>
-                <th className="text-left font-medium px-4 py-3">
-                  {rv('colStatus')}
-                </th>
-                <th className="text-right font-medium px-4 py-3"></th>
+              <tr className="border-b border-line">
+                <th className={`${th} text-left`}>{rv('colSymbol')}</th>
+                <th className={`${th} text-left`}>{rv('colSource')}</th>
+                <th className={`${th} text-left`}>{rv('colDirection')}</th>
+                <th className={`${th} text-right`}>{rv('colEntry')}</th>
+                <th className={`${th} text-right`}>{rv('colExit')}</th>
+                <th className={`${th} text-right`}>{rv('colLeverage')}</th>
+                <th className={`${th} text-right`}>{rv('colPnL')}</th>
+                <th className={`${th} text-right`}>{rv('colPnlPct')}</th>
+                <th className={`${th} text-left`}>{rv('colTime')}</th>
+                <th className={`${th} text-left`}>{rv('colPlan')}</th>
+                <th className={`${th} text-left`}>{rv('colAdherence')}</th>
+                <th className={`${th} text-left`}>{rv('colEmotion')}</th>
+                <th className={`${th} text-left`}>{rv('colStatus')}</th>
+                <th className={`${th} text-right`}></th>
               </tr>
             </thead>
             <tbody>
@@ -390,7 +332,7 @@ function JournalTab({
             </tbody>
           </table>
         )}
-      </div>
+      </Card>
 
       {editing && (
         <ReviewEditModal
@@ -417,115 +359,97 @@ function JournalRow({
   onEdit: () => void
 }) {
   const rv = (key: string) => t(`reviewPage.${key}`, language)
-  const win = entry.realized_pnl > 0
-  const pnlColor = win ? C.up : entry.realized_pnl < 0 ? C.down : C.muted
 
   const adherenceLabel = () => {
     switch (entry.executed_as_plan) {
       case 'yes':
-        return <span style={{ color: C.up }}>{rv('adherenceYes')}</span>
+        return (
+          <Badge variant="up" size="xs">
+            {rv('adherenceYes')}
+          </Badge>
+        )
       case 'partial':
-        return <span style={{ color: C.warn }}>{rv('adherencePartial')}</span>
+        return (
+          <Badge variant="warn" size="xs">
+            {rv('adherencePartial')}
+          </Badge>
+        )
       case 'no':
-        return <span style={{ color: C.down }}>{rv('adherenceNo')}</span>
+        return (
+          <Badge variant="down" size="xs">
+            {rv('adherenceNo')}
+          </Badge>
+        )
       default:
-        return <span style={{ color: C.faint }}>--</span>
+        return <span className="text-fg-3">--</span>
     }
   }
 
   const hasPlan = entry.planned_stop_loss > 0 || entry.planned_take_profit > 0
+  const td = 'px-3 py-0'
 
   return (
-    <tr
-      style={{ borderBottom: `1px solid ${C.rowBorder}` }}
-      className="hover:bg-fg/[0.03]"
-    >
-      <td className="px-4 py-3 font-semibold">{entry.symbol}</td>
-      <td className="px-4 py-3">
+    <tr className="h-[34px] border-b border-line last:border-b-0 hover:bg-surface-hover">
+      <td className={`${td} font-semibold text-fg`}>{entry.symbol}</td>
+      <td className={td}>
         {entry.ai_managed === null || entry.ai_managed === undefined ? (
-          <span
-            className="px-2 py-0.5 rounded text-[10px]"
-            style={{ color: C.faint }}
-          >
-            {rv('sourceUnknown')}
-          </span>
+          <span className="text-[11px] text-fg-3">{rv('sourceUnknown')}</span>
         ) : entry.ai_managed ? (
-          <span
-            className="px-2 py-0.5 rounded text-[10px]"
-            title={rv('sourceAITitle')}
-            style={{ background: 'var(--brand-soft)', color: C.gold }}
-          >
+          <Badge variant="brand" size="xs" title={rv('sourceAITitle')}>
             {rv('sourceAI')}
-          </span>
+          </Badge>
         ) : (
-          <span
-            className="px-2 py-0.5 rounded text-[10px]"
-            title={rv('sourceManualTitle')}
-            style={{ color: C.faint }}
-          >
+          <Badge variant="neutral" size="xs" title={rv('sourceManualTitle')}>
             {rv('sourceManual')}
-          </span>
+          </Badge>
         )}
       </td>
-      <td className="px-4 py-3">
-        <span style={{ color: entry.side === 'LONG' ? C.up : C.down }}>
+      <td className={td}>
+        <Badge variant={entry.side === 'LONG' ? 'up' : 'down'} size="xs">
           {entry.side === 'LONG' ? rv('long') : rv('short')}
-        </span>
+        </Badge>
       </td>
-      <td className="px-4 py-3 text-right">{fmtPrice(entry.entry_price)}</td>
-      <td className="px-4 py-3 text-right">{fmtPrice(entry.exit_price)}</td>
-      <td className="px-4 py-3 text-right">{entry.leverage}x</td>
-      <td
-        className="px-4 py-3 text-right font-semibold"
-        style={{ color: pnlColor }}
-      >
-        {entry.realized_pnl >= 0 ? '+' : ''}
-        {entry.realized_pnl.toFixed(2)}
+      <td className={`${td} num text-right`}>{fmtPrice(entry.entry_price)}</td>
+      <td className={`${td} num text-right`}>{fmtPrice(entry.exit_price)}</td>
+      <td className={`${td} num text-right`}>{entry.leverage}x</td>
+      <td className={`${td} text-right font-semibold`}>
+        <PnL value={entry.realized_pnl} currency="" />
       </td>
-      <td className="px-4 py-3 text-right" style={{ color: pnlColor }}>
-        {entry.pnl_pct >= 0 ? '+' : ''}
-        {entry.pnl_pct.toFixed(1)}%
+      <td className={`${td} text-right`}>
+        <Change value={entry.pnl_pct} decimals={1} />
       </td>
-      <td className="px-4 py-3" style={{ color: C.muted }}>
+      <td className={`${td} num text-fg-3`}>
         {fmtTime(entry.entry_time)} → {fmtTime(entry.exit_time)}
       </td>
-      <td className="px-4 py-3" style={{ color: hasPlan ? C.muted : C.faint }}>
+      <td className={`${td} num ${hasPlan ? 'text-fg-2' : 'text-fg-3'}`}>
         {hasPlan
           ? `SL ${fmtPrice(entry.planned_stop_loss)} / TP ${fmtPrice(entry.planned_take_profit)}`
           : rv('noPlan')}
       </td>
-      <td className="px-4 py-3">{adherenceLabel()}</td>
-      <td
-        className="px-4 py-3"
-        style={{ color: entry.emotions ? C.text : C.faint }}
-      >
+      <td className={td}>{adherenceLabel()}</td>
+      <td className={`${td} ${entry.emotions ? 'text-fg' : 'text-fg-3'}`}>
         {entry.emotions || '--'}
       </td>
-      <td className="px-4 py-3">
+      <td className={td}>
         {entry.review_status === 'reviewed' ? (
-          <span
-            className="px-2 py-0.5 rounded text-[10px]"
-            style={{ background: 'var(--up-soft)', color: C.up }}
-          >
+          <Badge variant="up" size="xs">
             {rv('reviewed')}
-          </span>
+          </Badge>
         ) : (
-          <span
-            className="px-2 py-0.5 rounded text-[10px]"
-            style={{ background: 'var(--brand-soft)', color: C.gold }}
-          >
+          <Badge variant="brand" size="xs">
             {rv('pendingReview')}
-          </span>
+          </Badge>
         )}
       </td>
-      <td className="px-4 py-3 text-right">
-        <button
+      <td className={`${td} text-right`}>
+        <Button
+          size="sm"
+          variant="secondary"
           onClick={onEdit}
-          className="text-xs rounded px-3 py-1.5 transition-colors hover:bg-fg/5"
-          style={{ border: `1px solid ${C.border}`, color: C.gold }}
+          className="text-brand"
         >
           {rv('reviewAction')}
-        </button>
+        </Button>
       </td>
     </tr>
   )
@@ -587,53 +511,61 @@ function ReviewEditModal({
   const win = entry.realized_pnl > 0
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'var(--overlay)' }}
-      onClick={onClose}
-    >
+    <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
-        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl p-6"
-        style={{ background: C.card, border: `1px solid ${C.border}` }}
+        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-lg border border-line bg-surface p-5 shadow-[var(--shadow)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header: trade facts */}
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h3 className="text-base font-bold">
-              {entry.symbol}{' '}
-              <span style={{ color: entry.side === 'LONG' ? C.up : C.down }}>
+            <h3 className="flex items-center gap-2 text-base font-semibold">
+              {entry.symbol}
+              <Badge variant={entry.side === 'LONG' ? 'up' : 'down'}>
                 {entry.side === 'LONG' ? rv('long') : rv('short')}{' '}
-                {entry.leverage}x
-              </span>
+                <span className="num">{entry.leverage}x</span>
+              </Badge>
             </h3>
-            <p className="text-xs mt-1" style={{ color: C.muted }}>
+            <p className="text-xs mt-1 text-fg-3">
               {fmtTime(entry.entry_time)} → {fmtTime(entry.exit_time)}
               {entry.close_reason ? ` · ${entry.close_reason}` : ''}
             </p>
           </div>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onClose}
-            className="text-lg px-2"
-            style={{ color: C.muted }}
+            aria-label="close"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         {/* Facts grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
           <FactBox label={rv('colEntry')} value={fmtPrice(entry.entry_price)} />
           <FactBox label={rv('colExit')} value={fmtPrice(entry.exit_price)} />
           <FactBox
             label={rv('colPnL')}
             value={`${entry.realized_pnl >= 0 ? '+' : ''}${entry.realized_pnl.toFixed(2)}`}
-            color={win ? C.up : entry.realized_pnl < 0 ? C.down : C.muted}
+            color={
+              win
+                ? 'text-up'
+                : entry.realized_pnl < 0
+                  ? 'text-down'
+                  : 'text-fg-3'
+            }
           />
           <FactBox
             label={rv('colPnlPct')}
             value={`${entry.pnl_pct >= 0 ? '+' : ''}${entry.pnl_pct.toFixed(1)}%`}
-            color={win ? C.up : entry.realized_pnl < 0 ? C.down : C.muted}
+            color={
+              win
+                ? 'text-up'
+                : entry.realized_pnl < 0
+                  ? 'text-down'
+                  : 'text-fg-3'
+            }
           />
           <FactBox
             label={rv('plannedSL')}
@@ -642,7 +574,7 @@ function ReviewEditModal({
                 ? fmtPrice(entry.planned_stop_loss)
                 : rv('noPlan')
             }
-            color={entry.planned_stop_loss > 0 ? undefined : C.faint}
+            color={entry.planned_stop_loss > 0 ? undefined : 'text-fg-3'}
           />
           <FactBox
             label={rv('plannedTP')}
@@ -651,7 +583,7 @@ function ReviewEditModal({
                 ? fmtPrice(entry.planned_take_profit)
                 : rv('noPlan')
             }
-            color={entry.planned_take_profit > 0 ? undefined : C.faint}
+            color={entry.planned_take_profit > 0 ? undefined : 'text-fg-3'}
           />
           <FactBox
             label={rv('colConfidence')}
@@ -662,11 +594,8 @@ function ReviewEditModal({
 
         {/* Entry reasoning */}
         {entry.entry_reasoning && (
-          <div
-            className="mb-5 p-3 rounded-lg text-xs leading-relaxed"
-            style={{ background: C.bg, color: C.muted }}
-          >
-            <div className="font-semibold mb-1" style={{ color: C.text }}>
+          <div className="mb-4 rounded-md bg-surface-2 p-3 text-xs leading-relaxed text-fg-2">
+            <div className="font-semibold mb-1 text-fg">
               {rv('entryReasoning')}
             </div>
             {entry.entry_reasoning}
@@ -676,12 +605,7 @@ function ReviewEditModal({
         {/* Review form */}
         <div className="space-y-4">
           <div>
-            <label
-              className="text-xs font-medium block mb-2"
-              style={{ color: C.muted }}
-            >
-              {rv('executedAsPlan')}
-            </label>
+            <label className={LABEL_CLS}>{rv('executedAsPlan')}</label>
             <div className="flex gap-2 flex-wrap">
               {[
                 { v: 'yes', label: rv('adherenceYes') },
@@ -690,16 +614,9 @@ function ReviewEditModal({
               ].map((opt) => (
                 <button
                   key={opt.v}
+                  type="button"
                   onClick={() => setExecutedAsPlan(opt.v)}
-                  className="px-4 py-1.5 rounded text-xs transition-colors"
-                  style={{
-                    border: `1px solid ${executedAsPlan === opt.v ? C.gold : C.border}`,
-                    color: executedAsPlan === opt.v ? C.gold : C.muted,
-                    background:
-                      executedAsPlan === opt.v
-                        ? 'var(--brand-soft)'
-                        : 'transparent',
-                  }}
+                  className={chipCls(executedAsPlan === opt.v)}
                 >
                   {opt.label}
                 </button>
@@ -708,25 +625,14 @@ function ReviewEditModal({
           </div>
 
           <div>
-            <label
-              className="text-xs font-medium block mb-2"
-              style={{ color: C.muted }}
-            >
-              {rv('emotionState')}
-            </label>
+            <label className={LABEL_CLS}>{rv('emotionState')}</label>
             <div className="flex gap-2 flex-wrap">
               {EMOTION_OPTIONS.map((emo) => (
                 <button
                   key={emo}
+                  type="button"
                   onClick={() => toggleEmotion(emo)}
-                  className="px-3 py-1.5 rounded text-xs transition-colors"
-                  style={{
-                    border: `1px solid ${emotions.includes(emo) ? C.blue : C.border}`,
-                    color: emotions.includes(emo) ? C.blue : C.muted,
-                    background: emotions.includes(emo)
-                      ? 'var(--info-soft)'
-                      : 'transparent',
-                  }}
+                  className={chipCls(emotions.includes(emo), 'info')}
                 >
                   {rv(`emotion_${emo}`)}
                 </button>
@@ -736,21 +642,11 @@ function ReviewEditModal({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label
-                className="text-xs font-medium block mb-2"
-                style={{ color: C.muted }}
-              >
-                {rv('mistakeCategory')}
-              </label>
+              <label className={LABEL_CLS}>{rv('mistakeCategory')}</label>
               <select
                 value={mistakeCategory}
                 onChange={(e) => setMistakeCategory(e.target.value)}
-                className="w-full text-xs rounded px-3 py-2 outline-none"
-                style={{
-                  background: C.bg,
-                  border: `1px solid ${C.border}`,
-                  color: C.text,
-                }}
+                className={INPUT_CLS}
               >
                 <option value="">--</option>
                 {MISTAKE_OPTIONS.map((opt) => (
@@ -761,21 +657,11 @@ function ReviewEditModal({
               </select>
             </div>
             <div>
-              <label
-                className="text-xs font-medium block mb-2"
-                style={{ color: C.muted }}
-              >
-                {rv('strategyTag')}
-              </label>
+              <label className={LABEL_CLS}>{rv('strategyTag')}</label>
               <select
                 value={strategyTag}
                 onChange={(e) => setStrategyTag(e.target.value)}
-                className="w-full text-xs rounded px-3 py-2 outline-none"
-                style={{
-                  background: C.bg,
-                  border: `1px solid ${C.border}`,
-                  color: C.text,
-                }}
+                className={INPUT_CLS}
               >
                 <option value="">--</option>
                 {STRATEGY_OPTIONS.map((opt) => (
@@ -788,64 +674,33 @@ function ReviewEditModal({
           </div>
 
           <div>
-            <label
-              className="text-xs font-medium block mb-2"
-              style={{ color: C.muted }}
-            >
-              {rv('deviationNote')}
-            </label>
+            <label className={LABEL_CLS}>{rv('deviationNote')}</label>
             <textarea
               value={deviationNote}
               onChange={(e) => setDeviationNote(e.target.value)}
               rows={2}
               placeholder={rv('deviationNotePlaceholder')}
-              className="w-full text-xs rounded px-3 py-2 outline-none resize-none"
-              style={{
-                background: C.bg,
-                border: `1px solid ${C.border}`,
-                color: C.text,
-              }}
+              className={TEXTAREA_CLS}
             />
           </div>
 
           <div>
-            <label
-              className="text-xs font-medium block mb-2"
-              style={{ color: C.muted }}
-            >
-              {rv('lesson')}
-            </label>
+            <label className={LABEL_CLS}>{rv('lesson')}</label>
             <textarea
               value={lesson}
               onChange={(e) => setLesson(e.target.value)}
               rows={3}
               placeholder={rv('lessonPlaceholder')}
-              className="w-full text-xs rounded px-3 py-2 outline-none resize-none"
-              style={{
-                background: C.bg,
-                border: `1px solid ${C.border}`,
-                color: C.text,
-              }}
+              className={TEXTAREA_CLS}
             />
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 mt-6">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded text-xs"
-            style={{ border: `1px solid ${C.border}`, color: C.muted }}
-          >
-            {t('cancel', language)}
-          </button>
-          <button
-            onClick={save}
-            disabled={saving}
-            className="px-5 py-2 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: 'var(--brand-fg)' }}
-          >
+        <div className="mt-5 flex justify-end gap-2">
+          <Button onClick={onClose}>{t('cancel', language)}</Button>
+          <Button variant="primary" onClick={save} disabled={saving}>
             {saving ? t('loading', language) : rv('saveReview')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -862,11 +717,9 @@ function FactBox({
   color?: string
 }) {
   return (
-    <div className="p-2.5 rounded-lg" style={{ background: C.bg }}>
-      <div className="text-[10px] mb-1" style={{ color: C.faint }}>
-        {label}
-      </div>
-      <div className="text-xs font-semibold" style={{ color: color || C.text }}>
+    <div className="rounded-md bg-surface-2 p-2">
+      <div className="mb-0.5 text-[11px] text-fg-3">{label}</div>
+      <div className={`num text-[13px] font-semibold ${color || 'text-fg'}`}>
         {value}
       </div>
     </div>
@@ -901,25 +754,21 @@ function StatsTab({
 
   if (loading) {
     return (
-      <div className="py-16 text-center text-sm" style={{ color: C.muted }}>
+      <div className="py-12 text-center text-sm text-fg-3">
         {t('loading', language)}
       </div>
     )
   }
   if (!stats || stats.total_entries === 0) {
-    return (
-      <div className="py-16 text-center text-sm" style={{ color: C.muted }}>
-        {rv('emptyStats')}
-      </div>
-    )
+    return <EmptyState title={rv('emptyStats')} className="py-12" />
   }
 
   const plRatio = stats.avg_loss > 0 ? stats.avg_win / stats.avg_loss : 0
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* Core metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      <Card className="grid grid-cols-2 gap-4 p-4 md:grid-cols-3 lg:grid-cols-6">
         <MetricCard
           label={rv('totalTrades')}
           value={String(stats.total_entries)}
@@ -929,7 +778,7 @@ function StatsTab({
           label={rv('winRate')}
           value={`${stats.win_rate.toFixed(1)}%`}
           sub={`${stats.win_trades}W / ${stats.loss_trades}L`}
-          color={stats.win_rate >= 50 ? C.up : C.down}
+          color={stats.win_rate >= 50 ? 'up' : 'down'}
         />
         <MetricCard
           label={rv('plRatio')}
@@ -940,35 +789,34 @@ function StatsTab({
           label={rv('expectancy')}
           value={`${stats.expectancy >= 0 ? '+' : ''}${stats.expectancy.toFixed(2)}`}
           sub={rv('expectancyDesc')}
-          color={stats.expectancy >= 0 ? C.up : C.down}
+          color={stats.expectancy >= 0 ? 'up' : 'down'}
         />
         <MetricCard
           label={rv('profitFactor')}
           value={
             stats.profit_factor > 0 ? stats.profit_factor.toFixed(2) : '--'
           }
-          color={stats.profit_factor >= 1 ? C.up : C.down}
+          color={stats.profit_factor >= 1 ? 'up' : 'down'}
         />
         <MetricCard
           label={rv('totalPnL')}
           value={`${stats.total_pnl >= 0 ? '+' : ''}${stats.total_pnl.toFixed(2)}`}
-          color={stats.total_pnl >= 0 ? C.up : C.down}
+          color={stats.total_pnl >= 0 ? 'up' : 'down'}
         />
-      </div>
+      </Card>
 
       {/* Execution layer: adherence + plan coverage */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div style={CARD_STYLE} className="p-4">
-          <h3 className="text-sm font-bold mb-3">{rv('adherenceSection')}</h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="rounded-lg border border-line bg-surface p-4">
+          <h3 className="text-sm font-semibold mb-2">
+            {rv('adherenceSection')}
+          </h3>
           <GroupStatsTable
             groups={stats.adherence_plan}
             language={language}
             labelMap={(k) => rv(`adherence_${k}`)}
           />
-          <div
-            className="mt-3 pt-3 text-xs flex items-center justify-between"
-            style={{ borderTop: `1px solid ${C.rowBorder}`, color: C.muted }}
-          >
+          <div className="mt-3 flex items-center justify-between border-t border-line pt-3 text-xs text-fg-3">
             <span>{rv('planCoverage')}</span>
             <span>
               {rv('withPlanWinRate', {
@@ -984,8 +832,8 @@ function StatsTab({
           </div>
         </div>
 
-        <div style={CARD_STYLE} className="p-4">
-          <h3 className="text-sm font-bold mb-3">{rv('emotionSection')}</h3>
+        <div className="rounded-lg border border-line bg-surface p-4">
+          <h3 className="text-sm font-semibold mb-2">{rv('emotionSection')}</h3>
           <GroupStatsTable
             groups={stats.emotion_stats}
             language={language}
@@ -993,8 +841,8 @@ function StatsTab({
           />
         </div>
 
-        <div style={CARD_STYLE} className="p-4">
-          <h3 className="text-sm font-bold mb-3">{rv('mistakeSection')}</h3>
+        <div className="rounded-lg border border-line bg-surface p-4">
+          <h3 className="text-sm font-semibold mb-2">{rv('mistakeSection')}</h3>
           <GroupStatsTable
             groups={stats.mistake_stats}
             language={language}
@@ -1002,8 +850,10 @@ function StatsTab({
           />
         </div>
 
-        <div style={CARD_STYLE} className="p-4">
-          <h3 className="text-sm font-bold mb-3">{rv('strategySection')}</h3>
+        <div className="rounded-lg border border-line bg-surface p-4">
+          <h3 className="text-sm font-semibold mb-2">
+            {rv('strategySection')}
+          </h3>
           <GroupStatsTable
             groups={stats.strategy_stats}
             language={language}
@@ -1024,23 +874,9 @@ function MetricCard({
   label: string
   value: string
   sub?: string
-  color?: string
+  color?: 'up' | 'down'
 }) {
-  return (
-    <div style={CARD_STYLE} className="p-4">
-      <div className="text-[11px] mb-1.5" style={{ color: C.muted }}>
-        {label}
-      </div>
-      <div className="text-lg font-bold" style={{ color: color || C.text }}>
-        {value}
-      </div>
-      {sub && (
-        <div className="text-[10px] mt-1" style={{ color: C.faint }}>
-          {sub}
-        </div>
-      )}
-    </div>
-  )
+  return <Stat label={label} value={value} hint={sub} tone={color} />
 }
 
 function GroupStatsTable({
@@ -1061,51 +897,46 @@ function GroupStatsTable({
   const rv = (key: string) => t(`reviewPage.${key}`, language)
   if (!groups || groups.length === 0) {
     return (
-      <div className="py-6 text-center text-xs" style={{ color: C.faint }}>
-        {rv('noData')}
-      </div>
+      <div className="py-6 text-center text-xs text-fg-3">{rv('noData')}</div>
     )
   }
+  const th = 'h-8 bg-surface-2 px-3 text-xs font-medium text-fg-3'
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr style={{ color: C.faint }}>
-          <th className="text-left font-medium pb-2">{rv('groupCol')}</th>
-          <th className="text-right font-medium pb-2">{rv('countCol')}</th>
-          <th className="text-right font-medium pb-2">{rv('winRateCol')}</th>
-          <th className="text-right font-medium pb-2">{rv('totalPnlCol')}</th>
-          <th className="text-right font-medium pb-2">{rv('avgPnlCol')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {groups.map((g) => (
-          <tr key={g.key} style={{ borderTop: `1px solid ${C.rowBorder}` }}>
-            <td className="py-2">{labelMap(g.key)}</td>
-            <td className="py-2 text-right">{g.count}</td>
-            <td
-              className="py-2 text-right"
-              style={{ color: g.win_rate >= 50 ? C.up : C.down }}
-            >
-              {g.win_rate.toFixed(0)}%
-            </td>
-            <td
-              className="py-2 text-right"
-              style={{ color: g.total_pnl >= 0 ? C.up : C.down }}
-            >
-              {g.total_pnl >= 0 ? '+' : ''}
-              {g.total_pnl.toFixed(1)}
-            </td>
-            <td
-              className="py-2 text-right"
-              style={{ color: g.avg_pnl >= 0 ? C.up : C.down }}
-            >
-              {g.avg_pnl >= 0 ? '+' : ''}
-              {g.avg_pnl.toFixed(1)}
-            </td>
+    <div className="-mx-4 -mb-4 overflow-x-auto">
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr className="border-y border-line">
+            <th className={`${th} text-left`}>{rv('groupCol')}</th>
+            <th className={`${th} text-right`}>{rv('countCol')}</th>
+            <th className={`${th} text-right`}>{rv('winRateCol')}</th>
+            <th className={`${th} text-right`}>{rv('totalPnlCol')}</th>
+            <th className={`${th} text-right`}>{rv('avgPnlCol')}</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {groups.map((g) => (
+            <tr
+              key={g.key}
+              className="h-[34px] border-b border-line last:border-b-0 hover:bg-surface-hover"
+            >
+              <td className="px-3 py-0">{labelMap(g.key)}</td>
+              <td className="num px-3 py-0 text-right">{g.count}</td>
+              <td
+                className={`num px-3 py-0 text-right ${g.win_rate >= 50 ? 'text-up' : 'text-down'}`}
+              >
+                {g.win_rate.toFixed(0)}%
+              </td>
+              <td className="px-3 py-0 text-right">
+                <PnL value={g.total_pnl} decimals={1} currency="" />
+              </td>
+              <td className="px-3 py-0 text-right">
+                <PnL value={g.avg_pnl} decimals={1} currency="" />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -1231,74 +1062,53 @@ function RulesTab({
   const softRules = rules.filter((r) => r.rule_type === 'soft')
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* Toolbar */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <p className="text-xs" style={{ color: C.muted }}>
-          {rv('rulesIntro')}
-        </p>
+        <p className="text-xs text-fg-3">{rv('rulesIntro')}</p>
         <div className="flex gap-2">
-          <button
+          <Button
             onClick={handleExtract}
             disabled={extracting}
-            className="text-xs font-semibold rounded px-4 py-2 transition-opacity hover:opacity-80"
-            style={{
-              border: `1px solid ${C.gold}`,
-              color: C.gold,
-              background: 'color-mix(in srgb, var(--brand) 6%, transparent)',
-            }}
+            loading={extracting}
+            className="border-ai/40 bg-ai-soft text-ai hover:bg-ai-soft hover:border-ai"
           >
             {extracting ? rv('extracting') : rv('aiExtractRules')}
-          </button>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="text-xs font-semibold rounded px-4 py-2 transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: 'var(--brand-fg)' }}
-          >
+          </Button>
+          <Button variant="primary" onClick={() => setShowCreate(true)}>
             {rv('addRule')}
-          </button>
+          </Button>
         </div>
       </div>
 
       {applyResult && (
-        <div
-          className="text-xs px-4 py-3 rounded-lg"
-          style={{
-            background: C.card,
-            border: `1px solid ${C.border}`,
-            color: C.muted,
-          }}
-        >
+        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-xs text-fg-3">
           {applyResult}
         </div>
       )}
 
       {/* AI proposals */}
       {proposals && (
-        <div style={CARD_STYLE} className="p-4">
+        <div className="rounded-lg border border-line bg-surface p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold">{rv('aiProposals')}</h3>
             <div className="flex gap-2">
               {proposals.length > 0 && (
-                <button
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={handleApplyProposals}
-                  className="text-xs px-3 py-1.5 rounded"
-                  style={{ background: C.gold, color: 'var(--brand-fg)' }}
                 >
                   {rv('applyAll')}
-                </button>
+                </Button>
               )}
-              <button
-                onClick={() => setProposals(null)}
-                className="text-xs px-3 py-1.5 rounded"
-                style={{ border: `1px solid ${C.border}`, color: C.muted }}
-              >
+              <Button size="sm" onClick={() => setProposals(null)}>
                 ✕
-              </button>
+              </Button>
             </div>
           </div>
           {proposals.length === 0 ? (
-            <p className="text-xs py-4 text-center" style={{ color: C.faint }}>
+            <p className="text-xs py-4 text-center text-fg-3">
               {rv('noProposals')}
             </p>
           ) : (
@@ -1312,19 +1122,19 @@ function RulesTab({
       )}
 
       {/* Hard rules */}
-      <div style={CARD_STYLE} className="p-4">
-        <h3 className="text-sm font-bold mb-3">
+      <div className="rounded-lg border border-line bg-surface p-4">
+        <h3 className="text-sm font-semibold mb-2">
           {rv('hardRules')}{' '}
-          <span className="text-xs font-normal" style={{ color: C.muted }}>
+          <span className="text-xs font-normal text-fg-3">
             ({hardRules.length})
           </span>
         </h3>
         {loading ? (
-          <div className="py-6 text-center text-xs" style={{ color: C.muted }}>
+          <div className="py-6 text-center text-xs text-fg-3">
             {t('loading', language)}
           </div>
         ) : hardRules.length === 0 ? (
-          <p className="py-6 text-center text-xs" style={{ color: C.faint }}>
+          <p className="py-6 text-center text-xs text-fg-3">
             {rv('noHardRules')}
           </p>
         ) : (
@@ -1344,15 +1154,15 @@ function RulesTab({
       </div>
 
       {/* Soft lessons */}
-      <div style={CARD_STYLE} className="p-4">
-        <h3 className="text-sm font-bold mb-3">
+      <div className="rounded-lg border border-line bg-surface p-4">
+        <h3 className="text-sm font-semibold mb-2">
           {rv('softRules')}{' '}
-          <span className="text-xs font-normal" style={{ color: C.muted }}>
+          <span className="text-xs font-normal text-fg-3">
             ({softRules.length})
           </span>
         </h3>
         {!loading && softRules.length === 0 ? (
-          <p className="py-6 text-center text-xs" style={{ color: C.faint }}>
+          <p className="py-6 text-center text-xs text-fg-3">
             {rv('noSoftRules')}
           </p>
         ) : (
@@ -1371,55 +1181,64 @@ function RulesTab({
       </div>
 
       {/* Check logs */}
-      <div style={CARD_STYLE} className="p-4">
-        <h3 className="text-sm font-bold mb-3">{rv('checkLogs')}</h3>
+      <div className="rounded-lg border border-line bg-surface p-4">
+        <h3 className="text-sm font-semibold mb-2">{rv('checkLogs')}</h3>
         {logs.length === 0 ? (
-          <p className="py-6 text-center text-xs" style={{ color: C.faint }}>
+          <p className="py-6 text-center text-xs text-fg-3">
             {rv('noCheckLogs')}
           </p>
         ) : (
-          <table className="w-full text-xs">
-            <thead>
-              <tr style={{ color: C.faint }}>
-                <th className="text-left font-medium pb-2">{rv('colTime')}</th>
-                <th className="text-left font-medium pb-2">
-                  {rv('colSymbol')}
-                </th>
-                <th className="text-left font-medium pb-2">{rv('ruleName')}</th>
-                <th className="text-left font-medium pb-2">
-                  {rv('checkResult')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log) => (
-                <tr
-                  key={log.id}
-                  style={{ borderTop: `1px solid ${C.rowBorder}` }}
-                >
-                  <td className="py-2" style={{ color: C.muted }}>
-                    {fmtTime(log.created_at)}
-                  </td>
-                  <td className="py-2 font-semibold">
-                    {log.symbol}{' '}
-                    <span style={{ color: C.faint }}>{log.action}</span>
-                  </td>
-                  <td className="py-2">{log.rule_name}</td>
-                  <td className="py-2">
-                    {log.blocked ? (
-                      <span style={{ color: C.down }}>
-                        {rv('resultBlocked')}
-                      </span>
-                    ) : (
-                      <span style={{ color: C.warn }}>
-                        {rv('resultWarned')}
-                      </span>
-                    )}
-                  </td>
+          <div className="-mx-4 -mb-4 overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr className="border-y border-line">
+                  {[
+                    rv('colTime'),
+                    rv('colSymbol'),
+                    rv('ruleName'),
+                    rv('checkResult'),
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="h-8 bg-surface-2 px-3 text-left text-xs font-medium text-fg-3"
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {logs.map((log) => (
+                  <tr
+                    key={log.id}
+                    className="h-[34px] border-b border-line last:border-b-0 hover:bg-surface-hover"
+                  >
+                    <td className="num px-3 py-0 text-fg-3">
+                      {fmtTime(log.created_at)}
+                    </td>
+                    <td className="px-3 py-0 font-semibold">
+                      {log.symbol}{' '}
+                      <span className="font-normal text-fg-3">
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="px-3 py-0">{log.rule_name}</td>
+                    <td className="px-3 py-0">
+                      {log.blocked ? (
+                        <Badge variant="down" size="xs">
+                          {rv('resultBlocked')}
+                        </Badge>
+                      ) : (
+                        <Badge variant="warn" size="xs">
+                          {rv('resultWarned')}
+                        </Badge>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
@@ -1454,59 +1273,50 @@ function RuleRow({
   const rv = (key: string, params?: Record<string, string | number>) =>
     t(`reviewPage.${key}`, language, params)
   return (
-    <div
-      className="flex items-start justify-between gap-3 p-3 rounded-lg"
-      style={{ background: C.bg, border: `1px solid ${C.rowBorder}` }}
-    >
+    <div className="flex items-start justify-between gap-3 rounded-md border border-line bg-surface-2 px-3 py-2">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold">{rule.name}</span>
+          <span className="text-[13px] font-semibold">{rule.name}</span>
+          <Badge
+            variant={rule.rule_type === 'hard' ? 'info' : 'brand'}
+            size="xs"
+          >
+            {rule.rule_type === 'hard' ? rv('typeHard') : rv('typeSoft')}
+          </Badge>
           {rule.on_violation === 'block' ? (
-            <span
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'var(--down-soft)', color: C.down }}
-            >
+            <Badge variant="down" size="xs">
               {rv('violationBlock')}
-            </span>
+            </Badge>
           ) : (
-            <span
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'var(--brand-soft)', color: C.warn }}
-            >
+            <Badge variant="warn" size="xs">
               {rv('violationWarn')}
-            </span>
+            </Badge>
           )}
           {rule.source === 'ai_review' && (
-            <span
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'var(--info-soft)', color: C.blue }}
-            >
+            <Badge variant="ai" size="xs">
               AI
-            </span>
+            </Badge>
           )}
-          <span className="text-[10px]" style={{ color: C.faint }}>
+          <span className="num text-[11px] text-fg-3">
             {rv('ruleHits', { hits: rule.hit_count, blocks: rule.block_count })}
           </span>
           {rule.triggers_30d !== undefined && (
-            <span className="text-[10px]" style={{ color: C.faint }}>
+            <span className="num text-[11px] text-fg-3">
               {rv('triggers30d', { n: rule.triggers_30d })}
             </span>
           )}
           {rule.review_due && (
-            <span
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'var(--brand-soft)', color: C.warn }}
-            >
+            <Badge variant="warn" size="xs">
               {rv('reviewDue')}
-            </span>
+            </Badge>
           )}
         </div>
         {rule.rule_type === 'hard' && (
-          <div className="text-[11px] mt-1 font-mono" style={{ color: C.blue }}>
+          <div className="num mt-1 text-[11px] text-info">
             {rule.condition_json}
           </div>
         )}
-        <div className="text-[11px] mt-1" style={{ color: C.muted }}>
+        <div className="mt-1 text-xs text-fg-2">
           {rule.rule_type === 'hard' ? rule.description : rule.lesson_text}
         </div>
       </div>
@@ -1514,32 +1324,28 @@ function RuleRow({
         {onReverify &&
           rule.rule_type === 'hard' &&
           rule.source === 'ai_review' && (
-            <button
-              onClick={onReverify}
-              className="text-[10px] px-2 py-1 rounded"
-              style={{ border: `1px solid ${C.border}`, color: C.muted }}
-            >
+            <Button size="sm" onClick={onReverify}>
               {rv('reverify')}
-            </button>
+            </Button>
           )}
         <button
+          type="button"
           onClick={onToggle}
-          className="w-9 h-5 rounded-full relative transition-colors"
-          style={{ background: rule.enabled ? C.up : C.border }}
+          className={`relative h-5 w-9 rounded-full transition-colors ${rule.enabled ? 'bg-up' : 'bg-line-strong'}`}
           title={rule.enabled ? rv('enabled') : rv('disabled')}
         >
           <span
-            className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-            style={{ left: rule.enabled ? 18 : 2 }}
+            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${rule.enabled ? 'left-[18px]' : 'left-0.5'}`}
           />
         </button>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onDelete}
-          className="text-xs px-2 py-1"
-          style={{ color: C.faint }}
+          aria-label="delete"
         >
-          🗑
-        </button>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
       </div>
     </div>
   )
@@ -1568,12 +1374,16 @@ function VerificationBadge({
     unverifiable: rv('verifUnverifiable'),
     soft: rv('verifSoft'),
   }
-  const color =
+  const variant =
     v.status === 'supported'
-      ? C.up
-      : v.status === 'weak' || v.status === 'contradicted'
-        ? C.down
-        : C.muted
+      ? 'up'
+      : v.status === 'weak'
+        ? 'warn'
+        : v.status === 'contradicted'
+          ? 'down'
+          : v.status === 'soft'
+            ? 'info'
+            : 'neutral'
   const detail = rv('verifDetail', {
     matched: v.matched,
     pop: v.population,
@@ -1581,13 +1391,9 @@ function VerificationBadge({
     net: v.net_pnl.toFixed(2),
   })
   return (
-    <span
-      className="px-1.5 py-0.5 rounded text-[10px]"
-      style={{ border: `1px solid ${color}`, color }}
-      title={v.reason || detail}
-    >
+    <Badge variant={variant} size="xs" title={v.reason || detail}>
       {label[v.status] || v.status}
-    </span>
+    </Badge>
   )
 }
 
@@ -1601,30 +1407,21 @@ function ProposalRow({
   const rv = (key: string, params?: Record<string, string | number>) =>
     t(`reviewPage.${key}`, language, params)
   return (
-    <div
-      className="p-3 rounded-lg text-xs"
-      style={{ background: C.bg, border: `1px solid ${C.rowBorder}` }}
-    >
+    <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs">
       <div className="flex items-center gap-2 flex-wrap">
-        <span
-          className="px-1.5 py-0.5 rounded text-[10px]"
-          style={{
-            background:
-              proposal.rule_type === 'hard'
-                ? 'var(--info-soft)'
-                : 'var(--brand-soft)',
-            color: proposal.rule_type === 'hard' ? C.blue : C.gold,
-          }}
+        <Badge
+          variant={proposal.rule_type === 'hard' ? 'info' : 'brand'}
+          size="xs"
         >
           {proposal.rule_type === 'hard' ? rv('typeHard') : rv('typeSoft')}
-        </span>
+        </Badge>
         <span className="font-semibold">{proposal.name}</span>
         {proposal.verification && (
           <VerificationBadge v={proposal.verification} language={language} />
         )}
       </div>
       {proposal.verification && proposal.verification.status !== 'soft' && (
-        <div className="text-[10px] mt-1" style={{ color: C.faint }}>
+        <div className="num mt-1 text-[11px] text-fg-3">
           {proposal.verification.reason ||
             rv('verifDetail', {
               matched: proposal.verification.matched,
@@ -1635,16 +1432,14 @@ function ProposalRow({
         </div>
       )}
       {proposalBlocked(proposal) && (
-        <div className="text-[10px] mt-1" style={{ color: C.down }}>
-          {rv('verifBlocked')}
-        </div>
+        <div className="text-[10px] mt-1 text-down">{rv('verifBlocked')}</div>
       )}
       {proposal.rule_type === 'hard' && proposal.condition && (
-        <div className="text-[11px] mt-1 font-mono" style={{ color: C.blue }}>
+        <div className="num mt-1 text-[11px] text-info">
           {proposal.condition}
         </div>
       )}
-      <div className="text-[11px] mt-1" style={{ color: C.muted }}>
+      <div className="mt-1 text-xs text-fg-2">
         {proposal.rule_type === 'hard'
           ? proposal.description
           : proposal.lesson_text}
@@ -1716,32 +1511,22 @@ function CreateRuleModal({
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    background: C.bg,
-    border: `1px solid ${C.border}`,
-    color: C.text,
-  }
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'var(--overlay)' }}
-      onClick={onClose}
-    >
+    <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
-        className="w-full max-w-lg rounded-xl p-6"
-        style={{ background: C.card, border: `1px solid ${C.border}` }}
+        className="w-full max-w-lg rounded-lg border border-line bg-surface p-5 shadow-[var(--shadow)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-bold">{rv('addRule')}</h3>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onClose}
-            className="text-lg px-2"
-            style={{ color: C.muted }}
+            aria-label="close"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         <div className="space-y-4">
@@ -1749,14 +1534,9 @@ function CreateRuleModal({
             {(['hard', 'soft'] as const).map((tp) => (
               <button
                 key={tp}
+                type="button"
                 onClick={() => setRuleType(tp)}
-                className="flex-1 px-4 py-2 rounded text-xs transition-colors"
-                style={{
-                  border: `1px solid ${ruleType === tp ? C.gold : C.border}`,
-                  color: ruleType === tp ? C.gold : C.muted,
-                  background:
-                    ruleType === tp ? 'var(--brand-soft)' : 'transparent',
-                }}
+                className={`${chipCls(ruleType === tp)} h-8 flex-1 justify-center`}
               >
                 {tp === 'hard' ? rv('typeHard') : rv('typeSoft')}
               </button>
@@ -1764,32 +1544,23 @@ function CreateRuleModal({
           </div>
 
           <div>
-            <label className="text-xs block mb-1.5" style={{ color: C.muted }}>
-              {rv('ruleName')}
-            </label>
+            <label className={LABEL_CLS}>{rv('ruleName')}</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full text-xs rounded px-3 py-2 outline-none"
-              style={inputStyle}
+              className={INPUT_CLS}
             />
           </div>
 
           {ruleType === 'hard' ? (
             <>
               <div>
-                <label
-                  className="text-xs block mb-1.5"
-                  style={{ color: C.muted }}
-                >
-                  {rv('ruleCondition')}
-                </label>
+                <label className={LABEL_CLS}>{rv('ruleCondition')}</label>
                 <div className="flex gap-2">
                   <select
                     value={field}
                     onChange={(e) => setField(e.target.value)}
-                    className="flex-1 text-xs rounded px-2 py-2 outline-none"
-                    style={inputStyle}
+                    className={`${INPUT_CLS} flex-1`}
                   >
                     {RULE_FIELDS.map((f) => (
                       <option key={f} value={f}>
@@ -1800,8 +1571,7 @@ function CreateRuleModal({
                   <select
                     value={op}
                     onChange={(e) => setOp(e.target.value)}
-                    className="w-20 text-xs rounded px-2 py-2 outline-none"
-                    style={inputStyle}
+                    className={`${INPUT_CLS} !w-20 shrink-0`}
                   >
                     {['>', '>=', '<', '<=', '==', '!=', 'in'].map((o) => (
                       <option key={o} value={o}>
@@ -1812,40 +1582,22 @@ function CreateRuleModal({
                   <input
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
-                    className="flex-1 text-xs rounded px-3 py-2 outline-none"
-                    style={inputStyle}
+                    className={`${INPUT_CLS} flex-1`}
                   />
                 </div>
-                <div
-                  className="text-[10px] mt-1.5 font-mono"
-                  style={{ color: C.faint }}
-                >
+                <div className="num text-[11px] mt-1.5 text-fg-3">
                   {conditionJSON}
                 </div>
               </div>
               <div>
-                <label
-                  className="text-xs block mb-1.5"
-                  style={{ color: C.muted }}
-                >
-                  {rv('violationAction')}
-                </label>
+                <label className={LABEL_CLS}>{rv('violationAction')}</label>
                 <div className="flex gap-2">
                   {(['block', 'warn'] as const).map((act) => (
                     <button
                       key={act}
+                      type="button"
                       onClick={() => setOnViolation(act)}
-                      className="flex-1 px-4 py-2 rounded text-xs transition-colors"
-                      style={{
-                        border: `1px solid ${onViolation === act ? (act === 'block' ? C.down : C.warn) : C.border}`,
-                        color:
-                          onViolation === act
-                            ? act === 'block'
-                              ? C.down
-                              : C.warn
-                            : C.muted,
-                        background: 'transparent',
-                      }}
+                      className={`${chipCls(onViolation === act, act === 'block' ? 'down' : 'warn')} h-8 flex-1 justify-center`}
                     >
                       {act === 'block'
                         ? rv('violationBlock')
@@ -1855,78 +1607,45 @@ function CreateRuleModal({
                 </div>
               </div>
               <div>
-                <label
-                  className="text-xs block mb-1.5"
-                  style={{ color: C.muted }}
-                >
-                  {rv('ruleDescription')}
-                </label>
+                <label className={LABEL_CLS}>{rv('ruleDescription')}</label>
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className="w-full text-xs rounded px-3 py-2 outline-none"
-                  style={inputStyle}
+                  className={INPUT_CLS}
                 />
               </div>
             </>
           ) : (
             <>
               <div>
-                <label
-                  className="text-xs block mb-1.5"
-                  style={{ color: C.muted }}
-                >
-                  {rv('lessonText')}
-                </label>
+                <label className={LABEL_CLS}>{rv('lessonText')}</label>
                 <textarea
                   value={lessonText}
                   onChange={(e) => setLessonText(e.target.value)}
                   rows={3}
-                  className="w-full text-xs rounded px-3 py-2 outline-none resize-none"
-                  style={inputStyle}
+                  className={TEXTAREA_CLS}
                 />
               </div>
               <div>
-                <label
-                  className="text-xs block mb-1.5"
-                  style={{ color: C.muted }}
-                >
-                  {rv('ruleTags')}
-                </label>
+                <label className={LABEL_CLS}>{rv('ruleTags')}</label>
                 <input
                   value={tags}
                   onChange={(e) => setTags(e.target.value)}
                   placeholder="fomo, high_leverage"
-                  className="w-full text-xs rounded px-3 py-2 outline-none"
-                  style={inputStyle}
+                  className={INPUT_CLS}
                 />
               </div>
             </>
           )}
 
-          {error && (
-            <p className="text-xs" style={{ color: C.down }}>
-              {error}
-            </p>
-          )}
+          {error && <p className="text-xs text-down">{error}</p>}
         </div>
 
-        <div className="flex justify-end gap-3 mt-6">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded text-xs"
-            style={{ border: `1px solid ${C.border}`, color: C.muted }}
-          >
-            {t('cancel', language)}
-          </button>
-          <button
-            onClick={save}
-            disabled={saving}
-            className="px-5 py-2 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: 'var(--brand-fg)' }}
-          >
+        <div className="mt-5 flex justify-end gap-2">
+          <Button onClick={onClose}>{t('cancel', language)}</Button>
+          <Button variant="primary" onClick={save} disabled={saving}>
             {saving ? t('loading', language) : rv('saveRule')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -2004,77 +1723,49 @@ function AITab({
   }
 
   return (
-    <div className="space-y-5">
-      <div style={CARD_STYLE} className="p-4">
-        <p className="text-xs mb-4" style={{ color: C.muted }}>
+    <div className="space-y-3">
+      <div className="rounded-lg border border-line bg-surface p-4">
+        <p className="mb-3 max-w-[80ch] text-xs text-fg-3">
           {rv('aiReviewIntro')}
         </p>
         <div className="flex items-center gap-3 flex-wrap">
-          <div
-            className="flex gap-1 p-1 rounded-lg"
-            style={{ background: C.bg }}
-          >
-            {(['daily', 'weekly', 'monthly'] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className="px-4 py-1.5 rounded text-xs transition-colors"
-                style={{
-                  background: period === p ? C.gold : 'transparent',
-                  color: period === p ? 'var(--brand-fg)' : C.muted,
-                  fontWeight: period === p ? 600 : 400,
-                }}
-              >
-                {rv(`period_${p}`)}
-              </button>
-            ))}
-          </div>
-          <button
+          <Segmented
+            items={(['daily', 'weekly', 'monthly'] as const).map((p) => ({
+              key: p,
+              label: rv(`period_${p}`),
+            }))}
+            value={period}
+            onChange={(k) => setPeriod(k)}
+          />
+          <Button
+            variant="primary"
             onClick={run}
             disabled={running}
-            className="px-5 py-2 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: 'var(--brand-fg)' }}
+            loading={running}
           >
             {running ? rv('aiRunning') : rv('aiRunReview')}
-          </button>
-          <button
-            onClick={() => setShowPrompts((v) => !v)}
-            className="px-3 py-2 rounded text-xs transition-opacity hover:opacity-80"
-            style={{ color: C.muted, border: `1px solid ${C.border}` }}
-          >
+          </Button>
+          <Button onClick={() => setShowPrompts((v) => !v)}>
             {rv('promptSettings')}
             {promptCfg &&
               (promptCfg.review_custom || promptCfg.rule_extract_custom) && (
-                <span
-                  className="ml-1.5 px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'var(--brand-soft)', color: C.gold }}
-                >
+                <Badge variant="brand" size="xs">
                   {rv('promptCustomActive')}
-                </span>
+                </Badge>
               )}
-          </button>
+          </Button>
         </div>
-        {error && (
-          <p className="text-xs mt-3" style={{ color: C.down }}>
-            {error}
-          </p>
-        )}
+        {error && <p className="text-xs mt-3 text-down">{error}</p>}
 
         {showPrompts && (
-          <div
-            className="mt-4 pt-4 space-y-4"
-            style={{ borderTop: `1px solid ${C.border}` }}
-          >
+          <div className="mt-4 space-y-3 border-t border-line pt-4">
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label
-                  className="text-xs font-medium"
-                  style={{ color: C.text }}
-                >
+                <label className="text-xs font-medium text-fg">
                   {rv('promptReview')}
                 </label>
                 {promptCfg?.review_custom && (
-                  <span className="text-[10px]" style={{ color: C.gold }}>
+                  <span className="text-[10px] text-brand">
                     {rv('promptCustomActive')}
                   </span>
                 )}
@@ -2083,24 +1774,16 @@ function AITab({
                 value={reviewPrompt}
                 onChange={(e) => setReviewPrompt(e.target.value)}
                 rows={10}
-                className="w-full p-2 rounded text-xs font-mono resize-y"
-                style={{
-                  background: C.bg,
-                  color: C.text,
-                  border: `1px solid ${C.border}`,
-                }}
+                className={`${TEXTAREA_CLS} num resize-y`}
               />
             </div>
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label
-                  className="text-xs font-medium"
-                  style={{ color: C.text }}
-                >
+                <label className="text-xs font-medium text-fg">
                   {rv('promptRuleExtract')}
                 </label>
                 {promptCfg?.rule_extract_custom && (
-                  <span className="text-[10px]" style={{ color: C.gold }}>
+                  <span className="text-[10px] text-brand">
                     {rv('promptCustomActive')}
                   </span>
                 )}
@@ -2109,44 +1792,32 @@ function AITab({
                 value={rulePrompt}
                 onChange={(e) => setRulePrompt(e.target.value)}
                 rows={8}
-                className="w-full p-2 rounded text-xs font-mono resize-y"
-                style={{
-                  background: C.bg,
-                  color: C.text,
-                  border: `1px solid ${C.border}`,
-                }}
+                className={`${TEXTAREA_CLS} num resize-y`}
               />
             </div>
-            <p className="text-[10px]" style={{ color: C.faint }}>
-              {rv('promptResetHint')}
-            </p>
+            <p className="text-[10px] text-fg-3">{rv('promptResetHint')}</p>
             <div className="flex items-center gap-2">
-              <button
+              <Button
+                variant="primary"
                 onClick={savePrompts}
                 disabled={savingPrompts}
-                className="px-4 py-1.5 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-                style={{ background: C.gold, color: 'var(--brand-fg)' }}
               >
                 {savingPrompts ? t('loading', language) : rv('promptSave')}
-              </button>
-              <button
+              </Button>
+              <Button
                 onClick={() => {
                   setReviewPrompt('')
                   setRulePrompt('')
                 }}
-                className="px-3 py-1.5 rounded text-xs"
-                style={{ color: C.muted, border: `1px solid ${C.border}` }}
               >
                 {rv('promptReset')}
-              </button>
+              </Button>
               {promptMsg && (
-                <span className="text-xs" style={{ color: C.up }}>
-                  {promptMsg}
-                </span>
+                <span className="text-xs text-up">{promptMsg}</span>
               )}
             </div>
             {!promptCfg?.review_custom && !promptCfg?.rule_extract_custom && (
-              <p className="text-[10px]" style={{ color: C.faint }}>
+              <p className="text-[10px] text-fg-3">
                 {rv('promptUsingDefault')}
               </p>
             )}
@@ -2155,20 +1826,26 @@ function AITab({
       </div>
 
       {result && (
-        <div style={CARD_STYLE} className="p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold">{rv('aiReviewResult')}</h3>
-            <span className="text-[10px]" style={{ color: C.faint }}>
-              {fmtTime(result.generated_at)}
-            </span>
-          </div>
-          <pre
-            className="text-xs leading-relaxed whitespace-pre-wrap font-sans"
-            style={{ color: C.text }}
-          >
-            {result.ai_response}
-          </pre>
-        </div>
+        <Card>
+          <CardHeader
+            title={rv('aiReviewResult')}
+            actions={
+              <>
+                <Badge variant="ai" size="xs">
+                  AI
+                </Badge>
+                <span className="num text-xs text-fg-3">
+                  {fmtTime(result.generated_at)}
+                </span>
+              </>
+            }
+          />
+          <CardBody>
+            <pre className="max-w-[80ch] whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-fg-2">
+              {result.ai_response}
+            </pre>
+          </CardBody>
+        </Card>
       )}
     </div>
   )

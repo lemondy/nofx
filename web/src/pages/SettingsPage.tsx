@@ -24,6 +24,7 @@ import { ExchangeConfigModal } from '../components/trader/ExchangeConfigModal'
 import { TelegramConfigModal } from '../components/trader/TelegramConfigModal'
 import { ModelConfigModal } from '../components/trader/ModelConfigModal'
 import type { Exchange, AIModel } from '../types'
+import { Badge, Button, Card, Input, Tabs } from '../components/ui'
 
 type Tab = 'account' | 'models' | 'exchanges' | 'telegram'
 
@@ -316,50 +317,40 @@ export function SettingsPage() {
   }
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
-    { key: 'account', label: 'Account', icon: <User size={16} /> },
-    { key: 'models', label: 'AI Models', icon: <Cpu size={16} /> },
-    { key: 'exchanges', label: 'Exchanges', icon: <Building2 size={16} /> },
-    { key: 'telegram', label: 'Telegram', icon: <MessageCircle size={16} /> },
+    { key: 'account', label: 'Account', icon: <User size={14} /> },
+    { key: 'models', label: 'AI Models', icon: <Cpu size={14} /> },
+    { key: 'exchanges', label: 'Exchanges', icon: <Building2 size={14} /> },
+    { key: 'telegram', label: 'Telegram', icon: <MessageCircle size={14} /> },
   ]
 
   return (
-    <div
-      className="min-h-screen pt-20 pb-12 px-4"
-      style={{ background: 'var(--bg)' }}
-    >
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-xl font-bold text-fg mb-6">Settings</h1>
+    <div className="min-h-screen bg-bg px-4 pb-10 pt-20">
+      <div className="mx-auto max-w-2xl">
+        <h1 className="mb-4 text-xl font-semibold text-fg">Settings</h1>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-surface/60 border border-line rounded-xl p-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all
- ${
-   activeTab === tab.key
-     ? 'bg-nofx-gold text-brand-fg'
-     : 'text-fg-3 hover:text-fg'
- }`}
-            >
-              {tab.icon}
-              <span className="hidden sm:inline">{tab.label}</span>
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="mb-4"
+          items={tabs.map((tab) => ({
+            key: tab.key,
+            icon: tab.icon,
+            label: <span className="hidden sm:inline">{tab.label}</span>,
+          }))}
+          value={activeTab}
+          onChange={(k) => setActiveTab(k)}
+        />
 
         {/* Tab Content */}
-        <div className="bg-surface/60 border border-line/80 rounded-2xl p-6">
+        <Card className="p-4">
           {/* Account Tab */}
           {activeTab === 'account' && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               <div>
-                <p className="text-xs text-fg-3 mb-1">Email</p>
+                <p className="mb-0.5 text-xs text-fg-3">Email</p>
                 <p className="text-sm text-fg font-medium">{user?.email}</p>
               </div>
 
-              <div className="border-t border-line pt-6">
+              <div className="border-t border-line pt-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <h3 className="text-sm font-semibold text-fg">
@@ -371,7 +362,7 @@ export function SettingsPage() {
                         : 'Beginner mode shows wallet onboarding and quickstart cards. Advanced mode keeps the original pro workflow.'}
                     </p>
                   </div>
-                  <span className="rounded-full border border-nofx-gold/20 bg-nofx-gold/10 px-3 py-1 text-xs font-semibold text-nofx-gold">
+                  <Badge variant="brand" className="shrink-0">
                     {userMode === 'beginner'
                       ? language === 'zh'
                         ? '当前：新手模式'
@@ -379,17 +370,17 @@ export function SettingsPage() {
                       : language === 'zh'
                         ? '当前：老手模式'
                         : 'Current: Advanced'}
-                  </span>
+                  </Badge>
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => handleSwitchMode('beginner')}
-                    className={`rounded-2xl border px-4 py-4 text-left transition-all ${
+                    className={`rounded-lg border px-3 py-3 text-left transition-colors ${
                       userMode === 'beginner'
-                        ? 'border-nofx-gold bg-nofx-gold/10'
-                        : 'border-line bg-surface-2/70 hover:border-line-strong'
+                        ? 'border-brand bg-brand-soft'
+                        : 'border-line bg-surface-2 hover:border-line-strong'
                     }`}
                   >
                     <div className="text-sm font-semibold text-fg">
@@ -405,10 +396,10 @@ export function SettingsPage() {
                   <button
                     type="button"
                     onClick={() => handleSwitchMode('advanced')}
-                    className={`rounded-2xl border px-4 py-4 text-left transition-all ${
+                    className={`rounded-lg border px-3 py-3 text-left transition-colors ${
                       userMode === 'advanced'
-                        ? 'border-nofx-gold bg-nofx-gold/10'
-                        : 'border-line bg-surface-2/70 hover:border-line-strong'
+                        ? 'border-brand bg-brand-soft'
+                        : 'border-line bg-surface-2 hover:border-line-strong'
                     }`}
                   >
                     <div className="text-sm font-semibold text-fg">
@@ -423,39 +414,39 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              <div className="border-t border-line pt-6">
-                <h3 className="text-sm font-semibold text-fg mb-4">
+              <div className="border-t border-line pt-4">
+                <h3 className="mb-3 text-sm font-semibold text-fg">
                   Change Password
                 </h3>
-                <form onSubmit={handleChangePassword} className="space-y-4">
+                <form onSubmit={handleChangePassword} className="space-y-3">
                   <label className="block text-xs font-medium text-fg-3">
                     Current Password
-                    <input
+                    <Input
                       type="password"
                       autoComplete="current-password"
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
                       required
-                      className="w-full mt-2 bg-surface-2/80 border border-line-strong/80 rounded-xl px-4 py-3 text-sm"
+                      className="mt-1"
                     />
                   </label>
                   <div>
-                    <label className="block text-xs font-medium text-fg-3 mb-2">
+                    <label className="mb-1 block text-xs font-medium text-fg-3">
                       New Password
                     </label>
                     <div className="relative">
-                      <input
+                      <Input
                         type={showPassword ? 'text' : 'password'}
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
-                        className="w-full bg-surface-2/80 border border-line-strong/80 rounded-xl px-4 py-3 pr-11 text-sm text-fg placeholder-fg-3 focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
+                        className="pr-9"
                         placeholder="At least 8 characters"
                         required
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-2 transition-colors"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 transition-colors hover:text-fg-2"
                       >
                         {showPassword ? (
                           <EyeOff size={16} />
@@ -465,17 +456,18 @@ export function SettingsPage() {
                       </button>
                     </div>
                   </div>
-                  <button
+                  <Button
                     type="submit"
+                    variant="primary"
                     disabled={
                       changingPassword ||
                       !currentPassword ||
                       newPassword.length < 8
                     }
-                    className="w-full bg-nofx-gold hover:brightness-110 active:scale-[0.98] text-brand-fg font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full"
                   >
                     {changingPassword ? 'Updating...' : 'Update Password'}
-                  </button>
+                  </Button>
                 </form>
               </div>
             </div>
@@ -483,26 +475,27 @@ export function SettingsPage() {
 
           {/* AI Models Tab */}
           {activeTab === 'models' && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-fg-3">
+                <p className="text-[13px] text-fg-3">
                   {configuredModels.length} model
                   {configuredModels.length !== 1 ? 's' : ''} configured
                 </p>
-                <button
+                <Button
+                  size="sm"
                   onClick={() => {
                     setEditingModel(null)
                     setShowModelModal(true)
                   }}
-                  className="flex items-center gap-1.5 text-xs font-medium bg-nofx-gold/10 hover:bg-nofx-gold/20 text-nofx-gold px-3 py-1.5 rounded-lg transition-colors"
+                  className="text-brand"
                 >
                   <Plus size={14} />
                   Add Model
-                </button>
+                </Button>
               </div>
 
               {configuredModels.length === 0 ? (
-                <div className="text-center py-8 text-fg-3 text-sm">
+                <div className="py-8 text-center text-[13px] text-fg-3">
                   No AI models configured yet
                 </div>
               ) : (
@@ -514,28 +507,26 @@ export function SettingsPage() {
                         setEditingModel(model.id)
                         setShowModelModal(true)
                       }}
-                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-hover/50 hover:bg-surface-hover border border-line-strong/50 transition-colors group"
+                      className="group flex w-full items-center justify-between rounded-md border border-line bg-surface-2 px-3 py-2 transition-colors hover:border-line-strong hover:bg-surface-hover"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-line flex items-center justify-center">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-hover">
                           <Cpu size={14} className="text-fg-2" />
                         </div>
                         <div className="text-left">
-                          <p className="text-sm font-medium text-fg">
+                          <p className="text-[13px] font-medium text-fg">
                             {model.name}
                           </p>
                           <p className="text-xs text-fg-3">{model.provider}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded-full ${model.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-line text-fg-3'}`}
-                        >
+                        <Badge variant={model.enabled ? 'up' : 'neutral'}>
                           {model.enabled ? 'Active' : 'Inactive'}
-                        </span>
+                        </Badge>
                         <Pencil
                           size={14}
-                          className="text-fg-3 group-hover:text-fg-3 transition-colors"
+                          className="text-fg-3 transition-colors group-hover:text-fg"
                         />
                       </div>
                     </button>
@@ -547,26 +538,27 @@ export function SettingsPage() {
 
           {/* Exchanges Tab */}
           {activeTab === 'exchanges' && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-fg-3">
+                <p className="text-[13px] text-fg-3">
                   {exchanges.length} account{exchanges.length !== 1 ? 's' : ''}{' '}
                   connected
                 </p>
-                <button
+                <Button
+                  size="sm"
                   onClick={() => {
                     setEditingExchange(null)
                     setShowExchangeModal(true)
                   }}
-                  className="flex items-center gap-1.5 text-xs font-medium bg-nofx-gold/10 hover:bg-nofx-gold/20 text-nofx-gold px-3 py-1.5 rounded-lg transition-colors"
+                  className="text-brand"
                 >
                   <Plus size={14} />
                   Add Exchange
-                </button>
+                </Button>
               </div>
 
               {exchanges.length === 0 ? (
-                <div className="text-center py-8 text-fg-3 text-sm">
+                <div className="py-8 text-center text-[13px] text-fg-3">
                   No exchange accounts connected yet
                 </div>
               ) : (
@@ -578,10 +570,10 @@ export function SettingsPage() {
                         setEditingExchange(exchange.id)
                         setShowExchangeModal(true)
                       }}
-                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-hover/50 hover:bg-surface-hover border border-line-strong/50 transition-colors group"
+                      className="group flex w-full items-center justify-between rounded-md border border-line bg-surface-2 px-3 py-2 transition-colors hover:border-line-strong hover:bg-surface-hover"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-line flex items-center justify-center">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-hover">
                           <Building2 size={14} className="text-fg-2" />
                         </div>
                         <div className="text-left">
@@ -595,7 +587,7 @@ export function SettingsPage() {
                       </div>
                       <ChevronRight
                         size={14}
-                        className="text-fg-3 group-hover:text-fg-3 transition-colors"
+                        className="text-fg-3 transition-colors group-hover:text-fg"
                       />
                     </button>
                   ))}
@@ -607,17 +599,17 @@ export function SettingsPage() {
           {/* Telegram Tab */}
           {activeTab === 'telegram' && (
             <div className="space-y-4">
-              <p className="text-sm text-fg-3">
+              <p className="text-[13px] text-fg-3">
                 Connect a Telegram bot to receive trading notifications and
                 interact with your traders.
               </p>
               <button
                 onClick={() => setShowTelegramModal(true)}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-hover/50 hover:bg-surface-hover border border-line-strong/50 transition-colors group"
+                className="group flex w-full items-center justify-between rounded-md border border-line bg-surface-2 px-3 py-2 transition-colors hover:border-line-strong hover:bg-surface-hover"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#0088cc]/20 flex items-center justify-center">
-                    <MessageCircle size={14} className="text-[#0088cc]" />
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md bg-info-soft">
+                    <MessageCircle size={14} className="text-info" />
                   </div>
                   <span className="text-sm font-medium text-fg">
                     Configure Telegram Bot
@@ -625,17 +617,17 @@ export function SettingsPage() {
                 </div>
                 <ChevronRight
                   size={14}
-                  className="text-fg-3 group-hover:text-fg-3 transition-colors"
+                  className="text-fg-3 transition-colors group-hover:text-fg"
                 />
               </button>
             </div>
           )}
-        </div>
+        </Card>
       </div>
 
       {/* AI Model Modal */}
       {showModelModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-2 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] px-4">
           <ModelConfigModal
             allModels={supportedModels}
             configuredModels={configuredModels}
@@ -653,7 +645,7 @@ export function SettingsPage() {
 
       {/* Exchange Modal */}
       {showExchangeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-2 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] px-4">
           <ExchangeConfigModal
             allExchanges={exchanges}
             editingExchangeId={editingExchange}
@@ -670,7 +662,7 @@ export function SettingsPage() {
 
       {/* Telegram Modal */}
       {showTelegramModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-2 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] px-4">
           <TelegramConfigModal
             onClose={() => setShowTelegramModal(false)}
             language={language}

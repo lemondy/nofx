@@ -2,18 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type { SystemQuality } from '../lib/api/system'
 import type { TraderInfo } from '../types'
+import { Badge, Card, CardHeader, EmptyState, Stat } from '../components/ui'
 
-const C = {
-  bg: 'var(--bg)',
-  card: 'var(--surface)',
-  border: 'var(--line)',
-  inset: 'var(--surface-2)',
-  text: 'var(--fg)',
-  muted: 'var(--fg-3)',
-  up: 'var(--up)',
-  down: 'var(--down)',
-  gold: 'var(--brand)',
-}
+const SELECT_CLS =
+  'h-8 rounded-md border border-line bg-surface-2 px-2 text-[13px] text-fg outline-none hover:border-line-strong focus:border-brand'
+const TH_CLS =
+  'h-8 bg-surface-2 px-3 py-0 text-xs font-medium text-fg-3 whitespace-nowrap'
+const TR_CLS =
+  'h-[34px] border-b border-line last:border-b-0 hover:bg-surface-hover'
 
 const L = (zh: string, en: string, language: string) =>
   language === 'zh' ? zh : en
@@ -106,15 +102,15 @@ export default function SystemQualityPage({ language }: { language: string }) {
   const ai = quality?.ai_calls
 
   return (
-    <div className="min-h-screen" style={{ background: C.bg, color: C.text }}>
-      <div className="max-w-[1440px] mx-auto px-6 py-6">
+    <div className="min-h-screen bg-bg text-fg">
+      <div className="mx-auto max-w-[1440px] px-4 py-4 sm:px-6">
         {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-4 mb-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold">
+            <h1 className="text-xl font-semibold">
               {L('系统质量', 'System Quality', language)}
             </h1>
-            <p className="text-xs mt-1" style={{ color: C.muted }}>
+            <p className="mt-0.5 text-xs text-fg-3">
               {L(
                 '每轮 AI 决策的耗时、成功率与服务自身失败分布——衡量系统本身的健康度与可改进空间',
                 'Per-cycle AI-call latency, success rate and failure mix — how healthy the system itself is',
@@ -123,18 +119,13 @@ export default function SystemQualityPage({ language }: { language: string }) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs" style={{ color: C.muted }}>
+            <span className="text-xs text-fg-3">
               {L('交易员', 'Trader', language)}
             </span>
             <select
               value={selectedTraderId || ''}
               onChange={(e) => setSelectedTraderId(e.target.value)}
-              className="text-xs rounded px-3 py-2 outline-none"
-              style={{
-                background: C.card,
-                border: `1px solid ${C.border}`,
-                color: C.text,
-              }}
+              className={SELECT_CLS}
             >
               {traders.length === 0 && <option value="">--</option>}
               {traders.map((tr) => (
@@ -146,12 +137,7 @@ export default function SystemQualityPage({ language }: { language: string }) {
             <select
               value={hours}
               onChange={(e) => setHours(Number(e.target.value))}
-              className="text-xs rounded px-3 py-2 outline-none"
-              style={{
-                background: C.card,
-                border: `1px solid ${C.border}`,
-                color: C.text,
-              }}
+              className={SELECT_CLS}
             >
               <option value={24}>
                 {L('近 24 小时', 'Last 24h', language)}
@@ -167,89 +153,78 @@ export default function SystemQualityPage({ language }: { language: string }) {
         </div>
 
         {loading && !quality ? (
-          <div className="py-24 text-center text-sm" style={{ color: C.muted }}>
+          <div className="py-16 text-center text-sm text-fg-3">
             {L('加载中', 'Loading', language)}...
           </div>
         ) : failed && !quality ? (
-          <div className="py-24 text-center text-sm" style={{ color: C.muted }}>
-            {L(
+          <EmptyState
+            className="py-16"
+            title={L(
               '数据加载失败，正在自动重试…',
               'Load failed — retrying automatically…',
               language
             )}
-          </div>
+          />
         ) : !quality || quality.total_cycles === 0 ? (
-          <div className="py-24 text-center text-sm" style={{ color: C.muted }}>
-            {L(
+          <EmptyState
+            className="py-16"
+            title={L(
               '该时间窗口内没有决策周期',
               'No decision cycles in this window',
               language
             )}
-          </div>
+          />
         ) : (
           <>
-            {/* Stat cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-              <StatCard
+            {/* Stat strip */}
+            <Card className="mb-3 grid grid-cols-2 gap-4 p-4 lg:grid-cols-5">
+              <Stat
                 label={L('周期成功率', 'Cycle success rate', language)}
                 value={`${quality.success_rate_pct.toFixed(1)}%`}
-                sub={`${quality.successful_cycles}/${quality.total_cycles} ${L('个周期', 'cycles', language)}`}
-                color={
+                hint={`${quality.successful_cycles}/${quality.total_cycles} ${L('个周期', 'cycles', language)}`}
+                tone={
                   quality.success_rate_pct >= 95
-                    ? C.up
-                    : quality.success_rate_pct >= 85
-                      ? C.gold
-                      : C.down
+                    ? 'up'
+                    : quality.success_rate_pct < 85
+                      ? 'down'
+                      : 'default'
                 }
-                language={language}
               />
-              <StatCard
+              <Stat
                 label={L('AI 平均耗时', 'AI avg latency', language)}
                 value={fmtMs(ai?.avg_ms)}
-                sub={L('每次大模型调用', 'per model call', language)}
-                language={language}
+                hint={L('每次大模型调用', 'per model call', language)}
               />
-              <StatCard
+              <Stat
                 label={L('AI P50 / P95', 'AI P50 / P95', language)}
                 value={`${fmtMs(ai?.p50_ms)} / ${fmtMs(ai?.p95_ms)}`}
-                sub={L('中位数与长尾', 'median vs tail', language)}
-                language={language}
+                hint={L('中位数与长尾', 'median vs tail', language)}
               />
-              <StatCard
+              <Stat
                 label={L('AI 最长耗时', 'AI max latency', language)}
                 value={fmtMs(ai?.max_ms)}
-                sub={L('窗口内最慢一次', 'slowest call in window', language)}
-                color={C.gold}
-                language={language}
+                hint={L('窗口内最慢一次', 'slowest call in window', language)}
               />
-              <StatCard
+              <Stat
                 label={L('失败周期', 'Failed cycles', language)}
                 value={String(quality.failed_cycles)}
-                sub={L(
+                hint={L(
                   '含执行与 AI 调用失败',
                   'execution + AI failures',
                   language
                 )}
-                color={quality.failed_cycles === 0 ? C.up : C.down}
-                language={language}
+                tone={quality.failed_cycles === 0 ? 'up' : 'down'}
               />
-            </div>
+            </Card>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               {/* Failure breakdown */}
-              <div
-                className="rounded-lg p-5"
-                style={{ background: C.card, border: `1px solid ${C.border}` }}
-              >
-                <h2 className="text-sm font-bold mb-4 uppercase tracking-wide">
-                  {L('失败分类', 'Failure breakdown', language)}
-                </h2>
+              <Card dense>
+                <CardHeader
+                  title={L('失败分类', 'Failure breakdown', language)}
+                />
                 {quality.failures.length === 0 ? (
-                  <div
-                    className="py-8 text-center text-xs"
-                    style={{ color: C.muted }}
-                  >
-                    ✅{' '}
+                  <div className="py-8 text-center text-xs text-fg-3">
                     {L(
                       '窗口内无失败周期',
                       'No failed cycles in this window',
@@ -257,107 +232,82 @@ export default function SystemQualityPage({ language }: { language: string }) {
                     )}
                   </div>
                 ) : (
-                  <table className="w-full rank-table text-xs">
-                    <thead>
-                      <tr>
-                        <th
-                          className="text-left pb-2 font-semibold"
-                          style={{ color: C.muted }}
-                        >
-                          {L('类别', 'Category', language)}
-                        </th>
-                        <th
-                          className="text-right pb-2 font-semibold"
-                          style={{ color: C.muted }}
-                        >
-                          {L('次数', 'Count', language)}
-                        </th>
-                        <th
-                          className="text-left pb-2 pl-4 font-semibold"
-                          style={{ color: C.muted }}
-                        >
-                          {L('最近示例', 'Latest sample', language)}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {quality.failures.map((f) => (
-                        <tr key={f.category}>
-                          <td
-                            className="py-2.5 font-semibold"
-                            style={{ color: C.down }}
-                          >
-                            {failureLabel(f.category, language)}
-                          </td>
-                          <td className="py-2.5 text-right font-mono">
-                            {f.count}
-                          </td>
-                          <td
-                            className="py-2.5 pl-4 font-mono max-w-[280px] truncate"
-                            title={f.sample}
-                            style={{ color: C.muted }}
-                          >
-                            {f.sample || '--'}
-                          </td>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-[13px]">
+                      <thead>
+                        <tr>
+                          <th className={`${TH_CLS} text-left`}>
+                            {L('类别', 'Category', language)}
+                          </th>
+                          <th className={`${TH_CLS} text-right`}>
+                            {L('次数', 'Count', language)}
+                          </th>
+                          <th className={`${TH_CLS} text-left`}>
+                            {L('最近示例', 'Latest sample', language)}
+                          </th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {quality.failures.map((f) => (
+                          <tr key={f.category} className={TR_CLS}>
+                            <td className="px-3 py-0">
+                              <Badge variant="down">
+                                {failureLabel(f.category, language)}
+                              </Badge>
+                            </td>
+                            <td className="num px-3 py-0 text-right">
+                              {f.count}
+                            </td>
+                            <td
+                              className="num max-w-[280px] truncate px-3 py-0 text-fg-3"
+                              title={f.sample}
+                            >
+                              {f.sample || '--'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
-              </div>
+              </Card>
 
               {/* Hourly table */}
-              <div
-                className="rounded-lg p-5"
-                style={{ background: C.card, border: `1px solid ${C.border}` }}
-              >
-                <h2 className="text-sm font-bold mb-4 uppercase tracking-wide">
-                  {L('逐小时概览', 'Hourly overview', language)}
-                </h2>
-                <div className="max-h-[360px] overflow-y-auto custom-scrollbar">
-                  <table className="w-full rank-table text-xs">
+              <Card dense>
+                <CardHeader
+                  title={L('逐小时概览', 'Hourly overview', language)}
+                />
+                <div className="custom-scrollbar max-h-[360px] overflow-auto">
+                  <table className="w-full border-collapse text-[13px]">
                     <thead>
                       <tr>
-                        <th
-                          className="text-left pb-2 font-semibold"
-                          style={{ color: C.muted }}
-                        >
+                        <th className={`${TH_CLS} sticky top-0 text-left`}>
                           {L('小时', 'Hour', language)}
                         </th>
-                        <th
-                          className="text-right pb-2 font-semibold"
-                          style={{ color: C.muted }}
-                        >
+                        <th className={`${TH_CLS} sticky top-0 text-right`}>
                           {L('周期', 'Cycles', language)}
                         </th>
-                        <th
-                          className="text-right pb-2 font-semibold"
-                          style={{ color: C.muted }}
-                        >
+                        <th className={`${TH_CLS} sticky top-0 text-right`}>
                           {L('失败', 'Fail', language)}
                         </th>
-                        <th
-                          className="text-right pb-2 font-semibold"
-                          style={{ color: C.muted }}
-                        >
+                        <th className={`${TH_CLS} sticky top-0 text-right`}>
                           {L('平均耗时', 'Avg latency', language)}
                         </th>
                       </tr>
                     </thead>
                     <tbody>
                       {[...quality.hourly].reverse().map((h) => (
-                        <tr key={h.hour}>
-                          <td className="py-2.5 font-mono">{h.hour}</td>
-                          <td className="py-2.5 text-right font-mono">
+                        <tr key={h.hour} className={TR_CLS}>
+                          <td className="num px-3 py-0">{h.hour}</td>
+                          <td className="num px-3 py-0 text-right">
                             {h.cycles}
                           </td>
                           <td
-                            className="py-2.5 text-right font-mono"
-                            style={{ color: h.failures > 0 ? C.down : C.muted }}
+                            className={`num px-3 py-0 text-right ${h.failures > 0 ? 'text-down' : 'text-fg-3'}`}
                           >
                             {h.failures}
                           </td>
-                          <td className="py-2.5 text-right font-mono">
+                          <td className="num px-3 py-0 text-right">
                             {fmtMs(h.avg_duration_ms)}
                           </td>
                         </tr>
@@ -365,10 +315,10 @@ export default function SystemQualityPage({ language }: { language: string }) {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </Card>
             </div>
 
-            <p className="text-xs mt-4" style={{ color: C.muted }}>
+            <p className="mt-3 max-w-[80ch] text-xs text-fg-3">
               {L(
                 '口径：耗时只统计成功发出并返回的大模型调用（ai_request_duration_ms）；成功率按决策周期计，一个周期内任一动作执行失败即计为失败。',
                 'Scope: latency counts completed model calls only (ai_request_duration_ms); success rate is per decision cycle — any failed action marks the cycle failed.',
@@ -378,48 +328,6 @@ export default function SystemQualityPage({ language }: { language: string }) {
           </>
         )}
       </div>
-    </div>
-  )
-}
-
-function StatCard({
-  label,
-  value,
-  sub,
-  color,
-  language,
-}: {
-  label: string
-  value: string
-  sub?: string
-  color?: string
-  language: string
-}) {
-  return (
-    <div
-      className="rounded-lg p-4"
-      style={{ background: C.card, border: `1px solid ${C.border}` }}
-    >
-      <div
-        className="text-[10px] font-mono uppercase tracking-wider mb-2"
-        style={{ color: C.muted }}
-      >
-        {label}
-      </div>
-      <div
-        className="text-xl font-bold font-mono tracking-tight"
-        style={{ color: color || C.text }}
-      >
-        {value}
-      </div>
-      {sub && (
-        <div
-          className="text-[10px] mt-1.5 font-mono"
-          style={{ color: C.muted }}
-        >
-          {language === 'zh' ? sub : sub}
-        </div>
-      )}
     </div>
   )
 }
