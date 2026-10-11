@@ -1,3 +1,5 @@
+import { cn } from '../../lib/cn'
+import { Button, Badge, PnL, Change, Card } from '../ui'
 import { useCallback, useEffect, useState } from 'react'
 import { GitCommitVertical, RefreshCw, Loader2, History } from 'lucide-react'
 import type { Language } from '../../i18n/translations'
@@ -36,23 +38,23 @@ function renderDiffValue(encoded: string): string {
 const SOURCE_STYLE: Record<string, { labelKey: string; className: string }> = {
   create: {
     labelKey: 'sourceCreate',
-    className: 'bg-nofx-gold/15 text-nofx-gold',
+    className: 'bg-brand-soft text-brand',
   },
   duplicate: {
     labelKey: 'sourceDuplicate',
-    className: 'bg-blue-400/15 text-blue-400',
+    className: 'bg-info-soft text-info',
   },
   baseline: {
     labelKey: 'sourceBaseline',
-    className: 'bg-nofx-text-muted/15 text-nofx-text-muted',
+    className: 'bg-surface-2 text-fg-3',
   },
   save: {
     labelKey: 'sourceSave',
-    className: 'bg-nofx-success/15 text-nofx-success',
+    className: 'bg-up-soft text-up',
   },
   external: {
     labelKey: 'sourceExternal',
-    className: 'bg-nofx-danger/15 text-nofx-danger',
+    className: 'bg-down-soft text-down',
   },
 }
 
@@ -63,11 +65,6 @@ function fmtTime(ms: number, language: Language): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function fmtSigned(v: number, digits = 2): string {
-  const s = v.toFixed(digits)
-  return v > 0 ? `+${s}` : s
 }
 
 export function VersionsPanel({
@@ -107,7 +104,7 @@ export function VersionsPanel({
 
   if (isLoading && !data) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-nofx-text-muted">
+      <div className="flex flex-col items-center justify-center py-12 text-fg-3">
         <Loader2 className="w-6 h-6 mb-2 animate-spin" />
         <p className="text-sm">{tv('loading', language)}</p>
       </div>
@@ -117,23 +114,25 @@ export function VersionsPanel({
   if (error) {
     return (
       <div className="p-3 space-y-3">
-        <div className="p-3 rounded-lg bg-nofx-danger/10 border border-nofx-danger/30 text-sm text-nofx-danger">
+        <div className="p-3 rounded-lg bg-down-soft border border-down/30 text-sm text-down">
           {tv('loadFailed', language)}: {error}
         </div>
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           onClick={fetchVersions}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-nofx-gold text-brand-fg hover:brightness-110"
+          className="flex items-center gap-1.5 text-brand-fg"
         >
           <RefreshCw className="w-3 h-3" />
           {tv('refresh', language)}
-        </button>
+        </Button>
       </div>
     )
   }
 
   if (!data || data.versions.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-nofx-text-muted">
+      <div className="flex flex-col items-center justify-center py-12 text-fg-3">
         <History className="w-10 h-10 mb-2 opacity-30" />
         <p className="text-sm">{tv('empty', language)}</p>
         <p className="text-xs mt-1 opacity-70">{tv('emptyHint', language)}</p>
@@ -149,13 +148,13 @@ export function VersionsPanel({
   return (
     <div className="p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-nofx-text-muted">
-          {tv('subtitle', language)}
-        </p>
-        <button
+        <p className="text-xs text-fg-3">{tv('subtitle', language)}</p>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={fetchVersions}
           disabled={isLoading}
-          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-nofx-text-muted hover:text-nofx-gold disabled:opacity-50"
+          className="flex items-center gap-1 text-fg-3"
         >
           {isLoading ? (
             <Loader2 className="w-3 h-3 animate-spin" />
@@ -163,10 +162,10 @@ export function VersionsPanel({
             <RefreshCw className="w-3 h-3" />
           )}
           {tv('refresh', language)}
-        </button>
+        </Button>
       </div>
 
-      <div className="relative">
+      <div className="num relative">
         {ordered.map((v, idx) => {
           const versionNo = ordered.length - idx
           const source = SOURCE_STYLE[v.source] ?? SOURCE_STYLE.baseline
@@ -178,44 +177,40 @@ export function VersionsPanel({
             <div key={v.id} className="relative pl-5 pb-3">
               {/* timeline rail */}
               <div
-                className="absolute left-[5px] top-2 bottom-0 w-px bg-nofx-line"
+                className="absolute left-[5px] top-2 bottom-0 w-px bg-line"
                 aria-hidden
               />
               <div
-                className="absolute left-0 top-1.5 w-[11px] h-[11px] rounded-full border-2"
-                style={{
-                  borderColor: isCurrent
-                    ? 'var(--brand)'
-                    : 'color-mix(in srgb, var(--brand) 35%, transparent)',
-                  background: isCurrent ? 'var(--brand)' : 'transparent',
-                }}
+                className={cn(
+                  'absolute left-0 top-1.5 w-[11px] h-[11px] rounded-full border-2',
+                  isCurrent ? 'border-brand' : 'border-brand/35',
+                  isCurrent ? 'bg-brand' : 'bg-transparent'
+                )}
                 aria-hidden
               />
-              <div className="rounded-lg bg-nofx-bg-lighter border border-nofx-gold/20 overflow-hidden">
+              <Card dense className="overflow-hidden">
                 {/* header */}
-                <div className="flex items-center justify-between px-2.5 py-2 gap-2 flex-wrap">
+                <div className="flex min-h-9 items-center justify-between border-b border-line bg-surface-2 px-3 py-2 gap-2 flex-wrap">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <GitCommitVertical className="w-3 h-3 text-nofx-gold" />
-                    <span className="text-xs font-bold text-nofx-text">
+                    <GitCommitVertical className="w-3 h-3 text-brand" />
+                    <span className="num text-xs font-semibold text-fg">
                       v{versionNo}
                     </span>
-                    <span
-                      className={`px-1.5 py-0.5 text-[10px] rounded ${source.className}`}
-                    >
+                    <Badge className={source.className} size="xs">
                       {tv(source.labelKey, language)}
-                    </span>
+                    </Badge>
                     {isCurrent && (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-gold text-brand-fg font-medium">
+                      <Badge variant="brand" size="xs">
                         {tv('current', language)}
-                      </span>
+                      </Badge>
                     )}
                   </div>
-                  <span className="text-[10px] text-nofx-text-muted">
+                  <span className="num text-xs text-fg-3">
                     {fmtTime(v.changed_at, language)}
                   </span>
                 </div>
                 {/* hashes */}
-                <div className="px-2.5 pb-1.5 flex items-center gap-3 text-[10px] text-nofx-text-muted font-mono">
+                <div className="px-3 pb-2 flex flex-wrap items-center gap-2 break-all text-xs text-fg-3 num">
                   <span title={tv('configHash', language)}>
                     {tv('configHash', language)}#{v.config_hash}
                   </span>
@@ -224,44 +219,44 @@ export function VersionsPanel({
                   </span>
                 </div>
                 {/* realized performance */}
-                <div className="mx-2.5 mb-2 p-2 rounded bg-nofx-bg border border-nofx-line">
+                <div className="mx-2.5 mb-2 p-2 rounded bg-bg border border-line">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-nofx-text-muted">
+                    <span className="text-xs text-fg-3">
                       {tv('statsTitle', language)}
                     </span>
                     {stats.low_sample && stats.trades > 0 && (
-                      <span className="text-[9px] px-1 rounded bg-nofx-text-muted/15 text-nofx-text-muted">
+                      <Badge variant="warn" size="xs">
                         {tv('lowSample', language)}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                   {stats.trades === 0 ? (
-                    <p className="text-xs text-nofx-text-muted opacity-70">
+                    <p className="text-xs text-fg-3 opacity-70">
                       {tv('noTrades', language)}
                     </p>
                   ) : (
-                    <div className="grid grid-cols-5 gap-1 text-center">
+                    <div className="grid grid-cols-2 gap-3 text-right sm:grid-cols-3">
                       <div>
-                        <div className="text-[10px] text-nofx-text-muted">
+                        <div className="text-xs text-fg-3">
                           {tv('statTrades', language)}
                         </div>
-                        <div className="text-xs font-medium text-nofx-text">
+                        <div className="num text-xs font-medium text-fg">
                           {stats.trades}
-                          <span className="text-[9px] text-nofx-text-muted">
+                          <span className="text-[11px] text-fg-3">
                             {' '}
                             ({stats.wins}W/{stats.losses}L)
                           </span>
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-nofx-text-muted">
+                        <div className="text-xs text-fg-3">
                           {tv('statWinRate', language)}
                         </div>
-                        <div className="text-xs font-medium text-nofx-text">
+                        <div className="num text-xs font-medium text-fg">
                           {stats.win_rate.toFixed(1)}%
                           {/* review 2026-10-09 I: Wilson 95% interval */}
                           {stats.win_rate_hi != null && (
-                            <span className="text-[9px] text-nofx-text-muted">
+                            <span className="num text-[11px] text-fg-3">
                               {' '}
                               ({(stats.win_rate_lo ?? 0).toFixed(0)}–
                               {stats.win_rate_hi.toFixed(0)}%)
@@ -270,31 +265,34 @@ export function VersionsPanel({
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-nofx-text-muted">
+                        <div className="text-xs text-fg-3">
                           {tv('statNetPnl', language)}
                         </div>
                         <div
-                          className={`text-xs font-medium ${stats.net_pnl >= 0 ? 'text-nofx-success' : 'text-nofx-danger'}`}
+                          className={`text-xs font-medium ${stats.net_pnl >= 0 ? 'text-up' : 'text-down'}`}
                         >
-                          {fmtSigned(stats.net_pnl)}
+                          <PnL value={stats.net_pnl} currency="" />
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-nofx-text-muted">
+                        <div className="text-xs text-fg-3">
                           {tv('statPF', language)}
                         </div>
-                        <div className="text-xs font-medium text-nofx-text">
+                        <div className="num text-xs font-medium text-fg">
                           {stats.profit_factor.toFixed(2)}
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-nofx-text-muted">
+                        <div className="text-xs text-fg-3">
                           {tv('statAvgR', language)}
                         </div>
                         <div
-                          className={`text-xs font-medium ${stats.avg_r >= 0 ? 'text-nofx-success' : 'text-nofx-danger'}`}
+                          className={`text-xs font-medium ${stats.avg_r >= 0 ? 'text-up' : 'text-down'}`}
                         >
-                          {stats.r_count > 0 ? fmtSigned(stats.avg_r) : '—'}
+                          <Change
+                            value={stats.r_count > 0 ? stats.avg_r : null}
+                            suffix=""
+                          />
                         </div>
                       </div>
                     </div>
@@ -303,7 +301,7 @@ export function VersionsPanel({
                   {((stats.crossed_version ?? 0) > 0 ||
                     (stats.excluded_manual ?? 0) > 0 ||
                     (stats.excluded_unattributed ?? 0) > 0) && (
-                    <p className="mt-1 text-[9px] text-nofx-text-muted opacity-80">
+                    <p className="mt-1 text-[11px] text-fg-3 opacity-80">
                       {(stats.crossed_version ?? 0) > 0 &&
                         `${tv('crossedVersion', language)} ${stats.crossed_version}`}
                       {(stats.crossed_version ?? 0) > 0 &&
@@ -318,50 +316,52 @@ export function VersionsPanel({
                 </div>
                 {/* diff */}
                 {v.summary.length === 0 ? (
-                  <p className="px-2.5 pb-2 text-[10px] text-nofx-text-muted opacity-70">
+                  <p className="px-2.5 pb-2 text-xs text-fg-3 opacity-70">
                     {tv('diffNone', language)}
                   </p>
                 ) : (
                   <div className="px-2.5 pb-2">
-                    <button
+                    <Button
+                      variant="ghost"
                       onClick={() => setExpandedDiff(diffOpen ? null : v.id)}
-                      className="text-[10px] text-nofx-gold hover:underline mb-1"
+                      className="text-brand mb-1"
                     >
                       {tv('diffTitle', language)} · {v.summary.length}
                       {diffOpen ? ' ▲' : ' ▼'}
-                    </button>
-                    <div className="space-y-0.5 font-mono">
+                    </Button>
+                    <div className="space-y-0.5 num">
                       {shownDiff.map(
                         (d: StrategyConfigDiffEntry, i: number) => (
                           <div
                             key={`${d.path}-${i}`}
-                            className="text-[10px] leading-4 break-all"
+                            className="text-xs leading-4 break-all"
                           >
-                            <span className="text-nofx-text">{d.path}</span>
-                            <span className="text-nofx-text-muted"> : </span>
-                            <span className="text-nofx-danger line-through opacity-80">
+                            <span className="text-fg">{d.path}</span>
+                            <span className="text-fg-3"> : </span>
+                            <span className="text-down line-through opacity-80">
                               {renderDiffValue(d.old)}
                             </span>
-                            <span className="text-nofx-text-muted"> → </span>
-                            <span className="text-nofx-success">
+                            <span className="text-fg-3"> → </span>
+                            <span className="text-up">
                               {renderDiffValue(d.new)}
                             </span>
                           </div>
                         )
                       )}
                       {!diffOpen && v.summary.length > 6 && (
-                        <button
+                        <Button
+                          variant="ghost"
                           onClick={() => setExpandedDiff(v.id)}
-                          className="text-[10px] text-nofx-text-muted hover:text-nofx-gold"
+                          className="text-fg-3"
                         >
                           …{v.summary.length - 6}{' '}
                           {tv('diffTruncated', language)}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
                 )}
-              </div>
+              </Card>
             </div>
           )
         })}

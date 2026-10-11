@@ -1,3 +1,5 @@
+import { cn } from '../../lib/cn'
+import { Input } from '../ui'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CandlestickChart, Clock, Search, X } from 'lucide-react'
 import type { StockConfig, USStockSymbol } from '../../types'
@@ -69,18 +71,6 @@ export function StockConfigEditor({
       onChange({ ...config, [key]: value })
     }
   }
-
-  const inputStyle = {
-    background: 'var(--surface-hover)',
-    border: '1px solid var(--line)',
-    color: 'var(--fg)',
-  }
-  const sectionStyle = {
-    background: 'var(--surface-2)',
-    border: '1px solid var(--line)',
-  }
-  const headingStyle = { color: 'var(--fg)' }
-  const mutedStyle = { color: 'var(--fg-3)' }
 
   // ---- symbol universe (GET /api/usstock/symbols) -------------------------
   const [universe, setUniverse] = useState<USStockSymbol[] | null>(null)
@@ -181,16 +171,10 @@ export function StockConfigEditor({
   ) => {
     const value = config[key]
     return (
-      <div className="p-4 rounded-lg" style={sectionStyle}>
-        <label className="block text-sm mb-1" style={headingStyle}>
-          {label}
-        </label>
-        {opts.desc && (
-          <p className="text-xs mb-2" style={mutedStyle}>
-            {opts.desc}
-          </p>
-        )}
-        <input
+      <div className="p-3 rounded-lg bg-surface-2 border border-line">
+        <label className="block text-[13px] mb-1 text-fg-2">{label}</label>
+        {opts.desc && <p className="text-xs mb-2 text-fg-3">{opts.desc}</p>}
+        <Input
           type="number"
           data-testid={`stock-${key}`}
           value={value ? value : ''}
@@ -208,31 +192,27 @@ export function StockConfigEditor({
           min={opts.min}
           max={opts.max}
           step={opts.step ?? 1}
-          className="w-full px-3 py-2 rounded"
-          style={inputStyle}
+          className="w-full px-3 bg-surface-2 border border-line text-fg num text-right"
         />
       </div>
     )
   }
 
   return (
-    <div className="space-y-6" data-testid="stock-config-editor">
+    <div className="space-y-4" data-testid="stock-config-editor">
       {/* Symbols */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <CandlestickChart
-            className="w-5 h-5"
-            style={{ color: 'var(--brand)' }}
-          />
-          <h3 className="font-medium" style={headingStyle}>
+          <CandlestickChart className="w-5 h-5 text-brand" />
+          <h3 className="font-medium text-fg">
             {ts(tx.symbolsSection, language)}
           </h3>
         </div>
-        <div className="p-4 rounded-lg" style={sectionStyle}>
-          <label className="block text-sm mb-1" style={headingStyle}>
+        <div className="p-3 rounded-lg bg-surface-2 border border-line">
+          <label className="block text-[13px] mb-1 text-fg-2">
             {ts(tx.symbols, language)}
           </label>
-          <p className="text-xs mb-3" style={mutedStyle}>
+          <p className="text-xs mb-3 text-fg-3">
             {ts(tx.symbolsDesc, language)}
           </p>
 
@@ -243,11 +223,7 @@ export function StockConfigEditor({
                 <span
                   key={sym}
                   data-testid="stock-selected-symbol"
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs"
-                  style={{
-                    background: 'var(--surface-hover)',
-                    border: '1px solid var(--brand)',
-                  }}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-surface-2 border border-brand"
                 >
                   {underlyingOf(sym)} · {sym}
                   {!disabled && (
@@ -255,6 +231,7 @@ export function StockConfigEditor({
                       type="button"
                       onClick={() => toggleSymbol(sym)}
                       aria-label={`remove ${sym}`}
+                      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -265,7 +242,7 @@ export function StockConfigEditor({
           )}
 
           {universeState === 'loading' && (
-            <p className="text-xs" style={mutedStyle}>
+            <p className="text-xs text-fg-3">
               {ts(tx.symbolsLoading, language)}
             </p>
           )}
@@ -273,27 +250,20 @@ export function StockConfigEditor({
           {universeState === 'ready' && (
             <div>
               <div className="relative mb-2">
-                <Search
-                  className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2"
-                  style={mutedStyle}
-                />
-                <input
+                <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-fg-3" />
+                <Input
                   type="text"
                   data-testid="stock-symbol-search"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={ts(tx.symbolSearch, language)}
                   disabled={disabled}
-                  className="w-full pl-8 pr-3 py-2 rounded"
-                  style={inputStyle}
+                  className="w-full pl-8 pr-3 bg-surface-2 border border-line text-fg"
                 />
               </div>
-              <div
-                className="max-h-56 overflow-y-auto rounded"
-                style={{ border: '1px solid var(--line)' }}
-              >
+              <div className="max-h-56 overflow-y-auto rounded border border-line">
                 {filtered.length === 0 && (
-                  <p className="p-3 text-xs" style={mutedStyle}>
+                  <p className="p-3 text-xs text-fg-3">
                     {ts(tx.symbolsNoMatch, language)}
                   </p>
                 )}
@@ -303,14 +273,15 @@ export function StockConfigEditor({
                   return (
                     <label
                       key={s.symbol}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-fg/5"
-                      style={{ opacity: full ? 0.5 : 1, color: 'var(--fg)' }}
+                      className="flex items-center gap-2 min-h-[34px] px-3 py-1.5 text-[13px] cursor-pointer hover:bg-surface-hover text-fg-2"
+                      style={{ opacity: full ? 0.5 : 1 }}
                     >
                       <input
                         type="checkbox"
                         checked={checked}
                         disabled={disabled || full}
                         onChange={() => toggleSymbol(s.symbol)}
+                        className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
                       />
                       <span>
                         {s.underlying} · {s.symbol}
@@ -319,7 +290,7 @@ export function StockConfigEditor({
                   )
                 })}
               </div>
-              <p className="text-xs mt-2" style={mutedStyle}>
+              <p className="text-xs mt-2 text-fg-3">
                 {ts(tx.symbolsSelected, language)} {symbols.length}/
                 {MAX_SYMBOLS}
               </p>
@@ -328,10 +299,10 @@ export function StockConfigEditor({
 
           {universeState === 'failed' && (
             <div>
-              <p className="text-xs mb-2" style={mutedStyle}>
+              <p className="text-xs mb-2 text-fg-3">
                 {ts(tx.symbolsFallback, language)}
               </p>
-              <input
+              <Input
                 type="text"
                 data-testid="stock-symbol-manual"
                 value={manualText}
@@ -341,23 +312,19 @@ export function StockConfigEditor({
                 }}
                 placeholder={ts(tx.symbolsFallbackPlaceholder, language)}
                 disabled={disabled}
-                className="w-full px-3 py-2 rounded font-mono text-sm"
-                style={inputStyle}
+                className="w-full px-3 num bg-surface-2 border border-line text-fg"
               />
             </div>
           )}
 
           {symbols.length === 0 && (
-            <p
-              className="text-xs mt-2 flex items-center gap-1"
-              style={{ color: 'var(--down)' }}
-            >
+            <p className="text-xs mt-2 flex items-center gap-1 text-down">
               <AlertTriangle className="w-3 h-3" />
               {ts(tx.symbolsEmptyWarn, language)}
             </p>
           )}
           {symbols.length > MAX_SYMBOLS && (
-            <p className="text-xs mt-2" style={{ color: 'var(--down)' }}>
+            <p className="text-xs mt-2 text-down">
               {ts(tx.symbolsMax, language)}
             </p>
           )}
@@ -367,8 +334,8 @@ export function StockConfigEditor({
       {/* Holding style preset */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Clock className="w-5 h-5" style={{ color: 'var(--up)' }} />
-          <h3 className="font-medium" style={headingStyle}>
+          <Clock className="w-5 h-5 text-up" />
+          <h3 className="font-medium text-fg">
             {ts(tx.presetSection, language)}
           </h3>
         </div>
@@ -381,14 +348,13 @@ export function StockConfigEditor({
           ).map(([value, label, desc]) => (
             <label
               key={value}
-              className="p-4 rounded-lg cursor-pointer"
-              style={{
-                ...sectionStyle,
-                border:
-                  preset === value
-                    ? '1px solid var(--brand)'
-                    : sectionStyle.border,
-              }}
+              className={cn(
+                'p-3 rounded-lg cursor-pointer',
+                'bg-surface-2',
+                'border border-line',
+                preset === value ? 'border border-brand' : 'border border-line',
+                'text-fg-2'
+              )}
             >
               <div className="flex items-center gap-2 mb-1">
                 <input
@@ -398,14 +364,13 @@ export function StockConfigEditor({
                   checked={preset === value}
                   disabled={disabled}
                   onChange={() => updateField('preset', value)}
+                  className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
                 />
-                <span className="text-sm font-medium" style={headingStyle}>
+                <span className="text-sm font-medium text-fg">
                   {ts(label, language)}
                 </span>
               </div>
-              <p className="text-xs" style={mutedStyle}>
-                {ts(desc, language)}
-              </p>
+              <p className="text-xs text-fg-3">{ts(desc, language)}</p>
             </label>
           ))}
         </div>
@@ -414,56 +379,50 @@ export function StockConfigEditor({
       {/* Sessions */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Clock className="w-5 h-5" style={{ color: 'var(--brand)' }} />
-          <h3 className="font-medium" style={headingStyle}>
+          <Clock className="w-5 h-5 text-brand" />
+          <h3 className="font-medium text-fg">
             {ts(tx.sessionsSection, language)}
           </h3>
         </div>
-        <div className="p-4 rounded-lg space-y-2" style={sectionStyle}>
-          <label
-            className="flex items-center gap-2 text-sm"
-            style={headingStyle}
-          >
+        <div className="p-3 rounded-lg space-y-2 bg-surface-2 border border-line">
+          <label className="flex items-center gap-2 text-[13px] text-fg-2">
             <input
               type="checkbox"
               data-testid="stock-session-regular"
               checked={regularOn}
               disabled={disabled}
               onChange={(e) => updateSession({ regular: e.target.checked })}
+              className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
             />
             {ts(tx.sessionRegular, language)}
           </label>
-          <label
-            className="flex items-center gap-2 text-sm"
-            style={headingStyle}
-          >
+          <label className="flex items-center gap-2 text-[13px] text-fg-2">
             <input
               type="checkbox"
               data-testid="stock-session-pre"
               checked={!!sessions.pre_market}
               disabled={disabled}
               onChange={(e) => updateSession({ pre_market: e.target.checked })}
+              className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
             />
             {ts(tx.sessionPreMarket, language)}
           </label>
-          <label
-            className="flex items-center gap-2 text-sm"
-            style={headingStyle}
-          >
+          <label className="flex items-center gap-2 text-[13px] text-fg-2">
             <input
               type="checkbox"
               data-testid="stock-session-after"
               checked={!!sessions.after_hours}
               disabled={disabled}
               onChange={(e) => updateSession({ after_hours: e.target.checked })}
+              className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
             />
             {ts(tx.sessionAfterHours, language)}
           </label>
-          <p className="text-xs pt-1" style={mutedStyle}>
+          <p className="text-xs pt-1 text-fg-3">
             {ts(tx.sessionsNote, language)}
           </p>
           {noSession && (
-            <p className="text-xs" style={{ color: 'var(--down)' }}>
+            <p className="text-xs text-down">
               {ts(tx.sessionsNoneWarn, language)}
             </p>
           )}
@@ -473,16 +432,13 @@ export function StockConfigEditor({
       {/* Data */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <h3 className="font-medium" style={headingStyle}>
+          <h3 className="font-medium text-fg">
             {ts(tx.dataSection, language)}
           </h3>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="p-4 rounded-lg" style={sectionStyle}>
-            <label
-              className="flex items-center gap-2 text-sm mb-1"
-              style={headingStyle}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="flex items-center gap-2 text-[13px] mb-1 text-fg-2">
               <input
                 type="checkbox"
                 data-testid="stock-yahoo-fallback"
@@ -491,10 +447,11 @@ export function StockConfigEditor({
                 onChange={(e) =>
                   updateField('data_fallback_yahoo', e.target.checked)
                 }
+                className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
               {ts(tx.yahooFallback, language)}
             </label>
-            <p className="text-xs" style={mutedStyle}>
+            <p className="text-xs text-fg-3">
               {ts(tx.yahooFallbackDesc, language)}
             </p>
           </div>
@@ -510,7 +467,7 @@ export function StockConfigEditor({
       {/* Risk */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <h3 className="font-medium" style={headingStyle}>
+          <h3 className="font-medium text-fg">
             {ts(tx.riskSection, language)}
           </h3>
         </div>
@@ -557,43 +514,32 @@ export function StockConfigEditor({
       {/* Paper trading */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <h3 className="font-medium" style={headingStyle}>
+          <h3 className="font-medium text-fg">
             {ts(tx.paperSection, language)}
           </h3>
         </div>
         <div
-          className="p-4 rounded-lg"
+          className={`p-3 rounded-lg border ${isPaper ? 'bg-surface-2 border-line' : 'bg-down-soft border-down'}`}
           data-testid="stock-paper-box"
-          style={
-            isPaper
-              ? sectionStyle
-              : {
-                  background: 'var(--down-soft)',
-                  border: '1px solid var(--down)',
-                }
-          }
         >
-          <label
-            className="flex items-center gap-2 text-sm font-medium"
-            style={headingStyle}
-          >
+          <label className="flex items-center gap-2 text-[13px] font-medium text-fg-2">
             <input
               type="checkbox"
               data-testid="stock-paper-trading"
               checked={isPaper}
               disabled={disabled}
               onChange={(e) => updateField('paper_trading', e.target.checked)}
+              className="accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
             />
             {ts(tx.paperTrading, language)}
           </label>
-          <p className="text-xs mt-1" style={mutedStyle}>
+          <p className="text-xs mt-1 text-fg-3">
             {ts(tx.paperTradingDesc, language)}
           </p>
           {!isPaper && (
             <p
-              className="text-xs mt-2 flex items-center gap-1 font-medium"
+              className="text-xs mt-2 flex items-center gap-1 font-medium text-down"
               data-testid="stock-live-warning"
-              style={{ color: 'var(--down)' }}
             >
               <AlertTriangle className="w-3 h-3" />
               {ts(tx.liveWarning, language)}

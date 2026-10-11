@@ -1,3 +1,4 @@
+import { Input } from '../ui'
 import { Shield, AlertTriangle } from 'lucide-react'
 import type { RiskControlConfig } from '../../types'
 import { riskControl, ts } from '../../i18n/strategy-translations'
@@ -25,34 +26,25 @@ export function RiskControlEditor({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Position Limits */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Shield className="w-5 h-5" style={{ color: 'var(--brand)' }} />
-          <h3 className="font-medium" style={{ color: 'var(--fg)' }}>
+          <Shield className="w-5 h-5 text-brand" />
+          <h3 className="font-medium text-fg">
             {ts(riskControl.positionLimits, language)}
           </h3>
         </div>
 
         <div className="grid grid-cols-1 gap-4 mb-4">
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.maxPositions, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.maxPositionsDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               value={config.max_positions ?? 3}
               onChange={(e) =>
@@ -61,32 +53,18 @@ export function RiskControlEditor({
               disabled={disabled}
               min={1}
               max={10}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.earlyCloseMinHours, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.earlyCloseMinHoursDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               value={config.early_close_min_hours ?? 0}
               onChange={(e) =>
@@ -98,38 +76,21 @@ export function RiskControlEditor({
               disabled={disabled}
               min={-1}
               max={72}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.early_close_min_hours ?? 0) === 0 ? 4 : (config.early_close_min_hours ?? 0) <= -1 ? '禁用' : config.early_close_min_hours}h`}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.pumpGuard4hPct, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.pumpGuard4hPctDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               value={config.pump_guard_4h_pct ?? 0}
               onChange={(e) =>
@@ -141,38 +102,21 @@ export function RiskControlEditor({
               disabled={disabled}
               min={-1}
               max={200}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.pump_guard_4h_pct ?? 0) === 0 ? 20 : (config.pump_guard_4h_pct ?? 0) < 0 ? '禁用' : config.pump_guard_4h_pct}%`}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.tpTrimProfitPct, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.tpTrimProfitPctDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               value={config.tp_trim_profit_pct ?? 0}
               onChange={(e) =>
@@ -182,21 +126,13 @@ export function RiskControlEditor({
                 )
               }
               disabled={disabled}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
             {(() => {
               const lockR = config.profit_lock_at_r ?? 0
               if (lockR >= 0) {
                 return (
-                  <p
-                    className="text-xs mt-2 font-medium"
-                    style={{ color: 'var(--brand)' }}
-                  >
+                  <p className="text-xs mt-2 font-medium text-brand">
                     {ts(riskControl.profitLockTrimHint, language)}
                   </p>
                 )
@@ -205,23 +141,14 @@ export function RiskControlEditor({
             })()}
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.tpFullProfitPct, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.tpFullProfitPctDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               value={config.tp_full_profit_pct ?? 0}
               onChange={(e) =>
@@ -231,42 +158,25 @@ export function RiskControlEditor({
                 )
               }
               disabled={disabled}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {'止盈阶梯 R 档(R 单位,优先于上面的 ROE 档)'}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {
                 'ROE 档随杠杆漂移(15% ROE ≈ 0.5R@10x / 1.67R@3x),R 档与杠杆无关。>0 = 该 R 值生效并覆盖 ROE 档;负数 = 该档关闭;0 = 用上面的 ROE 兼容档'
               }
             </p>
             <div className="flex gap-4">
               <div>
-                <label
-                  className="block text-xs mb-1"
-                  style={{ color: 'var(--fg-3)' }}
-                >
+                <label className="block text-xs mb-1 text-fg-2">
                   {'减仓 1/3 触发 (R)'}
                 </label>
-                <input
+                <Input
                   type="number"
                   step={0.1}
                   value={config.tp_trim_at_r ?? 0}
@@ -277,22 +187,14 @@ export function RiskControlEditor({
                     )
                   }
                   disabled={disabled}
-                  className="w-32 px-3 py-2 rounded"
-                  style={{
-                    background: 'var(--surface-hover)',
-                    border: '1px solid var(--line)',
-                    color: 'var(--fg)',
-                  }}
+                  className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
                 />
               </div>
               <div>
-                <label
-                  className="block text-xs mb-1"
-                  style={{ color: 'var(--fg-3)' }}
-                >
+                <label className="block text-xs mb-1 text-fg-2">
                   {'全部平仓触发 (R;负数=关闭)'}
                 </label>
-                <input
+                <Input
                   type="number"
                   step={0.1}
                   value={config.tp_full_at_r ?? 0}
@@ -303,19 +205,11 @@ export function RiskControlEditor({
                     )
                   }
                   disabled={disabled}
-                  className="w-32 px-3 py-2 rounded"
-                  style={{
-                    background: 'var(--surface-hover)',
-                    border: '1px solid var(--line)',
-                    color: 'var(--fg)',
-                  }}
+                  className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
                 />
               </div>
             </div>
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {(() => {
                 const trimR = config.tp_trim_at_r ?? 0
                 const fullR = config.tp_full_at_r ?? 0
@@ -336,23 +230,14 @@ export function RiskControlEditor({
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.profitLockAtR, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.profitLockAtRDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               step={0.1}
               value={config.profit_lock_at_r ?? 0}
@@ -363,38 +248,21 @@ export function RiskControlEditor({
                 )
               }
               disabled={disabled}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.profit_lock_at_r ?? 0) < 0 ? '禁用(ROE 减仓档接管)' : `${(config.profit_lock_at_r ?? 0) === 0 ? 1 : config.profit_lock_at_r}R 时保本+减半 50%`}`}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.profitLockBEOffsetR, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.profitLockBEOffsetRDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               step={0.05}
               value={config.profit_lock_be_offset_r ?? 0}
@@ -405,39 +273,22 @@ export function RiskControlEditor({
                 )
               }
               disabled={disabled}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.profit_lock_be_offset_r ?? 0) < 0 ? '纯保本(开仓价)' : `开仓价+${(config.profit_lock_be_offset_r ?? 0) === 0 ? 0.2 : config.profit_lock_be_offset_r}R`}
  `}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.tpCloseFraction, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.tpCloseFractionDesc, language)}
             </p>
-            <input
+            <Input
               type="number"
               step={0.05}
               min={-1}
@@ -450,17 +301,9 @@ export function RiskControlEditor({
                 )
               }
               disabled={disabled}
-              className="w-32 px-3 py-2 rounded"
-              style={{
-                background: 'var(--surface-hover)',
-                border: '1px solid var(--line)',
-                color: 'var(--fg)',
-              }}
+              className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
             />
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="num text-xs mt-2 font-medium text-up">
               {(() => {
                 const raw = config.tp_close_fraction ?? 0
                 // Backend bool: absent/false = trailing OFF → full close (no runner).
@@ -476,28 +319,16 @@ export function RiskControlEditor({
 
         {/* Trading Leverage (Exchange) */}
         <div className="mb-2">
-          <p
-            className="text-xs font-medium mb-2"
-            style={{ color: 'var(--brand)' }}
-          >
+          <p className="text-xs font-medium mb-2 text-brand">
             {ts(riskControl.tradingLeverage, language)}
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.btcEthLeverage, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.btcEthLeverageDesc, language)}
             </p>
             <div className="flex items-center gap-2">
@@ -510,31 +341,19 @@ export function RiskControlEditor({
                 disabled={disabled}
                 min={1}
                 max={20}
-                className="flex-1 accent-yellow-500"
+                className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
-              <span
-                className="w-12 text-center font-mono"
-                style={{ color: 'var(--brand)' }}
-              >
+              <span className="w-12 text-center num text-brand">
                 {config.btc_eth_max_leverage ?? 5}x
               </span>
             </div>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.altcoinLeverage, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.altcoinLeverageDesc, language)}
             </p>
             <div className="flex items-center gap-2">
@@ -547,12 +366,9 @@ export function RiskControlEditor({
                 disabled={disabled}
                 min={1}
                 max={20}
-                className="flex-1 accent-yellow-500"
+                className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
-              <span
-                className="w-12 text-center font-mono"
-                style={{ color: 'var(--brand)' }}
-              >
+              <span className="w-12 text-center num text-brand">
                 {config.altcoin_max_leverage ?? 5}x
               </span>
             </div>
@@ -561,28 +377,19 @@ export function RiskControlEditor({
 
         {/* Position Value Ratio (Risk Control - CODE ENFORCED) */}
         <div className="mb-2">
-          <p className="text-xs font-medium" style={{ color: 'var(--up)' }}>
+          <p className="text-xs font-medium text-up">
             {ts(riskControl.positionValueRatio, language)}
           </p>
-          <p className="text-xs mt-1" style={{ color: 'var(--fg-3)' }}>
+          <p className="text-xs mt-1 text-fg-3">
             {ts(riskControl.positionValueRatioDesc, language)}
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.btcEthPositionValueRatio, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.btcEthPositionValueRatioDesc, language)}
             </p>
             <div className="flex items-center gap-2">
@@ -599,31 +406,19 @@ export function RiskControlEditor({
                 min={0.5}
                 max={10}
                 step={0.5}
-                className="flex-1 accent-green-500"
+                className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
-              <span
-                className="w-12 text-center font-mono"
-                style={{ color: 'var(--up)' }}
-              >
+              <span className="w-12 text-center num text-up">
                 {config.btc_eth_max_position_value_ratio ?? 5}x
               </span>
             </div>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.altcoinPositionValueRatio, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.altcoinPositionValueRatioDesc, language)}
             </p>
             <div className="flex items-center gap-2">
@@ -640,12 +435,9 @@ export function RiskControlEditor({
                 min={0.5}
                 max={10}
                 step={0.5}
-                className="flex-1 accent-green-500"
+                className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
-              <span
-                className="w-12 text-center font-mono"
-                style={{ color: 'var(--up)' }}
-              >
+              <span className="w-12 text-center num text-up">
                 {config.altcoin_max_position_value_ratio ?? 1}x
               </span>
             </div>
@@ -656,32 +448,23 @@ export function RiskControlEditor({
       {/* Risk Parameters */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <AlertTriangle className="w-5 h-5" style={{ color: 'var(--down)' }} />
-          <h3 className="font-medium" style={{ color: 'var(--fg)' }}>
+          <AlertTriangle className="w-5 h-5 text-down" />
+          <h3 className="font-medium text-fg">
             {ts(riskControl.riskParameters, language)}
           </h3>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.minRiskReward, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.minRiskRewardDesc, language)}
             </p>
             <div className="flex items-center">
-              <span style={{ color: 'var(--fg-3)' }}>1:</span>
-              <input
+              <span className="text-fg-3">1:</span>
+              <Input
                 type="number"
                 value={config.min_risk_reward_ratio ?? 3}
                 onChange={(e) => {
@@ -697,38 +480,21 @@ export function RiskControlEditor({
                 min={0}
                 max={10}
                 step={0.5}
-                className="w-20 px-3 py-2 rounded ml-2"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-20 px-3 ml-2 bg-surface-2 border border-line text-fg num text-right"
               />
             </div>
             {(config.min_risk_reward_ratio ?? 3) === 0 && (
-              <p
-                className="text-xs mt-2 font-medium"
-                style={{ color: 'var(--brand)' }}
-              >
+              <p className="text-xs mt-2 font-medium text-brand">
                 {ts(riskControl.minRRZeroHint, language)}
               </p>
             )}
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.maxMarginUsage, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.maxMarginUsageDesc, language)}
             </p>
             <div className="flex items-center gap-2">
@@ -744,35 +510,23 @@ export function RiskControlEditor({
                 disabled={disabled}
                 min={10}
                 max={100}
-                className="flex-1 accent-green-500"
+                className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
-              <span
-                className="w-12 text-center font-mono"
-                style={{ color: 'var(--up)' }}
-              >
+              <span className="w-12 text-center num text-up">
                 {Math.round((config.max_margin_usage ?? 0.9) * 100)}%
               </span>
             </div>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.riskPerTradePct, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.riskPerTradePctDesc, language)}
             </p>
             <div className="flex items-center">
-              <input
+              <Input
                 type="number"
                 value={config.risk_per_trade_pct ?? 0}
                 onChange={(e) => {
@@ -786,43 +540,24 @@ export function RiskControlEditor({
                 min={0}
                 max={10}
                 step={0.1}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
-              <span className="ml-2" style={{ color: 'var(--fg-3)' }}>
-                %
-              </span>
+              <span className="ml-2 text-fg-3">%</span>
             </div>
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.risk_per_trade_pct ?? 0) <= 0 ? '默认 1.5' : config.risk_per_trade_pct}%`}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.maxAccountRiskPct, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.maxAccountRiskPctDesc, language)}
             </p>
             <div className="flex items-center">
-              <input
+              <Input
                 type="number"
                 value={config.max_account_risk_pct ?? 0}
                 onChange={(e) => {
@@ -836,43 +571,24 @@ export function RiskControlEditor({
                 min={-1}
                 max={100}
                 step={0.5}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
-              <span className="ml-2" style={{ color: 'var(--fg-3)' }}>
-                %
-              </span>
+              <span className="ml-2 text-fg-3">%</span>
             </div>
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.max_account_risk_pct ?? 0) < 0 ? '禁用' : (config.max_account_risk_pct ?? 0) === 0 ? '默认 10' : config.max_account_risk_pct}%`}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.maxNetDirectionalRiskPct, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.maxNetDirectionalRiskPctDesc, language)}
             </p>
             <div className="flex items-center">
-              <input
+              <Input
                 type="number"
                 value={config.max_net_directional_risk_pct ?? 0}
                 onChange={(e) => {
@@ -886,43 +602,24 @@ export function RiskControlEditor({
                 min={-1}
                 max={100}
                 step={0.5}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
-              <span className="ml-2" style={{ color: 'var(--fg-3)' }}>
-                %
-              </span>
+              <span className="ml-2 text-fg-3">%</span>
             </div>
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.max_net_directional_risk_pct ?? 0) < 0 ? '禁用' : (config.max_net_directional_risk_pct ?? 0) === 0 ? '默认 6' : config.max_net_directional_risk_pct}%`}
             </p>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--up)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-up">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.vendorDivergence, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.vendorDivergenceDesc, language)}
             </p>
             <div className="flex items-center">
-              <input
+              <Input
                 type="number"
                 value={config.max_vendor_divergence_pct ?? 0}
                 onChange={(e) => {
@@ -936,21 +633,11 @@ export function RiskControlEditor({
                 min={-5}
                 max={10}
                 step={0.5}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
-              <span className="ml-2" style={{ color: 'var(--fg-3)' }}>
-                %
-              </span>
+              <span className="ml-2 text-fg-3">%</span>
             </div>
-            <p
-              className="text-xs mt-2 font-medium"
-              style={{ color: 'var(--up)' }}
-            >
+            <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.max_vendor_divergence_pct ?? 0) < 0 ? '禁用' : (config.max_vendor_divergence_pct ?? 0) === 0 ? '默认 1' : config.max_vendor_divergence_pct}%`}
             </p>
           </div>
@@ -960,31 +647,22 @@ export function RiskControlEditor({
       {/* Entry Requirements */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Shield className="w-5 h-5" style={{ color: 'var(--up)' }} />
-          <h3 className="font-medium" style={{ color: 'var(--fg)' }}>
+          <Shield className="w-5 h-5 text-up" />
+          <h3 className="font-medium text-fg">
             {ts(riskControl.entryRequirements, language)}
           </h3>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.minPositionSize, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.minPositionSizeDesc, language)}
             </p>
             <div className="flex items-center">
-              <input
+              <Input
                 type="number"
                 value={config.min_position_size ?? 12}
                 onChange={(e) =>
@@ -996,33 +674,17 @@ export function RiskControlEditor({
                 disabled={disabled}
                 min={10}
                 max={1000}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
-              <span className="ml-2" style={{ color: 'var(--fg-3)' }}>
-                USDT
-              </span>
+              <span className="ml-2 text-fg-3">USDT</span>
             </div>
           </div>
 
-          <div
-            className="p-4 rounded-lg"
-            style={{
-              background: 'var(--surface-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            <label
-              className="block text-sm mb-1"
-              style={{ color: 'var(--fg)' }}
-            >
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="block text-[13px] mb-1 text-fg-2">
               {ts(riskControl.minConfidence, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+            <p className="text-xs mb-2 text-fg-3">
               {ts(riskControl.minConfidenceDesc, language)}
             </p>
             <div className="flex items-center gap-2">
@@ -1035,29 +697,20 @@ export function RiskControlEditor({
                 disabled={disabled}
                 min={50}
                 max={100}
-                className="flex-1 accent-green-500"
+                className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
               />
-              <span
-                className="w-12 text-center font-mono"
-                style={{ color: 'var(--up)' }}
-              >
+              <span className="w-12 text-center num text-up">
                 {config.min_confidence ?? 75}
               </span>
             </div>
           </div>
         </div>
 
-        <div
-          className="p-4 rounded-lg mt-4"
-          style={{
-            background: 'var(--surface-2)',
-            border: '1px solid var(--line)',
-          }}
-        >
-          <label className="block text-sm mb-1" style={{ color: 'var(--fg)' }}>
+        <div className="p-3 rounded-lg mt-4 bg-surface-2 border border-line">
+          <label className="block text-[13px] mb-1 text-fg-2">
             限价挂单偏移 limit_entry_offset_pct
           </label>
-          <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+          <p className="text-xs mb-2 text-fg-3">
             默认限价开仓:做多挂现价下方、做空挂现价上方该百分比(0.1–5%,默认0.5)。偏移越大成交越慢、价位越优
           </p>
           <div className="flex items-center gap-2">
@@ -1074,28 +727,16 @@ export function RiskControlEditor({
               min={0.1}
               max={5}
               step={0.1}
-              className="flex-1 accent-green-500"
+              className="min-w-0 flex-1 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
             />
-            <span
-              className="w-14 text-center font-mono"
-              style={{ color: 'var(--up)' }}
-            >
+            <span className="w-14 text-center num text-up">
               {(config.limit_entry_offset_pct ?? 0.5).toFixed(1)}%
             </span>
           </div>
         </div>
 
-        <div
-          className="p-4 rounded-lg mt-4"
-          style={{
-            background: 'var(--surface-2)',
-            border: '1px solid var(--line)',
-          }}
-        >
-          <label
-            className="flex items-center justify-between block text-sm mb-1 cursor-pointer"
-            style={{ color: 'var(--fg)' }}
-          >
+        <div className="p-3 rounded-lg mt-4 bg-surface-2 border border-line">
+          <label className="items-center justify-between block text-[13px] mb-1 cursor-pointer text-fg-2">
             <span>锚点穿越转市价 limit_entry_market_fallback</span>
             <input
               type="checkbox"
@@ -1104,37 +745,26 @@ export function RiskControlEditor({
                 updateField('limit_entry_market_fallback', e.target.checked)
               }
               disabled={disabled}
-              className="w-3.5 h-3.5 rounded accent-green-500"
+              className="w-3.5 h-3.5 rounded accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
             />
           </label>
-          <p className="text-xs" style={{ color: 'var(--fg-3)' }}>
+          <p className="text-xs text-fg-3">
             AI
             推理期间行情穿过限价锚点(多单锚点高于现价/空单低于现价)时,视为回踩/反弹已到位,自动转为市价单入场(全部风险闸门按现价复检);价格已越过止损则拒单。关闭后维持旧行为:穿越即拒单
           </p>
         </div>
 
-        <div
-          className="p-4 rounded-lg mt-4"
-          style={{
-            background: 'var(--surface-2)',
-            border: '1px solid var(--line)',
-          }}
-        >
-          <label className="block text-sm mb-1" style={{ color: 'var(--fg)' }}>
+        <div className="p-3 rounded-lg mt-4 bg-surface-2 border border-line">
+          <label className="block text-[13px] mb-1 text-fg-2">
             回撤保护平仓 peak_drawdown
           </label>
-          <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
+          <p className="text-xs mb-2 text-fg-3">
             浮盈峰值达到「起征浮盈」后,从峰值回撤超过「最大回撤」即程序自动平仓锁定利润
           </p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--fg-3)' }}
-              >
-                起征浮盈 %
-              </label>
-              <input
+              <label className="block text-xs mb-1 text-fg-2">起征浮盈 %</label>
+              <Input
                 type="number"
                 value={config.peak_drawdown_min_profit_pct ?? 5}
                 onChange={(e) =>
@@ -1147,22 +777,12 @@ export function RiskControlEditor({
                 min={1}
                 max={50}
                 step={0.5}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
             </div>
             <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--fg-3)' }}
-              >
-                最大回撤 %
-              </label>
-              <input
+              <label className="block text-xs mb-1 text-fg-2">最大回撤 %</label>
+              <Input
                 type="number"
                 value={config.peak_drawdown_max_dd_pct ?? 55}
                 onChange={(e) =>
@@ -1175,24 +795,16 @@ export function RiskControlEditor({
                 min={10}
                 max={95}
                 step={1}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
             <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--fg-3)' }}
-              >
+              <label className="block text-xs mb-1 text-fg-2">
                 R 档起征 (×初始止损距离;&gt;0 启用,替代上面的 ROE 档)
               </label>
-              <input
+              <Input
                 type="number"
                 step={0.1}
                 value={config.peak_drawdown_arm_r ?? 0}
@@ -1203,22 +815,14 @@ export function RiskControlEditor({
                   )
                 }
                 disabled={disabled}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
             </div>
             <div>
-              <label
-                className="block text-xs mb-1"
-                style={{ color: 'var(--fg-3)' }}
-              >
+              <label className="block text-xs mb-1 text-fg-2">
                 R 档回吐比例 (0-1,0=默认 0.5)
               </label>
-              <input
+              <Input
                 type="number"
                 step={0.05}
                 value={config.peak_drawdown_giveback_r ?? 0}
@@ -1229,19 +833,11 @@ export function RiskControlEditor({
                   )
                 }
                 disabled={disabled}
-                className="w-24 px-3 py-2 rounded"
-                style={{
-                  background: 'var(--surface-hover)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--fg)',
-                }}
+                className="w-24 px-3 bg-surface-2 border border-line text-fg num text-right"
               />
             </div>
           </div>
-          <p
-            className="text-xs mt-2 font-medium"
-            style={{ color: 'var(--up)' }}
-          >
+          <p className="text-xs mt-2 font-medium text-up">
             {(() => {
               const armR = config.peak_drawdown_arm_r ?? 0
               if (armR > 0) {

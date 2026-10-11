@@ -1,3 +1,5 @@
+import { cn } from '../../lib/cn'
+import { Button, Input, Badge } from '../ui'
 import { useState } from 'react'
 import {
   Plus,
@@ -32,12 +34,12 @@ export function CoinSourceEditor({
   const [newExcludedCoin, setNewExcludedCoin] = useState('')
 
   const sourceTypes = [
-    { value: 'static', icon: List, color: 'var(--fg-3)' },
-    { value: 'ai500', icon: Database, color: 'var(--brand)' },
-    { value: 'oi_top', icon: TrendingUp, color: 'var(--up)' },
-    { value: 'oi_low', icon: TrendingDown, color: 'var(--down)' },
-    { value: 'piggy_dash', icon: Zap, color: '#EC4899' },
-    { value: 'short_scan', icon: ArrowDownRight, color: 'var(--down)' },
+    { value: 'static', icon: List, color: 'text-fg-3' },
+    { value: 'ai500', icon: Database, color: 'text-brand' },
+    { value: 'oi_top', icon: TrendingUp, color: 'text-up' },
+    { value: 'oi_low', icon: TrendingDown, color: 'text-down' },
+    { value: 'piggy_dash', icon: Zap, color: 'text-ai' },
+    { value: 'short_scan', icon: ArrowDownRight, color: 'text-down' },
   ] as const
 
   type SourceKey = (typeof sourceTypes)[number]['value']
@@ -200,8 +202,7 @@ export function CoinSourceEditor({
     const toast = document.createElement('div')
     toast.textContent = msg
     toast.className =
-      'fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm z-50 shadow-lg'
-    toast.style.cssText = 'background:var(--down);color:var(--brand-fg);'
+      'fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm z-50 shadow-pop border border-down/30 bg-down-soft text-down'
     document.body.appendChild(toast)
     setTimeout(() => toast.remove(), 2000)
   }
@@ -283,22 +284,22 @@ export function CoinSourceEditor({
 
   // NofxOS badge component
   const NofxOSBadge = () => (
-    <span className="text-[9px] px-1.5 py-0.5 rounded font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30">
+    <Badge variant="ai" size="xs">
       NofxOS
-    </span>
+    </Badge>
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Source Type Multi-Selector */}
       <div>
-        <label className="block text-sm font-medium mb-1 text-nofx-text">
+        <label className="block text-[13px] font-medium mb-1 text-fg-2">
           {ts(coinSource.sourceType, language)}
         </label>
-        <p className="text-xs mb-3 text-nofx-text-muted">
+        <p className="text-xs mb-3 text-fg-3">
           {ts(coinSource.multiSelectHint, language)}
         </p>
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
           {sourceTypes.map(({ value, icon: Icon, color }) => {
             const selected = selectedSources.includes(value)
             return (
@@ -306,22 +307,26 @@ export function CoinSourceEditor({
                 key={value}
                 onClick={() => toggleSource(value)}
                 disabled={disabled}
-                className={`relative p-4 rounded-lg border transition-all ${
-                  selected
-                    ? 'ring-2 ring-nofx-gold bg-nofx-gold/10'
-                    : 'hover:bg-fg/5 bg-nofx-bg'
-                } border-nofx-gold/20`}
+                aria-pressed={selected}
+                className={cn(
+                  `relative p-3 rounded-md border transition-colors ${
+                    selected
+                      ? 'border-brand bg-brand-soft'
+                      : 'hover:bg-surface-hover bg-bg'
+                  } border-line`,
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50'
+                )}
               >
                 {selected && (
-                  <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-nofx-gold text-brand-fg text-[10px] font-bold flex items-center justify-center">
+                  <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-brand text-brand-fg text-xs font-bold flex items-center justify-center">
                     ✓
                   </span>
                 )}
-                <Icon className="w-6 h-6 mx-auto mb-2" style={{ color }} />
-                <div className="text-sm font-medium text-nofx-text">
+                <Icon className={cn('w-5 h-5 mx-auto mb-2', color)} />
+                <div className="text-sm font-medium text-fg">
                   {ts(coinSource[value as keyof typeof coinSource], language)}
                 </div>
-                <div className="text-xs mt-1 text-nofx-text-muted">
+                <div className="text-xs mt-1 text-fg-3">
                   {ts(
                     coinSource[`${value}Desc` as keyof typeof coinSource],
                     language
@@ -332,7 +337,7 @@ export function CoinSourceEditor({
           })}
         </div>
         {isMixed && (
-          <div className="mt-2 text-xs font-medium text-blue-400">
+          <div className="mt-2 text-xs font-medium text-info">
             {ts(coinSource.mixedMode, language).replace(
               '{n}',
               String(selectedSources.length)
@@ -344,44 +349,47 @@ export function CoinSourceEditor({
       {/* Static Coins - when the static source is selected */}
       {selectedSources.includes('static') && (
         <div>
-          <label className="block text-sm font-medium mb-3 text-nofx-text">
+          <label className="block text-[13px] font-medium mb-3 text-fg-2">
             {ts(coinSource.staticCoins, language)}
           </label>
           <div className="flex flex-wrap gap-2 mb-3">
             {(config.static_coins || []).map((coin) => (
               <span
                 key={coin}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-full text-sm bg-nofx-bg-lighter text-nofx-text"
+                className="flex max-w-full items-center gap-1 rounded-md bg-surface-2 pl-2 text-xs text-fg"
               >
                 {coin}
                 {!disabled && (
-                  <button
+                  <Button
+                    variant="danger"
+                    size="sm"
                     onClick={() => handleRemoveCoin(coin)}
-                    className="ml-1 hover:text-red-400 transition-colors"
+                    className="w-7 px-0"
                   >
                     <X className="w-3 h-3" />
-                  </button>
+                  </Button>
                 )}
               </span>
             ))}
           </div>
           {!disabled && (
             <div className="flex gap-2">
-              <input
+              <Input
                 type="text"
                 value={newCoin}
                 onChange={(e) => setNewCoin(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddCoin()}
                 placeholder="BTC, ETH, SOL..."
-                className="flex-1 px-4 py-2 rounded-lg bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="flex-1 px-4"
               />
-              <button
+              <Button
+                variant="primary"
                 onClick={handleAddCoin}
-                className="px-4 py-2 rounded-lg flex items-center gap-2 transition-colors bg-nofx-gold text-brand-fg hover:brightness-110"
+                className="flex items-center gap-2 text-brand-fg"
               >
                 <Plus className="w-4 h-4" />
                 {ts(coinSource.addCoin, language)}
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -390,68 +398,71 @@ export function CoinSourceEditor({
       {/* Excluded Coins */}
       <div>
         <div className="flex items-center gap-2 mb-3">
-          <Ban className="w-4 h-4 text-nofx-danger" />
-          <label className="text-sm font-medium text-nofx-text">
+          <Ban className="w-4 h-4 text-down" />
+          <label className="text-[13px] font-medium text-fg-2">
             {ts(coinSource.excludedCoins, language)}
           </label>
         </div>
-        <p className="text-xs mb-3 text-nofx-text-muted">
+        <p className="text-xs mb-3 text-fg-3">
           {ts(coinSource.excludedCoinsDesc, language)}
         </p>
         <div className="flex flex-wrap gap-2 mb-3">
           {(config.excluded_coins || []).map((coin) => (
             <span
               key={coin}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-full text-sm bg-nofx-danger/15 text-nofx-danger"
+              className="flex max-w-full items-center gap-1 rounded-md bg-down-soft pl-2 text-xs text-down"
             >
               {coin}
               {!disabled && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => handleRemoveExcludedCoin(coin)}
-                  className="ml-1 hover:text-fg transition-colors"
+                  className="w-7 px-0"
                 >
                   <X className="w-3 h-3" />
-                </button>
+                </Button>
               )}
             </span>
           ))}
           {(config.excluded_coins || []).length === 0 && (
-            <span className="text-xs italic text-nofx-text-muted">
+            <span className="text-xs italic text-fg-3">
               {ts(coinSource.excludedNone, language)}
             </span>
           )}
         </div>
         {!disabled && (
           <div className="flex gap-2">
-            <input
+            <Input
               type="text"
               value={newExcludedCoin}
               onChange={(e) => setNewExcludedCoin(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddExcludedCoin()}
               placeholder="BTC, ETH, DOGE..."
-              className="flex-1 px-4 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+              className="flex-1 px-4"
             />
-            <button
+            <Button
+              variant="secondary"
               onClick={handleAddExcludedCoin}
-              className="px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm bg-nofx-danger text-fg hover:bg-red-600"
+              className="flex items-center gap-2 text-fg"
             >
               <Ban className="w-4 h-4" />
               {ts(coinSource.addExcludedCoin, language)}
-            </button>
+            </Button>
           </div>
         )}
       </div>
 
       {/* Min OI Value Filter — applies to all sources */}
       <div>
-        <label className="text-sm font-medium text-nofx-text">
+        <label className="text-[13px] font-medium text-fg-2">
           {ts(coinSource.minOILabel, language)}
         </label>
-        <p className="text-xs mb-2 text-nofx-text-muted">
+        <p className="text-xs mb-2 text-fg-3">
           {ts(coinSource.minOIDesc, language)}
         </p>
         <div className="flex items-center gap-2">
-          <input
+          <Input
             type="number"
             min={0}
             max={1000}
@@ -467,11 +478,11 @@ export function CoinSourceEditor({
               })
             }
             disabled={disabled}
-            className="w-28 px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+            className="w-28 px-3 num text-right"
           />
-          <span className="text-xs text-nofx-text-muted">M USD</span>
+          <span className="text-xs text-fg-3">M USD</span>
           {(config.min_oi_value_millions ?? 15) === 0 && (
-            <span className="text-xs text-nofx-text-muted">
+            <span className="text-xs text-fg-3">
               ({ts(coinSource.minOIDefault, language)})
             </span>
           )}
@@ -480,11 +491,11 @@ export function CoinSourceEditor({
 
       {/* AI500 Options - when the ai500 source is selected */}
       {selectedSources.includes('ai500') && (
-        <div className="p-4 rounded-lg bg-nofx-gold/5 border border-nofx-gold/20">
+        <div className="p-4 rounded-lg bg-brand/5 border border-line">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-nofx-gold" />
-              <span className="text-sm font-medium text-nofx-text">
+              <Zap className="w-4 h-4 text-brand" />
+              <span className="text-sm font-medium text-fg">
                 AI500 {ts(coinSource.dataSourceConfig, language)}
               </span>
               <NofxOSBadge />
@@ -493,7 +504,7 @@ export function CoinSourceEditor({
 
           <div className="space-y-3">
             <div className="flex items-center gap-3 pl-2">
-              <span className="text-sm text-nofx-text-muted">
+              <span className="text-sm text-fg-3">
                 {ts(coinSource.ai500Limit, language)}:
               </span>
               <NofxSelect
@@ -507,11 +518,11 @@ export function CoinSourceEditor({
                   value: n,
                   label: String(n),
                 }))}
-                className="px-3 py-1.5 rounded bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="px-3 border border-line text-fg h-8 rounded-md bg-surface-2 text-[13px] hover:border-line-strong"
               />
             </div>
 
-            <p className="text-xs pl-2 text-nofx-text-muted">
+            <p className="text-xs pl-2 text-fg-3">
               {ts(coinSource.nofxosNote, language)}
             </p>
           </div>
@@ -520,19 +531,19 @@ export function CoinSourceEditor({
 
       {/* Piggy Dash Options - when the piggy_dash source is selected */}
       {selectedSources.includes('piggy_dash') && (
-        <div className="space-y-4 p-4 rounded-lg bg-nofx-bg border border-nofx-gold/20">
+        <div className="space-y-4 p-4 rounded-lg bg-bg border border-line">
           <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4" style={{ color: '#EC4899' }} />
-            <span className="text-sm font-medium text-nofx-text">
+            <Zap className="w-4 h-4 text-ai" />
+            <span className="text-sm font-medium text-fg">
               {ts(coinSource.piggyDashTitle, language)}
             </span>
           </div>
 
           <div>
-            <label className="block text-sm text-nofx-text mb-2">
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.piggyDashLimit, language)}
             </label>
-            <input
+            <Input
               type="number"
               min={1}
               max={30}
@@ -547,12 +558,12 @@ export function CoinSourceEditor({
                 })
               }
               disabled={disabled}
-              className="w-24 px-3 py-2 rounded-lg bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+              className="w-24 px-3 num text-right"
             />
           </div>
 
           <div>
-            <label className="block text-sm text-nofx-text mb-2">
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.piggyDashDirection, language)}
             </label>
             <div className="flex gap-2">
@@ -571,11 +582,14 @@ export function CoinSourceEditor({
                     onChange({ ...config, piggy_dash_direction: value })
                   }
                   disabled={disabled}
-                  className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
-                    (config.piggy_dash_direction || '') === value
-                      ? 'bg-nofx-gold/15 text-nofx-gold border border-nofx-gold/40'
-                      : 'bg-nofx-bg text-nofx-text-muted border border-nofx-gold/10 hover:bg-fg/5'
-                  }`}
+                  className={cn(
+                    `px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      (config.piggy_dash_direction || '') === value
+                        ? 'bg-brand/15 text-brand border border-brand/40'
+                        : 'bg-bg text-fg-3 border border-brand/10 hover:bg-surface-2'
+                    }`,
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50'
+                  )}
                 >
                   {ts(label, language)}
                 </button>
@@ -583,7 +597,7 @@ export function CoinSourceEditor({
             </div>
           </div>
 
-          <div className="text-xs text-nofx-text-muted flex items-start gap-1.5">
+          <div className="text-xs text-fg-3 flex items-start gap-1.5">
             <span>🐷</span>
             <span>{ts(coinSource.piggyDashNote, language)}</span>
           </div>
@@ -592,11 +606,11 @@ export function CoinSourceEditor({
 
       {/* OI Top Options - when the oi_top source is selected */}
       {selectedSources.includes('oi_top') && (
-        <div className="p-4 rounded-lg bg-nofx-success/5 border border-nofx-success/20">
+        <div className="p-4 rounded-lg bg-up/5 border border-up/20">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-nofx-success" />
-              <span className="text-sm font-medium text-nofx-text">
+              <TrendingUp className="w-4 h-4 text-up" />
+              <span className="text-sm font-medium text-fg">
                 {ts(coinSource.oiIncreaseTitle, language)}{' '}
                 {ts(coinSource.dataSourceConfig, language)}
               </span>
@@ -606,7 +620,7 @@ export function CoinSourceEditor({
 
           <div className="space-y-3">
             <div className="flex items-center gap-3 pl-2">
-              <span className="text-sm text-nofx-text-muted">
+              <span className="text-sm text-fg-3">
                 {ts(coinSource.oiTopLimit, language)}:
               </span>
               <NofxSelect
@@ -620,11 +634,11 @@ export function CoinSourceEditor({
                   value: n,
                   label: String(n),
                 }))}
-                className="px-3 py-1.5 rounded bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="px-3 border border-line text-fg h-8 rounded-md bg-surface-2 text-[13px] hover:border-line-strong"
               />
             </div>
 
-            <p className="text-xs pl-2 text-nofx-text-muted">
+            <p className="text-xs pl-2 text-fg-3">
               {ts(coinSource.nofxosNote, language)}
             </p>
           </div>
@@ -633,22 +647,19 @@ export function CoinSourceEditor({
 
       {/* Short Scan Options - when the short_scan source is selected */}
       {selectedSources.includes('short_scan') && (
-        <div className="space-y-4 p-4 rounded-lg bg-nofx-bg border border-nofx-gold/20">
+        <div className="space-y-4 p-4 rounded-lg bg-bg border border-line">
           <div className="flex items-center gap-2">
-            <ArrowDownRight
-              className="w-4 h-4"
-              style={{ color: 'var(--down)' }}
-            />
-            <span className="text-sm font-medium text-nofx-text">
+            <ArrowDownRight className="w-4 h-4 text-down" />
+            <span className="text-sm font-medium text-fg">
               {ts(coinSource.shortScanTitle, language)}
             </span>
           </div>
 
           <div>
-            <label className="block text-sm text-nofx-text mb-2">
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.shortScanLimit, language)}
             </label>
-            <input
+            <Input
               type="number"
               min={1}
               max={30}
@@ -663,16 +674,16 @@ export function CoinSourceEditor({
                 })
               }
               disabled={disabled}
-              className="w-24 px-3 py-2 rounded-lg bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+              className="w-24 px-3 num text-right"
             />
           </div>
 
           <div>
-            <label className="block text-sm text-nofx-text mb-2">
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.shortScanFunding, language)}
             </label>
             <div className="flex items-center gap-2">
-              <input
+              <Input
                 type="number"
                 min={0}
                 max={1}
@@ -688,26 +699,26 @@ export function CoinSourceEditor({
                   })
                 }
                 disabled={disabled}
-                className="w-28 px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="w-28 px-3 num text-right"
               />
-              <span className="text-xs text-nofx-text-muted">%</span>
+              <span className="text-xs text-fg-3">%</span>
               {(config.short_scan_funding_rate_pct ?? 0.03) === 0 && (
-                <span className="text-xs text-nofx-text-muted">
+                <span className="text-xs text-fg-3">
                   ({ts(coinSource.shortScanFundingDefault, language)})
                 </span>
               )}
             </div>
-            <p className="text-xs pl-2 mt-1 text-nofx-text-muted">
+            <p className="text-xs pl-2 mt-1 text-fg-3">
               {ts(coinSource.shortScanFundingDesc, language)}
             </p>
           </div>
 
           <div>
-            <label className="block text-sm text-nofx-text mb-2">
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.shortScanHistoryDays, language)}
             </label>
             <div className="flex items-center gap-2">
-              <input
+              <Input
                 type="number"
                 min={-1}
                 max={30}
@@ -722,28 +733,28 @@ export function CoinSourceEditor({
                   })
                 }
                 disabled={disabled}
-                className="w-24 px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="w-24 px-3 num text-right"
               />
-              <span className="text-xs text-nofx-text-muted">
+              <span className="text-xs text-fg-3">
                 {ts(coinSource.shortScanHistoryDaysUnit, language)}
               </span>
               {(config.short_scan_history_days ?? 0) === 0 && (
-                <span className="text-xs text-nofx-text-muted">
+                <span className="text-xs text-fg-3">
                   ({ts(coinSource.shortScanHistoryDaysDefault, language)})
                 </span>
               )}
             </div>
-            <p className="text-xs pl-2 mt-1 text-nofx-text-muted">
+            <p className="text-xs pl-2 mt-1 text-fg-3">
               {ts(coinSource.shortScanHistoryDaysDesc, language)}
             </p>
           </div>
 
           <div>
-            <label className="block text-sm text-nofx-text mb-2">
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.shortScanHistoryMax, language)}
             </label>
             <div className="flex items-center gap-2">
-              <input
+              <Input
                 type="number"
                 min={0}
                 max={100}
@@ -760,23 +771,23 @@ export function CoinSourceEditor({
                   })
                 }
                 disabled={disabled}
-                className="w-24 px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="w-24 px-3 num text-right"
               />
-              <span className="text-xs text-nofx-text-muted">
+              <span className="text-xs text-fg-3">
                 {ts(coinSource.shortScanHistoryMaxUnit, language)}
               </span>
               {(config.short_scan_history_max ?? 0) === 0 && (
-                <span className="text-xs text-nofx-text-muted">
+                <span className="text-xs text-fg-3">
                   ({ts(coinSource.shortScanHistoryMaxDefault, language)})
                 </span>
               )}
             </div>
-            <p className="text-xs pl-2 mt-1 text-nofx-text-muted">
+            <p className="text-xs pl-2 mt-1 text-fg-3">
               {ts(coinSource.shortScanHistoryMaxDesc, language)}
             </p>
           </div>
 
-          <p className="text-xs pl-2 text-nofx-text-muted">
+          <p className="text-xs pl-2 text-fg-3">
             {ts(coinSource.shortScanNote, language)}
           </p>
         </div>
@@ -784,11 +795,11 @@ export function CoinSourceEditor({
 
       {/* OI Low Options - when the oi_low source is selected */}
       {selectedSources.includes('oi_low') && (
-        <div className="p-4 rounded-lg bg-nofx-danger/5 border border-nofx-danger/20">
+        <div className="p-4 rounded-lg bg-down/5 border border-down/20">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <TrendingDown className="w-4 h-4 text-nofx-danger" />
-              <span className="text-sm font-medium text-nofx-text">
+              <TrendingDown className="w-4 h-4 text-down" />
+              <span className="text-sm font-medium text-fg">
                 {ts(coinSource.oiDecreaseTitle, language)}{' '}
                 {ts(coinSource.dataSourceConfig, language)}
               </span>
@@ -798,7 +809,7 @@ export function CoinSourceEditor({
 
           <div className="space-y-3">
             <div className="flex items-center gap-3 pl-2">
-              <span className="text-sm text-nofx-text-muted">
+              <span className="text-sm text-fg-3">
                 {ts(coinSource.oiLowLimit, language)}:
               </span>
               <NofxSelect
@@ -812,11 +823,11 @@ export function CoinSourceEditor({
                   value: n,
                   label: String(n),
                 }))}
-                className="px-3 py-1.5 rounded bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                className="px-3 border border-line text-fg h-8 rounded-md bg-surface-2 text-[13px] hover:border-line-strong"
               />
             </div>
 
-            <p className="text-xs pl-2 text-nofx-text-muted">
+            <p className="text-xs pl-2 text-fg-3">
               {ts(coinSource.nofxosNote, language)}
             </p>
           </div>
@@ -829,18 +840,18 @@ export function CoinSourceEditor({
           const { sources, totalLimit } = getMixedSummary()
           if (sources.length === 0) return null
           return (
-            <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
+            <div className="p-3 rounded-lg bg-info/5 border border-info/20">
               <div className="flex items-center gap-2 mb-2">
-                <Shuffle className="w-4 h-4 text-blue-400" />
-                <span className="text-sm font-medium text-nofx-text">
+                <Shuffle className="w-4 h-4 text-info" />
+                <span className="text-sm font-medium text-fg">
                   {ts(coinSource.mixedSummary, language)}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-nofx-text font-medium">
+                <span className="text-fg font-medium">
                   {sources.join(' + ')}
                 </span>
-                <span className="text-nofx-text-muted">
+                <span className="text-fg-3">
                   {ts(coinSource.maxCoins, language)} {totalLimit}{' '}
                   {ts(coinSource.coins, language)}
                 </span>

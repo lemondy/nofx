@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
 import useSWR from 'swr'
 import {
   TrendingUp,
@@ -9,19 +8,28 @@ import {
   EyeOff,
   Copy,
   Check,
-  Hexagon,
   Layers,
   Target,
   Activity,
-  Terminal,
-  Cpu,
-  Database,
+  Search,
+  type LucideIcon,
 } from 'lucide-react'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from 'sonner'
 import { t } from '../i18n/translations'
-import { DeepVoidBackground } from '../components/common/DeepVoidBackground'
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardBody,
+  EmptyState,
+  Input,
+  Segmented,
+  Skeleton,
+  Stat,
+} from '../components/ui'
 
 interface PublicStrategy {
   id: string
@@ -39,71 +47,13 @@ interface PublicStrategy {
   updated_at: string
 }
 
-const strategyStyles: Record<
-  string,
-  {
-    color: string
-    border: string
-    glow: string
-    shadow: string
-    icon: any
-    bg: string
-  }
-> = {
-  scalper: {
-    color: 'text-brand',
-    border: 'border-brand/30',
-    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--brand)_15%,transparent)]',
-    shadow:
-      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--brand)_25%,transparent)]',
-    bg: 'bg-brand/5',
-    icon: Zap,
-  },
-  swing: {
-    color: 'text-cyan-400',
-    border: 'border-cyan-400/30',
-    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--info)_15%,transparent)]',
-    shadow:
-      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--info)_25%,transparent)]',
-    bg: 'bg-cyan-400/5',
-    icon: TrendingUp,
-  },
-  arbitrage: {
-    color: 'text-purple-400',
-    border: 'border-purple-400/30',
-    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--ai)_15%,transparent)]',
-    shadow:
-      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--ai)_25%,transparent)]',
-    bg: 'bg-purple-400/5',
-    icon: Layers,
-  },
-  conservative: {
-    color: 'text-emerald-400',
-    border: 'border-emerald-400/30',
-    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--up)_15%,transparent)]',
-    shadow:
-      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--up)_25%,transparent)]',
-    bg: 'bg-emerald-400/5',
-    icon: Shield,
-  },
-  aggressive: {
-    color: 'text-red-500',
-    border: 'border-red-500/30',
-    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--down)_15%,transparent)]',
-    shadow:
-      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--down)_25%,transparent)]',
-    bg: 'bg-red-500/5',
-    icon: Target,
-  },
-  default: {
-    color: 'text-fg-3',
-    border: 'border-line-strong',
-    glow: '',
-    shadow:
-      'hover:shadow-[0_0_20px_color-mix(in_srgb,var(--fg)_5%,transparent)]',
-    bg: 'bg-surface-hover/20',
-    icon: Activity,
-  },
+const strategyStyles: Record<string, { color: string; icon: LucideIcon }> = {
+  scalper: { color: 'text-brand', icon: Zap },
+  swing: { color: 'text-info', icon: TrendingUp },
+  arbitrage: { color: 'text-ai', icon: Layers },
+  conservative: { color: 'text-up', icon: Shield },
+  aggressive: { color: 'text-down', icon: Target },
+  default: { color: 'text-fg-3', icon: Activity },
 }
 
 function getStrategyStyle(name: string) {
@@ -197,364 +147,205 @@ export function StrategyMarketPage() {
   }
 
   return (
-    <DeepVoidBackground className="min-h-screen text-fg font-mono py-12">
-      <div className="w-full px-4 md:px-8 space-y-8">
-        <div className="w-full relative z-10">
-          {/* Header Section */}
-          <div className="mb-12 border-b border-line pb-8 relative">
-            <div className="absolute top-0 right-0 p-2 border border-line rounded bg-surface-2 text-xs text-fg-3 font-mono hidden md:block">
-              SYSTEM_STATUS:{' '}
-              <span className="text-emerald-500 animate-pulse">ONLINE</span>
-              <br />
-              MARKET_UPLINK:{' '}
-              <span className="text-emerald-500">ESTABLISHED</span>
-            </div>
-
-            <div className="flex items-center gap-4 mb-4">
-              <div className="bg-surface border border-line-strong p-3 rounded-none relative group overflow-hidden">
-                <div className="absolute inset-0 bg-nofx-gold/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <Database className="w-8 h-8 text-nofx-gold relative z-10" />
-              </div>
-              <div>
-                <h1
-                  className="text-4xl font-bold tracking-tighter text-fg uppercase glitch-text"
-                  data-text={tr('title')}
-                >
-                  {tr('title')}
-                </h1>
-                <p className="text-xs text-nofx-gold tracking-[0.3em] font-bold mt-1">
-                  {'// '}
-                  {tr('subtitle')}
-                </p>
-              </div>
-            </div>
-            <p className="text-sm text-fg-3 max-w-2xl border-l-2 border-line pl-4">
-              {tr('description')}
-            </p>
+    <main className="min-h-screen bg-bg px-3 py-4 text-fg sm:px-6">
+      <div className="mx-auto max-w-[1600px] space-y-4">
+        <header className="border-b border-line pb-4">
+          <div className="mb-2 flex items-center gap-2">
+            <Layers className="h-5 w-5 text-brand" />
+            <h1 className="text-xl font-semibold">{tr('title')}</h1>
           </div>
+          <p className="text-xs text-fg-2">{tr('subtitle')}</p>
+          <p className="mt-1 text-sm text-fg-3">{tr('description')}</p>
+        </header>
 
-          {/* Search and Filter Bar */}
-          <div className="flex flex-col md:flex-row gap-4 mb-8">
-            {/* Search */}
-            <div className="relative flex-1 group">
-              <div className="absolute -inset-0.5 bg-gradient-to-r from-nofx-gold/20 to-line-strong/30 rounded opacity-0 group-hover:opacity-100 transition duration-500 blur"></div>
-              <div className="relative bg-surface-2 flex items-center border border-line group-hover:border-nofx-gold/50 transition-colors">
-                <div className="pl-4 pr-3 text-fg-3 group-hover:text-nofx-gold transition-colors">
-                  <Terminal size={16} />
-                </div>
-                <input
-                  type="text"
-                  placeholder={tr('search')}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent py-3 text-sm focus:outline-none placeholder-fg-3 text-nofx-gold font-mono"
-                />
-                <div className="pr-4">
-                  <div className="w-2 h-4 bg-nofx-gold animate-pulse"></div>
-                </div>
-              </div>
-            </div>
-
-            {/* Category Filter */}
-            <div className="flex gap-2 bg-surface/50 p-1 border border-line">
-              {['all', 'popular', 'recent'].map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => setSelectedCategory(cat)}
-                  className={`px-4 py-2 text-xs font-mono uppercase tracking-wider transition-all relative overflow-hidden ${
-                    selectedCategory === cat
-                      ? 'text-brand-fg font-bold'
-                      : 'text-fg-3 hover:text-fg'
-                  }`}
-                >
-                  {selectedCategory === cat && (
-                    <motion.div
-                      layoutId="filter-highlight"
-                      className="absolute inset-0 bg-nofx-gold"
-                      transition={{
-                        type: 'spring',
-                        bounce: 0.2,
-                        duration: 0.6,
-                      }}
-                    />
-                  )}
-                  <span className="relative z-10">{tr(cat)}</span>
-                </button>
-              ))}
-            </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-2 h-4 w-4 text-fg-3" />
+            <Input
+              aria-label={tr('search')}
+              placeholder={tr('search')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
           </div>
+          <Segmented
+            items={['all', 'popular', 'recent'].map((key) => ({
+              key,
+              label: tr(key),
+            }))}
+            value={selectedCategory}
+            onChange={setSelectedCategory}
+            className="self-start sm:self-auto"
+          />
+        </div>
 
-          {/* Loading State */}
-          {isLoading && (
-            <div className="flex flex-col items-center justify-center py-32 space-y-4">
-              <div className="relative w-16 h-16">
-                <div className="absolute inset-0 border-2 border-line rounded-full"></div>
-                <div className="absolute inset-0 border-2 border-nofx-gold rounded-full border-t-transparent animate-spin"></div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <Cpu size={24} className="text-nofx-gold/50" />
-                </div>
-              </div>
-              <p className="text-nofx-gold text-xs tracking-widest animate-pulse">
-                {tr('loading')}
-              </p>
-              <div className="flex gap-1">
-                <div
-                  className="w-1 h-1 bg-nofx-gold rounded-full animate-bounce"
-                  style={{ animationDelay: '0s' }}
-                ></div>
-                <div
-                  className="w-1 h-1 bg-nofx-gold rounded-full animate-bounce"
-                  style={{ animationDelay: '0.2s' }}
-                ></div>
-                <div
-                  className="w-1 h-1 bg-nofx-gold rounded-full animate-bounce"
-                  style={{ animationDelay: '0.4s' }}
-                ></div>
-              </div>
-            </div>
-          )}
+        {isLoading && (
+          <div
+            role="status"
+            aria-label={tr('loading')}
+            className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+          >
+            {[0, 1, 2, 3].map((key) => (
+              <Card key={key} dense>
+                <CardBody className="space-y-3">
+                  <Skeleton className="h-5 w-2/3" />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </CardBody>
+              </Card>
+            ))}
+          </div>
+        )}
 
-          {/* Empty State */}
-          {!isLoading && filteredStrategies.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-32 border border-line border-dashed bg-surface/20 rounded">
-              <div className="relative mb-6">
-                <div className="absolute -inset-4 bg-red-500/10 rounded-full blur-xl animate-pulse"></div>
-                <Activity className="w-16 h-16 text-fg-3 relative z-10" />
-              </div>
-              <h3 className="text-xl font-bold text-fg-2 font-mono tracking-tight mb-2">
-                [{tr('noStrategies')}]
-              </h3>
-              <p className="text-fg-3 text-xs tracking-wide uppercase">
-                {tr('noStrategiesDesc')}
-              </p>
-            </div>
-          )}
+        {!isLoading && filteredStrategies.length === 0 && (
+          <Card dense>
+            <EmptyState
+              icon={<Activity className="h-8 w-8" />}
+              title={tr('noStrategies')}
+              description={tr('noStrategiesDesc')}
+            />
+          </Card>
+        )}
 
-          {/* Strategy Grid */}
-          {!isLoading && filteredStrategies.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <AnimatePresence>
-                {filteredStrategies.map((strategy, i) => {
-                  const style = getStrategyStyle(strategy.name)
-                  const Icon = style.icon
-                  const indicators =
-                    strategy.config_visible && strategy.config
-                      ? getIndicatorList(strategy.config)
-                      : []
-
-                  return (
-                    <motion.div
-                      key={strategy.id}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.95 }}
-                      transition={{ delay: i * 0.05 }}
-                      className={`group relative bg-surface-2 border border-line hover:border-line-strong transition-all duration-300 ${style.shadow}`}
-                    >
-                      {/* Holographic Border Highlight */}
-                      <div
-                        className={`absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-${style.color.split('-')[1]}-500 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500`}
-                      ></div>
-                      <div
-                        className={`absolute bottom-0 right-0 w-full h-[1px] bg-gradient-to-r from-transparent via-${style.color.split('-')[1]}-500 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500`}
-                      ></div>
-
-                      {/* Category Side Strip */}
-                      <div
-                        className={`absolute left-0 top-0 bottom-0 w-[2px] ${style.bg.replace('/5', '/50')}`}
-                      ></div>
-
-                      <div className="p-6 relative">
-                        {/* Header */}
-                        <div className="flex justify-between items-start mb-6">
-                          <div
-                            className={`p-2 rounded-none border ${style.border} ${style.bg}`}
-                          >
-                            <Icon className={`w-5 h-5 ${style.color}`} />
-                          </div>
-                          <div className="text-[10px] font-mono">
-                            {strategy.config_visible ? (
-                              <div className="flex items-center gap-1.5 text-emerald-500 border border-emerald-500/20 bg-emerald-500/10 px-2 py-1">
-                                <Eye size={10} />
-                                PUBLIC_ACCESS
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1.5 text-fg-3 border border-line bg-surface px-2 py-1">
-                                <EyeOff size={10} />
-                                RESTRICTED
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Name and Description */}
-                        <h3
-                          className={`text-lg font-bold mb-2 tracking-tight group-hover:${style.color} transition-colors uppercase truncate relative`}
-                        >
+        {!isLoading && filteredStrategies.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {filteredStrategies.map((strategy) => {
+              const style = getStrategyStyle(strategy.name)
+              const Icon = style.icon
+              const indicators = getIndicatorList(strategy.config)
+              return (
+                <Card
+                  key={strategy.id}
+                  dense
+                  className="flex min-w-0 flex-col transition-colors hover:border-line-strong"
+                >
+                  <CardHeader
+                    title={
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Icon className={`h-4 w-4 shrink-0 ${style.color}`} />
+                        <span className="truncate" title={strategy.name}>
                           {strategy.name}
-                          <span className="absolute -bottom-1 left-0 w-8 h-[2px] bg-surface-hover group-hover:bg-nofx-gold transition-colors"></span>
-                        </h3>
-                        <p className="text-xs text-fg-3 mb-6 line-clamp-2 h-8 leading-relaxed font-sans">
-                          {strategy.description || 'NO_DESCRIPTION_AVAILABLE'}
-                        </p>
-
-                        {/* Meta Data */}
-                        <div className="grid grid-cols-2 gap-y-2 mb-6 text-[10px] font-mono text-fg-3">
-                          <div className="flex flex-col">
-                            <span className="text-fg-3 uppercase">
-                              {tr('author')}
-                            </span>
-                            <span className="text-fg-3 group-hover:text-fg transition-colors">
-                              @
-                              {strategy.author_email?.split('@')[0] ||
-                                'UNKNOWN'}
-                            </span>
-                          </div>
-                          <div className="flex flex-col text-right">
-                            <span className="text-fg-3 uppercase">
-                              {tr('createdAt')}
-                            </span>
-                            <span className="text-fg-3">
-                              {formatDate(strategy.created_at)}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Config / Indicators */}
-                        <div className="bg-surface/30 border border-line/50 p-3 mb-4 min-h-[90px]">
-                          {strategy.config_visible && strategy.config ? (
-                            <div className="space-y-3">
-                              {/* Indicators */}
-                              <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
-                                {indicators.length > 0 ? (
-                                  indicators.map((ind) => (
-                                    <span
-                                      key={ind}
-                                      className="px-1.5 py-0.5 border border-line-strong bg-surface-hover text-[9px] text-fg-2 font-mono whitespace-nowrap"
-                                    >
-                                      {ind}
-                                    </span>
-                                  ))
-                                ) : (
-                                  <span className="text-[9px] text-fg-3">
-                                    NO_INDICATORS
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Risk Control */}
-                              {strategy.config.risk_control && (
-                                <div className="flex justify-between items-center text-[10px]">
-                                  <div className="flex gap-3">
-                                    <div className="flex flex-col">
-                                      <span className="text-fg-3 scale-90 origin-left">
-                                        LEV
-                                      </span>
-                                      <span className="text-fg-2 font-bold">
-                                        {strategy.config.risk_control
-                                          .btc_eth_max_leverage || '-'}
-                                        x
-                                      </span>
-                                    </div>
-                                    <div className="flex flex-col">
-                                      <span className="text-fg-3 scale-90 origin-left">
-                                        POS
-                                      </span>
-                                      <span className="text-fg-2 font-bold">
-                                        {strategy.config.risk_control
-                                          .max_positions || '-'}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <Activity size={12} className="text-fg-3" />
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center justify-center h-full text-fg-3">
-                              <EyeOff size={16} className="mb-1 opacity-50" />
-                              <span className="text-[9px] uppercase tracking-widest">
-                                {tr('configHiddenDesc')}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Action Button */}
-                        <div>
-                          {strategy.config_visible && strategy.config ? (
-                            <button
-                              onClick={() => handleCopyConfig(strategy)}
-                              className="w-full py-2.5 text-[10px] font-bold font-mono uppercase tracking-widest border border-line-strong bg-surface-2 hover:bg-surface text-fg-2 hover:text-nofx-gold hover:border-nofx-gold transition-all flex items-center justify-center gap-2 group/btn"
-                            >
-                              {copiedId === strategy.id ? (
-                                <>
-                                  <Check className="w-3 h-3 text-emerald-500" />
-                                  <span className="text-emerald-500">
-                                    {tr('copied')}
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="w-3 h-3 group-hover/btn:scale-110 transition-transform" />
-                                  {tr('copyConfig')}
-                                </>
-                              )}
-                            </button>
-                          ) : (
-                            <button
-                              disabled
-                              className="w-full py-2.5 text-[10px] font-bold font-mono uppercase tracking-widest border border-line bg-surface-2 text-fg-3 cursor-not-allowed flex items-center justify-center gap-2"
-                            >
-                              <Shield size={12} />
-                              {tr('hideConfig')}
-                            </button>
-                          )}
+                        </span>
+                      </span>
+                    }
+                    actions={
+                      <Badge
+                        variant={strategy.config_visible ? 'up' : 'neutral'}
+                        size="xs"
+                      >
+                        {strategy.config_visible ? (
+                          <Eye size={12} />
+                        ) : (
+                          <EyeOff size={12} />
+                        )}
+                        {strategy.config_visible
+                          ? 'PUBLIC_ACCESS'
+                          : tr('configHidden')}
+                      </Badge>
+                    }
+                  />
+                  <CardBody className="flex flex-1 flex-col gap-3">
+                    <p className="min-h-9 text-xs text-fg-3 line-clamp-2">
+                      {strategy.description || 'NO_DESCRIPTION_AVAILABLE'}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="min-w-0">
+                        <div className="text-fg-3">{tr('author')}</div>
+                        <div className="truncate text-fg-2">
+                          @{strategy.author_email?.split('@')[0] || 'UNKNOWN'}
                         </div>
                       </div>
-                    </motion.div>
-                  )
-                })}
-              </AnimatePresence>
-            </div>
-          )}
+                      <div className="text-right">
+                        <div className="text-fg-3">{tr('createdAt')}</div>
+                        <div className="num text-[11px] text-fg-2">
+                          {formatDate(strategy.created_at)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex-1 rounded-md border border-line bg-surface-2 p-3">
+                      {strategy.config_visible && strategy.config ? (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap gap-1">
+                            {indicators.length > 0 ? (
+                              indicators.map((ind) => (
+                                <Badge key={ind} size="xs">
+                                  {ind}
+                                </Badge>
+                              ))
+                            ) : (
+                              <span className="text-xs text-fg-3">
+                                NO_INDICATORS
+                              </span>
+                            )}
+                          </div>
+                          {strategy.config.risk_control && (
+                            <div className="grid grid-cols-2 gap-3">
+                              <Stat
+                                label={tr('maxLeverage')}
+                                value={`${strategy.config.risk_control.btc_eth_max_leverage || '-'}x`}
+                              />
+                              <Stat
+                                label={tr('maxPositions')}
+                                value={
+                                  strategy.config.risk_control.max_positions ||
+                                  '-'
+                                }
+                                className="text-right [&>div]:justify-end"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex min-h-20 items-center justify-center gap-2 text-xs text-fg-3">
+                          <EyeOff size={16} className="shrink-0" />
+                          {tr('configHiddenDesc')}
+                        </div>
+                      )}
+                    </div>
+                    {strategy.config_visible && strategy.config ? (
+                      <Button
+                        onClick={() => handleCopyConfig(strategy)}
+                        className="w-full"
+                      >
+                        {copiedId === strategy.id ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 text-up" />
+                            <span className="text-up">{tr('copied')}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" />
+                            {tr('copyConfig')}
+                          </>
+                        )}
+                      </Button>
+                    ) : (
+                      <Button disabled className="w-full">
+                        <Shield size={14} />
+                        {tr('hideConfig')}
+                      </Button>
+                    )}
+                  </CardBody>
+                </Card>
+              )
+            })}
+          </div>
+        )}
 
-          {/* CTA - Share Strategy */}
-          {user && token && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              className="mt-16 mb-20 flex justify-center"
+        {user && token && (
+          <div className="flex justify-center border-t border-line pt-4">
+            <Button
+              variant="primary"
+              onClick={() => (window.location.href = '/strategy')}
             >
-              <div
-                className="relative group cursor-pointer"
-                onClick={() => (window.location.href = '/strategy')}
-              >
-                <div className="absolute -inset-1 bg-gradient-to-r from-nofx-gold to-yellow-600 rounded blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
-                <div className="relative px-8 py-4 bg-surface-2 border border-line hover:border-nofx-gold/50 flex items-center gap-4 transition-all">
-                  <Hexagon
-                    className="text-nofx-gold animate-spin-slow"
-                    size={24}
-                  />
-                  <div className="text-left">
-                    <div className="text-sm font-bold text-fg uppercase tracking-wider group-hover:text-nofx-gold transition-colors">
-                      {tr('shareYours')}
-                    </div>
-                    <div className="text-[10px] text-fg-3 font-mono">
-                      CONTRIBUTE TO THE GLOBAL DATABASE
-                    </div>
-                  </div>
-                  <div className="w-[1px] h-8 bg-surface-hover mx-2"></div>
-                  <div className="text-xs font-mono text-fg-3 group-hover:translate-x-1 transition-transform">
-                    INITIALIZE_UPLOAD -&gt;
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </div>
+              <Layers size={16} />
+              {tr('shareYours')}
+            </Button>
+          </div>
+        )}
       </div>
-    </DeepVoidBackground>
+    </main>
   )
 }
