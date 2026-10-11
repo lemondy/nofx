@@ -294,6 +294,11 @@ type CoinSourceConfig struct {
 	// Cap on EXTRA history-pool symbols analyzed per scan (each costs ~6
 	// fapi calls every 5 min). 0 = built-in default (30).
 	ShortScanHistoryMax int `json:"short_scan_history_max,omitempty"`
+	// Short-scan pool quality floor: candidates scoring below this short
+	// score (0-100) are kept out of the pool. 0 = built-in default (55,
+	// review 2026-10-07 S1). Applied every cycle; a strategy save reloads
+	// the traders using it, so changes take effect without a restart.
+	ShortScanMinScore float64 `json:"short_scan_min_score,omitempty"`
 	// whether to use Hyperliquid All coins (all available perp pairs)
 	UseHyperAll bool `json:"use_hyper_all"`
 	// whether to use Hyperliquid Main coins (top N by 24h volume)
@@ -301,6 +306,22 @@ type CoinSourceConfig struct {
 	// Hyperliquid Main maximum count (default 20)
 	HyperMainLimit int `json:"hyper_main_limit,omitempty"`
 	// Note: API URLs are now built automatically using NofxOSAPIKey from IndicatorConfig
+}
+
+// DefaultShortScanMinScore is the built-in short-scan pool quality floor
+// applied when the per-strategy short_scan_min_score is unset (0).
+const DefaultShortScanMinScore = 55.0
+
+// EffectiveShortScanMinScore returns the configured short-scan quality floor,
+// falling back to DefaultShortScanMinScore when unset and capping at 100.
+func (c *CoinSourceConfig) EffectiveShortScanMinScore() float64 {
+	if c.ShortScanMinScore <= 0 {
+		return DefaultShortScanMinScore
+	}
+	if c.ShortScanMinScore > 100 {
+		return 100
+	}
+	return c.ShortScanMinScore
 }
 
 // DefaultMinOIValueMillions is the built-in OI-value floor applied when the

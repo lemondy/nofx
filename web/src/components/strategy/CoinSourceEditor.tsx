@@ -680,6 +680,44 @@ export function CoinSourceEditor({
 
           <div>
             <label className="block text-[13px] mb-2 text-fg-2">
+              {ts(coinSource.shortScanMinScore, language)}
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={config.short_scan_min_score ?? 0}
+                onChange={(e) =>
+                  onChange({
+                    ...config,
+                    // 0 = built-in default (55) — the backend resolves ≤0 that way.
+                    short_scan_min_score: Math.max(
+                      0,
+                      Math.min(100, Number(e.target.value) || 0)
+                    ),
+                  })
+                }
+                disabled={disabled}
+                className="w-24 px-3 num text-right"
+              />
+              <span className="text-xs text-fg-3">
+                {ts(coinSource.shortScanMinScoreUnit, language)}
+              </span>
+              {(config.short_scan_min_score ?? 0) === 0 && (
+                <span className="text-xs text-fg-3">
+                  ({ts(coinSource.shortScanMinScoreDefault, language)})
+                </span>
+              )}
+            </div>
+            <p className="text-xs pl-2 mt-1 text-fg-3">
+              {ts(coinSource.shortScanMinScoreDesc, language)}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-[13px] mb-2 text-fg-2">
               {ts(coinSource.shortScanFunding, language)}
             </label>
             <div className="flex items-center gap-2">

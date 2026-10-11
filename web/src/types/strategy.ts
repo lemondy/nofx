@@ -162,6 +162,8 @@ export interface CoinSourceConfig {
   short_scan_history_days?: number
   // 历史涨幅池每轮额外分析上限（个）；0/缺省 = 默认 30
   short_scan_history_max?: number
+  // 做空扫描入池最低分（0-100）；0/缺省 = 默认 55，低于此分的候选不进入候选池
+  short_scan_min_score?: number
   // 候选币最低 OI 持仓价值（百万 USD），低于则跳过；0/缺省 = 默认 15M
   min_oi_value_millions?: number
   // Note: API URLs are now built automatically using nofxos_api_key from IndicatorConfig

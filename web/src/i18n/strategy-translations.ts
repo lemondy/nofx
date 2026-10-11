@@ -195,6 +195,26 @@ export const coinSource = {
     en: "Records each day's Top-20 gainers for N days and merges (deduped) into the short-scan universe — catches pumps that already fell off the 24h board; negative = off",
     es: 'Registra el Top-20 diario de alzas por N días y lo fusiona en el universo de cortos; negativo = desactivado',
   },
+  shortScanMinScore: {
+    zh: '入池最低分',
+    en: 'Minimum Pool Score',
+    es: 'Puntuación Mínima',
+  },
+  shortScanMinScoreUnit: {
+    zh: '分（0-100）',
+    en: 'pts (0-100)',
+    es: 'pts (0-100)',
+  },
+  shortScanMinScoreDefault: {
+    zh: '0 = 使用默认 55 分',
+    en: '0 = default 55',
+    es: '0 = 55 por defecto',
+  },
+  shortScanMinScoreDesc: {
+    zh: '做空评分低于此值的币不进入候选池。调低会放进更多但更弱的做空候选（复盘显示 40-55 分平均为负收益）；保存后下一周期生效',
+    en: 'Coins with a short score below this stay out of the pool. Lower admits more but weaker short setups (journal: 40-55 averaged a negative return); applies from the next cycle after saving',
+    es: 'Las monedas con puntuación inferior no entran en el pool. Bajarla admite más candidatos pero más débiles; se aplica en el siguiente ciclo tras guardar',
+  },
   shortScanHistoryMax: {
     zh: '历史涨幅池每轮上限（个）',
     en: 'History Pool Cap per Scan',

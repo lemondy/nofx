@@ -773,7 +773,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	case "short_scan":
 		// 做空扫描: top 24h gainers ranked by short-suitability score.
 		// Like piggy_dash, selecting this source type IS the switch.
-		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(), coinSource.EffectiveShortScanMinScore(),
 			coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 		if err != nil {
 			return nil, err
@@ -850,7 +850,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// (QUANT_REVIEW_2026-09-22 A5).
 		var shortCoins []CandidateCoin
 		if coinSource.UseShortScan {
-			sc, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+			sc, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(), coinSource.EffectiveShortScanMinScore(),
 				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 			if err != nil {
 				logger.Infof("⚠️  Failed to get short-scan coins: %v", err)
@@ -1134,10 +1134,6 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 	return candidates, nil
 }
 
-// shortScanPoolMinScore: review 2026-10-07 S1 — non-near_high candidates need
-// score >= 55 (medium+) to enter the pool.
-const shortScanPoolMinScore = 55.0
-
 // dedupeShortCandidates keeps one entry per symbol (the higher ShortScore;
 // first wins ties) preserving the relative order of the survivors. The
 // history pool and breakdown universe can emit the same symbol twice.
@@ -1171,9 +1167,13 @@ func dedupeShortCandidates(in []CandidateCoin) []CandidateCoin {
 // histDays/histMax are the RAW strategy config values; they sync into the
 // scanner here every cycle (UI saves take effect next cycle), because the
 // scheduler shares one scan cache and must resolve the same universe.
-func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, histDays, histMax int) ([]CandidateCoin, error) {
+func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions, minScore float64, histDays, histMax int) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 5
+	}
+	if minScore <= 0 {
+		// Defensive: callers pass coinSource.EffectiveShortScanMinScore().
+		minScore = store.DefaultShortScanMinScore
 	}
 	if minOIMillions <= 0 {
 		// Defensive: callers should pass coinSource.EffectiveMinOIMillions();
@@ -1212,8 +1212,9 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 		// its own ≥55 bar. Applies to every universe (gainer/hist/breakdown)
 		// — a sub-noise breakdown signal is not a continuation setup either.
 		// review 2026-10-07 S1: the journal showed score 40-55 averaging -0.43%
-		// (24h short return) vs +0.5% at 55-70, so the pool floor is medium+.
-		if sig.Score < shortScanPoolMinScore {
+		// (24h short return) vs +0.5% at 55-70, so the default floor is medium+
+		// (55); the strategy's short_scan_min_score overrides it.
+		if sig.Score < minScore {
 			floorSkipped = append(floorSkipped, fmt.Sprintf("%s(%.0f)", sig.Symbol, sig.Score))
 			continue
 		}
@@ -1294,7 +1295,7 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	}
 	if len(floorSkipped) > 0 {
 		logger.Infof("🩸 Short-scan quality floor (score<%.0f): skipped %d candidates %v",
-			shortScanPoolMinScore, len(floorSkipped), floorSkipped)
+			minScore, len(floorSkipped), floorSkipped)
 	}
 	var syms []string
 	for _, c := range candidates {
