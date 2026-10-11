@@ -14,7 +14,7 @@ export default function FooterSection({ language }: FooterSectionProps) {
         name: 'X (Twitter)',
         href: OFFICIAL_LINKS.twitter,
         icon: () => (
-          <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
           </svg>
         ),
@@ -52,45 +52,31 @@ export default function FooterSection({ language }: FooterSectionProps) {
   }
 
   return (
-    <footer
-      style={{
-        background: 'var(--surface-2)',
-        borderTop: '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
-      }}
-    >
-      <div className="max-w-6xl mx-auto px-4 py-8 md:py-12">
+    <footer className="border-t border-line bg-surface-2">
+      <div className="mx-auto max-w-6xl px-4 py-10 md:py-12">
         {/* Top Section */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 md:gap-10 mb-8 md:mb-12">
+        <div className="mb-10 grid grid-cols-1 gap-8 md:grid-cols-4 md:gap-10">
           {/* Brand */}
           <div className="md:col-span-1">
-            <div className="flex items-center gap-3 mb-4">
-              <img src="/icons/nofx.svg" alt="NOFX Logo" className="w-8 h-8" />
-              <span
-                className="text-xl font-bold"
-                style={{ color: 'var(--fg)' }}
-              >
-                NOFX
-              </span>
+            <div className="mb-4 flex items-center gap-2.5">
+              <img src="/icons/nofx.svg" alt="NOFX Logo" className="h-7 w-7" />
+              <span className="text-lg font-semibold text-fg">NOFX</span>
             </div>
-            <p className="text-sm mb-6" style={{ color: 'var(--fg-3)' }}>
+            <p className="mb-5 text-[13px] text-fg-3">
               {t('futureStandardAI', language)}
             </p>
             {/* Social Icons */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               {links.social.map((link) => (
                 <a
                   key={link.name}
                   href={link.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-9 h-9 rounded-lg flex items-center justify-center transition-all hover:scale-110"
-                  style={{
-                    background: 'color-mix(in srgb, var(--fg) 5%, transparent)',
-                    color: 'var(--fg-3)',
-                  }}
+                  className="flex h-8 w-8 items-center justify-center rounded-md bg-surface text-fg-3 transition-colors hover:bg-surface-hover hover:text-fg"
                   title={link.name}
                 >
-                  <link.icon className="w-4 h-4" />
+                  <link.icon className="h-4 w-4" />
                 </a>
               ))}
             </div>
@@ -98,21 +84,17 @@ export default function FooterSection({ language }: FooterSectionProps) {
 
           {/* Links */}
           <div>
-            <h4
-              className="text-sm font-semibold mb-4"
-              style={{ color: 'var(--fg)' }}
-            >
+            <h4 className="mb-4 text-sm font-semibold text-fg">
               {t('links', language)}
             </h4>
-            <ul className="space-y-3">
+            <ul className="space-y-2.5">
               {links.social.map((link) => (
                 <li key={link.name}>
                   <a
                     href={link.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm transition-colors hover:text-brand"
-                    style={{ color: 'var(--fg-3)' }}
+                    className="text-[13px] text-fg-3 transition-colors hover:text-brand"
                   >
                     {link.name}
                   </a>
@@ -123,24 +105,20 @@ export default function FooterSection({ language }: FooterSectionProps) {
 
           {/* Resources */}
           <div>
-            <h4
-              className="text-sm font-semibold mb-4"
-              style={{ color: 'var(--fg)' }}
-            >
+            <h4 className="mb-4 text-sm font-semibold text-fg">
               {t('resources', language)}
             </h4>
-            <ul className="space-y-3">
+            <ul className="space-y-2.5">
               {links.resources.map((link) => (
                 <li key={link.name}>
                   <a
                     href={link.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm transition-colors hover:text-brand inline-flex items-center gap-1"
-                    style={{ color: 'var(--fg-3)' }}
+                    className="inline-flex items-center gap-1 text-[13px] text-fg-3 transition-colors hover:text-brand"
                   >
                     {link.name}
-                    <ExternalLink className="w-3 h-3 opacity-50" />
+                    <ExternalLink className="h-3 w-3 opacity-50" />
                   </a>
                 </li>
               ))}
@@ -149,10 +127,7 @@ export default function FooterSection({ language }: FooterSectionProps) {
 
           {/* Supporters */}
           <div>
-            <h4
-              className="text-sm font-semibold mb-4"
-              style={{ color: 'var(--fg)' }}
-            >
+            <h4 className="mb-4 text-sm font-semibold text-fg">
               {t('supporters', language)}
             </h4>
             <div className="flex flex-wrap gap-2">
@@ -162,8 +137,7 @@ export default function FooterSection({ language }: FooterSectionProps) {
                   href={link.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs border border-line bg-surface/50 rounded px-3 py-1.5 transition-all hover:border-brand hover:text-brand hover:bg-brand/10 hover:shadow-[0_0_10px_color-mix(in_srgb,var(--brand)_20%,transparent)]"
-                  style={{ color: 'var(--fg-3)' }}
+                  className="rounded border border-line bg-surface px-2.5 py-1.5 text-xs text-fg-3 transition-colors hover:border-brand hover:text-brand"
                 >
                   {link.name}
                 </a>
@@ -173,16 +147,9 @@ export default function FooterSection({ language }: FooterSectionProps) {
         </div>
 
         {/* Bottom Section */}
-        <div
-          className="pt-6 text-center text-xs"
-          style={{
-            color: 'var(--fg-3)',
-            borderTop:
-              '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
-          }}
-        >
-          <p className="mb-2">{t('footerTitle', language)}</p>
-          <p style={{ color: 'var(--fg-3)' }}>{t('footerWarning', language)}</p>
+        <div className="border-t border-line pt-6 text-center text-xs text-fg-3">
+          <p className="mb-2 text-fg-2">{t('footerTitle', language)}</p>
+          <p>{t('footerWarning', language)}</p>
         </div>
       </div>
     </footer>

@@ -12,17 +12,17 @@ export function LanguageSwitcher() {
   const { language, setLanguage } = useLanguage()
 
   return (
-    <div className="absolute top-4 right-4 z-50 flex items-center gap-1 rounded-lg p-1 border border-nofx-line bg-fg/5 ">
-      <Globe size={14} className="text-fg-3 ml-1.5 mr-0.5" />
+    <div className="absolute right-4 top-4 z-50 flex h-8 items-center gap-0.5 rounded-md border border-line bg-surface p-0.5">
+      <Globe size={14} className="ml-1.5 mr-0.5 text-fg-3" />
       {languages.map(({ code, label }) => (
         <button
           key={code}
           type="button"
           onClick={() => setLanguage(code)}
-          className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+          className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
             language === code
-              ? 'bg-nofx-gold/15 text-nofx-gold'
-              : 'text-fg-3 hover:text-fg-2 bg-transparent'
+              ? 'bg-brand-soft text-brand'
+              : 'text-fg-3 hover:bg-surface-hover hover:text-fg'
           }`}
         >
           {label}

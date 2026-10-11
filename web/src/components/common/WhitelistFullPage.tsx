@@ -1,6 +1,6 @@
-import { motion } from 'framer-motion'
-import { ShieldAlert, ArrowLeft, Twitter, Send, Lock } from 'lucide-react'
+import { ShieldAlert, ArrowLeft, Twitter, Send } from 'lucide-react'
 import { OFFICIAL_LINKS } from '../../constants/branding'
+import { Button, Card, CardBody } from '../ui'
 
 interface WhitelistFullPageProps {
   onBack?: () => void
@@ -16,114 +16,75 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
   }
 
   return (
-    <div className="min-h-screen bg-nofx-bg-deeper text-fg font-mono relative overflow-hidden flex items-center justify-center px-4">
-      {/* Background Grid & Scanlines */}
-      <div className="fixed inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none"></div>
-      <div className="fixed inset-0 bg-gradient-to-t from-bg via-transparent to-transparent pointer-events-none"></div>
-      <div className="fixed inset-0 pointer-events-none opacity-[0.03] bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.5)_50%)] bg-[length:100%_4px]"></div>
+    <div className="flex min-h-screen items-center justify-center bg-bg px-4 text-fg">
+      <Card className="w-full max-w-[400px]">
+        <CardBody className="p-6 text-center">
+          {/* Icon */}
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-down-soft">
+            <ShieldAlert className="h-6 w-6 text-down" />
+          </div>
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5 }}
-        className="max-w-lg w-full relative z-10"
-      >
-        <div className="bg-surface/40 border border-red-500/30 rounded-lg overflow-hidden relative group">
-          {/* Top Bar */}
-          <div className="flex items-center justify-between px-4 py-2 bg-red-900/20 border-b border-red-500/30">
-            <div className="flex gap-1.5 opacity-50">
-              <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-line-strong"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-line-strong"></div>
-            </div>
-            <div className="text-[10px] text-red-400 font-mono tracking-widest animate-pulse">
-              ACCESS_DENIED // ERROR_403
+          {/* Title */}
+          <h1 className="text-lg font-semibold text-fg">Access restricted</h1>
+
+          {/* Description */}
+          <p className="mt-2 text-[13px] leading-relaxed text-fg-3">
+            Your identifier is not on the active whitelist. Platform capacity
+            limits have been reached for the current beta phase. Prioritized
+            access is currently reserved for authorized operators only.
+          </p>
+
+          {/* Info Box */}
+          <div className="mt-5 rounded-md border border-down/20 bg-down-soft p-3 text-left">
+            <div className="flex items-start gap-2.5">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-down" />
+              <div>
+                <h3 className="text-xs font-semibold text-down">
+                  Batched access
+                </h3>
+                <p className="mt-0.5 text-xs leading-relaxed text-fg-3">
+                  Access is rolled out in batches. If you believe this is an
+                  error, please verify your credentials or contact system
+                  administrators.
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="p-8 text-center">
-            {/* Icon */}
-            <div className="relative mx-auto mb-8 w-20 h-20 flex items-center justify-center">
-              <div className="absolute inset-0 bg-red-500/20 rounded-full animate-ping opacity-50"></div>
-              <div className="relative z-10 p-4 border-2 border-red-500/50 rounded-full bg-surface-2">
-                <ShieldAlert className="w-8 h-8 text-red-500" />
-              </div>
-            </div>
+          {/* Action Buttons */}
+          <div className="mt-5 space-y-2">
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={handleBackToLogin}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to login
+            </Button>
 
-            {/* Title */}
-            <h1 className="text-2xl font-bold mb-2 tracking-widest text-fg uppercase glitch-text">
-              <span className="text-red-500">RESTRICTED</span> ACCESS
-            </h1>
-
-            <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-red-900/50 to-transparent my-4"></div>
-
-            {/* Description */}
-            <p className="text-xs text-fg-3 mb-8 leading-relaxed font-mono px-4">
-              <span className="text-red-400">[SYSTEM_MESSAGE]:</span> YOUR
-              IDENTIFIER IS NOT ON THE ACTIVE WHITELIST.
-              <br />
-              <br />
-              Platform capacity limits have been reached for the current beta
-              phase. Prioritized access is currently reserved for authorized
-              operators only.
-            </p>
-
-            {/* Info Box */}
-            <div className="bg-red-950/20 border border-red-900/30 p-4 rounded mb-8 text-left">
-              <div className="flex items-start gap-3">
-                <Lock className="w-4 h-4 text-red-500 mt-0.5" />
-                <div>
-                  <h3 className="text-xs font-bold text-red-400 uppercase mb-1">
-                    Authorization Protocol
-                  </h3>
-                  <p className="text-[10px] text-fg-3 leading-tight">
-                    Access is rolled out in batches. If you believe this is an
-                    error, please verify your credentials or contact system
-                    administrators.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="space-y-3">
-              <button
-                onClick={handleBackToLogin}
-                className="w-full flex items-center justify-center gap-2 py-3 border border-line-strong bg-surface-2 hover:bg-surface hover:border-red-500 hover:text-red-500 text-fg-3 transition-all text-xs font-bold tracking-widest uppercase group"
+            <div className="grid grid-cols-2 gap-2">
+              <a
+                href={OFFICIAL_LINKS.twitter}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md text-xs text-fg-3 transition-colors hover:bg-surface-hover hover:text-fg"
               >
-                <ArrowLeft className="w-3 h-3 group-hover:-translate-x-1 transition-transform" />
-                RETURN TO LOGIN
-              </button>
-
-              <div className="grid grid-cols-2 gap-3 mt-4">
-                <a
-                  href={OFFICIAL_LINKS.twitter}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 py-2 border border-line bg-surface/50 hover:bg-surface-hover text-fg-3 hover:text-fg transition-colors text-[10px] uppercase"
-                >
-                  <Twitter className="w-3 h-3" />
-                  Updates
-                </a>
-                <a
-                  href={OFFICIAL_LINKS.telegram}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 py-2 border border-line bg-surface/50 hover:bg-surface-hover text-fg-3 hover:text-fg transition-colors text-[10px] uppercase"
-                >
-                  <Send className="w-3 h-3" />
-                  Support
-                </a>
-              </div>
+                <Twitter className="h-3.5 w-3.5" />
+                Updates
+              </a>
+              <a
+                href={OFFICIAL_LINKS.telegram}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md text-xs text-fg-3 transition-colors hover:bg-surface-hover hover:text-fg"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Support
+              </a>
             </div>
           </div>
-
-          {/* Footer */}
-          <div className="bg-surface-2 p-2 text-[9px] text-fg-3 text-center border-t border-line font-mono uppercase">
-            ERR_CODE: WLIST_0x403 // SECURITY_LAYER_ACTIVE
-          </div>
-        </div>
-      </motion.div>
+        </CardBody>
+      </Card>
     </div>
   )
 }

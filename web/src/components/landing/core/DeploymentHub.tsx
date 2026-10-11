@@ -1,17 +1,13 @@
 import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import {
-  Terminal,
-  Copy,
-  Check,
-  ChevronRight,
-  Server,
-  Command,
-  Shield,
-} from 'lucide-react'
+import { Check, Command, Copy, Server, Shield, Terminal } from 'lucide-react'
+import { Button, Card, CardBody, CardHeader } from '../../ui'
+import { t, type Language } from '../../../i18n/translations'
+import { useLanguage } from '../../../contexts/LanguageContext'
 
 export default function DeploymentHub() {
   const [copied, setCopied] = useState(false)
+  const { language } = useLanguage()
+  const lang = language as Language
   const installCmd =
     'curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash'
 
@@ -21,127 +17,89 @@ export default function DeploymentHub() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const highlights = [
+    {
+      icon: Command,
+      label: 'One-Line Install',
+      desc: 'No configuration needed',
+    },
+    {
+      icon: Shield,
+      label: 'Secure Core',
+      desc: 'Sandboxed execution env',
+    },
+  ]
+
   return (
-    <section className="py-24 bg-surface-2 relative overflow-hidden border-t border-line">
-      {/* Background Grids */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px]"></div>
-
-      <div className="max-w-7xl mx-auto px-6 relative z-10">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-          {/* Left Column: Context */}
-          <div className="space-y-8">
-            <div className="flex items-center gap-2 text-nofx-gold font-mono text-xs tracking-[0.2em] uppercase">
-              <Server className="w-4 h-4" /> System Deployment
-            </div>
-
-            <h2 className="text-4xl md:text-6xl font-black text-fg leading-tight">
-              DEPLOY{' '}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand to-brand">
-                INSTANTLY
-              </span>
-            </h2>
-
-            <p className="text-fg-3 text-lg leading-relaxed font-light">
-              Initialize your own high-frequency trading node in seconds. Our
-              optimized installer handles all dependencies, bringing your
-              autonomous agent online with a single command.
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-              {[
-                {
-                  icon: Command,
-                  label: 'One-Line Install',
-                  desc: 'No configuration needed',
-                },
-                {
-                  icon: Shield,
-                  label: 'Secure Core',
-                  desc: 'Sandboxed execution env',
-                },
-              ].map((item, i) => (
-                <div
-                  key={i}
-                  className="flex gap-4 items-start p-4 rounded bg-surface/50 border border-line hover:border-nofx-gold/30 transition-colors group"
-                >
-                  <div className="p-2 rounded bg-surface-2 border border-line text-nofx-gold group-hover:bg-nofx-gold/10 transition-colors">
-                    <item.icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-fg font-bold font-mono text-sm mb-1">
-                      {item.label}
-                    </h4>
-                    <p className="text-fg-3 text-xs">{item.desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+    <section
+      id="install"
+      className="scroll-mt-[68px] border-t border-line bg-surface-2"
+    >
+      <div className="mx-auto grid w-full max-w-[1200px] grid-cols-1 items-center gap-10 px-4 py-16 sm:px-6 lg:grid-cols-2">
+        {/* Left Column: Context */}
+        <div className="space-y-5">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-fg-3">
+            <Server size={14} /> System Deployment
           </div>
 
-          {/* Right Column: Terminal */}
-          <motion.div
-            initial={{ opacity: 0, x: 50 }}
-            whileInView={{ opacity: 1, x: 0 }}
-            viewport={{ once: true }}
-            className="relative"
-          >
-            {/* Glow effect */}
-            <div className="absolute -inset-1 bg-gradient-to-r from-nofx-gold/20 to-blue-500/20 rounded-xl blur-xl opacity-50"></div>
+          <h2 className="text-2xl font-semibold leading-tight text-fg md:text-3xl">
+            Deploy instantly, self-hosted
+          </h2>
 
-            <div className="relative rounded-xl overflow-hidden bg-surface-2 border border-line shadow-2xl">
-              {/* Terminal Header */}
-              <div className="flex items-center justify-between px-4 py-3 bg-surface/80 border-b border-line">
-                <div className="flex gap-2">
-                  <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-                  <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-                  <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
+          <p className="max-w-xl text-[15px] leading-relaxed text-fg-2">
+            Initialize your own trading node in seconds. The installer handles
+            all dependencies and brings your autonomous agents online with a
+            single command.
+          </p>
+
+          <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-2">
+            {highlights.map((item) => (
+              <div
+                key={item.label}
+                className="flex items-start gap-3 rounded-lg border border-line bg-surface p-3"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-2 text-brand">
+                  <item.icon size={16} />
                 </div>
-                <div className="text-[10px] font-mono text-fg-3 flex items-center gap-1.5">
-                  <Terminal className="w-3 h-3" />
-                  root@nofx-os:~
+                <div>
+                  <h4 className="text-[13px] font-semibold text-fg">
+                    {item.label}
+                  </h4>
+                  <p className="mt-0.5 text-xs text-fg-3">{item.desc}</p>
                 </div>
               </div>
-
-              {/* Terminal Content */}
-              <div className="p-8 font-mono text-sm md:text-base bg-surface-2 min-h-[200px] flex flex-col justify-center">
-                <div className="mb-2 text-fg-3 text-xs tracking-wide">
-                  # Initialize NoFX Core Protocol
-                </div>
-                <div
-                  className="group relative flex items-start gap-3 p-4 rounded-lg bg-surface/50 border border-line hover:border-nofx-gold/50 cursor-pointer transition-all hover:bg-surface/80"
-                  onClick={handleCopy}
-                >
-                  <span className="text-nofx-gold mt-1">
-                    <ChevronRight className="w-4 h-4" />
-                  </span>
-                  <code className="text-fg flex-1 break-all">{installCmd}</code>
-
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <AnimatePresence mode="wait">
-                      {copied ? (
-                        <motion.div
-                          initial={{ scale: 0.5, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0.5, opacity: 0 }}
-                          className="flex items-center gap-1 text-green-400 bg-green-400/10 px-2 py-1 rounded text-xs font-bold"
-                        >
-                          <Check className="w-3 h-3" />
-                        </motion.div>
-                      ) : (
-                        <div className="text-fg-3 bg-surface-hover p-1.5 rounded hover:text-fg hover:bg-line">
-                          <Copy className="w-4 h-4" />
-                        </div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <div className="w-2 h-4 bg-nofx-gold animate-pulse"></div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
+            ))}
+          </div>
         </div>
+
+        {/* Right Column: Install Command */}
+        <Card>
+          <CardHeader
+            title="install.sh"
+            subtitle="bash"
+            actions={<Terminal size={14} className="text-fg-3" />}
+          />
+          <CardBody>
+            <div className="flex items-start gap-3 rounded-md border border-line bg-surface-2 p-3">
+              <span className="num select-none pt-px text-[13px] text-fg-3">
+                $
+              </span>
+              <code className="num flex-1 break-all text-[13px] text-fg">
+                {installCmd}
+              </code>
+              <Button
+                variant={copied ? 'up' : 'secondary'}
+                size="sm"
+                onClick={handleCopy}
+                className="shrink-0"
+                aria-label={t('copy', lang)}
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? 'OK' : t('copy', lang)}
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
       </div>
     </section>
   )

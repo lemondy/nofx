@@ -7,6 +7,7 @@ import { useLanguage } from '../../contexts/LanguageContext'
 import { t } from '../../i18n/translations'
 import { getSystemConfig } from '../../lib/config'
 import { DeepVoidBackground } from '../common/DeepVoidBackground'
+import { Button, Card, Input } from '../ui'
 import { RegistrationDisabled } from './RegistrationDisabled'
 import { WhitelistFullPage } from '../common/WhitelistFullPage'
 
@@ -113,182 +114,125 @@ export function RegisterPage() {
   }
 
   return (
-    <DeepVoidBackground
-      className="min-h-screen flex items-center justify-center py-12 font-mono"
-      disableAnimation
-    >
-      <div className="w-full max-w-lg relative z-10 px-6">
-        <div className="flex justify-between items-center mb-8">
-          <button
-            onClick={() => (window.location.href = '/')}
-            className="flex items-center gap-2 text-fg-3 hover:text-fg transition-colors group px-3 py-1.5 rounded border border-transparent hover:border-line-strong bg-surface-2 "
-          >
-            <div className="w-2 h-2 rounded-full bg-red-500 group-hover:animate-pulse"></div>
-            <span className="text-xs font-mono uppercase tracking-widest">
-              &lt; ABORT_REGISTRATION
-            </span>
-          </button>
-        </div>
-
-        <div className="mb-8 text-center">
-          <div className="flex justify-center mb-6">
-            <div className="relative">
-              <div className="absolute -inset-2 bg-nofx-gold/20 rounded-full blur-xl animate-pulse"></div>
-              <img
-                src="/icons/nofx.svg"
-                alt="NoFx Logo"
-                className="w-16 h-16 object-contain relative z-10 opacity-90"
-              />
-            </div>
-          </div>
-          <h1 className="text-3xl font-bold tracking-tighter text-fg uppercase mb-2">
-            <span className="text-nofx-gold">NEW_USER</span> ONBOARDING
-          </h1>
-          <p className="text-fg-3 text-xs tracking-[0.2em] uppercase">
-            Initializing Registration Sequence...
-          </p>
-        </div>
-
-        <div className="bg-surface/40 border border-line rounded-lg overflow-hidden shadow-2xl relative group">
-          <div className="absolute inset-0 bg-surface/50 opacity-0 group-hover:opacity-100 transition duration-700 pointer-events-none"></div>
-
-          <div className="flex items-center justify-between px-4 py-2 bg-surface/80 border-b border-line">
-            <div className="flex gap-1.5">
-              <div
-                className="w-2.5 h-2.5 rounded-full bg-red-500/50 hover:bg-red-500 cursor-pointer transition-colors"
-                onClick={() => (window.location.href = '/')}
-                title="Close / Return Home"
-              ></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/50"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-green-500/50"></div>
-            </div>
-            <div className="text-[10px] text-fg-3 font-mono flex items-center gap-1">
-              <span className="text-emerald-500">➜</span> setup_account.sh
-            </div>
+    <DeepVoidBackground disableAnimation>
+      <div className="flex flex-1 items-center justify-center px-4 py-16">
+        <div className="w-full max-w-[400px]">
+          {/* Logo + Title */}
+          <div className="mb-6 text-center">
+            <img
+              src="/icons/nofx.svg"
+              alt="NOFX"
+              className="mx-auto mb-4 h-10 w-10"
+            />
+            <h1 className="text-xl font-semibold text-fg">
+              {t('signUp', language)}
+            </h1>
+            <p className="mt-1 text-[13px] text-fg-3">NOFX</p>
           </div>
 
-          <div className="p-6 md:p-8 relative">
-            <div className="mb-6 font-mono text-xs space-y-1 text-fg-3 border-b border-line/50 pb-4">
-              <div className="flex gap-2">
-                <span className="text-emerald-500">➜</span>
-                <span>
-                  System Check: <span className="text-emerald-500">READY</span>
-                </span>
-              </div>
-              <div className="flex gap-2">
-                <span className="text-emerald-500">➜</span>
-                <span>Mode: {betaMode ? 'CLOSED_BETA CA1' : 'PUBLIC'}</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleRegister} className="space-y-5">
+          <Card className="p-6">
+            <form onSubmit={handleRegister} className="space-y-4">
               <div>
-                <label className="block text-xs uppercase tracking-wider text-fg-3 mb-1.5 ml-1 font-bold">
+                <label className="mb-1.5 block text-xs text-fg-3">
                   {t('email', language)}
                 </label>
-                <input
+                <Input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono"
-                  placeholder="user@nofx.os"
+                  placeholder="you@example.com"
                   required
+                  autoFocus
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs uppercase tracking-wider text-fg-3 mb-1.5 ml-1 font-bold">
-                    {t('password', language)}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono pr-10"
-                      placeholder="••••••••"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-3 transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs uppercase tracking-wider text-fg-3 mb-1.5 ml-1 font-bold">
-                    {t('confirmPassword', language)}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono pr-10"
-                      placeholder="••••••••"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShowConfirmPassword(!showConfirmPassword)
-                      }
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-3 transition-colors"
-                    >
-                      {showConfirmPassword ? (
-                        <EyeOff size={16} />
-                      ) : (
-                        <Eye size={16} />
-                      )}
-                    </button>
-                  </div>
+              <div>
+                <label className="mb-1.5 block text-xs text-fg-3">
+                  {t('password', language)}
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 transition-colors hover:text-fg-2"
+                    tabIndex={-1}
+                    aria-label={showPassword ? 'Hide' : 'Show'}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
               </div>
 
-              <div className="bg-surface/50 p-3 rounded border border-line/50">
-                <div className="text-[10px] uppercase tracking-wider text-fg-3 mb-2 font-bold flex items-center gap-2">
-                  <div className="w-1 h-1 rounded-full bg-line-strong"></div>
-                  Password Strength Protocol
-                </div>
-                <div className="text-xs font-mono text-fg-3">
-                  <PasswordChecklist
-                    rules={[
-                      'minLength',
-                      'capital',
-                      'lowercase',
-                      'number',
-                      'specialChar',
-                      'match',
-                    ]}
-                    minLength={8}
-                    value={password}
-                    valueAgain={confirmPassword}
-                    messages={{
-                      minLength: t('passwordRuleMinLength', language),
-                      capital: t('passwordRuleUppercase', language),
-                      lowercase: t('passwordRuleLowercase', language),
-                      number: t('passwordRuleNumber', language),
-                      specialChar: t('passwordRuleSpecial', language),
-                      match: t('passwordRuleMatch', language),
-                    }}
-                    className="grid grid-cols-2 gap-x-4 gap-y-1"
-                    onChange={(isValid) => setPasswordValid(isValid)}
-                    iconSize={10}
+              <div>
+                <label className="mb-1.5 block text-xs text-fg-3">
+                  {t('confirmPassword', language)}
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="pr-10"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 transition-colors hover:text-fg-2"
+                    tabIndex={-1}
+                    aria-label={showConfirmPassword ? 'Hide' : 'Show'}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff size={16} />
+                    ) : (
+                      <Eye size={16} />
+                    )}
+                  </button>
                 </div>
+              </div>
+
+              <div className="rounded-md border border-line bg-surface-2 p-3">
+                <PasswordChecklist
+                  rules={[
+                    'minLength',
+                    'capital',
+                    'lowercase',
+                    'number',
+                    'specialChar',
+                    'match',
+                  ]}
+                  minLength={8}
+                  value={password}
+                  valueAgain={confirmPassword}
+                  messages={{
+                    minLength: t('passwordRuleMinLength', language),
+                    capital: t('passwordRuleUppercase', language),
+                    lowercase: t('passwordRuleLowercase', language),
+                    number: t('passwordRuleNumber', language),
+                    specialChar: t('passwordRuleSpecial', language),
+                    match: t('passwordRuleMatch', language),
+                  }}
+                  className="grid grid-cols-1 gap-x-4 gap-y-1 text-xs"
+                  onChange={(isValid) => setPasswordValid(isValid)}
+                  iconSize={10}
+                />
               </div>
 
               {betaMode && (
                 <div>
-                  <label className="block text-xs uppercase tracking-wider text-nofx-gold mb-1.5 ml-1 font-bold">
+                  <label className="mb-1.5 block text-xs text-brand">
                     Priority Access Code
                   </label>
-                  <input
+                  <Input
                     type="text"
                     value={betaCode}
                     onChange={(e) =>
@@ -296,66 +240,52 @@ export function RegisterPage() {
                         e.target.value.replace(/[^a-z0-9]/gi, '').toLowerCase()
                       )
                     }
-                    className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono tracking-widest"
                     placeholder="XXXXXX"
                     maxLength={6}
                     required={betaMode}
+                    className="num tracking-widest"
                   />
-                  <p className="text-[10px] text-fg-3 font-mono mt-1 ml-1">
-                    * CASE SENSITIVE ALPHANUMERIC
-                  </p>
                 </div>
               )}
 
               {error && (
-                <div className="text-xs bg-red-500/10 border border-red-500/30 text-red-500 px-3 py-2 rounded font-mono">
-                  [REGISTRATION_ERROR]: {error}
-                </div>
+                <p className="rounded-md border border-down/30 bg-down-soft px-3 py-2 text-xs text-down">
+                  {error}
+                </p>
               )}
 
-              <button
+              <Button
                 type="submit"
-                disabled={
-                  loading || (betaMode && !betaCode.trim()) || !passwordValid
-                }
-                className="w-full bg-nofx-gold text-brand-fg font-bold py-3 px-4 rounded text-sm tracking-wide uppercase hover:brightness-110 transition-all transform active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed font-mono shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_10%,transparent)] hover:shadow-[0_0_25px_color-mix(in_srgb,var(--brand)_25%,transparent)] flex items-center justify-center gap-2 group mt-4"
+                variant="primary"
+                size="lg"
+                loading={loading}
+                disabled={(betaMode && !betaCode.trim()) || !passwordValid}
+                className="w-full"
               >
-                {loading ? (
-                  <span className="animate-pulse">INITIALIZING...</span>
-                ) : (
-                  <>
-                    <span>CREATE_ACCOUNT</span>
-                    <span className="group-hover:translate-x-1 transition-transform">
-                      -&gt;
-                    </span>
-                  </>
-                )}
-              </button>
+                {t('signUp', language)}
+              </Button>
             </form>
-          </div>
+          </Card>
 
-          <div className="bg-surface/50 p-3 flex justify-between items-center text-[10px] font-mono text-fg-3 border-t border-line">
-            <div>ENCRYPTION: AES-256</div>
-            <div>SECURE_REGISTRY</div>
-          </div>
-        </div>
-
-        <div className="text-center mt-8 space-y-4">
-          <p className="text-xs font-mono text-fg-3">
-            EXISTING_OPERATOR?{' '}
+          <p className="mt-6 text-center text-[13px] text-fg-3">
+            {language === 'zh' ? '已有账号？' : 'Already have an account?'}{' '}
             <button
+              type="button"
               onClick={() => (window.location.href = '/login')}
-              className="text-nofx-gold hover:underline hover:text-yellow-300 transition-colors ml-1 uppercase"
+              className="text-brand transition-colors hover:underline"
             >
-              ACCESS TERMINAL
+              {t('signIn', language)}
             </button>
           </p>
-          <button
-            onClick={() => (window.location.href = '/')}
-            className="text-[10px] text-fg-3 hover:text-red-500 transition-colors uppercase tracking-widest hover:underline decoration-red-500/30 font-mono"
-          >
-            [ ABORT_REGISTRATION_RETURN_HOME ]
-          </button>
+          <p className="mt-3 text-center">
+            <button
+              type="button"
+              onClick={() => (window.location.href = '/')}
+              className="text-xs text-fg-3 transition-colors hover:text-fg-2 hover:underline"
+            >
+              {language === 'zh' ? '返回首页' : 'Back to home'}
+            </button>
+          </p>
         </div>
       </div>
     </DeepVoidBackground>

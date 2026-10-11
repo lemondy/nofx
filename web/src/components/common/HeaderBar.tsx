@@ -1,8 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, ChevronDown, Settings } from 'lucide-react'
+import {
+  Menu,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  Lock,
+  LogOut,
+  Repeat,
+  Settings,
+} from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
+import { buttonVariants } from '../ui'
 import { t, type Language } from '../../i18n/translations'
 import { OFFICIAL_LINKS } from '../../constants/branding'
 import {
@@ -38,6 +49,112 @@ interface HeaderBarProps {
   onLoginRequired?: (featureName: string) => void
 }
 
+interface NavTab {
+  page: Page
+  path: string
+  label: string
+  requiresAuth: boolean
+}
+
+const LANGUAGES: { code: Language; label: string }[] = [
+  { code: 'zh', label: '中文' },
+  { code: 'en', label: 'English' },
+  { code: 'id', label: 'Bahasa' },
+]
+
+function buildNavTabs(language: Language): NavTab[] {
+  return [
+    {
+      page: 'data',
+      path: '/data',
+      label: language === 'zh' ? '数据' : language === 'id' ? 'Data' : 'Data',
+      requiresAuth: false,
+    },
+    {
+      page: 'strategy-market',
+      path: '/strategy-market',
+      label:
+        language === 'zh' ? '策略市场' : language === 'id' ? 'Pasar' : 'Market',
+      requiresAuth: true,
+    },
+    {
+      page: 'traders',
+      path: '/traders',
+      label: t('configNav', language),
+      requiresAuth: true,
+    },
+    {
+      page: 'trader',
+      path: '/dashboard',
+      label: t('dashboardNav', language),
+      requiresAuth: true,
+    },
+    {
+      page: 'strategy',
+      path: '/strategy',
+      label: t('strategyNav', language),
+      requiresAuth: true,
+    },
+    {
+      page: 'review',
+      path: '/review',
+      label: t('reviewNav', language),
+      requiresAuth: true,
+    },
+    {
+      page: 'system-quality',
+      path: '/system-quality',
+      label: language === 'zh' ? '系统质量' : 'System Quality',
+      requiresAuth: true,
+    },
+    {
+      page: 'competition',
+      path: '/competition',
+      label: t('realtimeNav', language),
+      requiresAuth: true,
+    },
+    {
+      page: 'faq',
+      path: '/faq',
+      label: t('faqNav', language),
+      requiresAuth: false,
+    },
+  ]
+}
+
+const socialIconClass =
+  'inline-flex h-8 w-8 items-center justify-center rounded-md text-fg-3 transition-colors hover:bg-surface-hover hover:text-fg'
+
+const SOCIAL_LINKS = [
+  {
+    name: 'GitHub',
+    href: OFFICIAL_LINKS.github,
+    iconSize: 18,
+    viewBox: '0 0 16 16',
+    path: 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z',
+  },
+  {
+    name: 'Twitter',
+    href: OFFICIAL_LINKS.twitter,
+    iconSize: 16,
+    viewBox: '0 0 24 24',
+    path: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z',
+  },
+  {
+    name: 'Telegram',
+    href: OFFICIAL_LINKS.telegram,
+    iconSize: 16,
+    viewBox: '0 0 24 24',
+    path: 'M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z',
+  },
+]
+
+const dropdownPanelClass =
+  'absolute right-0 top-full mt-1 z-50 rounded-md border border-line bg-surface p-1 shadow-pop'
+
+const dropdownItemClass =
+  'flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg'
+
 export default function HeaderBar({
   isLoggedIn = false,
   isHomePage = false,
@@ -70,6 +187,7 @@ export default function HeaderBar({
     setUserDropdownOpen(false)
     navigateInApp(getPostAuthPath(nextMode))
   }
+
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -93,235 +211,145 @@ export default function HeaderBar({
     }
   }, [])
 
+  const navTabs = buildNavTabs(language)
+
+  const handleNavClick = (tab: NavTab, closeMobile = false) => {
+    // If requires auth and not logged in, show login prompt
+    if (tab.requiresAuth && !isLoggedIn) {
+      onLoginRequired?.(tab.label)
+      if (closeMobile) setMobileMenuOpen(false)
+      return
+    }
+    if (onPageChange) {
+      onPageChange(tab.page)
+    }
+    navigate(tab.path)
+    if (closeMobile) setMobileMenuOpen(false)
+  }
+
+  const currentLanguageLabel =
+    LANGUAGES.find((l) => l.code === language)?.label ?? '中文'
+
   return (
-    <nav className="fixed top-0 w-full z-50 header-bar">
-      <div className="flex items-center justify-between h-16 px-4 sm:px-6 max-w-[1920px] mx-auto">
+    <nav className="header-bar fixed top-0 z-50 w-full">
+      <div className="mx-auto flex h-[52px] max-w-[1920px] items-center justify-between gap-4 px-4 sm:px-6">
         {/* Logo - Always go to home page */}
-        <div
+        <button
+          type="button"
           onClick={() => {
             window.location.href = '/'
           }}
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer"
+          className="flex shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
         >
-          <img src="/icons/nofx.svg" alt="NOFX Logo" className="w-7 h-7" />
-          <span className="text-lg font-bold text-nofx-gold">NOFX</span>
+          <img src="/icons/nofx.svg" alt="NOFX Logo" className="h-6 w-6" />
+          <span className="text-base font-semibold text-fg">NOFX</span>
+        </button>
+
+        {/* Desktop Main Nav */}
+        <div className="hidden min-w-0 flex-1 items-stretch gap-1 self-stretch pl-6 md:flex">
+          {navTabs.map((tab) => {
+            const active = currentPage === tab.page
+            return (
+              <button
+                key={tab.page}
+                type="button"
+                onClick={() => handleNavClick(tab)}
+                className={`relative flex items-center whitespace-nowrap border-b-2 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50 ${
+                  active
+                    ? 'border-brand text-fg'
+                    : 'border-transparent text-fg-3 hover:text-fg'
+                }`}
+              >
+                {tab.label}
+                {tab.requiresAuth && !isLoggedIn && (
+                  <Lock className="ml-1 h-3 w-3 text-fg-disabled" />
+                )}
+              </button>
+            )
+          })}
         </div>
 
-        {/* Desktop Menu */}
-        <div className="hidden md:flex items-center justify-between flex-1 ml-8">
-          {/* Left Side - Navigation Tabs - Always show all tabs */}
-          <div className="flex items-center gap-2">
-            {/* Navigation tabs configuration */}
-            {(() => {
-              // Define all navigation tabs
-              const navTabs: {
-                page: Page
-                path: string
-                label: string
-                requiresAuth: boolean
-              }[] = [
-                {
-                  page: 'data',
-                  path: '/data',
-                  label:
-                    language === 'zh'
-                      ? '数据'
-                      : language === 'id'
-                        ? 'Data'
-                        : 'Data',
-                  requiresAuth: false,
-                },
-                {
-                  page: 'strategy-market',
-                  path: '/strategy-market',
-                  label:
-                    language === 'zh'
-                      ? '策略市场'
-                      : language === 'id'
-                        ? 'Pasar'
-                        : 'Market',
-                  requiresAuth: true,
-                },
-                {
-                  page: 'traders',
-                  path: '/traders',
-                  label: t('configNav', language),
-                  requiresAuth: true,
-                },
-                {
-                  page: 'trader',
-                  path: '/dashboard',
-                  label: t('dashboardNav', language),
-                  requiresAuth: true,
-                },
-                {
-                  page: 'strategy',
-                  path: '/strategy',
-                  label: t('strategyNav', language),
-                  requiresAuth: true,
-                },
-                {
-                  page: 'review',
-                  path: '/review',
-                  label: t('reviewNav', language),
-                  requiresAuth: true,
-                },
-                {
-                  page: 'system-quality',
-                  path: '/system-quality',
-                  label: language === 'zh' ? '系统质量' : 'System Quality',
-                  requiresAuth: true,
-                },
-                {
-                  page: 'competition',
-                  path: '/competition',
-                  label: t('realtimeNav', language),
-                  requiresAuth: true,
-                },
-                {
-                  page: 'faq',
-                  path: '/faq',
-                  label: t('faqNav', language),
-                  requiresAuth: false,
-                },
-              ]
-
-              const handleNavClick = (tab: (typeof navTabs)[0]) => {
-                // If requires auth and not logged in, show login prompt
-                if (tab.requiresAuth && !isLoggedIn) {
-                  onLoginRequired?.(tab.label)
-                  return
-                }
-                // Navigate normally
-                if (onPageChange) {
-                  onPageChange(tab.page)
-                }
-                navigate(tab.path)
-              }
-
-              return navTabs.map((tab) => (
-                <button
-                  key={tab.page}
-                  onClick={() => handleNavClick(tab)}
-                  className={`text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500 px-3 py-2 rounded-lg
- ${currentPage === tab.page ? 'text-nofx-gold' : 'text-nofx-text-muted hover:text-nofx-gold'}`}
+        {/* Desktop Right Side */}
+        <div className="hidden items-center gap-1 md:flex">
+          <div className="flex items-center gap-0.5">
+            {SOCIAL_LINKS.map((link) => (
+              <a
+                key={link.name}
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={socialIconClass}
+                title={link.name}
+              >
+                <svg
+                  width={link.iconSize}
+                  height={link.iconSize}
+                  viewBox={link.viewBox}
+                  fill="currentColor"
                 >
-                  {currentPage === tab.page && (
-                    <span className="absolute inset-0 rounded-lg bg-nofx-gold/15 -z-10" />
-                  )}
-                  {tab.label}
-                </button>
-              ))
-            })()}
+                  <path d={link.path} />
+                </svg>
+              </a>
+            ))}
           </div>
 
-          {/* Right Side - Social Links and User Actions */}
-          <div className="flex items-center gap-4">
-            {/* Social Links - Always visible */}
-            <div className="flex items-center gap-1">
-              {/* GitHub */}
-              <a
-                href={OFFICIAL_LINKS.github}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 rounded-lg transition-all hover:scale-110 text-nofx-text-muted hover:text-fg hover:bg-fg/5"
-                title="GitHub"
-              >
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                >
-                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-                </svg>
-              </a>
-              {/* Twitter/X */}
-              <a
-                href={OFFICIAL_LINKS.twitter}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 rounded-lg transition-all hover:scale-110 text-nofx-text-muted hover:text-[#1DA1F2] hover:bg-[#1DA1F2]/10"
-                title="Twitter"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                >
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                </svg>
-              </a>
-              {/* Telegram */}
-              <a
-                href={OFFICIAL_LINKS.telegram}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 rounded-lg transition-all hover:scale-110 text-nofx-text-muted hover:text-[#0088cc] hover:bg-[#0088cc]/10"
-                title="Telegram"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                >
-                  <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
-                </svg>
-              </a>
-            </div>
+          <div className="mx-1.5 h-5 w-px bg-line" />
 
-            {/* Divider */}
-            <div className="h-5 w-px" style={{ background: 'var(--line)' }} />
+          {isLoggedIn && user ? (
+            <div className="relative" ref={userDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                className="flex h-8 items-center gap-2 rounded-md border border-line bg-surface-2 py-0 pl-1 pr-2 transition-colors hover:border-line-strong"
+              >
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand text-[11px] font-bold text-brand-fg">
+                  {user.email[0].toUpperCase()}
+                </span>
+                <span className="max-w-[140px] truncate text-[13px] text-fg-2">
+                  {user.email}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 text-fg-3" />
+              </button>
 
-            {/* User Info and Actions */}
-            {isLoggedIn && user ? (
-              <div className="flex items-center gap-3">
-                {/* User Info with Dropdown */}
-                <div className="relative" ref={userDropdownRef}>
-                  <button
-                    onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                    className="flex items-center gap-2 px-3 py-2 rounded transition-colors bg-nofx-bg-lighter border border-nofx-gold/20 hover:bg-fg/5"
+              <AnimatePresence>
+                {userDropdownOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.12 }}
+                    className={`${dropdownPanelClass} w-52`}
                   >
-                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold bg-nofx-gold text-brand-fg">
-                      {user.email[0].toUpperCase()}
-                    </div>
-                    <span className="text-sm text-nofx-text-muted">
-                      {user.email}
-                    </span>
-                    <ChevronDown className="w-4 h-4 text-nofx-text-muted" />
-                  </button>
-
-                  {userDropdownOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-48 rounded-lg shadow-lg overflow-hidden z-50 bg-nofx-bg-lighter border border-nofx-gold/20">
-                      <div className="px-3 py-2 border-b border-nofx-gold/20">
-                        <div className="text-xs text-nofx-text-muted">
-                          {t('loggedInAs', language)}
-                        </div>
-                        <div className="text-sm font-medium text-nofx-text-muted">
-                          {user.email}
-                        </div>
+                    <div className="border-b border-line px-2.5 py-2">
+                      <div className="text-xs text-fg-3">
+                        {t('loggedInAs', language)}
                       </div>
+                      <div className="truncate text-[13px] font-medium text-fg">
+                        {user.email}
+                      </div>
+                    </div>
+                    <div className="p-1">
                       <button
+                        type="button"
                         onClick={() => {
                           window.location.href = '/settings'
                           setUserDropdownOpen(false)
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-fg/5 text-nofx-text-muted hover:text-fg"
+                        className={dropdownItemClass}
                       >
-                        <Settings className="w-3.5 h-3.5" />
+                        <Settings className="h-3.5 w-3.5 text-fg-3" />
                         Settings
                       </button>
                       <button
+                        type="button"
                         onClick={() =>
                           handleSwitchMode(
                             userMode === 'beginner' ? 'advanced' : 'beginner'
                           )
                         }
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-fg/5 text-nofx-text-muted hover:text-fg"
+                        className={dropdownItemClass}
                       >
-                        <Settings className="w-3.5 h-3.5" />
+                        <Repeat className="h-3.5 w-3.5 text-fg-3" />
                         {userMode === 'beginner'
                           ? language === 'zh'
                             ? '切到老手模式'
@@ -332,101 +360,93 @@ export default function HeaderBar({
                       </button>
                       {onLogout && (
                         <button
+                          type="button"
                           onClick={() => {
                             onLogout()
                             setUserDropdownOpen(false)
                           }}
-                          className="w-full px-3 py-2 text-sm font-semibold transition-colors hover:opacity-80 text-center bg-nofx-danger/20 text-nofx-danger"
+                          className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-[13px] font-medium text-down transition-colors hover:bg-down-soft"
                         >
+                          <LogOut className="h-3.5 w-3.5" />
                           {t('exitLogin', language)}
                         </button>
                       )}
                     </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              /* Show login/register buttons when not logged in and not on login/register pages */
-              currentPage !== 'login' &&
-              currentPage !== 'register' && (
-                <div className="flex items-center gap-3">
-                  <a
-                    href="/login"
-                    className="px-3 py-2 text-sm font-medium transition-colors rounded text-nofx-text-muted hover:text-fg"
-                  >
-                    {t('signIn', language)}
-                  </a>
-                </div>
-              )
-            )}
-
-            <ThemeToggle />
-
-            {/* Language Toggle - Always at the rightmost */}
-            <div className="relative" ref={dropdownRef}>
-              <button
-                onClick={() => setLanguageDropdownOpen(!languageDropdownOpen)}
-                className="flex items-center gap-2 px-3 py-2 rounded transition-colors text-nofx-text-muted hover:bg-fg/5"
-              >
-                <span className="text-lg">
-                  {language === 'zh' ? '🇨🇳' : language === 'id' ? '🇮🇩' : '🇺🇸'}
-                </span>
-                <ChevronDown className="w-4 h-4" />
-              </button>
-
-              {languageDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-32 rounded-lg shadow-lg overflow-hidden z-50 bg-nofx-bg-lighter border border-nofx-gold/20">
-                  <button
-                    onClick={() => {
-                      onLanguageChange?.('zh')
-                      setLanguageDropdownOpen(false)
-                    }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-nofx-text-muted hover:text-fg
- ${language === 'zh' ? 'bg-nofx-gold/10' : 'hover:bg-fg/5'}`}
-                  >
-                    <span className="text-base">🇨🇳</span>
-                    <span className="text-sm">中文</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      onLanguageChange?.('en')
-                      setLanguageDropdownOpen(false)
-                    }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-nofx-text-muted hover:text-fg
- ${language === 'en' ? 'bg-nofx-gold/10' : 'hover:bg-fg/5'}`}
-                  >
-                    <span className="text-base">🇺🇸</span>
-                    <span className="text-sm">English</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      onLanguageChange?.('id')
-                      setLanguageDropdownOpen(false)
-                    }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-nofx-text-muted hover:text-fg
- ${language === 'id' ? 'bg-nofx-gold/10' : 'hover:bg-fg/5'}`}
-                  >
-                    <span className="text-base">🇮🇩</span>
-                    <span className="text-sm">Bahasa</span>
-                  </button>
-                </div>
-              )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
+          ) : (
+            currentPage !== 'login' &&
+            currentPage !== 'register' && (
+              <a
+                href="/login"
+                className={buttonVariants({ variant: 'secondary', size: 'md' })}
+              >
+                {t('signIn', language)}
+              </a>
+            )
+          )}
+
+          <ThemeToggle />
+
+          {/* Language Switcher */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              type="button"
+              onClick={() => setLanguageDropdownOpen(!languageDropdownOpen)}
+              className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg"
+            >
+              {currentLanguageLabel}
+              <ChevronDown className="h-3.5 w-3.5 text-fg-3" />
+            </button>
+
+            <AnimatePresence>
+              {languageDropdownOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.12 }}
+                  className={`${dropdownPanelClass} w-36`}
+                >
+                  {LANGUAGES.map((l) => (
+                    <button
+                      key={l.code}
+                      type="button"
+                      onClick={() => {
+                        onLanguageChange?.(l.code)
+                        setLanguageDropdownOpen(false)
+                      }}
+                      className={dropdownItemClass}
+                    >
+                      <span className="w-3.5">
+                        {language === l.code && (
+                          <Check className="h-3.5 w-3.5 text-brand" />
+                        )}
+                      </span>
+                      {l.label}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
         {/* Mobile Menu Button */}
-        <motion.button
+        <button
+          type="button"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="md:hidden text-nofx-text-muted hover:text-fg"
-          whileTap={{ scale: 0.9 }}
+          aria-label="Toggle menu"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg md:hidden"
         >
           {mobileMenuOpen ? (
-            <X className="w-6 h-6" />
+            <X className="h-5 w-5" />
           ) : (
-            <Menu className="w-6 h-6" />
+            <Menu className="h-5 w-5" />
           )}
-        </motion.button>
+        </button>
       </div>
 
       {/* Mobile Menu Overlay */}
@@ -436,230 +456,117 @@ export default function HeaderBar({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-40 md:hidden bg-surface-2/90 "
-            style={{ top: '64px' }} // Below header
+            transition={{ duration: 0.15 }}
+            className="fixed inset-x-0 bottom-0 top-[52px] z-40 overflow-y-auto bg-surface md:hidden"
           >
-            <motion.div
-              initial={{ y: -20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.1, duration: 0.3 }}
-              className="flex flex-col h-[calc(100vh-64px)] overflow-y-auto px-6 py-8"
-            >
+            <div className="flex min-h-full flex-col px-4 py-4">
               {/* Navigation Links */}
-              <div className="flex flex-col gap-6 mb-12">
-                {(() => {
-                  const navTabs: {
-                    page: Page
-                    path: string
-                    label: string
-                    requiresAuth: boolean
-                  }[] = [
-                    {
-                      page: 'data',
-                      path: '/data',
-                      label:
-                        language === 'zh'
-                          ? '数据'
-                          : language === 'id'
-                            ? 'Data'
-                            : 'Data',
-                      requiresAuth: false,
-                    },
-                    {
-                      page: 'strategy-market',
-                      path: '/strategy-market',
-                      label:
-                        language === 'zh'
-                          ? '策略市场'
-                          : language === 'id'
-                            ? 'Pasar'
-                            : 'Market',
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'traders',
-                      path: '/traders',
-                      label: t('configNav', language),
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'trader',
-                      path: '/dashboard',
-                      label: t('dashboardNav', language),
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'strategy',
-                      path: '/strategy',
-                      label: t('strategyNav', language),
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'review',
-                      path: '/review',
-                      label: t('reviewNav', language),
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'system-quality',
-                      path: '/system-quality',
-                      label: language === 'zh' ? '系统质量' : 'System Quality',
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'competition',
-                      path: '/competition',
-                      label: t('realtimeNav', language),
-                      requiresAuth: true,
-                    },
-                    {
-                      page: 'faq',
-                      path: '/faq',
-                      label: t('faqNav', language),
-                      requiresAuth: false,
-                    },
-                  ]
-
-                  const handleMobileNavClick = (tab: (typeof navTabs)[0]) => {
-                    if (tab.requiresAuth && !isLoggedIn) {
-                      onLoginRequired?.(tab.label)
-                      setMobileMenuOpen(false)
-                      return
-                    }
-                    if (onPageChange) {
-                      onPageChange(tab.page)
-                    }
-                    navigate(tab.path)
-                    setMobileMenuOpen(false)
-                  }
-
-                  return navTabs.map((tab, i) => (
-                    <motion.button
+              <nav className="flex flex-col gap-0.5">
+                {navTabs.map((tab) => {
+                  const active = currentPage === tab.page
+                  return (
+                    <button
                       key={tab.page}
-                      initial={{ x: -20, opacity: 0 }}
-                      animate={{ x: 0, opacity: 1 }}
-                      transition={{ delay: 0.1 + i * 0.05 }}
-                      onClick={() => handleMobileNavClick(tab)}
-                      className={`text-2xl font-black tracking-tight text-left flex items-center gap-3
- ${currentPage === tab.page ? 'text-nofx-gold' : 'text-fg-3'}`}
+                      type="button"
+                      onClick={() => handleNavClick(tab, true)}
+                      className={`flex items-center gap-2.5 rounded-md px-3 py-2.5 text-left text-[15px] font-medium transition-colors ${
+                        active
+                          ? 'bg-surface-2 text-fg'
+                          : 'text-fg-2 hover:bg-surface-hover hover:text-fg'
+                      }`}
                     >
-                      {currentPage === tab.page && (
-                        <motion.div
-                          layoutId="active-indicator"
-                          className="w-1.5 h-1.5 rounded-full bg-nofx-gold"
-                        />
-                      )}
+                      <span
+                        className={`h-4 w-0.5 rounded-full ${
+                          active ? 'bg-brand' : 'bg-transparent'
+                        }`}
+                      />
                       {tab.label}
                       {tab.requiresAuth && !isLoggedIn && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded border border-line text-fg-3 font-normal tracking-wide uppercase align-middle relative -top-1">
-                          LOGIN_REQ
-                        </span>
+                        <Lock className="ml-auto h-3.5 w-3.5 text-fg-disabled" />
                       )}
-                    </motion.button>
-                  ))
-                })()}
+                    </button>
+                  )
+                })}
+              </nav>
 
-                {/* Original Page Links */}
-                {isHomePage && (
-                  <div className="pt-6 border-t border-nofx-line/50 space-y-4">
-                    {[
-                      { key: 'features', label: t('features', language) },
-                      { key: 'howItWorks', label: t('howItWorks', language) },
-                    ].map((item, i) => (
-                      <motion.a
-                        key={item.key}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: 0.5 + i * 0.1 }}
-                        href={`#${item.key === 'features' ? 'features' : 'how-it-works'}`}
-                        className="block text-lg font-mono text-fg-3 hover:text-fg"
-                        onClick={() => setMobileMenuOpen(false)}
-                      >
-                        {'>'} {item.label}
-                      </motion.a>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {/* On-page anchors (home only) */}
+              {isHomePage && (
+                <div className="mt-4 border-t border-line pt-4">
+                  {[
+                    { key: 'features', label: t('features', language) },
+                    { key: 'install', label: t('howItWorks', language) },
+                  ].map((item) => (
+                    <a
+                      key={item.key}
+                      href={`#${item.key}`}
+                      className="flex items-center gap-1.5 rounded-md px-3 py-2.5 text-[15px] text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg"
+                      onClick={() => setMobileMenuOpen(false)}
+                    >
+                      <ChevronRight className="h-4 w-4 text-fg-3" />
+                      {item.label}
+                    </a>
+                  ))}
+                </div>
+              )}
 
               {/* Bottom Actions */}
-              <div className="mt-auto space-y-8">
-                {/* Social Links */}
-                <div className="flex items-center gap-4">
-                  {[
-                    {
-                      href: OFFICIAL_LINKS.github,
-                      icon: (
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-                      ),
-                    },
-                    {
-                      href: OFFICIAL_LINKS.twitter,
-                      icon: (
-                        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                      ),
-                    },
-                    {
-                      href: OFFICIAL_LINKS.telegram,
-                      icon: (
-                        <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
-                      ),
-                    },
-                  ].map((link, i) => (
+              <div className="mt-auto space-y-4 pt-8">
+                <div className="flex items-center gap-1">
+                  {SOCIAL_LINKS.map((link) => (
                     <a
-                      key={i}
+                      key={link.name}
                       href={link.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="w-12 h-12 rounded-full bg-surface border border-line flex items-center justify-center text-fg-3 hover:text-nofx-gold hover:border-nofx-gold transition-colors"
+                      className={socialIconClass}
+                      title={link.name}
                     >
                       <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 16 16"
+                        width={link.iconSize}
+                        height={link.iconSize}
+                        viewBox={link.viewBox}
                         fill="currentColor"
                       >
-                        {link.icon}
+                        <path d={link.path} />
                       </svg>
                     </a>
                   ))}
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex items-center justify-between">
                   <ThemeToggle />
                 </div>
 
-                {/* Account / Lang */}
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Lang Switcher */}
-                  <div className="flex bg-surface rounded-lg p-1 border border-line">
-                    {['zh', 'en', 'id'].map((lang) => (
+                <div className="grid grid-cols-2 items-stretch gap-2">
+                  {/* Language Switcher */}
+                  <div className="flex rounded-md border border-line bg-surface-2 p-0.5">
+                    {LANGUAGES.map((l) => (
                       <button
-                        key={lang}
+                        key={l.code}
+                        type="button"
                         onClick={() => {
-                          onLanguageChange?.(lang as Language)
-                          setMobileMenuOpen(false)
+                          onLanguageChange?.(l.code)
                         }}
-                        className={`flex-1 py-3 text-sm font-bold rounded-md transition-colors ${
-                          language === lang
-                            ? 'bg-surface-hover text-fg shadow-sm'
-                            : 'text-fg-3'
+                        className={`flex-1 rounded px-1 py-1.5 text-xs font-semibold transition-colors ${
+                          language === l.code
+                            ? 'bg-brand-soft text-brand'
+                            : 'text-fg-3 hover:text-fg'
                         }`}
                       >
-                        {lang === 'zh' ? 'CN' : lang === 'id' ? 'ID' : 'EN'}
+                        {l.code.toUpperCase()}
                       </button>
                     ))}
                   </div>
 
-                  {/* Auth Actions */}
+                  {/* Auth Action */}
                   {isLoggedIn && user ? (
                     <button
+                      type="button"
                       onClick={() => {
                         onLogout?.()
                         setMobileMenuOpen(false)
                       }}
-                      className="bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg font-bold text-sm hover:bg-red-500/20 transition-colors"
+                      className="rounded-md border border-down/30 bg-down-soft text-[13px] font-semibold text-down transition-colors hover:bg-down/20"
                     >
                       {t('exitLogin', language)}
                     </button>
@@ -668,7 +575,10 @@ export default function HeaderBar({
                     currentPage !== 'register' && (
                       <a
                         href="/login"
-                        className="flex items-center justify-center bg-nofx-gold text-brand-fg rounded-lg font-bold text-sm hover:brightness-110 transition-colors"
+                        className={buttonVariants({
+                          variant: 'primary',
+                          size: 'md',
+                        })}
                       >
                         {t('signIn', language)}
                       </a>
@@ -676,7 +586,7 @@ export default function HeaderBar({
                   )}
                 </div>
               </div>
-            </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

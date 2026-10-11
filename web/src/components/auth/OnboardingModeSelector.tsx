@@ -1,4 +1,5 @@
 import type { UserMode } from '../../lib/onboarding'
+import { Badge } from '../ui'
 
 interface OnboardingModeSelectorProps {
   language: string
@@ -38,7 +39,7 @@ export function OnboardingModeSelector({
 
   return (
     <div className="space-y-2">
-      <div className="text-xs font-medium text-fg-3">
+      <div className="text-xs text-fg-3">
         {isZh ? '使用模式' : 'Experience'}
       </div>
       <div className="grid grid-cols-1 gap-2">
@@ -49,18 +50,18 @@ export function OnboardingModeSelector({
               key={option.id}
               type="button"
               onClick={() => onChange(option.id)}
-              className={`w-full rounded-xl border px-4 py-3 text-left transition-all ${
+              className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${
                 selected
-                  ? 'border-nofx-gold/60 bg-nofx-gold/10 shadow-[0_0_0_1px_color-mix(in_srgb,var(--brand)_15%,transparent)]'
-                  : 'border-line bg-surface-2/60 hover:border-line-strong'
+                  ? 'border-brand bg-brand-soft'
+                  : 'border-line bg-surface-2 hover:border-line-strong'
               }`}
             >
-              <div className="flex items-center gap-2 text-sm font-semibold text-fg">
+              <div className="flex items-center gap-2 text-[13px] font-semibold text-fg">
                 <span>{option.title}</span>
                 {option.badge ? (
-                  <span className="rounded-full bg-nofx-gold px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-fg">
+                  <Badge variant="brand" size="xs">
                     {option.badge}
-                  </span>
+                  </Badge>
                 ) : null}
               </div>
               <p className="mt-1 text-xs leading-5 text-fg-3">

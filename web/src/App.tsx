@@ -527,7 +527,7 @@ function App() {
           onLoginRequired={handleLoginRequired}
           onPageChange={dataPageNavigate}
         />
-        <main className="pt-16">
+        <main className="pt-[52px]">
           <DataPage />
         </main>
         <LoginRequiredOverlay
@@ -561,7 +561,7 @@ function App() {
           onLoginRequired={handleLoginRequired}
           onPageChange={reviewPageNavigate}
         />
-        <main className="pt-16">
+        <main className="pt-[52px]">
           <ReviewPage language={language} />
         </main>
         <LoginRequiredOverlay
@@ -592,7 +592,7 @@ function App() {
           onLoginRequired={handleLoginRequired}
           onPageChange={navigateToPage}
         />
-        <main className="pt-16">
+        <main className="pt-[52px]">
           <SystemQualityPage language={language} />
         </main>
         <LoginRequiredOverlay
@@ -630,7 +630,7 @@ function App() {
       />
 
       {/* Main Content with Page Transitions */}
-      <main className="min-h-screen pt-16">
+      <main className="min-h-screen pt-[52px]">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentPage}

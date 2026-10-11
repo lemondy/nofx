@@ -83,14 +83,14 @@ describe('RegistrationDisabled Component', () => {
     it('should have correct background color', () => {
       const { container } = renderComponent()
       const mainDiv = container.firstChild as HTMLElement
-      // 使用设计变量, 不写死色值
-      expect(mainDiv.style.background).toBe('var(--bg)')
+      // 使用设计变量对应的语义类, 不写死色值
+      expect(mainDiv.className).toContain('bg-bg')
     })
 
     it('should have correct text color', () => {
       const { container } = renderComponent()
       const mainDiv = container.firstChild as HTMLElement
-      expect(mainDiv.style.color).toBe('var(--fg)')
+      expect(mainDiv.className).toContain('text-fg')
     })
 
     it('should have centered layout', () => {
