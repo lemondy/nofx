@@ -7,17 +7,26 @@ import type { RiskStatus } from '../../types'
 // already computes (2026-10-07 review F1): daily-loss halt, account drawdown
 // breaker, loss-streak bans, resting limit entries and open positions in R.
 
-const GOOD = 'var(--up)'
-const BAD = 'var(--down)'
-const WARN = 'var(--brand)'
-const MUTED = 'var(--fg-3)'
+type Tone = 'up' | 'down' | 'brand' | 'muted'
+const TEXT: Record<Tone, string> = {
+  up: 'text-up',
+  down: 'text-down',
+  brand: 'text-brand',
+  muted: 'text-fg-3',
+}
+const BG: Record<Tone, string> = {
+  up: 'bg-up',
+  down: 'bg-down',
+  brand: 'bg-brand',
+  muted: 'bg-fg-3',
+}
 
-function meterColor(value: number, cap: number) {
-  if (cap <= 0) return MUTED
+function meterTone(value: number, cap: number): Tone {
+  if (cap <= 0) return 'muted'
   const ratio = value / cap
-  if (ratio >= 1) return BAD
-  if (ratio >= 0.6) return WARN
-  return GOOD
+  if (ratio >= 1) return 'down'
+  if (ratio >= 0.6) return 'brand'
+  return 'up'
 }
 
 function fmtR(r: number) {
@@ -48,23 +57,23 @@ function Meter({
   language: Language
 }) {
   const shown = Math.max(0, value)
-  const color = meterColor(shown, cap)
+  const tone = meterTone(shown, cap)
   const pct = cap > 0 ? Math.min(100, (shown / cap) * 100) : 0
   return (
     <div>
-      <div className="flex justify-between text-xs mb-1">
-        <span style={{ color: MUTED }}>{label}</span>
-        <span className="font-mono" style={{ color }}>
+      <div className="mb-1 flex justify-between text-xs">
+        <span className="text-fg-3">{label}</span>
+        <span className={`num ${TEXT[tone]}`}>
           {shown.toFixed(2)}% /{' '}
           {cap > 0
             ? `${cap}% ${t('riskStatus.cap', language)}`
             : t('riskStatus.off', language)}
         </span>
       </div>
-      <div className="h-1.5 rounded bg-nofx-line/40 overflow-hidden">
+      <div className="h-1.5 overflow-hidden rounded bg-line">
         <div
-          className="h-full rounded"
-          style={{ width: `${pct}%`, background: color }}
+          className={`h-full rounded ${BG[tone]}`}
+          style={{ width: `${pct}%` }}
         />
       </div>
     </div>
@@ -86,56 +95,57 @@ export function RiskStatusPanel({
 
   if (error && !data) {
     return (
-      <div className="nofx-glass p-4 text-xs" style={{ color: MUTED }}>
+      <div className="rounded-lg border border-line bg-surface p-3 text-xs text-fg-3">
         {t('riskStatus.unavailable', language)}
       </div>
     )
   }
   if (!data) return null
 
-  const alerts: { text: string; color: string }[] = []
+  const alerts: { text: string; tone: Tone }[] = []
   if (data.daily_halted)
     alerts.push({
       text: `${t('riskStatus.dailyLoss', language)}: ${t('riskStatus.halted', language)}`,
-      color: BAD,
+      tone: 'down',
     })
   if (data.account_breaker_active)
     alerts.push({
       text: `${t('riskStatus.accountDrawdown', language)}: ${t('riskStatus.halted', language)}`,
-      color: BAD,
+      tone: 'down',
     })
   if (data.reduce_only)
-    alerts.push({ text: t('riskStatus.reduceOnly', language), color: WARN })
+    alerts.push({ text: t('riskStatus.reduceOnly', language), tone: 'brand' })
   if (data.protection_fault)
     alerts.push({
       text: `${t('riskStatus.protectionFault', language)}: ${data.protection_fault}`,
-      color: BAD,
+      tone: 'down',
     })
 
   return (
-    <div className="nofx-glass p-5 space-y-4">
+    <div className="space-y-3 rounded-lg border border-line bg-surface p-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-nofx-text-main">
+        <h2 className="text-sm font-semibold text-fg">
           {t('riskStatus.title', language)}
         </h2>
         <span
-          className="text-xs font-semibold"
-          style={{ color: alerts.length ? alerts[0].color : GOOD }}
+          className={`text-xs font-semibold ${
+            alerts.length ? TEXT[alerts[0].tone] : 'text-up'
+          }`}
         >
           {alerts.length ? alerts[0].text : t('riskStatus.ok', language)}
         </span>
       </div>
       {alerts.length > 1 && (
-        <ul className="text-xs space-y-1">
+        <ul className="space-y-1 text-xs">
           {alerts.slice(1).map((a) => (
-            <li key={a.text} style={{ color: a.color }}>
+            <li key={a.text} className={TEXT[a.tone]}>
               {a.text}
             </li>
           ))}
         </ul>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
         <Meter
           label={t('riskStatus.dailyLoss', language)}
           value={data.daily_loss_pct}
@@ -150,20 +160,20 @@ export function RiskStatusPanel({
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+      <div className="grid grid-cols-1 gap-x-6 gap-y-3 border-t border-line pt-3 text-xs md:grid-cols-3">
         <div>
-          <div className="mb-1" style={{ color: MUTED }}>
+          <div className="mb-1 text-fg-3">
             {t('riskStatus.lossStreak', language)}
           </div>
           {!data.loss_streak_enabled ? (
-            <div style={{ color: MUTED }}>
+            <div className="text-fg-3">
               {t('riskStatus.lossStreakOff', language)}
             </div>
           ) : data.loss_streak_bans.length === 0 ? (
-            <div style={{ color: GOOD }}>{t('riskStatus.none', language)}</div>
+            <div className="text-up">{t('riskStatus.none', language)}</div>
           ) : (
             data.loss_streak_bans.map((b) => (
-              <div key={b.symbol} className="font-mono" style={{ color: BAD }}>
+              <div key={b.symbol} className="num text-down">
                 {b.symbol} · {t('riskStatus.until', language)}{' '}
                 {fmtTime(b.until)}
               </div>
@@ -172,19 +182,19 @@ export function RiskStatusPanel({
         </div>
 
         <div>
-          <div className="mb-1" style={{ color: MUTED }}>
+          <div className="mb-1 text-fg-3">
             {t('riskStatus.pending', language)}
           </div>
           {data.pending_entries.length === 0 ? (
-            <div style={{ color: MUTED }}>{t('riskStatus.none', language)}</div>
+            <div className="text-fg-3">{t('riskStatus.none', language)}</div>
           ) : (
             data.pending_entries.map((p) => (
               <div
                 key={`${p.symbol}-${p.side}`}
-                className="font-mono"
+                className="num"
                 title={`SL ${p.stop_loss} · TP ${p.take_profit} · ${fmtTime(p.placed_at)}`}
               >
-                <span style={{ color: p.side === 'long' ? GOOD : BAD }}>
+                <span className={p.side === 'long' ? 'text-up' : 'text-down'}>
                   {p.side.toUpperCase()}
                 </span>{' '}
                 {p.symbol} @ {p.price}
@@ -194,16 +204,16 @@ export function RiskStatusPanel({
         </div>
 
         <div>
-          <div className="mb-1" style={{ color: MUTED }}>
+          <div className="mb-1 text-fg-3">
             {t('riskStatus.positionsR', language)}
           </div>
           {data.positions.length === 0 ? (
-            <div style={{ color: MUTED }}>{t('riskStatus.none', language)}</div>
+            <div className="text-fg-3">{t('riskStatus.none', language)}</div>
           ) : (
             data.positions.map((p) => (
               <div
                 key={`${p.symbol}-${p.side}`}
-                className="font-mono"
+                className="num"
                 title={
                   p.has_initial_stop
                     ? `SL0 ${p.initial_stop} · SL ${p.current_stop} · ${p.exit_mode}`
@@ -213,14 +223,16 @@ export function RiskStatusPanel({
                 {p.symbol}{' '}
                 {p.has_initial_stop ? (
                   <>
-                    <span style={{ color: p.current_r >= 0 ? GOOD : BAD }}>
+                    <span
+                      className={p.current_r >= 0 ? 'text-up' : 'text-down'}
+                    >
                       {t('riskStatus.currentR', language)} {fmtR(p.current_r)}
                     </span>
                     {p.current_stop > 0 && (
                       <span
-                        style={{
-                          color: p.stop_locked_r >= 0 ? GOOD : MUTED,
-                        }}
+                        className={
+                          p.stop_locked_r >= 0 ? 'text-up' : 'text-fg-3'
+                        }
                       >
                         {' '}
                         · {t('riskStatus.lockedR', language)}{' '}
@@ -229,7 +241,7 @@ export function RiskStatusPanel({
                     )}
                   </>
                 ) : (
-                  <span style={{ color: MUTED }}>
+                  <span className="text-fg-3">
                     {t('riskStatus.noInitialStop', language)}
                   </span>
                 )}
