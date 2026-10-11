@@ -1021,7 +1021,7 @@ export function StrategyStudioPage() {
           {selectedStrategy && editingConfig ? (
             <div className="space-y-3">
               {/* Strategy Name & Actions */}
-              <div className="sticky top-16 z-20 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface p-3">
+              <div className="sticky top-[60px] z-20 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface p-3">
                 <div className="min-w-0 basis-full sm:flex-1 sm:basis-0">
                   <Input
                     type="text"

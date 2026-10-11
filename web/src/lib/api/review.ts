@@ -185,16 +185,19 @@ export const reviewApi = {
   async aiApplyRules(
     traderId: string | undefined,
     rules: RuleInput[]
-  ): Promise<{ saved: number; rejected?: { index: number; reason: string }[] }> {
+  ): Promise<{
+    saved: number
+    rejected?: { index: number; reason: string }[]
+  }> {
     const params = new URLSearchParams()
     if (traderId) params.append('trader_id', traderId)
     const result = await httpClient.request<{
       saved: number
       rejected?: { index: number; reason: string }[]
-    }>(
-      `${API_BASE}/review/ai/apply-rules?${params}`,
-      { method: 'POST', data: { rules } }
-    )
+    }>(`${API_BASE}/review/ai/apply-rules?${params}`, {
+      method: 'POST',
+      data: { rules },
+    })
     if (!result.success) throw new Error('Failed to apply AI rules')
     return result.data!
   },

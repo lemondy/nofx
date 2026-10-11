@@ -1793,7 +1793,7 @@ export function DataPage() {
   useVergexRelaySync()
 
   return (
-    <div className="w-full min-h-[calc(100vh-64px)] px-4 md:px-6 py-4">
+    <div className="w-full min-h-[calc(100vh-52px)] px-4 md:px-6 py-4">
       <div className="max-w-7xl mx-auto space-y-4">
         {/* Page title + top-level section switch */}
         <div className="flex items-center justify-between flex-wrap gap-3">

@@ -3,7 +3,7 @@ import { Card, CardBody, buttonVariants } from '../components/ui'
 
 export function PageNotFound() {
   return (
-    <div className="flex min-h-[calc(100vh-64px)] items-center justify-center bg-bg p-4 text-center">
+    <div className="flex min-h-[calc(100vh-52px)] items-center justify-center bg-bg p-4 text-center">
       <Card className="w-full max-w-md">
         <CardBody className="flex flex-col items-center gap-3 py-8">
           <h1 className="num text-5xl font-semibold text-fg">404</h1>

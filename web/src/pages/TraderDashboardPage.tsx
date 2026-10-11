@@ -791,7 +791,7 @@ export function TraderDashboardPage({
         </Card>
 
         {/* Recent Decisions */}
-        <Card className="flex flex-col xl:sticky xl:top-16 xl:max-h-[calc(100vh-80px)]">
+        <Card className="flex flex-col xl:sticky xl:top-[60px] xl:max-h-[calc(100vh-72px)]">
           <CardHeader
             title={t('recentDecisions', language)}
             subtitle={
