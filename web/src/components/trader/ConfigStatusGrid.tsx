@@ -13,6 +13,7 @@ import type { Language } from '../../i18n/translations'
 import { t } from '../../i18n/translations'
 import { getModelIcon } from '../common/ModelIcons'
 import { getExchangeIcon } from '../common/ExchangeIcons'
+import { Badge } from '../ui/badge'
 import {
   getShortName,
   AI_PROVIDER_CONFIG,
@@ -109,7 +110,7 @@ export function ConfigStatusGrid({
       <div className="nofx-glass rounded-lg border border-nofx-line/50 overflow-hidden">
         <div className="px-4 py-3 border-b border-nofx-line/50 bg-surface-2 flex items-center gap-2 ">
           <Brain className="w-4 h-4 text-nofx-gold" />
-          <h3 className="text-sm font-mono tracking-widest text-fg-2 uppercase">
+          <h3 className="text-sm font-semibold text-fg">
             {t('aiModels', language)}
           </h3>
         </div>
@@ -182,18 +183,18 @@ export function ConfigStatusGrid({
                   </button>
                   <div className="text-right">
                     {usageInfo.totalCount > 0 ? (
-                      <span
-                        className={`text-[10px] font-mono px-2 py-1 rounded border ${
-                          usageInfo.runningCount > 0
-                            ? 'bg-up-soft border-up/30 text-up'
-                            : 'bg-warn-soft border-warn/30 text-warn'
-                        }`}
+                      <Badge
+                        size="xs"
+                        variant={usageInfo.runningCount > 0 ? 'up' : 'warn'}
                       >
-                        {usageInfo.runningCount}/{usageInfo.totalCount} ACTIVE
-                      </span>
+                        {t('tradersRunningOfTotal', language, {
+                          running: usageInfo.runningCount,
+                          total: usageInfo.totalCount,
+                        })}
+                      </Badge>
                     ) : (
-                      <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider">
-                        {language === 'zh' ? '就绪' : 'STANDBY'}
+                      <span className="text-[11px] text-fg-3">
+                        {t('configStandby', language)}
                       </span>
                     )}
                   </div>
@@ -205,7 +206,7 @@ export function ConfigStatusGrid({
           {configuredModels.length === 0 && (
             <div className="text-center py-10 border border-dashed border-line rounded-lg bg-surface-2">
               <Brain className="w-8 h-8 mx-auto mb-3 text-fg-3" />
-              <div className="text-xs font-mono text-fg-3 uppercase tracking-widest">
+              <div className="text-xs text-fg-3">
                 {t('noModelsConfigured', language)}
               </div>
             </div>
@@ -217,7 +218,7 @@ export function ConfigStatusGrid({
       <div className="nofx-glass rounded-lg border border-nofx-line/50 overflow-hidden">
         <div className="px-4 py-3 border-b border-nofx-line/50 bg-surface-2 flex items-center gap-2 ">
           <Landmark className="w-4 h-4 text-nofx-gold" />
-          <h3 className="text-sm font-mono tracking-widest text-fg-2 uppercase">
+          <h3 className="text-sm font-semibold text-fg">
             {t('exchanges', language)}
           </h3>
         </div>
@@ -253,7 +254,7 @@ export function ConfigStatusGrid({
                       {exchange.exchange_type?.toUpperCase() ||
                         getShortName(exchange.name)}
                       <span className="text-[10px] text-fg-3 ml-2 border border-line px-1 rounded">
-                        {exchange.account_name || 'DEFAULT'}
+                        {exchange.account_name || t('defaultAccount', language)}
                       </span>
                     </div>
                     <div className="text-[10px] text-fg-3 font-mono flex items-center gap-2">
@@ -324,18 +325,18 @@ export function ConfigStatusGrid({
                   })()}
 
                   {usageInfo.totalCount > 0 ? (
-                    <span
-                      className={`text-[10px] font-mono px-2 py-1 rounded border ${
-                        usageInfo.runningCount > 0
-                          ? 'bg-up-soft border-up/30 text-up'
-                          : 'bg-warn-soft border-warn/30 text-warn'
-                      }`}
+                    <Badge
+                      size="xs"
+                      variant={usageInfo.runningCount > 0 ? 'up' : 'warn'}
                     >
-                      {usageInfo.runningCount}/{usageInfo.totalCount} ACTIVE
-                    </span>
+                      {t('tradersRunningOfTotal', language, {
+                        running: usageInfo.runningCount,
+                        total: usageInfo.totalCount,
+                      })}
+                    </Badge>
                   ) : (
-                    <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider">
-                      {language === 'zh' ? '就绪' : 'STANDBY'}
+                    <span className="text-[11px] text-fg-3">
+                      {t('configStandby', language)}
                     </span>
                   )}
                 </div>
@@ -345,7 +346,7 @@ export function ConfigStatusGrid({
           {configuredExchanges.length === 0 && (
             <div className="text-center py-10 border border-dashed border-line rounded-lg bg-surface-2">
               <Landmark className="w-8 h-8 mx-auto mb-3 text-fg-3" />
-              <div className="text-xs font-mono text-fg-3 uppercase tracking-widest">
+              <div className="text-xs text-fg-3">
                 {t('noExchangesConfigured', language)}
               </div>
             </div>

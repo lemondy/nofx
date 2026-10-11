@@ -20,6 +20,8 @@ import { ModelConfigModal } from './ModelConfigModal'
 import { ConfigStatusGrid } from './ConfigStatusGrid'
 import { TradersList } from './TradersList'
 import { Bot, Plus, MessageCircle } from 'lucide-react'
+import { Button } from '../ui/button'
+import { Badge } from '../ui/badge'
 import { confirmToast } from '../../lib/notify'
 import { toast } from 'sonner'
 import { ApiError } from '../../lib/httpClient'
@@ -843,6 +845,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     }
   }
 
+  const runningTraders = traders?.filter((tr) => tr.is_running).length ?? 0
+
   const handleAddModel = () => {
     setEditingModel(null)
     setShowModelModal(true)
@@ -856,74 +860,49 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   return (
     <DeepVoidBackground className="py-8" disableAnimation>
       <div className="w-full px-4 md:px-8 space-y-8 animate-fade-in">
-        {/* Header - Terminal Style */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-nofx-line pb-6">
-          <div className="flex items-center gap-4">
-            <div className="relative group">
-              <div className="absolute -inset-1 bg-nofx-gold/20 rounded-xl blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
-              <div className="w-12 h-12 md:w-14 md:h-14 rounded-xl flex items-center justify-center bg-surface-2 border border-nofx-gold/30 text-nofx-gold relative z-10 shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_10%,transparent)]">
-                <Bot className="w-6 h-6 md:w-7 md:h-7" />
-              </div>
+        {/* Header */}
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-line pb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-brand-soft text-brand">
+              <Bot className="w-5 h-5" />
             </div>
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold font-mono tracking-tight text-fg flex items-center gap-3 uppercase">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-semibold text-fg">
                 {t('aiTraders', language)}
-                <span className="text-xs font-mono font-normal px-2 py-0.5 rounded bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 tracking-wider">
-                  {traders?.length || 0} ACTIVE_NODES
-                </span>
               </h1>
-              <p className="text-xs font-mono text-fg-3 uppercase tracking-widest mt-1 ml-1 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-up animate-pulse"></span>
-                SYSTEM_READY
-              </p>
+              <Badge variant={runningTraders > 0 ? 'up' : 'neutral'}>
+                {t('tradersRunningOfTotal', language, {
+                  running: runningTraders,
+                  total: traders?.length || 0,
+                })}
+              </Badge>
             </div>
           </div>
 
           <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 no-scrollbar">
-            <button
-              onClick={handleAddModel}
-              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-line-strong bg-surface-2 text-fg-3 hover:text-fg hover:border-line-strong whitespace-nowrap "
-            >
-              <div className="flex items-center gap-2">
-                <Plus className="w-3 h-3" />
-                <span>MODELS_CONFIG</span>
-              </div>
-            </button>
-
-            <button
-              onClick={handleAddExchange}
-              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-line-strong bg-surface-2 text-fg-3 hover:text-fg hover:border-line-strong whitespace-nowrap "
-            >
-              <div className="flex items-center gap-2">
-                <Plus className="w-3 h-3" />
-                <span>EXCHANGE_KEYS</span>
-              </div>
-            </button>
-
-            <button
-              onClick={() => setShowTelegramModal(true)}
-              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-info/60 bg-surface-2 text-info hover:text-info hover:border-info whitespace-nowrap "
-            >
-              <div className="flex items-center gap-2">
-                <MessageCircle className="w-3 h-3" />
-                <span>TELEGRAM_BOT</span>
-              </div>
-            </button>
-
-            <button
+            <Button onClick={handleAddModel}>
+              <Plus className="w-3.5 h-3.5" />
+              {t('aiModels', language)}
+            </Button>
+            <Button onClick={handleAddExchange}>
+              <Plus className="w-3.5 h-3.5" />
+              {t('exchanges', language)}
+            </Button>
+            <Button onClick={() => setShowTelegramModal(true)}>
+              <MessageCircle className="w-3.5 h-3.5" />
+              Telegram
+            </Button>
+            <Button
+              variant="primary"
               onClick={() => setShowCreateModal(true)}
               disabled={
                 configuredModels.length === 0 ||
                 configuredExchanges.length === 0
               }
-              className="group relative px-6 py-2 rounded text-xs font-bold font-mono uppercase tracking-wider transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap overflow-hidden bg-nofx-gold text-brand-fg hover:brightness-110 shadow-[0_0_20px_color-mix(in_srgb,var(--brand)_20%,transparent)] hover:shadow-[0_0_30px_color-mix(in_srgb,var(--brand)_40%,transparent)]"
             >
-              <span className="relative z-10 flex items-center gap-2">
-                <Plus className="w-4 h-4" />
-                {t('createTrader', language)}
-              </span>
-              <div className="absolute inset-0 bg-fg/15 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-            </button>
+              <Plus className="w-4 h-4" />
+              {t('createTrader', language)}
+            </Button>
           </div>
         </div>
 
