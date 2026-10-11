@@ -879,7 +879,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             </div>
           </div>
 
-          <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 hide-scrollbar">
+          <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 no-scrollbar">
             <button
               onClick={handleAddModel}
               className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-line-strong bg-surface-2 text-fg-3 hover:text-fg hover:border-line-strong whitespace-nowrap "
