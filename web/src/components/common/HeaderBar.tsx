@@ -246,7 +246,7 @@ export default function HeaderBar({
         </button>
 
         {/* Desktop Main Nav */}
-        <div className="hidden min-w-0 flex-1 items-stretch gap-1 self-stretch pl-6 md:flex">
+        <div className="hidden min-w-0 flex-1 items-stretch gap-0.5 self-stretch overflow-x-auto pl-4 [scrollbar-width:none] xl:flex 2xl:gap-1 2xl:pl-6 [&::-webkit-scrollbar]:hidden">
           {navTabs.map((tab) => {
             const active = currentPage === tab.page
             return (
@@ -254,7 +254,7 @@ export default function HeaderBar({
                 key={tab.page}
                 type="button"
                 onClick={() => handleNavClick(tab)}
-                className={`relative flex items-center whitespace-nowrap border-b-2 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50 ${
+                className={`relative flex shrink-0 items-center whitespace-nowrap border-b-2 px-2.5 text-[13px] 2xl:px-3 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50 ${
                   active
                     ? 'border-brand text-fg'
                     : 'border-transparent text-fg-3 hover:text-fg'
@@ -270,8 +270,8 @@ export default function HeaderBar({
         </div>
 
         {/* Desktop Right Side */}
-        <div className="hidden items-center gap-1 md:flex">
-          <div className="flex items-center gap-0.5">
+        <div className="hidden shrink-0 items-center gap-1 xl:flex">
+          <div className="hidden items-center gap-0.5 2xl:flex">
             {SOCIAL_LINKS.map((link) => (
               <a
                 key={link.name}
@@ -293,7 +293,7 @@ export default function HeaderBar({
             ))}
           </div>
 
-          <div className="mx-1.5 h-5 w-px bg-line" />
+          <div className="mx-1.5 hidden h-5 w-px bg-line 2xl:block" />
 
           {isLoggedIn && user ? (
             <div className="relative" ref={userDropdownRef}>
@@ -305,7 +305,7 @@ export default function HeaderBar({
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand text-[11px] font-bold text-brand-fg">
                   {user.email[0].toUpperCase()}
                 </span>
-                <span className="max-w-[140px] truncate text-[13px] text-fg-2">
+                <span className="hidden max-w-[140px] truncate text-[13px] text-fg-2 2xl:inline">
                   {user.email}
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 text-fg-3" />
@@ -439,7 +439,7 @@ export default function HeaderBar({
           type="button"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           aria-label="Toggle menu"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg md:hidden"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg xl:hidden"
         >
           {mobileMenuOpen ? (
             <X className="h-5 w-5" />
@@ -457,7 +457,7 @@ export default function HeaderBar({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-x-0 bottom-0 top-[52px] z-40 overflow-y-auto bg-surface md:hidden"
+            className="fixed inset-x-0 bottom-0 top-[52px] z-40 overflow-y-auto bg-surface xl:hidden"
           >
             <div className="flex min-h-full flex-col px-4 py-4">
               {/* Navigation Links */}
