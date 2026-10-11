@@ -22,6 +22,7 @@ import type {
   TraderInfo,
   Exchange,
 } from '../types'
+import { withAlpha } from '../lib/colorAlpha'
 
 // --- Helper Functions ---
 
@@ -249,8 +250,8 @@ export function TraderDashboardPage({
           <div
             className="w-24 h-24 mx-auto mb-6 rounded-full flex items-center justify-center nofx-glass"
             style={{
-              background: 'rgba(184, 145, 42, 0.1)',
-              borderColor: 'rgba(184, 145, 42, 0.3)',
+              background: 'var(--brand-soft)',
+              borderColor: 'color-mix(in srgb, var(--brand) 30%, transparent)',
             }}
           >
             <svg
@@ -292,8 +293,8 @@ export function TraderDashboardPage({
           <div
             className="w-24 h-24 mx-auto mb-6 rounded-full flex items-center justify-center nofx-glass"
             style={{
-              background: 'rgba(184, 145, 42, 0.1)',
-              borderColor: 'rgba(184, 145, 42, 0.3)',
+              background: 'var(--brand-soft)',
+              borderColor: 'color-mix(in srgb, var(--brand) 30%, transparent)',
             }}
           >
             <svg
@@ -363,7 +364,7 @@ export function TraderDashboardPage({
           className="mb-6 rounded-lg p-6 animate-scale-in nofx-glass group"
           style={{
             background:
-              'linear-gradient(135deg, rgba(244, 241, 232, 0.6) 0%, rgba(244, 241, 232, 0.4) 100%)',
+              'linear-gradient(135deg, color-mix(in srgb, var(--surface) 60%, transparent) 0%, color-mix(in srgb, var(--surface) 40%, transparent) 100%)',
           }}
         >
           <div className="flex items-start justify-between mb-4">
@@ -375,9 +376,9 @@ export function TraderDashboardPage({
                     selectedTrader.trader_name
                   )}
                   size={56}
-                  className="rounded-xl border-2 border-nofx-gold/30 shadow-[0_0_15px_rgba(184,145,42,0.2)]"
+                  className="rounded-xl border-2 border-nofx-gold/30 shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_20%,transparent)]"
                 />
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-nofx-green rounded-full border-2 border-[#F2EFE6] shadow-[0_0_8px_rgba(46,125,79,0.8)] animate-pulse" />
+                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-nofx-green rounded-full border-2 border-bg shadow-[0_0_8px_color-mix(in_srgb,var(--up)_80%,transparent)] animate-pulse" />
               </div>
               <div className="flex flex-col">
                 <span className="text-3xl tracking-tight text-nofx-text font-semibold">
@@ -419,7 +420,7 @@ export function TraderDashboardPage({
                       <button
                         type="button"
                         onClick={() => setShowWalletAddress(!showWalletAddress)}
-                        className="p-1 rounded hover:bg-[#1E1E1A]/10 transition-colors"
+                        className="p-1 rounded hover:bg-fg/10 transition-colors"
                         title={
                           showWalletAddress
                             ? t('traderDashboard.hideAddress', language)
@@ -435,7 +436,7 @@ export function TraderDashboardPage({
                       <button
                         type="button"
                         onClick={handleCopyAddress}
-                        className="p-1 rounded hover:bg-[#1E1E1A]/10 transition-colors"
+                        className="p-1 rounded hover:bg-fg/10 transition-colors"
                         title={t('traderDashboard.copyAddress', language)}
                       >
                         {copiedAddress ? (
@@ -461,12 +462,12 @@ export function TraderDashboardPage({
                 className="font-bold px-2 py-0.5 rounded text-xs tracking-wide"
                 style={{
                   background: selectedTrader.ai_model.includes('qwen')
-                    ? 'rgba(192, 132, 252, 0.15)'
-                    : 'rgba(96, 165, 250, 0.15)',
+                    ? 'var(--ai-soft)'
+                    : 'var(--info-soft)',
                   color: selectedTrader.ai_model.includes('qwen')
-                    ? '#c084fc'
-                    : '#5e7a5e',
-                  border: `1px solid ${selectedTrader.ai_model.includes('qwen') ? '#c084fc' : '#5e7a5e'}40`,
+                    ? 'var(--ai)'
+                    : 'var(--info)',
+                  border: `1px solid ${withAlpha(selectedTrader.ai_model.includes('qwen') ? 'var(--ai)' : 'var(--info)', 25)}`,
                 }}
               >
                 {getModelDisplayName(
@@ -514,12 +515,13 @@ export function TraderDashboardPage({
         </div>
 
         {/* Debug Info */}
-        <div className="mb-4 px-3 py-1.5 rounded bg-[#E9E4D6] border border-nofx-line/50 text-[10px] font-mono text-nofx-text-muted flex justify-between items-center opacity-60 hover:opacity-100 transition-opacity">
+        <div className="mb-4 px-3 py-1.5 rounded bg-surface-hover border border-nofx-line/50 text-[10px] font-mono text-nofx-text-muted flex justify-between items-center opacity-60 hover:opacity-100 transition-opacity">
           {/* F17 (2026-10-01 review): the status line used to read ONLINE unconditionally —
      stale account/position data looked live. Fetch failure ⇒ STALE (red). */}
           <span
             style={{
-              color: accountFailed || positionsFailed ? '#C0392B' : '#2E7D4F',
+              color:
+                accountFailed || positionsFailed ? 'var(--down)' : 'var(--up)',
             }}
           >
             {accountFailed || positionsFailed
@@ -533,14 +535,14 @@ export function TraderDashboardPage({
               <span>PNL::{account.total_pnl?.toFixed(2)}</span>
             </div>
           ) : accountFailed ? (
-            <span style={{ color: '#C0392B' }}>
+            <span style={{ color: 'var(--down)' }}>
               {t('traderDashboard.accountFetchFailed', language)}
             </span>
           ) : (
             <div className="flex gap-4">
-              <span className="inline-block w-32 h-3 rounded bg-[#1E1E1A]/5 animate-pulse" />
-              <span className="inline-block w-16 h-3 rounded bg-[#1E1E1A]/5 animate-pulse" />
-              <span className="inline-block w-16 h-3 rounded bg-[#1E1E1A]/5 animate-pulse" />
+              <span className="inline-block w-32 h-3 rounded bg-fg/5 animate-pulse" />
+              <span className="inline-block w-16 h-3 rounded bg-fg/5 animate-pulse" />
+              <span className="inline-block w-16 h-3 rounded bg-fg/5 animate-pulse" />
             </div>
           )}
         </div>
@@ -663,7 +665,7 @@ export function TraderDashboardPage({
                   {t('currentPositions', language)}
                 </h2>
                 {positions && positions.length > 0 && (
-                  <div className="text-xs px-2 py-1 rounded bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 font-mono shadow-[0_0_10px_rgba(184,145,42,0.1)]">
+                  <div className="text-xs px-2 py-1 rounded bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 font-mono shadow-[0_0_10px_color-mix(in_srgb,var(--brand)_10%,transparent)]">
                     {positions.length} {t('active', language)}
                   </div>
                 )}
@@ -749,7 +751,7 @@ export function TraderDashboardPage({
                         {paginatedPositions.map((pos, i) => (
                           <tr
                             key={i}
-                            className="border-b border-nofx-line/50 last:border-0 transition-all hover:bg-[#1E1E1A]/5 cursor-pointer group/row"
+                            className="border-b border-nofx-line/50 last:border-0 transition-all hover:bg-fg/5 cursor-pointer group/row"
                             onClick={() => {
                               setSelectedChartSymbol(pos.symbol)
                               setChartUpdateKey(Date.now())
@@ -761,12 +763,12 @@ export function TraderDashboardPage({
                               }
                             }}
                           >
-                            <td className="px-1 py-3 font-mono font-semibold whitespace-nowrap text-left text-nofx-text-main group-hover/row:text-[#1E1E1A] transition-colors">
+                            <td className="px-1 py-3 font-mono font-semibold whitespace-nowrap text-left text-nofx-text-main group-hover/row:text-fg transition-colors">
                               {pos.symbol}
                             </td>
                             <td className="px-1 py-3 whitespace-nowrap text-center">
                               <span
-                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${pos.side === 'long' ? 'bg-nofx-green/10 text-nofx-green shadow-[0_0_8px_rgba(46,125,79,0.2)]' : 'bg-nofx-red/10 text-nofx-red shadow-[0_0_8px_rgba(192,57,43,0.2)]'}`}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${pos.side === 'long' ? 'bg-nofx-green/10 text-nofx-green shadow-[0_0_8px_color-mix(in_srgb,var(--up)_20%,transparent)]' : 'bg-nofx-red/10 text-nofx-red shadow-[0_0_8px_color-mix(in_srgb,var(--down)_20%,transparent)]'}`}
                               >
                                 {t(
                                   pos.side === 'long' ? 'long' : 'short',
@@ -820,8 +822,8 @@ export function TraderDashboardPage({
                                 style={{
                                   textShadow:
                                     pos.unrealized_pnl >= 0
-                                      ? '0 0 10px rgba(46,125,79,0.3)'
-                                      : '0 0 10px rgba(192,57,43,0.3)',
+                                      ? '0 0 10px color-mix(in srgb, var(--up) 30%, transparent)'
+                                      : '0 0 10px color-mix(in srgb, var(--down) 30%, transparent)',
                                 }}
                               >
                                 {pos.unrealized_pnl >= 0 ? '+' : ''}
@@ -930,7 +932,7 @@ export function TraderDashboardPage({
                               { value: 50, label: '50' },
                               { value: 100, label: '100' },
                             ]}
-                            className="bg-[#E9E4D6] border border-nofx-line rounded px-2 py-1 text-xs text-nofx-text-main transition-colors"
+                            className="bg-surface-hover border border-nofx-line rounded px-2 py-1 text-xs text-nofx-text-main transition-colors"
                           />
                         </div>
                         {totalPositionPages > 1 && (
@@ -991,7 +993,7 @@ export function TraderDashboardPage({
                                   key={idx}
                                   onClick={onClick}
                                   disabled={disabled}
-                                  className={`px-2 py-1 rounded transition-colors ${disabled ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[#1E1E1A]/10 text-nofx-text-main bg-[#1E1E1A]/5'}`}
+                                  className={`px-2 py-1 rounded transition-colors ${disabled ? 'opacity-30 cursor-not-allowed' : 'hover:bg-fg/10 text-nofx-text-main bg-fg/5'}`}
                                 >
                                   {label}
                                 </button>
@@ -1032,10 +1034,10 @@ export function TraderDashboardPage({
             {/* Header */}
             <div className="flex items-center gap-3 mb-5 pb-4 border-b border-nofx-line/50 shrink-0">
               <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shadow-[0_4px_14px_rgba(99,102,241,0.4)]"
+                className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shadow-[0_4px_14px_color-mix(in_srgb,var(--ai)_40%,transparent)]"
                 style={{
                   background:
-                    'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)',
+                    'linear-gradient(135deg, var(--ai) 0%, var(--ai) 100%)',
                 }}
               >
                 🧠
@@ -1061,7 +1063,7 @@ export function TraderDashboardPage({
                   { value: 50, label: '50' },
                   { value: 100, label: '100' },
                 ]}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium cursor-pointer transition-all bg-[#E9E4D6] text-nofx-text-main border border-nofx-line hover:border-nofx-accent"
+                className="px-3 py-1.5 rounded-lg text-sm font-medium cursor-pointer transition-all bg-surface-hover text-nofx-text-main border border-nofx-line hover:border-nofx-accent"
               />
             </div>
 
@@ -1142,7 +1144,7 @@ function StatCard({
   loading?: boolean
 }) {
   return (
-    <div className="group nofx-glass p-5 rounded-lg transition-all duration-300 hover:bg-[#1E1E1A]/5 hover:translate-y-[-2px] border border-nofx-line/50 hover:border-nofx-gold/20 relative overflow-hidden">
+    <div className="group nofx-glass p-5 rounded-lg transition-all duration-300 hover:bg-fg/5 hover:translate-y-[-2px] border border-nofx-line/50 hover:border-nofx-gold/20 relative overflow-hidden">
       <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity text-4xl grayscale group-hover:grayscale-0">
         {icon}
       </div>
@@ -1151,13 +1153,13 @@ function StatCard({
       </div>
       {loading ? (
         <div className="space-y-2">
-          <div className="h-7 w-24 rounded bg-[#1E1E1A]/5 animate-pulse" />
-          <div className="h-3 w-16 rounded bg-[#1E1E1A]/5 animate-pulse" />
+          <div className="h-7 w-24 rounded bg-fg/5 animate-pulse" />
+          <div className="h-3 w-16 rounded bg-fg/5 animate-pulse" />
         </div>
       ) : (
         <>
           <div className="flex items-baseline gap-1 mb-1">
-            <div className="text-2xl font-bold font-mono text-nofx-text-main tracking-tight group-hover:text-[#1E1E1A] transition-colors">
+            <div className="text-2xl font-bold font-mono text-nofx-text-main tracking-tight group-hover:text-fg transition-colors">
               {value}
             </div>
             {unit && (

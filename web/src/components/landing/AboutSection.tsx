@@ -31,14 +31,14 @@ export default function AboutSection({ language }: AboutSectionProps) {
   return (
     <section
       className="py-24 relative overflow-hidden"
-      style={{ background: '#F2EFE6' }}
+      style={{ background: 'var(--surface-2)' }}
     >
       {/* Background Decoration */}
       <div
         className="absolute top-0 right-0 w-96 h-96 rounded-full blur-3xl opacity-30"
         style={{
           background:
-            'radial-gradient(circle, rgba(184, 145, 42, 0.1) 0%, transparent 70%)',
+            'radial-gradient(circle, var(--brand-soft) 0%, transparent 70%)',
         }}
       />
 
@@ -54,14 +54,15 @@ export default function AboutSection({ language }: AboutSectionProps) {
             <motion.div
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-6"
               style={{
-                background: 'rgba(184, 145, 42, 0.1)',
-                border: '1px solid rgba(184, 145, 42, 0.2)',
+                background: 'var(--brand-soft)',
+                border:
+                  '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
               }}
             >
-              <Terminal className="w-4 h-4" style={{ color: '#B8912A' }} />
+              <Terminal className="w-4 h-4" style={{ color: 'var(--brand)' }} />
               <span
                 className="text-xs font-medium"
-                style={{ color: '#B8912A' }}
+                style={{ color: 'var(--brand)' }}
               >
                 {t('aboutNofx', language)}
               </span>
@@ -69,14 +70,14 @@ export default function AboutSection({ language }: AboutSectionProps) {
 
             <h2
               className="text-4xl lg:text-5xl font-bold mb-6"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {t('whatIsNofx', language)}
             </h2>
 
             <p
               className="text-lg mb-8 leading-relaxed"
-              style={{ color: '#6E6E60' }}
+              style={{ color: 'var(--fg-3)' }}
             >
               {t('nofxNotAnotherBot', language)}{' '}
               {t('nofxDescription1', language)}
@@ -93,27 +94,28 @@ export default function AboutSection({ language }: AboutSectionProps) {
                   transition={{ delay: index * 0.1 }}
                   className="flex items-center gap-3 px-4 py-3 rounded-xl"
                   style={{
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                    background: 'color-mix(in srgb, var(--fg) 3%, transparent)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
                   }}
                 >
                   <div
                     className="w-10 h-10 rounded-lg flex items-center justify-center"
-                    style={{ background: 'rgba(184, 145, 42, 0.1)' }}
+                    style={{ background: 'var(--brand-soft)' }}
                   >
                     <feature.icon
                       className="w-5 h-5"
-                      style={{ color: '#B8912A' }}
+                      style={{ color: 'var(--brand)' }}
                     />
                   </div>
                   <div>
                     <div
                       className="text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {feature.title}
                     </div>
-                    <div className="text-xs" style={{ color: '#8A8A7C' }}>
+                    <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
                       {feature.desc}
                     </div>
                   </div>
@@ -132,8 +134,9 @@ export default function AboutSection({ language }: AboutSectionProps) {
             <div
               className="rounded-2xl overflow-hidden"
               style={{
-                background: '#EFECE1',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'var(--surface-2)',
+                border:
+                  '1px solid color-mix(in srgb, var(--fg) 10%, transparent)',
                 boxShadow: '0 25px 50px -12px rgba(30, 30, 26, 0.15)',
               }}
             >
@@ -141,8 +144,9 @@ export default function AboutSection({ language }: AboutSectionProps) {
               <div
                 className="flex items-center gap-2 px-4 py-3"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                  background: 'color-mix(in srgb, var(--fg) 3%, transparent)',
+                  borderBottom:
+                    '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
                 }}
               >
                 <div className="flex gap-2">
@@ -159,29 +163,29 @@ export default function AboutSection({ language }: AboutSectionProps) {
                     style={{ background: '#27C93F' }}
                   />
                 </div>
-                <span className="text-xs ml-2" style={{ color: '#8A8A7C' }}>
+                <span className="text-xs ml-2" style={{ color: 'var(--fg-3)' }}>
                   terminal
                 </span>
               </div>
 
               {/* Terminal Content */}
               <div className="p-6 font-mono text-sm space-y-2">
-                <div style={{ color: '#8A8A7C' }}>
+                <div style={{ color: 'var(--fg-3)' }}>
                   $ git clone https://github.com/NoFxAiOS/nofx.git
                 </div>
-                <div style={{ color: '#8A8A7C' }}>
+                <div style={{ color: 'var(--fg-3)' }}>
                   $ cd nofx && chmod +x start.sh
                 </div>
-                <div style={{ color: '#8A8A7C' }}>
+                <div style={{ color: 'var(--fg-3)' }}>
                   $ ./start.sh start --build
                 </div>
-                <div className="pt-2" style={{ color: '#B8912A' }}>
+                <div className="pt-2" style={{ color: 'var(--brand)' }}>
                   ✓ {t('startupMessages1', language)}
                 </div>
-                <div style={{ color: '#2E7D4F' }}>
+                <div style={{ color: 'var(--up)' }}>
                   ✓ {t('startupMessages2', language)}
                 </div>
-                <div style={{ color: '#2E7D4F' }}>
+                <div style={{ color: 'var(--up)' }}>
                   ✓ {t('startupMessages3', language)}
                 </div>
                 <motion.div
@@ -189,8 +193,8 @@ export default function AboutSection({ language }: AboutSectionProps) {
                   animate={{ opacity: [1, 0.5, 1] }}
                   transition={{ duration: 1.5, repeat: Infinity }}
                 >
-                  <span style={{ color: '#B8912A' }}>▸</span>
-                  <span style={{ color: '#1E1E1A' }}>_</span>
+                  <span style={{ color: 'var(--brand)' }}>▸</span>
+                  <span style={{ color: 'var(--fg)' }}>_</span>
                 </motion.div>
               </div>
             </div>

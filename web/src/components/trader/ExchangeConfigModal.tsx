@@ -90,18 +90,20 @@ function StepIndicator({
               style={{
                 background:
                   index < currentStep
-                    ? '#2E7D4F'
+                    ? 'var(--up)'
                     : index === currentStep
-                      ? '#B8912A'
-                      : '#C0B9A2',
-                color: index <= currentStep ? '#000' : '#6E6E60',
+                      ? 'var(--brand)'
+                      : 'var(--line)',
+                color: index <= currentStep ? 'var(--brand-fg)' : 'var(--fg-3)',
               }}
             >
               {index < currentStep ? <Check className="w-4 h-4" /> : index + 1}
             </div>
             <span
               className="text-xs font-medium hidden sm:block"
-              style={{ color: index === currentStep ? '#1E1E1A' : '#6E6E60' }}
+              style={{
+                color: index === currentStep ? 'var(--fg)' : 'var(--fg-3)',
+              }}
             >
               {label}
             </span>
@@ -110,7 +112,7 @@ function StepIndicator({
             <div
               className="w-8 h-0.5 mx-1"
               style={{
-                background: index < currentStep ? '#2E7D4F' : '#C0B9A2',
+                background: index < currentStep ? 'var(--up)' : 'var(--line)',
               }}
             />
           )}
@@ -139,8 +141,8 @@ function ExchangeCard({
       disabled={disabled}
       className="flex flex-col items-center gap-2 p-4 rounded-xl transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
       style={{
-        background: selected ? 'rgba(184, 145, 42, 0.15)' : '#F2EFE6',
-        border: selected ? '2px solid #B8912A' : '2px solid #C0B9A2',
+        background: selected ? 'var(--brand-soft)' : 'var(--surface-2)',
+        border: selected ? '2px solid var(--brand)' : '2px solid var(--line)',
       }}
     >
       <div className="relative">
@@ -148,23 +150,21 @@ function ExchangeCard({
         {selected && (
           <div
             className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center"
-            style={{ background: '#2E7D4F' }}
+            style={{ background: 'var(--up)' }}
           >
-            <Check className="w-3 h-3 text-black" />
+            <Check className="w-3 h-3 text-brand-fg" />
           </div>
         )}
       </div>
-      <span className="text-sm font-semibold" style={{ color: '#1E1E1A' }}>
+      <span className="text-sm font-semibold" style={{ color: 'var(--fg)' }}>
         {getShortName(template.name)}
       </span>
       <span
         className="text-xs px-2 py-0.5 rounded-full"
         style={{
           background:
-            template.type === 'cex'
-              ? 'rgba(184, 145, 42, 0.2)'
-              : 'rgba(139, 92, 246, 0.2)',
-          color: template.type === 'cex' ? '#B8912A' : '#A78BFA',
+            template.type === 'cex' ? 'var(--brand-soft)' : 'var(--ai-soft)',
+          color: template.type === 'cex' ? 'var(--brand)' : 'var(--ai)',
         }}
       >
         {template.type.toUpperCase()}
@@ -488,11 +488,12 @@ export function ExchangeConfigModal({
   )
 
   return (
-    <div className="fixed inset-0 bg-[#F4F1E8] flex items-center justify-center z-50 p-4 overflow-y-auto ">
+    <div className="fixed inset-0 bg-surface-hover flex items-center justify-center z-50 p-4 overflow-y-auto ">
       <div
         className="rounded-2xl w-full max-w-2xl relative my-8 shadow-2xl"
         style={{
-          background: 'linear-gradient(180deg, #E9E4D6 0%, #EDE9DC 100%)',
+          background:
+            'linear-gradient(180deg, var(--surface-hover) 0%, var(--surface-hover) 100%)',
           maxHeight: 'calc(100vh - 4rem)',
         }}
       >
@@ -503,12 +504,15 @@ export function ExchangeConfigModal({
               <button
                 type="button"
                 onClick={handleBack}
-                className="p-2 rounded-lg hover:bg-[#1E1E1A]/10 transition-colors"
+                className="p-2 rounded-lg hover:bg-fg/10 transition-colors"
               >
-                <ChevronLeft className="w-5 h-5" style={{ color: '#6E6E60' }} />
+                <ChevronLeft
+                  className="w-5 h-5"
+                  style={{ color: 'var(--fg-3)' }}
+                />
               </button>
             )}
-            <h3 className="text-xl font-bold" style={{ color: '#1E1E1A' }}>
+            <h3 className="text-xl font-bold" style={{ color: 'var(--fg)' }}>
               {editingExchangeId
                 ? t('editExchange', language)
                 : t('addExchange', language)}
@@ -521,8 +525,8 @@ export function ExchangeConfigModal({
                 onClick={() => setShowGuide(true)}
                 className="px-3 py-2 rounded-lg text-sm font-semibold transition-all hover:scale-105 flex items-center gap-2"
                 style={{
-                  background: 'rgba(184, 145, 42, 0.1)',
-                  color: '#B8912A',
+                  background: 'var(--brand-soft)',
+                  color: 'var(--brand)',
                 }}
               >
                 <BookOpen className="w-4 h-4" />
@@ -534,7 +538,7 @@ export function ExchangeConfigModal({
                 type="button"
                 onClick={() => onDelete(editingExchangeId)}
                 className="p-2 rounded-lg hover:bg-red-500/20 transition-colors"
-                style={{ color: '#C0392B' }}
+                style={{ color: 'var(--down)' }}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -542,8 +546,8 @@ export function ExchangeConfigModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-[#1E1E1A]/10 transition-colors"
-              style={{ color: '#6E6E60' }}
+              className="p-2 rounded-lg hover:bg-fg/10 transition-colors"
+              style={{ color: 'var(--fg-3)' }}
             >
               ✕
             </button>
@@ -569,7 +573,7 @@ export function ExchangeConfigModal({
               <div className="space-y-2">
                 <div
                   className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide"
-                  style={{ color: '#6E6E60' }}
+                  style={{ color: 'var(--fg-3)' }}
                 >
                   <Shield className="w-4 h-4" />
                   {t('environmentSteps.checkTitle', language)}
@@ -585,7 +589,7 @@ export function ExchangeConfigModal({
               <div className="space-y-4">
                 <div
                   className="text-sm font-semibold"
-                  style={{ color: '#1E1E1A' }}
+                  style={{ color: 'var(--fg)' }}
                 >
                   {t('exchangeConfig.chooseExchange', language)}
                 </div>
@@ -594,7 +598,7 @@ export function ExchangeConfigModal({
                 <div className="space-y-3">
                   <div
                     className="text-xs font-medium uppercase tracking-wide"
-                    style={{ color: '#B8912A' }}
+                    style={{ color: 'var(--brand)' }}
                   >
                     {t('exchangeConfig.centralizedExchanges', language)}
                   </div>
@@ -622,7 +626,7 @@ export function ExchangeConfigModal({
                 <div className="space-y-3">
                   <div
                     className="text-xs font-medium uppercase tracking-wide"
-                    style={{ color: '#A78BFA' }}
+                    style={{ color: 'var(--ai)' }}
                   >
                     {t('exchangeConfig.decentralizedExchanges', language)}
                   </div>
@@ -655,7 +659,10 @@ export function ExchangeConfigModal({
               {/* Selected Exchange Header */}
               <div
                 className="p-4 rounded-xl flex items-center gap-4"
-                style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+                style={{
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                }}
               >
                 {getExchangeIcon(selectedTemplate.exchange_type, {
                   width: 48,
@@ -664,11 +671,11 @@ export function ExchangeConfigModal({
                 <div className="flex-1">
                   <div
                     className="font-semibold text-lg"
-                    style={{ color: '#1E1E1A' }}
+                    style={{ color: 'var(--fg)' }}
                   >
                     {getShortName(selectedTemplate.name)}
                   </div>
-                  <div className="text-xs" style={{ color: '#6E6E60' }}>
+                  <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
                     {selectedTemplate.type.toUpperCase()} •{' '}
                     {selectedTemplate.exchange_type}
                   </div>
@@ -682,14 +689,18 @@ export function ExchangeConfigModal({
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all hover:scale-105"
                   style={{
-                    background: 'rgba(184, 145, 42, 0.1)',
-                    border: '1px solid rgba(184, 145, 42, 0.3)',
+                    background: 'var(--brand-soft)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
                   }}
                 >
-                  <UserPlus className="w-4 h-4" style={{ color: '#B8912A' }} />
+                  <UserPlus
+                    className="w-4 h-4"
+                    style={{ color: 'var(--brand)' }}
+                  />
                   <span
                     className="text-sm font-medium"
-                    style={{ color: '#B8912A' }}
+                    style={{ color: 'var(--brand)' }}
                   >
                     {t('exchangeConfig.register', language)}
                   </span>
@@ -698,8 +709,8 @@ export function ExchangeConfigModal({
                     <span
                       className="text-xs px-1.5 py-0.5 rounded"
                       style={{
-                        background: 'rgba(46, 125, 79, 0.2)',
-                        color: '#2E7D4F',
+                        background: 'var(--up-soft)',
+                        color: 'var(--up)',
                       }}
                     >
                       {t('exchangeConfig.bonus', language)}
@@ -712,9 +723,9 @@ export function ExchangeConfigModal({
               <div className="space-y-2">
                 <label
                   className="flex items-center gap-2 text-sm font-semibold"
-                  style={{ color: '#1E1E1A' }}
+                  style={{ color: 'var(--fg)' }}
                 >
-                  <Key className="w-4 h-4" style={{ color: '#B8912A' }} />
+                  <Key className="w-4 h-4" style={{ color: 'var(--brand)' }} />
                   {t('exchangeConfig.accountName', language)} *
                 </label>
                 <input
@@ -727,9 +738,9 @@ export function ExchangeConfigModal({
                   )}
                   className="w-full px-4 py-3 rounded-xl text-base"
                   style={{
-                    background: '#F2EFE6',
-                    border: '1px solid #C0B9A2',
-                    color: '#1E1E1A',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--fg)',
                   }}
                   required
                 />
@@ -755,10 +766,10 @@ export function ExchangeConfigModal({
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <span style={{ color: '#58a6ff' }}>ℹ️</span>
+                          <span style={{ color: 'var(--info)' }}>ℹ️</span>
                           <span
                             className="text-sm font-medium"
-                            style={{ color: '#1E1E1A' }}
+                            style={{ color: 'var(--fg)' }}
                           >
                             {t('exchangeConfig.useBinanceFuturesApi', language)}
                           </span>
@@ -780,7 +791,7 @@ export function ExchangeConfigModal({
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 hover:underline"
-                            style={{ color: '#58a6ff' }}
+                            style={{ color: 'var(--info)' }}
                             onClick={(e) => e.stopPropagation()}
                           >
                             {t('exchangeConfig.viewTutorial', language)}{' '}
@@ -794,9 +805,12 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
-                      <Key className="w-4 h-4" style={{ color: '#B8912A' }} />
+                      <Key
+                        className="w-4 h-4"
+                        style={{ color: 'var(--brand)' }}
+                      />
                       {t('apiKey', language)}
                     </label>
                     <input
@@ -806,9 +820,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterAPIKey', language)}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -817,11 +831,11 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       <Shield
                         className="w-4 h-4"
-                        style={{ color: '#B8912A' }}
+                        style={{ color: 'var(--brand)' }}
                       />
                       {t('secretKey', language)}
                     </label>
@@ -832,9 +846,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterSecretKey', language)}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -846,9 +860,12 @@ export function ExchangeConfigModal({
                     <div className="space-y-2">
                       <label
                         className="flex items-center gap-2 text-sm font-semibold"
-                        style={{ color: '#1E1E1A' }}
+                        style={{ color: 'var(--fg)' }}
                       >
-                        <Key className="w-4 h-4" style={{ color: '#B8912A' }} />
+                        <Key
+                          className="w-4 h-4"
+                          style={{ color: 'var(--brand)' }}
+                        />
                         {t('passphrase', language)}
                       </label>
                       <input
@@ -858,9 +875,9 @@ export function ExchangeConfigModal({
                         placeholder={t('enterPassphrase', language)}
                         className="w-full px-4 py-3 rounded-xl"
                         style={{
-                          background: '#F2EFE6',
-                          border: '1px solid #C0B9A2',
-                          color: '#1E1E1A',
+                          background: 'var(--surface-2)',
+                          border: '1px solid var(--line)',
+                          color: 'var(--fg)',
                         }}
                         required
                       />
@@ -871,34 +888,38 @@ export function ExchangeConfigModal({
                     <div
                       className="p-4 rounded-xl"
                       style={{
-                        background: 'rgba(184, 145, 42, 0.1)',
-                        border: '1px solid rgba(184, 145, 42, 0.2)',
+                        background: 'var(--brand-soft)',
+                        border:
+                          '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
                       }}
                     >
                       <div
                         className="text-sm font-semibold mb-2"
-                        style={{ color: '#B8912A' }}
+                        style={{ color: 'var(--brand)' }}
                       >
                         {t('whitelistIP', language)}
                       </div>
                       <div
                         className="text-xs mb-3"
-                        style={{ color: '#6E6E60' }}
+                        style={{ color: 'var(--fg-3)' }}
                       >
                         {t('whitelistIPDesc', language)}
                       </div>
                       {loadingIP ? (
-                        <div className="text-xs" style={{ color: '#6E6E60' }}>
+                        <div
+                          className="text-xs"
+                          style={{ color: 'var(--fg-3)' }}
+                        >
                           {t('loadingServerIP', language)}
                         </div>
                       ) : serverIP?.public_ip ? (
                         <div
                           className="flex items-center gap-2 p-3 rounded-lg"
-                          style={{ background: '#F2EFE6' }}
+                          style={{ background: 'var(--surface-2)' }}
                         >
                           <code
                             className="flex-1 text-sm font-mono"
-                            style={{ color: '#B8912A' }}
+                            style={{ color: 'var(--brand)' }}
                           >
                             {serverIP.public_ip}
                           </code>
@@ -907,8 +928,8 @@ export function ExchangeConfigModal({
                             onClick={() => handleCopyIP(serverIP.public_ip)}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:scale-105"
                             style={{
-                              background: 'rgba(184, 145, 42, 0.2)',
-                              color: '#B8912A',
+                              background: 'var(--brand-soft)',
+                              color: 'var(--brand)',
                             }}
                           >
                             <Copy className="w-3 h-3" />
@@ -929,8 +950,9 @@ export function ExchangeConfigModal({
                   <div
                     className="p-4 rounded-xl"
                     style={{
-                      background: 'rgba(139, 92, 246, 0.1)',
-                      border: '1px solid rgba(139, 92, 246, 0.3)',
+                      background: 'var(--ai-soft)',
+                      border:
+                        '1px solid color-mix(in srgb, var(--ai) 30%, transparent)',
                     }}
                   >
                     <div className="flex items-start gap-2">
@@ -938,11 +960,14 @@ export function ExchangeConfigModal({
                       <div>
                         <div
                           className="text-sm font-semibold mb-1"
-                          style={{ color: '#A78BFA' }}
+                          style={{ color: 'var(--ai)' }}
                         >
                           {t('asterApiProTitle', language)}
                         </div>
-                        <div className="text-xs" style={{ color: '#6E6E60' }}>
+                        <div
+                          className="text-xs"
+                          style={{ color: 'var(--fg-3)' }}
+                        >
                           {t('asterApiProDesc', language)}
                         </div>
                       </div>
@@ -951,13 +976,13 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('asterUserLabel', language)}
                       <Tooltip content={t('asterUserDesc', language)}>
                         <HelpCircle
                           className="w-4 h-4 cursor-help"
-                          style={{ color: '#A78BFA' }}
+                          style={{ color: 'var(--ai)' }}
                         />
                       </Tooltip>
                     </label>
@@ -968,9 +993,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterAsterUser', language)}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -978,13 +1003,13 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('asterSignerLabel', language)}
                       <Tooltip content={t('asterSignerDesc', language)}>
                         <HelpCircle
                           className="w-4 h-4 cursor-help"
-                          style={{ color: '#A78BFA' }}
+                          style={{ color: 'var(--ai)' }}
                         />
                       </Tooltip>
                     </label>
@@ -995,9 +1020,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterAsterSigner', language)}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -1005,13 +1030,13 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('asterPrivateKeyLabel', language)}
                       <Tooltip content={t('asterPrivateKeyDesc', language)}>
                         <HelpCircle
                           className="w-4 h-4 cursor-help"
-                          style={{ color: '#A78BFA' }}
+                          style={{ color: 'var(--ai)' }}
                         />
                       </Tooltip>
                     </label>
@@ -1022,9 +1047,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterAsterPrivateKey', language)}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -1051,7 +1076,10 @@ export function ExchangeConfigModal({
                         >
                           {t('hyperliquidAgentWalletTitle', language)}
                         </div>
-                        <div className="text-xs" style={{ color: '#6E6E60' }}>
+                        <div
+                          className="text-xs"
+                          style={{ color: 'var(--fg-3)' }}
+                        >
                           {t('hyperliquidAgentWalletDesc', language)}
                         </div>
                       </div>
@@ -1060,7 +1088,7 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('hyperliquidAgentPrivateKey', language)}
                     </label>
@@ -1075,9 +1103,9 @@ export function ExchangeConfigModal({
                         )}
                         className="flex-1 px-4 py-3 rounded-xl"
                         style={{
-                          background: '#F2EFE6',
-                          border: '1px solid #C0B9A2',
-                          color: '#1E1E1A',
+                          background: 'var(--surface-2)',
+                          border: '1px solid var(--line)',
+                          color: 'var(--fg)',
                         }}
                       />
                       <button
@@ -1095,7 +1123,7 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('hyperliquidMainWalletAddress', language)}
                     </label>
@@ -1109,9 +1137,9 @@ export function ExchangeConfigModal({
                       )}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -1125,8 +1153,9 @@ export function ExchangeConfigModal({
                   <div
                     className="p-4 rounded-xl"
                     style={{
-                      background: 'rgba(59, 130, 246, 0.1)',
-                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      background: 'var(--info-soft)',
+                      border:
+                        '1px solid color-mix(in srgb, var(--info) 30%, transparent)',
                     }}
                   >
                     <div className="flex items-start gap-2">
@@ -1134,11 +1163,14 @@ export function ExchangeConfigModal({
                       <div>
                         <div
                           className="text-sm font-semibold mb-1"
-                          style={{ color: '#3B82F6' }}
+                          style={{ color: 'var(--info)' }}
                         >
                           {t('exchangeConfig.lighterApiKeySetup', language)}
                         </div>
-                        <div className="text-xs" style={{ color: '#6E6E60' }}>
+                        <div
+                          className="text-xs"
+                          style={{ color: 'var(--fg-3)' }}
+                        >
                           {t('exchangeConfig.lighterApiKeyDesc', language)}
                         </div>
                       </div>
@@ -1147,7 +1179,7 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('lighterWalletAddress', language)} *
                     </label>
@@ -1158,9 +1190,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterLighterWalletAddress', language)}
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -1168,14 +1200,14 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('lighterApiKeyPrivateKey', language)} *
                       <button
                         type="button"
                         onClick={() => setSecureInputTarget('lighter')}
                         className="text-xs underline"
-                        style={{ color: '#3B82F6' }}
+                        style={{ color: 'var(--info)' }}
                       >
                         {t('secureInputButton', language)}
                       </button>
@@ -1189,9 +1221,9 @@ export function ExchangeConfigModal({
                       placeholder={t('enterLighterApiKeyPrivateKey', language)}
                       className="w-full px-4 py-3 rounded-xl font-mono"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       required
                     />
@@ -1199,7 +1231,7 @@ export function ExchangeConfigModal({
                   <div className="space-y-2">
                     <label
                       className="flex items-center gap-2 text-sm font-semibold"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {t('exchangeConfig.apiKeyIndex', language)}
                       <Tooltip
@@ -1210,7 +1242,7 @@ export function ExchangeConfigModal({
                       >
                         <HelpCircle
                           className="w-4 h-4 cursor-help"
-                          style={{ color: '#3B82F6' }}
+                          style={{ color: 'var(--info)' }}
                         />
                       </Tooltip>
                     </label>
@@ -1224,9 +1256,9 @@ export function ExchangeConfigModal({
                       }
                       className="w-full px-4 py-3 rounded-xl"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                     />
                   </div>
@@ -1238,8 +1270,8 @@ export function ExchangeConfigModal({
                 <button
                   type="button"
                   onClick={handleBack}
-                  className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-[#1E1E1A]/5"
-                  style={{ background: '#C0B9A2', color: '#6E6E60' }}
+                  className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-fg/5"
+                  style={{ background: 'var(--line)', color: 'var(--fg-3)' }}
                 >
                   {editingExchangeId
                     ? t('cancel', language)
@@ -1249,7 +1281,10 @@ export function ExchangeConfigModal({
                   type="submit"
                   disabled={isSaving || !accountName.trim()}
                   className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ background: '#B8912A', color: '#000' }}
+                  style={{
+                    background: 'var(--brand)',
+                    color: 'var(--brand-fg)',
+                  }}
                 >
                   {isSaving ? (
                     t('saving', language)
@@ -1269,26 +1304,29 @@ export function ExchangeConfigModal({
       {/* Binance Guide Modal */}
       {showGuide && (
         <div
-          className="fixed inset-0 bg-[#F2EFE6]/75 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-surface-2/75 flex items-center justify-center z-50 p-4"
           onClick={() => setShowGuide(false)}
         >
           <div
             className="rounded-2xl p-6 w-full max-w-4xl"
-            style={{ background: '#E9E4D6' }}
+            style={{ background: 'var(--surface-hover)' }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
               <h3
                 className="text-xl font-bold flex items-center gap-2"
-                style={{ color: '#1E1E1A' }}
+                style={{ color: 'var(--fg)' }}
               >
-                <BookOpen className="w-6 h-6" style={{ color: '#B8912A' }} />
+                <BookOpen
+                  className="w-6 h-6"
+                  style={{ color: 'var(--brand)' }}
+                />
                 {t('binanceSetupGuide', language)}
               </h3>
               <button
                 onClick={() => setShowGuide(false)}
                 className="px-4 py-2 rounded-lg text-sm font-semibold"
-                style={{ background: '#C0B9A2', color: '#6E6E60' }}
+                style={{ background: 'var(--line)', color: 'var(--fg-3)' }}
               >
                 {t('closeGuide', language)}
               </button>

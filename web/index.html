@@ -11,6 +11,16 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 <!-- End Google Tag Manager -->
     <link rel="icon" type="image/svg+xml" href="/icons/nofx.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        var t = 'dark';
+        try {
+          var s = localStorage.getItem('nofx-theme');
+          if (s === 'light' || s === 'dark') t = s;
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
     <title>NOFX - AI Auto Trading Dashboard</title>
   </head>
   <body>

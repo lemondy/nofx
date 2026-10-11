@@ -73,12 +73,15 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
   ]
 
   return (
-    <section className="py-24 relative" style={{ background: '#F2EFE6' }}>
+    <section
+      className="py-24 relative"
+      style={{ background: 'var(--surface-2)' }}
+    >
       {/* Background */}
       <div
         className="absolute inset-0 opacity-[0.02]"
         style={{
-          backgroundImage: `linear-gradient(#B8912A 1px, transparent 1px), linear-gradient(90deg, #B8912A 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(var(--brand) 1px, transparent 1px), linear-gradient(90deg, var(--brand) 1px, transparent 1px)`,
           backgroundSize: '40px 40px',
         }}
       />
@@ -93,11 +96,14 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
         >
           <h2
             className="text-4xl lg:text-5xl font-bold mb-4"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {t('whyChooseNofx', language)}
           </h2>
-          <p className="text-lg max-w-2xl mx-auto" style={{ color: '#6E6E60' }}>
+          <p
+            className="text-lg max-w-2xl mx-auto"
+            style={{ color: 'var(--fg-3)' }}
+          >
             {language === 'zh'
               ? '不只是交易机器人，而是完整的 AI 交易操作系统'
               : 'Not just a trading bot, but a complete AI trading operating system'}
@@ -119,11 +125,11 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
  `}
               style={{
                 background: feature.highlight
-                  ? 'linear-gradient(135deg, rgba(184, 145, 42, 0.08) 0%, rgba(184, 145, 42, 0.02) 100%)'
-                  : '#ECE8DB',
+                  ? 'linear-gradient(135deg, var(--brand-soft) 0%, color-mix(in srgb, var(--brand) 2%, transparent) 100%)'
+                  : 'var(--surface)',
                 border: feature.highlight
-                  ? '1px solid rgba(184, 145, 42, 0.2)'
-                  : '1px solid rgba(255, 255, 255, 0.06)',
+                  ? '1px solid color-mix(in srgb, var(--brand) 20%, transparent)'
+                  : '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
               }}
             >
               {/* Badge */}
@@ -131,8 +137,8 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
                 <div
                   className="absolute top-4 right-4 px-2 py-1 rounded text-xs font-medium"
                   style={{
-                    background: 'rgba(184, 145, 42, 0.15)',
-                    color: '#B8912A',
+                    background: 'var(--brand-soft)',
+                    color: 'var(--brand)',
                   }}
                 >
                   {feature.badge}
@@ -144,28 +150,29 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
                 className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
                 style={{
                   background: feature.highlight
-                    ? 'rgba(184, 145, 42, 0.15)'
-                    : 'rgba(184, 145, 42, 0.1)',
-                  border: '1px solid rgba(184, 145, 42, 0.2)',
+                    ? 'var(--brand-soft)'
+                    : 'var(--brand-soft)',
+                  border:
+                    '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
                 }}
                 whileHover={{ scale: 1.1, rotate: 5 }}
               >
                 <feature.icon
                   className="w-6 h-6"
-                  style={{ color: '#B8912A' }}
+                  style={{ color: 'var(--brand)' }}
                 />
               </motion.div>
 
               {/* Text */}
               <h3
                 className="text-xl font-bold mb-3"
-                style={{ color: '#1E1E1A' }}
+                style={{ color: 'var(--fg)' }}
               >
                 {feature.title}
               </h3>
               <p
                 className="text-sm leading-relaxed"
-                style={{ color: '#6E6E60' }}
+                style={{ color: 'var(--fg-3)' }}
               >
                 {feature.desc}
               </p>
@@ -173,7 +180,7 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
               {/* Hover Glow */}
               <div
                 className="absolute -bottom-10 -right-10 w-32 h-32 rounded-full blur-3xl opacity-0 group-hover:opacity-30 transition-opacity duration-500"
-                style={{ background: '#B8912A' }}
+                style={{ background: 'var(--brand)' }}
               />
             </motion.div>
           ))}
@@ -208,22 +215,23 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
               key={stat.label}
               className="text-center p-4 rounded-xl"
               style={{
-                background: 'rgba(255, 255, 255, 0.02)',
-                border: '1px solid rgba(255, 255, 255, 0.05)',
+                background: 'color-mix(in srgb, var(--fg) 2%, transparent)',
+                border:
+                  '1px solid color-mix(in srgb, var(--fg) 5%, transparent)',
               }}
             >
               <div
                 className="text-2xl font-bold mb-1"
                 style={{
                   background:
-                    'linear-gradient(135deg, #B8912A 0%, #C9A227 100%)',
+                    'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                 }}
               >
                 {stat.value}
               </div>
-              <div className="text-xs" style={{ color: '#8A8A7C' }}>
+              <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
                 {stat.label}
               </div>
             </div>

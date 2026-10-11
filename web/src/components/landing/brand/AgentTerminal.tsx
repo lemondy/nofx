@@ -9,14 +9,14 @@ export default function AgentTerminal() {
       className="w-[380px] lg:w-[440px] relative group"
     >
       {/* Terminal frame */}
-      <div className="relative bg-[#ECE8DB] rounded-2xl overflow-hidden shadow-[0_24px_48px_-16px_rgba(30,30,26,0.18)] border border-[#C0B9A2]">
+      <div className="relative bg-surface rounded-2xl overflow-hidden shadow-[0_24px_48px_-16px_color-mix(in srgb, var(--fg) 18%, transparent)] border border-line">
         <div
           className="absolute inset-0 pointer-events-none z-50 opacity-[0.02]"
           style={{}}
         />
 
         {/* Header bar - macOS style */}
-        <div className="flex items-center justify-between px-4 py-2.5 bg-[#EFECE1] border-b border-[#C0B9A2]/60">
+        <div className="flex items-center justify-between px-4 py-2.5 bg-surface-2 border-b border-line/60">
           {/* Window controls */}
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5">
@@ -27,7 +27,7 @@ export default function AgentTerminal() {
           </div>
           {/* Title */}
           <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
-            <span className="text-[#6E6E60] text-xs font-mono">
+            <span className="text-fg-3 text-xs font-mono">
               NOFX Agent Terminal
             </span>
           </div>
@@ -41,19 +41,19 @@ export default function AgentTerminal() {
         </div>
 
         {/* Portfolio PnL Section */}
-        <div className="p-4 border-b border-[#C0B9A2]/40">
+        <div className="p-4 border-b border-line/40">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-[#6E6E60] text-xs font-mono uppercase tracking-wider">
+            <span className="text-fg-3 text-xs font-mono uppercase tracking-wider">
               Portfolio PnL
             </span>
             <div className="flex gap-1">
               <button className="px-2 py-0.5 bg-nofx-gold/20 border border-nofx-gold/30 rounded text-[10px] text-nofx-gold font-mono">
                 24H
               </button>
-              <button className="px-2 py-0.5 text-[10px] text-[#8A8A7C] font-mono hover:text-[#6E6E60] transition-colors">
+              <button className="px-2 py-0.5 text-[10px] text-fg-3 font-mono hover:text-fg-3 transition-colors">
                 7D
               </button>
-              <button className="px-2 py-0.5 text-[10px] text-[#8A8A7C] font-mono hover:text-[#6E6E60] transition-colors">
+              <button className="px-2 py-0.5 text-[10px] text-fg-3 font-mono hover:text-fg-3 transition-colors">
                 30D
               </button>
             </div>
@@ -80,8 +80,8 @@ export default function AgentTerminal() {
                   x2="0%"
                   y2="100%"
                 >
-                  <stop offset="0%" stopColor="#22C55E" stopOpacity="0.2" />
-                  <stop offset="100%" stopColor="#22C55E" stopOpacity="0" />
+                  <stop offset="0%" stopColor="var(--up)" stopOpacity="0.2" />
+                  <stop offset="100%" stopColor="var(--up)" stopOpacity="0" />
                 </linearGradient>
               </defs>
               <path
@@ -91,7 +91,7 @@ export default function AgentTerminal() {
               <path
                 d="M0,56 C40,52 80,48 120,40 C160,32 200,28 240,24 C280,20 320,16 360,12 L400,8"
                 fill="none"
-                stroke="#22C55E"
+                stroke="var(--up)"
                 strokeWidth="1.5"
               />
             </svg>
@@ -99,28 +99,26 @@ export default function AgentTerminal() {
         </div>
 
         {/* Metrics Row */}
-        <div className="grid grid-cols-3 divide-x divide-zinc-800/40 border-b border-[#C0B9A2]/40">
+        <div className="grid grid-cols-3 divide-x divide-line/40 border-b border-line/40">
           <div className="p-3 text-center">
-            <div className="text-[#6E6E60] text-[10px] font-mono uppercase tracking-wider mb-1">
+            <div className="text-fg-3 text-[10px] font-mono uppercase tracking-wider mb-1">
               OI
             </div>
-            <div className="text-[#1E1E1A] font-bold font-mono">$847M</div>
+            <div className="text-fg font-bold font-mono">$847M</div>
             <div className="text-green-500 text-[10px] font-mono">↑ 2.1%</div>
           </div>
           <div className="p-3 text-center">
-            <div className="text-[#6E6E60] text-[10px] font-mono uppercase tracking-wider mb-1">
+            <div className="text-fg-3 text-[10px] font-mono uppercase tracking-wider mb-1">
               Netflow
             </div>
             <div className="text-green-400 font-bold font-mono">+$124M</div>
-            <div className="text-[#6E6E60] text-[10px] font-mono">
-              24h inflow
-            </div>
+            <div className="text-fg-3 text-[10px] font-mono">24h inflow</div>
           </div>
           <div className="p-3 text-center">
-            <div className="text-[#6E6E60] text-[10px] font-mono uppercase tracking-wider mb-1">
+            <div className="text-fg-3 text-[10px] font-mono uppercase tracking-wider mb-1">
               L/S Ratio
             </div>
-            <div className="text-[#1E1E1A] font-bold font-mono">1.24</div>
+            <div className="text-fg font-bold font-mono">1.24</div>
             <div className="flex gap-0.5 mt-1 px-2">
               <div className="h-1 bg-green-500/60 rounded-l flex-[55]" />
               <div className="h-1 bg-red-500/60 rounded-r flex-[45]" />
@@ -129,12 +127,12 @@ export default function AgentTerminal() {
         </div>
 
         {/* Order Book */}
-        <div className="p-4 border-b border-[#C0B9A2]/40">
+        <div className="p-4 border-b border-line/40">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-[#6E6E60] text-xs font-mono uppercase tracking-wider">
+            <span className="text-fg-3 text-xs font-mono uppercase tracking-wider">
               Order Book
             </span>
-            <span className="text-[#8A8A7C] text-[10px] font-mono">
+            <span className="text-fg-3 text-[10px] font-mono">
               Spread: <span className="text-nofx-gold">0.02%</span>
             </span>
           </div>
@@ -157,7 +155,7 @@ export default function AgentTerminal() {
                   <span className="relative text-red-400 font-mono">
                     {ask.price}
                   </span>
-                  <span className="relative text-[#6E6E60] font-mono">
+                  <span className="relative text-fg-3 font-mono">
                     {ask.amount}
                   </span>
                 </div>
@@ -181,7 +179,7 @@ export default function AgentTerminal() {
                   <span className="relative text-green-400 font-mono">
                     {bid.price}
                   </span>
-                  <span className="relative text-[#6E6E60] font-mono">
+                  <span className="relative text-fg-3 font-mono">
                     {bid.amount}
                   </span>
                 </div>
@@ -193,7 +191,7 @@ export default function AgentTerminal() {
         {/* Active Positions */}
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-[#6E6E60] text-xs font-mono uppercase tracking-wider">
+            <span className="text-fg-3 text-xs font-mono uppercase tracking-wider">
               Positions
             </span>
             <span className="text-green-400 text-xs font-mono font-medium">
@@ -229,7 +227,7 @@ export default function AgentTerminal() {
             ].map((pos, i) => (
               <div
                 key={i}
-                className="flex items-center justify-between py-2 px-2 rounded-lg bg-[#ECE8DB]/50 hover:bg-[#E4E0D0]/50 transition-colors"
+                className="flex items-center justify-between py-2 px-2 rounded-lg bg-surface/50 hover:bg-surface-hover/50 transition-colors"
               >
                 <div className="flex items-center gap-3">
                   <div
@@ -243,14 +241,12 @@ export default function AgentTerminal() {
                     {pos.coin}
                   </div>
                   <div>
-                    <div className="text-[#1E1E1A] text-sm font-mono">
-                      {pos.name}
-                    </div>
+                    <div className="text-fg text-sm font-mono">{pos.name}</div>
                     <div className="flex items-center gap-2 text-[10px]">
                       <span className="text-green-400 bg-green-500/10 px-1.5 py-0.5 rounded font-mono">
                         LONG
                       </span>
-                      <span className="text-[#6E6E60] font-mono">
+                      <span className="text-fg-3 font-mono">
                         {pos.size} {pos.coin}
                       </span>
                     </div>
@@ -270,15 +266,15 @@ export default function AgentTerminal() {
         </div>
 
         {/* Footer status bar */}
-        <div className="px-4 py-2 bg-[#EFECE1] border-t border-[#C0B9A2]/60 flex items-center justify-between">
-          <div className="flex items-center gap-3 text-[10px] font-mono text-[#8A8A7C]">
+        <div className="px-4 py-2 bg-surface-2 border-t border-line/60 flex items-center justify-between">
+          <div className="flex items-center gap-3 text-[10px] font-mono text-fg-3">
             <span className="flex items-center gap-1">
               <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
               Connected
             </span>
             <span>Latency: 12ms</span>
           </div>
-          <div className="text-[10px] font-mono text-[#8A8A7C]">
+          <div className="text-[10px] font-mono text-fg-3">
             mainnet • v2.4.0
           </div>
         </div>

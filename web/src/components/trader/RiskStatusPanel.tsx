@@ -7,10 +7,10 @@ import type { RiskStatus } from '../../types'
 // already computes (2026-10-07 review F1): daily-loss halt, account drawdown
 // breaker, loss-streak bans, resting limit entries and open positions in R.
 
-const GOOD = '#2E7D4F'
-const BAD = '#C0392B'
-const WARN = '#B8912A'
-const MUTED = '#6E6E60'
+const GOOD = 'var(--up)'
+const BAD = 'var(--down)'
+const WARN = 'var(--brand)'
+const MUTED = 'var(--fg-3)'
 
 function meterColor(value: number, cap: number) {
   if (cap <= 0) return MUTED

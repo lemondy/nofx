@@ -73,10 +73,10 @@ export function WebCryptoEnvironmentCheck({
 
   const isCompact = variant === 'compact'
   const containerClass = isCompact
-    ? 'p-3 rounded border border-nofx-line bg-[#F2EFE6] space-y-3'
-    : 'p-4 rounded border border-[#C0B9A2] bg-[#F2EFE6] space-y-4'
+    ? 'p-3 rounded border border-nofx-line bg-surface-2 space-y-3'
+    : 'p-4 rounded border border-line bg-surface-2 space-y-4'
 
-  const descriptionColor = '#6E6E60'
+  const descriptionColor = 'var(--fg-3)'
   const showInfo = status !== 'idle'
 
   const statusRendererMap: Record<WebCryptoCheckStatus, () => ReactNode> = {
@@ -92,7 +92,7 @@ export function WebCryptoEnvironmentCheck({
       </div>
     ),
     insecure: () => (
-      <div className="text-xs" style={{ color: '#F59E0B' }}>
+      <div className="text-xs" style={{ color: 'var(--warn)' }}>
         <div className="flex items-start gap-2 mb-1">
           <ShieldAlert className="w-4 h-4 flex-shrink-0" />
           <div className="font-semibold">
@@ -111,7 +111,7 @@ export function WebCryptoEnvironmentCheck({
       </div>
     ),
     unsupported: () => (
-      <div className="text-xs" style={{ color: '#C0392B' }}>
+      <div className="text-xs" style={{ color: 'var(--down)' }}>
         <div className="flex items-start gap-2 mb-1">
           <ShieldAlert className="w-4 h-4 flex-shrink-0" />
           <div className="font-semibold">
@@ -122,7 +122,7 @@ export function WebCryptoEnvironmentCheck({
       </div>
     ),
     disabled: () => (
-      <div className="flex items-start gap-2 text-[#6E6E60] text-xs">
+      <div className="flex items-start gap-2 text-fg-3 text-xs">
         <ShieldMinus className="w-4 h-4 flex-shrink-0" />
         <div>
           <div className="font-semibold">
@@ -135,7 +135,7 @@ export function WebCryptoEnvironmentCheck({
     checking: () => (
       <div
         className="flex items-center gap-2 text-xs"
-        style={{ color: '#1E1E1A' }}
+        style={{ color: 'var(--fg)' }}
       >
         <Loader2 className="w-4 h-4 animate-spin" />
         <span>{t('environmentCheck.checking', language)}</span>

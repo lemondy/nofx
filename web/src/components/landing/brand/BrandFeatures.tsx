@@ -42,13 +42,13 @@ const features = [
 
 export default function BrandFeatures() {
   return (
-    <section id="features" className="py-24 bg-[#F2EFE6] relative">
+    <section id="features" className="py-24 bg-surface-2 relative">
       <div className="max-w-[1920px] mx-auto px-6 lg:px-16">
         <div className="mb-16 border-l-4 border-nofx-gold pl-6">
-          <h2 className="text-4xl md:text-5xl font-black text-[#1E1E1A] uppercase tracking-tighter mb-4">
-            Core Protocol <span className="text-[#8A8A7C]">Specs</span>
+          <h2 className="text-4xl md:text-5xl font-black text-fg uppercase tracking-tighter mb-4">
+            Core Protocol <span className="text-fg-3">Specs</span>
           </h2>
-          <p className="text-xl text-[#6E6E60] font-mono">
+          <p className="text-xl text-fg-3 font-mono">
             Next generation infrastructure for algorithmic dominance.
           </p>
         </div>
@@ -57,7 +57,7 @@ export default function BrandFeatures() {
           {features.map((f, i) => (
             <motion.div
               key={i}
-              className="group relative bg-[#ECE8DB] border border-[#C0B9A2] p-8 hover:bg-[#E4E0D0] transition-colors cursor-default overflow-hidden"
+              className="group relative bg-surface border border-line p-8 hover:bg-surface-hover transition-colors cursor-default overflow-hidden"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
@@ -69,11 +69,11 @@ export default function BrandFeatures() {
 
               <f.icon className="w-10 h-10 text-nofx-gold mb-6" />
 
-              <h3 className="text-xl font-bold text-[#1E1E1A] mb-3 uppercase flex items-center gap-2">
+              <h3 className="text-xl font-bold text-fg mb-3 uppercase flex items-center gap-2">
                 {f.title}
               </h3>
 
-              <p className="text-[#6E6E60] leading-relaxed text-sm md:text-base">
+              <p className="text-fg-3 leading-relaxed text-sm md:text-base">
                 {f.description}
               </p>
 

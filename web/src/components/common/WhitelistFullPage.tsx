@@ -16,10 +16,10 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
   }
 
   return (
-    <div className="min-h-screen bg-nofx-bg-deeper text-[#1E1E1A] font-mono relative overflow-hidden flex items-center justify-center px-4">
+    <div className="min-h-screen bg-nofx-bg-deeper text-fg font-mono relative overflow-hidden flex items-center justify-center px-4">
       {/* Background Grid & Scanlines */}
       <div className="fixed inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none"></div>
-      <div className="fixed inset-0 bg-gradient-to-t from-black via-transparent to-transparent pointer-events-none"></div>
+      <div className="fixed inset-0 bg-gradient-to-t from-bg via-transparent to-transparent pointer-events-none"></div>
       <div className="fixed inset-0 pointer-events-none opacity-[0.03] bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.5)_50%)] bg-[length:100%_4px]"></div>
 
       <motion.div
@@ -28,13 +28,13 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
         transition={{ duration: 0.5 }}
         className="max-w-lg w-full relative z-10"
       >
-        <div className="bg-[#ECE8DB]/40 border border-red-500/30 rounded-lg overflow-hidden relative group">
+        <div className="bg-surface/40 border border-red-500/30 rounded-lg overflow-hidden relative group">
           {/* Top Bar */}
           <div className="flex items-center justify-between px-4 py-2 bg-red-900/20 border-b border-red-500/30">
             <div className="flex gap-1.5 opacity-50">
               <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-zinc-600"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-zinc-600"></div>
+              <div className="w-2.5 h-2.5 rounded-full bg-line-strong"></div>
+              <div className="w-2.5 h-2.5 rounded-full bg-line-strong"></div>
             </div>
             <div className="text-[10px] text-red-400 font-mono tracking-widest animate-pulse">
               ACCESS_DENIED // ERROR_403
@@ -45,20 +45,20 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
             {/* Icon */}
             <div className="relative mx-auto mb-8 w-20 h-20 flex items-center justify-center">
               <div className="absolute inset-0 bg-red-500/20 rounded-full animate-ping opacity-50"></div>
-              <div className="relative z-10 p-4 border-2 border-red-500/50 rounded-full bg-[#F2EFE6]">
+              <div className="relative z-10 p-4 border-2 border-red-500/50 rounded-full bg-surface-2">
                 <ShieldAlert className="w-8 h-8 text-red-500" />
               </div>
             </div>
 
             {/* Title */}
-            <h1 className="text-2xl font-bold mb-2 tracking-widest text-[#1E1E1A] uppercase glitch-text">
+            <h1 className="text-2xl font-bold mb-2 tracking-widest text-fg uppercase glitch-text">
               <span className="text-red-500">RESTRICTED</span> ACCESS
             </h1>
 
             <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-red-900/50 to-transparent my-4"></div>
 
             {/* Description */}
-            <p className="text-xs text-[#6E6E60] mb-8 leading-relaxed font-mono px-4">
+            <p className="text-xs text-fg-3 mb-8 leading-relaxed font-mono px-4">
               <span className="text-red-400">[SYSTEM_MESSAGE]:</span> YOUR
               IDENTIFIER IS NOT ON THE ACTIVE WHITELIST.
               <br />
@@ -76,7 +76,7 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
                   <h3 className="text-xs font-bold text-red-400 uppercase mb-1">
                     Authorization Protocol
                   </h3>
-                  <p className="text-[10px] text-[#6E6E60] leading-tight">
+                  <p className="text-[10px] text-fg-3 leading-tight">
                     Access is rolled out in batches. If you believe this is an
                     error, please verify your credentials or contact system
                     administrators.
@@ -89,7 +89,7 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
             <div className="space-y-3">
               <button
                 onClick={handleBackToLogin}
-                className="w-full flex items-center justify-center gap-2 py-3 border border-[#B3AB92] bg-[#F2EFE6] hover:bg-[#ECE8DB] hover:border-red-500 hover:text-red-500 text-[#6E6E60] transition-all text-xs font-bold tracking-widest uppercase group"
+                className="w-full flex items-center justify-center gap-2 py-3 border border-line-strong bg-surface-2 hover:bg-surface hover:border-red-500 hover:text-red-500 text-fg-3 transition-all text-xs font-bold tracking-widest uppercase group"
               >
                 <ArrowLeft className="w-3 h-3 group-hover:-translate-x-1 transition-transform" />
                 RETURN TO LOGIN
@@ -100,7 +100,7 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
                   href={OFFICIAL_LINKS.twitter}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 py-2 border border-[#C0B9A2] bg-[#ECE8DB]/50 hover:bg-[#E4E0D0] text-[#6E6E60] hover:text-[#1E1E1A] transition-colors text-[10px] uppercase"
+                  className="flex items-center justify-center gap-2 py-2 border border-line bg-surface/50 hover:bg-surface-hover text-fg-3 hover:text-fg transition-colors text-[10px] uppercase"
                 >
                   <Twitter className="w-3 h-3" />
                   Updates
@@ -109,7 +109,7 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
                   href={OFFICIAL_LINKS.telegram}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 py-2 border border-[#C0B9A2] bg-[#ECE8DB]/50 hover:bg-[#E4E0D0] text-[#6E6E60] hover:text-[#1E1E1A] transition-colors text-[10px] uppercase"
+                  className="flex items-center justify-center gap-2 py-2 border border-line bg-surface/50 hover:bg-surface-hover text-fg-3 hover:text-fg transition-colors text-[10px] uppercase"
                 >
                   <Send className="w-3 h-3" />
                   Support
@@ -119,7 +119,7 @@ export function WhitelistFullPage({ onBack }: WhitelistFullPageProps) {
           </div>
 
           {/* Footer */}
-          <div className="bg-[#EFECE1] p-2 text-[9px] text-[#8A8A7C] text-center border-t border-[#C0B9A2] font-mono uppercase">
+          <div className="bg-surface-2 p-2 text-[9px] text-fg-3 text-center border-t border-line font-mono uppercase">
             ERR_CODE: WLIST_0x403 // SECURITY_LAYER_ACTIVE
           </div>
         </div>

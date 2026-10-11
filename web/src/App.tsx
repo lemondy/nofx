@@ -423,7 +423,7 @@ function App() {
     return (
       <div
         className="min-h-screen flex items-center justify-center"
-        style={{ background: '#F2EFE6' }}
+        style={{ background: 'var(--bg)' }}
       >
         <div className="text-center">
           <img
@@ -431,7 +431,7 @@ function App() {
             alt="NoFx Logo"
             className="w-16 h-16 mx-auto mb-4 animate-pulse"
           />
-          <p style={{ color: '#1E1E1A' }}>{t('loading', language)}</p>
+          <p style={{ color: 'var(--fg)' }}>{t('loading', language)}</p>
         </div>
       </div>
     )
@@ -461,7 +461,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -492,7 +492,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -515,7 +515,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -549,7 +549,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -580,7 +580,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -616,7 +616,7 @@ function App() {
   return (
     <div
       className="min-h-screen"
-      style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+      style={{ background: 'var(--bg)', color: 'var(--fg)' }}
     >
       <HeaderBar
         isLoggedIn={!!user}
@@ -714,11 +714,14 @@ function App() {
       {/* Footer */}
       <footer
         className="mt-16"
-        style={{ borderTop: '1px solid #C0B9A2', background: '#EDE9DC' }}
+        style={{
+          borderTop: '1px solid var(--line)',
+          background: 'var(--surface-hover)',
+        }}
       >
         <div
           className="max-w-[1920px] mx-auto px-6 py-6 text-center text-sm"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           <p>{t('footerTitle', language)}</p>
           <p className="mt-1">{t('footerWarning', language)}</p>
@@ -730,19 +733,19 @@ function App() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#6E6E60',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg-3)',
+                border: '1px solid var(--line)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#C0B9A2'
-                e.currentTarget.style.color = '#1E1E1A'
-                e.currentTarget.style.borderColor = '#B8912A'
+                e.currentTarget.style.background = 'var(--line)'
+                e.currentTarget.style.color = 'var(--fg)'
+                e.currentTarget.style.borderColor = 'var(--brand)'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#E9E4D6'
-                e.currentTarget.style.color = '#6E6E60'
-                e.currentTarget.style.borderColor = '#C0B9A2'
+                e.currentTarget.style.background = 'var(--surface-hover)'
+                e.currentTarget.style.color = 'var(--fg-3)'
+                e.currentTarget.style.borderColor = 'var(--line)'
               }}
             >
               <svg
@@ -762,19 +765,19 @@ function App() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#6E6E60',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg-3)',
+                border: '1px solid var(--line)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#C0B9A2'
-                e.currentTarget.style.color = '#1E1E1A'
+                e.currentTarget.style.background = 'var(--line)'
+                e.currentTarget.style.color = 'var(--fg)'
                 e.currentTarget.style.borderColor = '#1DA1F2'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#E9E4D6'
-                e.currentTarget.style.color = '#6E6E60'
-                e.currentTarget.style.borderColor = '#C0B9A2'
+                e.currentTarget.style.background = 'var(--surface-hover)'
+                e.currentTarget.style.color = 'var(--fg-3)'
+                e.currentTarget.style.borderColor = 'var(--line)'
               }}
             >
               <svg
@@ -794,19 +797,19 @@ function App() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#6E6E60',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg-3)',
+                border: '1px solid var(--line)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#C0B9A2'
-                e.currentTarget.style.color = '#1E1E1A'
+                e.currentTarget.style.background = 'var(--line)'
+                e.currentTarget.style.color = 'var(--fg)'
                 e.currentTarget.style.borderColor = '#0088cc'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#E9E4D6'
-                e.currentTarget.style.color = '#6E6E60'
-                e.currentTarget.style.borderColor = '#C0B9A2'
+                e.currentTarget.style.background = 'var(--surface-hover)'
+                e.currentTarget.style.color = 'var(--fg-3)'
+                e.currentTarget.style.borderColor = 'var(--line)'
               }}
             >
               <svg

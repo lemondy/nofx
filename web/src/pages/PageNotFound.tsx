@@ -15,7 +15,7 @@ export function PageNotFound() {
           </div>
 
           <div className="space-y-2">
-            <h1 className="text-4xl font-bold font-mono tracking-tighter text-[#1E1E1A]">
+            <h1 className="text-4xl font-bold font-mono tracking-tighter text-fg">
               404
             </h1>
             <div className="text-xs uppercase tracking-[0.3em] text-nofx-danger font-mono border-b border-nofx-danger/30 pb-2 inline-block">
@@ -31,7 +31,7 @@ export function PageNotFound() {
 
           <a
             href="/"
-            className="flex items-center gap-2 px-6 py-3 bg-nofx-gold text-black font-bold text-sm uppercase tracking-widest rounded hover:bg-yellow-400 transition-all shadow-neon hover:shadow-[0_0_20px_rgba(184,145,42,0.4)] group mt-4"
+            className="flex items-center gap-2 px-6 py-3 bg-nofx-gold text-brand-fg font-bold text-sm uppercase tracking-widest rounded hover:brightness-110 transition-all shadow-neon hover:shadow-[0_0_20px_color-mix(in_srgb,var(--brand)_40%,transparent)] group mt-4"
           >
             <Home size={16} />
             <span>RETURN_BASE</span>

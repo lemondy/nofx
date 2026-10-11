@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import type { DecisionRecord, DecisionAction } from '../../types'
 import { t, type Language } from '../../i18n/translations'
 import { gateCodeLabel } from '../../lib/gateCodeLabels'
+import { withAlpha } from '../../lib/colorAlpha'
 
 interface DecisionCardProps {
   decision: DecisionRecord
@@ -16,38 +17,38 @@ const ACTION_CONFIG: Record<
   { color: string; bg: string; icon: string; label: string }
 > = {
   open_long: {
-    color: '#2E7D4F',
-    bg: 'rgba(46, 125, 79, 0.15)',
+    color: 'var(--up)',
+    bg: 'color-mix(in srgb, var(--up) 15%, transparent)',
     icon: '📈',
     label: 'LONG',
   },
   open_short: {
-    color: '#C0392B',
-    bg: 'rgba(192, 57, 43, 0.15)',
+    color: 'var(--down)',
+    bg: 'color-mix(in srgb, var(--down) 15%, transparent)',
     icon: '📉',
     label: 'SHORT',
   },
   close_long: {
-    color: '#B8912A',
-    bg: 'rgba(184, 145, 42, 0.15)',
+    color: 'var(--brand)',
+    bg: 'color-mix(in srgb, var(--brand) 15%, transparent)',
     icon: '💰',
     label: 'CLOSE',
   },
   close_short: {
-    color: '#B8912A',
-    bg: 'rgba(184, 145, 42, 0.15)',
+    color: 'var(--brand)',
+    bg: 'color-mix(in srgb, var(--brand) 15%, transparent)',
     icon: '💰',
     label: 'CLOSE',
   },
   hold: {
-    color: '#6E6E60',
-    bg: 'rgba(132, 142, 156, 0.15)',
+    color: 'var(--fg-3)',
+    bg: 'color-mix(in srgb, var(--fg-3) 15%, transparent)',
     icon: '⏸️',
     label: 'HOLD',
   },
   wait: {
-    color: '#6E6E60',
-    bg: 'rgba(132, 142, 156, 0.15)',
+    color: 'var(--fg-3)',
+    bg: 'color-mix(in srgb, var(--fg-3) 15%, transparent)',
     icon: '⏳',
     label: 'WAIT',
   },
@@ -75,10 +76,10 @@ function calcPctChange(
 
 // Get confidence color
 function getConfidenceColor(confidence: number | undefined): string {
-  if (!confidence) return '#6E6E60'
-  if (confidence >= 80) return '#2E7D4F'
-  if (confidence >= 60) return '#B8912A'
-  return '#C0392B'
+  if (!confidence) return 'var(--fg-3)'
+  if (confidence >= 80) return 'var(--up)'
+  if (confidence >= 60) return 'var(--brand)'
+  return 'var(--down)'
 }
 
 // Single Action Card Component
@@ -99,9 +100,10 @@ function ActionCard({
     <div
       className="rounded-lg p-4 transition-all duration-200 hover:scale-[1.01]"
       style={{
-        background: 'linear-gradient(135deg, #E9E4D6 0%, #EBE7DA 100%)',
-        border: `1px solid ${config.color}33`,
-        boxShadow: `0 4px 12px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03)`,
+        background:
+          'linear-gradient(135deg, var(--surface-hover) 0%, var(--surface-hover) 100%)',
+        border: `1px solid ${withAlpha(config.color, 20)}`,
+        boxShadow: `0 4px 12px rgba(0, 0, 0, 0.2), inset 0 1px 0 color-mix(in srgb, var(--fg) 3%, transparent)`,
       }}
     >
       {/* Header Row */}
@@ -110,7 +112,7 @@ function ActionCard({
           <span className="text-xl">{config.icon}</span>
           <span
             className="font-mono font-bold text-lg cursor-pointer transition-all duration-200 hover:scale-110"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
             onClick={() => onSymbolClick?.(action.symbol)}
             title="Click to view chart"
           >
@@ -121,7 +123,7 @@ function ActionCard({
             style={{
               background: config.bg,
               color: config.color,
-              border: `1px solid ${config.color}55`,
+              border: `1px solid ${withAlpha(config.color, 33)}`,
             }}
           >
             {config.label}
@@ -134,7 +136,7 @@ function ActionCard({
             <div
               className="px-2 py-1 rounded text-xs font-semibold"
               style={{
-                background: `${getConfidenceColor(action.confidence)}22`,
+                background: `${withAlpha(getConfidenceColor(action.confidence), 13)}`,
                 color: getConfidenceColor(action.confidence),
               }}
             >
@@ -143,7 +145,7 @@ function ActionCard({
           )}
           <div
             className="w-2 h-2 rounded-full"
-            style={{ background: action.success ? '#2E7D4F' : '#C0392B' }}
+            style={{ background: action.success ? 'var(--up)' : 'var(--down)' }}
           />
         </div>
       </div>
@@ -152,16 +154,16 @@ function ActionCard({
       {isOpen && (
         <div
           className="grid grid-cols-4 gap-3 mt-3 pt-3"
-          style={{ borderTop: '1px solid #C0B9A2' }}
+          style={{ borderTop: '1px solid var(--line)' }}
         >
           {/* Entry Price */}
           <div className="text-center">
-            <div className="text-xs mb-1" style={{ color: '#6E6E60' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--fg-3)' }}>
               {t('entryPrice', language)}
             </div>
             <div
               className="font-mono font-semibold"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {formatPrice(action.price)}
             </div>
@@ -169,17 +171,17 @@ function ActionCard({
 
           {/* Stop Loss */}
           <div className="text-center">
-            <div className="text-xs mb-1" style={{ color: '#C0392B' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--down)' }}>
               {t('stopLoss', language)}
             </div>
             <div
               className="font-mono font-semibold"
-              style={{ color: '#C0392B' }}
+              style={{ color: 'var(--down)' }}
             >
               {formatPrice(action.stop_loss)}
             </div>
             {action.stop_loss && action.price && (
-              <div className="text-xs mt-0.5" style={{ color: '#6E6E60' }}>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--fg-3)' }}>
                 {calcPctChange(action.price, action.stop_loss, isLong)}
               </div>
             )}
@@ -187,17 +189,17 @@ function ActionCard({
 
           {/* Take Profit */}
           <div className="text-center">
-            <div className="text-xs mb-1" style={{ color: '#2E7D4F' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--up)' }}>
               {t('takeProfit', language)}
             </div>
             <div
               className="font-mono font-semibold"
-              style={{ color: '#2E7D4F' }}
+              style={{ color: 'var(--up)' }}
             >
               {formatPrice(action.take_profit)}
             </div>
             {action.take_profit && action.price && (
-              <div className="text-xs mt-0.5" style={{ color: '#6E6E60' }}>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--fg-3)' }}>
                 {calcPctChange(action.price, action.take_profit, isLong)}
               </div>
             )}
@@ -205,12 +207,12 @@ function ActionCard({
 
           {/* Leverage */}
           <div className="text-center">
-            <div className="text-xs mb-1" style={{ color: '#6E6E60' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--fg-3)' }}>
               {t('leverage', language)}
             </div>
             <div
               className="font-mono font-semibold"
-              style={{ color: '#B8912A' }}
+              style={{ color: 'var(--brand)' }}
             >
               {action.leverage}x
             </div>
@@ -222,9 +224,9 @@ function ActionCard({
       {isOpen && action.stop_loss && action.take_profit && action.price && (
         <div
           className="mt-3 pt-3 flex items-center justify-between"
-          style={{ borderTop: '1px solid #C0B9A2' }}
+          style={{ borderTop: '1px solid var(--line)' }}
         >
-          <span className="text-xs" style={{ color: '#6E6E60' }}>
+          <span className="text-xs" style={{ color: 'var(--fg-3)' }}>
             {t('riskReward', language)}
           </span>
           <div className="flex items-center gap-2">
@@ -233,19 +235,25 @@ function ActionCard({
               const tpDist = Math.abs(action.take_profit - action.price)
               const ratio = slDist > 0 ? tpDist / slDist : 0
               const ratioColor =
-                ratio >= 3 ? '#2E7D4F' : ratio >= 2 ? '#B8912A' : '#C0392B'
+                ratio >= 3
+                  ? 'var(--up)'
+                  : ratio >= 2
+                    ? 'var(--brand)'
+                    : 'var(--down)'
               return (
                 <>
                   <div className="flex gap-1">
-                    <span style={{ color: '#C0392B' }}>1</span>
-                    <span style={{ color: '#6E6E60' }}>:</span>
-                    <span style={{ color: '#2E7D4F' }}>{ratio.toFixed(1)}</span>
+                    <span style={{ color: 'var(--down)' }}>1</span>
+                    <span style={{ color: 'var(--fg-3)' }}>:</span>
+                    <span style={{ color: 'var(--up)' }}>
+                      {ratio.toFixed(1)}
+                    </span>
                   </div>
                   <div
                     className="h-1.5 rounded-full"
                     style={{
                       width: '60px',
-                      background: '#C0B9A2',
+                      background: 'var(--line)',
                     }}
                   >
                     <div
@@ -265,8 +273,14 @@ function ActionCard({
 
       {/* Reasoning */}
       {action.reasoning && (
-        <div className="mt-3 pt-3" style={{ borderTop: '1px solid #C0B9A2' }}>
-          <div className="text-xs line-clamp-2" style={{ color: '#6E6E60' }}>
+        <div
+          className="mt-3 pt-3"
+          style={{ borderTop: '1px solid var(--line)' }}
+        >
+          <div
+            className="text-xs line-clamp-2"
+            style={{ color: 'var(--fg-3)' }}
+          >
             💡 {action.reasoning}
           </div>
         </div>
@@ -277,9 +291,10 @@ function ActionCard({
         <div
           className="mt-3 rounded p-2 text-xs"
           style={{
-            background: 'rgba(192, 57, 43, 0.1)',
-            border: '1px solid rgba(192, 57, 43, 0.3)',
-            color: '#C0392B',
+            background: 'var(--down-soft)',
+            border:
+              '1px solid color-mix(in srgb, var(--down) 30%, transparent)',
+            color: 'var(--down)',
           }}
         >
           ❌ {action.error}
@@ -349,9 +364,15 @@ function CandidateWatchlist({
   return (
     <div
       className="rounded-lg p-4 mb-4"
-      style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+      style={{
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+      }}
     >
-      <div className="text-xs font-semibold mb-3" style={{ color: '#6E6E60' }}>
+      <div
+        className="text-xs font-semibold mb-3"
+        style={{ color: 'var(--fg-3)' }}
+      >
         🎯 {t('candidateCoinsThisCycle', language)} ({evaluatedCount})
         {filteredCount > 0 && (
           <span className="ml-2 font-normal" style={{ opacity: 0.7 }}>
@@ -368,7 +389,7 @@ function CandidateWatchlist({
             <div key={symbol} className="flex items-start gap-3">
               <span
                 className="font-mono font-bold text-sm cursor-pointer hover:underline shrink-0"
-                style={{ color: '#6E6E60' }}
+                style={{ color: 'var(--fg-3)' }}
                 onClick={() => onSymbolClick?.(symbol)}
               >
                 {symbol.replace('USDT', '')}
@@ -376,8 +397,9 @@ function CandidateWatchlist({
               <span
                 className="px-2 py-0.5 rounded text-[10px] font-bold shrink-0"
                 style={{
-                  background: 'rgba(132, 142, 156, 0.15)',
-                  color: '#6E6E60',
+                  background:
+                    'color-mix(in srgb, var(--fg-3) 15%, transparent)',
+                  color: 'var(--fg-3)',
                   opacity: isFiltered ? 0.7 : 1,
                 }}
               >
@@ -388,15 +410,17 @@ function CandidateWatchlist({
               {v && (
                 <span
                   className="text-[11px] min-w-0 break-words"
-                  style={{ color: '#6E6E60' }}
+                  style={{ color: 'var(--fg-3)' }}
                 >
                   {isFiltered ? (
                     v.reason
                   ) : (
                     <>
-                      {t('candidateLongLabel', language)}: {codes(v.long_failed)}
+                      {t('candidateLongLabel', language)}:{' '}
+                      {codes(v.long_failed)}
                       {' | '}
-                      {t('candidateShortLabel', language)}: {codes(v.short_failed)}
+                      {t('candidateShortLabel', language)}:{' '}
+                      {codes(v.short_failed)}
                     </>
                   )}
                 </span>
@@ -446,8 +470,9 @@ export function DecisionCard({
     <div
       className="rounded-xl p-5 transition-all duration-300 hover:translate-y-[-2px]"
       style={{
-        border: '1px solid #C0B9A2',
-        background: 'linear-gradient(180deg, #E9E4D6 0%, #EBE7DA 100%)',
+        border: '1px solid var(--line)',
+        background:
+          'linear-gradient(180deg, var(--surface-hover) 0%, var(--surface-hover) 100%)',
         boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
       }}
     >
@@ -456,15 +481,15 @@ export function DecisionCard({
         <div className="flex items-center gap-3">
           <div
             className="w-10 h-10 rounded-lg flex items-center justify-center"
-            style={{ background: 'rgba(184, 145, 42, 0.15)' }}
+            style={{ background: 'var(--brand-soft)' }}
           >
             <span className="text-xl">🤖</span>
           </div>
           <div>
-            <div className="font-bold" style={{ color: '#1E1E1A' }}>
+            <div className="font-bold" style={{ color: 'var(--fg)' }}>
               {t('cycle', language)} #{decision.cycle_number}
             </div>
-            <div className="text-xs" style={{ color: '#6E6E60' }}>
+            <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
               {new Date(decision.timestamp).toLocaleString()}
             </div>
           </div>
@@ -474,14 +499,16 @@ export function DecisionCard({
           style={
             decision.success
               ? {
-                  background: 'rgba(46, 125, 79, 0.15)',
-                  color: '#2E7D4F',
-                  border: '1px solid rgba(46, 125, 79, 0.3)',
+                  background: 'var(--up-soft)',
+                  color: 'var(--up)',
+                  border:
+                    '1px solid color-mix(in srgb, var(--up) 30%, transparent)',
                 }
               : {
-                  background: 'rgba(192, 57, 43, 0.15)',
-                  color: '#C0392B',
-                  border: '1px solid rgba(192, 57, 43, 0.3)',
+                  background: 'var(--down-soft)',
+                  color: 'var(--down)',
+                  border:
+                    '1px solid color-mix(in srgb, var(--down) 30%, transparent)',
                 }
           }
         >
@@ -521,11 +548,11 @@ export function DecisionCard({
           <div>
             <button
               onClick={() => setShowSystemPrompt(!showSystemPrompt)}
-              className="flex items-center gap-2 text-sm transition-colors w-full justify-between p-2 rounded hover:bg-[#1E1E1A]/5"
+              className="flex items-center gap-2 text-sm transition-colors w-full justify-between p-2 rounded hover:bg-fg/5"
             >
               <div className="flex items-center gap-2">
                 <span className="text-base">⚙️</span>
-                <span className="font-semibold" style={{ color: '#a78bfa' }}>
+                <span className="font-semibold" style={{ color: 'var(--ai)' }}>
                   System Prompt
                 </span>
               </div>
@@ -537,9 +564,10 @@ export function DecisionCard({
                   }}
                   className="text-xs px-2.5 py-1 rounded hover:opacity-80 transition-opacity flex items-center gap-1"
                   style={{
-                    background: 'rgba(167, 139, 250, 0.2)',
-                    color: '#a78bfa',
-                    border: '1px solid rgba(167, 139, 250, 0.3)',
+                    background: 'var(--ai-soft)',
+                    color: 'var(--ai)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--ai) 30%, transparent)',
                   }}
                   title="Copy to clipboard"
                 >
@@ -555,9 +583,10 @@ export function DecisionCard({
                   }}
                   className="text-xs px-2.5 py-1 rounded hover:opacity-80 transition-opacity flex items-center gap-1"
                   style={{
-                    background: 'rgba(167, 139, 250, 0.2)',
-                    color: '#a78bfa',
-                    border: '1px solid rgba(167, 139, 250, 0.3)',
+                    background: 'var(--ai-soft)',
+                    color: 'var(--ai)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--ai) 30%, transparent)',
                   }}
                   title="Download as file"
                 >
@@ -566,8 +595,8 @@ export function DecisionCard({
                 <span
                   className="text-xs px-2 py-0.5 rounded"
                   style={{
-                    background: 'rgba(167, 139, 250, 0.15)',
-                    color: '#a78bfa',
+                    background: 'var(--ai-soft)',
+                    color: 'var(--ai)',
                   }}
                 >
                   {showSystemPrompt
@@ -580,9 +609,9 @@ export function DecisionCard({
               <div
                 className="mt-2 rounded-lg p-4 text-sm font-mono whitespace-pre-wrap max-h-96 overflow-y-auto"
                 style={{
-                  background: '#F2EFE6',
-                  border: '1px solid #C0B9A2',
-                  color: '#1E1E1A',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--fg)',
                 }}
               >
                 {decision.system_prompt}
@@ -596,11 +625,14 @@ export function DecisionCard({
           <div>
             <button
               onClick={() => setShowInputPrompt(!showInputPrompt)}
-              className="flex items-center gap-2 text-sm transition-colors w-full justify-between p-2 rounded hover:bg-[#1E1E1A]/5"
+              className="flex items-center gap-2 text-sm transition-colors w-full justify-between p-2 rounded hover:bg-fg/5"
             >
               <div className="flex items-center gap-2">
                 <span className="text-base">📥</span>
-                <span className="font-semibold" style={{ color: '#5e7a5e' }}>
+                <span
+                  className="font-semibold"
+                  style={{ color: 'var(--info)' }}
+                >
                   User Prompt
                 </span>
               </div>
@@ -612,9 +644,10 @@ export function DecisionCard({
                   }}
                   className="text-xs px-2.5 py-1 rounded hover:opacity-80 transition-opacity flex items-center gap-1"
                   style={{
-                    background: 'rgba(96, 165, 250, 0.2)',
-                    color: '#5e7a5e',
-                    border: '1px solid rgba(96, 165, 250, 0.3)',
+                    background: 'var(--info-soft)',
+                    color: 'var(--info)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--info) 30%, transparent)',
                   }}
                   title="Copy to clipboard"
                 >
@@ -630,9 +663,10 @@ export function DecisionCard({
                   }}
                   className="text-xs px-2.5 py-1 rounded hover:opacity-80 transition-opacity flex items-center gap-1"
                   style={{
-                    background: 'rgba(96, 165, 250, 0.2)',
-                    color: '#5e7a5e',
-                    border: '1px solid rgba(96, 165, 250, 0.3)',
+                    background: 'var(--info-soft)',
+                    color: 'var(--info)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--info) 30%, transparent)',
                   }}
                   title="Download as file"
                 >
@@ -641,8 +675,8 @@ export function DecisionCard({
                 <span
                   className="text-xs px-2 py-0.5 rounded"
                   style={{
-                    background: 'rgba(96, 165, 250, 0.15)',
-                    color: '#5e7a5e',
+                    background: 'var(--info-soft)',
+                    color: 'var(--info)',
                   }}
                 >
                   {showInputPrompt
@@ -655,9 +689,9 @@ export function DecisionCard({
               <div
                 className="mt-2 rounded-lg p-4 text-sm font-mono whitespace-pre-wrap max-h-96 overflow-y-auto"
                 style={{
-                  background: '#F2EFE6',
-                  border: '1px solid #C0B9A2',
-                  color: '#1E1E1A',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--fg)',
                 }}
               >
                 {decision.input_prompt}
@@ -671,11 +705,14 @@ export function DecisionCard({
           <div>
             <button
               onClick={() => setShowCoT(!showCoT)}
-              className="flex items-center gap-2 text-sm transition-colors w-full justify-between p-2 rounded hover:bg-[#1E1E1A]/5"
+              className="flex items-center gap-2 text-sm transition-colors w-full justify-between p-2 rounded hover:bg-fg/5"
             >
               <div className="flex items-center gap-2">
                 <span className="text-base">🧠</span>
-                <span className="font-semibold" style={{ color: '#B8912A' }}>
+                <span
+                  className="font-semibold"
+                  style={{ color: 'var(--brand)' }}
+                >
                   {t('aiThinking', language)}
                 </span>
               </div>
@@ -687,9 +724,10 @@ export function DecisionCard({
                   }}
                   className="text-xs px-2.5 py-1 rounded hover:opacity-80 transition-opacity flex items-center gap-1"
                   style={{
-                    background: 'rgba(184, 145, 42, 0.2)',
-                    color: '#B8912A',
-                    border: '1px solid rgba(184, 145, 42, 0.3)',
+                    background: 'var(--brand-soft)',
+                    color: 'var(--brand)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
                   }}
                   title="Copy to clipboard"
                 >
@@ -705,9 +743,10 @@ export function DecisionCard({
                   }}
                   className="text-xs px-2.5 py-1 rounded hover:opacity-80 transition-opacity flex items-center gap-1"
                   style={{
-                    background: 'rgba(184, 145, 42, 0.2)',
-                    color: '#B8912A',
-                    border: '1px solid rgba(184, 145, 42, 0.3)',
+                    background: 'var(--brand-soft)',
+                    color: 'var(--brand)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
                   }}
                   title="Download as file"
                 >
@@ -716,8 +755,8 @@ export function DecisionCard({
                 <span
                   className="text-xs px-2 py-0.5 rounded"
                   style={{
-                    background: 'rgba(184, 145, 42, 0.15)',
-                    color: '#B8912A',
+                    background: 'var(--brand-soft)',
+                    color: 'var(--brand)',
                   }}
                 >
                   {showCoT ? t('collapse', language) : t('expand', language)}
@@ -728,9 +767,9 @@ export function DecisionCard({
               <div
                 className="mt-2 rounded-lg p-4 text-sm font-mono whitespace-pre-wrap max-h-96 overflow-y-auto"
                 style={{
-                  background: '#F2EFE6',
-                  border: '1px solid #C0B9A2',
-                  color: '#1E1E1A',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--fg)',
                 }}
               >
                 {decision.cot_trace}
@@ -744,10 +783,13 @@ export function DecisionCard({
       {decision.execution_log && decision.execution_log.length > 0 && (
         <div
           className="rounded-lg p-3 mt-4 text-xs font-mono space-y-1"
-          style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+          style={{
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+          }}
         >
           {decision.execution_log.map((log, index) => (
-            <div key={`${log}-${index}`} style={{ color: '#1E1E1A' }}>
+            <div key={`${log}-${index}`} style={{ color: 'var(--fg)' }}>
               {log}
             </div>
           ))}
@@ -759,9 +801,10 @@ export function DecisionCard({
         <div
           className="rounded-lg p-3 mt-4 text-sm"
           style={{
-            background: 'rgba(192, 57, 43, 0.1)',
-            border: '1px solid rgba(192, 57, 43, 0.4)',
-            color: '#C0392B',
+            background: 'var(--down-soft)',
+            border:
+              '1px solid color-mix(in srgb, var(--down) 40%, transparent)',
+            color: 'var(--down)',
           }}
         >
           ❌ {decision.error_message}

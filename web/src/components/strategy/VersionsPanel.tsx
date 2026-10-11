@@ -122,7 +122,7 @@ export function VersionsPanel({
         </div>
         <button
           onClick={fetchVersions}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-nofx-gold text-black hover:bg-yellow-500"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-nofx-gold text-brand-fg hover:brightness-110"
         >
           <RefreshCw className="w-3 h-3" />
           {tv('refresh', language)}
@@ -184,8 +184,10 @@ export function VersionsPanel({
               <div
                 className="absolute left-0 top-1.5 w-[11px] h-[11px] rounded-full border-2"
                 style={{
-                  borderColor: isCurrent ? '#B8912A' : 'rgba(184,145,42,0.35)',
-                  background: isCurrent ? '#B8912A' : 'transparent',
+                  borderColor: isCurrent
+                    ? 'var(--brand)'
+                    : 'color-mix(in srgb, var(--brand) 35%, transparent)',
+                  background: isCurrent ? 'var(--brand)' : 'transparent',
                 }}
                 aria-hidden
               />
@@ -203,7 +205,7 @@ export function VersionsPanel({
                       {tv(source.labelKey, language)}
                     </span>
                     {isCurrent && (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-gold text-black font-medium">
+                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-gold text-brand-fg font-medium">
                         {tv('current', language)}
                       </span>
                     )}

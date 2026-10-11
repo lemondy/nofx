@@ -48,14 +48,14 @@ export default function HowItWorksSection({
   return (
     <section
       className="py-24 relative overflow-hidden"
-      style={{ background: '#EFECE1' }}
+      style={{ background: 'var(--surface-2)' }}
     >
       {/* Background Decoration */}
       <div
         className="absolute left-0 top-1/2 -translate-y-1/2 w-96 h-96 rounded-full blur-3xl opacity-20"
         style={{
           background:
-            'radial-gradient(circle, rgba(184, 145, 42, 0.15) 0%, transparent 70%)',
+            'radial-gradient(circle, var(--brand-soft) 0%, transparent 70%)',
         }}
       />
 
@@ -69,11 +69,11 @@ export default function HowItWorksSection({
         >
           <h2
             className="text-4xl lg:text-5xl font-bold mb-4"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {t('howToStart', language)}
           </h2>
-          <p className="text-lg" style={{ color: '#6E6E60' }}>
+          <p className="text-lg" style={{ color: 'var(--fg-3)' }}>
             {t('fourSimpleSteps', language)}
           </p>
         </motion.div>
@@ -85,7 +85,7 @@ export default function HowItWorksSection({
             className="absolute left-[39px] top-0 bottom-0 w-px hidden lg:block"
             style={{
               background:
-                'linear-gradient(to bottom, transparent, rgba(184, 145, 42, 0.3), transparent)',
+                'linear-gradient(to bottom, transparent, color-mix(in srgb, var(--brand) 30%, transparent), transparent)',
             }}
           />
 
@@ -102,8 +102,9 @@ export default function HowItWorksSection({
                 <div
                   className="flex flex-col lg:flex-row items-start gap-6 p-6 rounded-2xl transition-all duration-300 hover:translate-x-2"
                   style={{
-                    background: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    background: 'color-mix(in srgb, var(--fg) 2%, transparent)',
+                    border:
+                      '1px solid color-mix(in srgb, var(--fg) 5%, transparent)',
                   }}
                 >
                   {/* Number Circle */}
@@ -112,14 +113,15 @@ export default function HowItWorksSection({
                       className="w-20 h-20 rounded-2xl flex items-center justify-center"
                       style={{
                         background:
-                          'linear-gradient(135deg, rgba(184, 145, 42, 0.2) 0%, rgba(184, 145, 42, 0.05) 100%)',
-                        border: '1px solid rgba(184, 145, 42, 0.3)',
+                          'linear-gradient(135deg, var(--brand-soft) 0%, color-mix(in srgb, var(--brand) 5%, transparent) 100%)',
+                        border:
+                          '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
                       }}
                       whileHover={{ scale: 1.1 }}
                     >
                       <step.icon
                         className="w-8 h-8"
-                        style={{ color: '#B8912A' }}
+                        style={{ color: 'var(--brand)' }}
                       />
                     </motion.div>
                   </div>
@@ -129,18 +131,18 @@ export default function HowItWorksSection({
                     <div className="flex items-center gap-3 mb-2">
                       <span
                         className="text-sm font-mono font-bold"
-                        style={{ color: '#B8912A' }}
+                        style={{ color: 'var(--brand)' }}
                       >
                         {step.number}
                       </span>
                       <h3
                         className="text-xl font-bold"
-                        style={{ color: '#1E1E1A' }}
+                        style={{ color: 'var(--fg)' }}
                       >
                         {step.title}
                       </h3>
                     </div>
-                    <p className="mb-4" style={{ color: '#6E6E60' }}>
+                    <p className="mb-4" style={{ color: 'var(--fg-3)' }}>
                       {step.desc}
                     </p>
 
@@ -148,12 +150,14 @@ export default function HowItWorksSection({
                     <div
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg font-mono text-sm"
                       style={{
-                        background: 'rgba(30, 30, 26, 0.06)',
-                        border: '1px solid rgba(255, 255, 255, 0.06)',
+                        background:
+                          'color-mix(in srgb, var(--fg) 6%, transparent)',
+                        border:
+                          '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
                       }}
                     >
-                      <span style={{ color: '#8A8A7C' }}>$</span>
-                      <span style={{ color: '#1E1E1A' }}>{step.code}</span>
+                      <span style={{ color: 'var(--fg-3)' }}>$</span>
+                      <span style={{ color: 'var(--fg)' }}>{step.code}</span>
                     </div>
                   </div>
                 </div>
@@ -166,8 +170,9 @@ export default function HowItWorksSection({
         <motion.div
           className="mt-12 p-6 rounded-2xl flex items-start gap-4"
           style={{
-            background: 'rgba(184, 145, 42, 0.05)',
-            border: '1px solid rgba(184, 145, 42, 0.15)',
+            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
+            border:
+              '1px solid color-mix(in srgb, var(--brand) 15%, transparent)',
           }}
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -175,15 +180,24 @@ export default function HowItWorksSection({
         >
           <div
             className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'rgba(184, 145, 42, 0.1)' }}
+            style={{ background: 'var(--brand-soft)' }}
           >
-            <AlertTriangle className="w-6 h-6" style={{ color: '#B8912A' }} />
+            <AlertTriangle
+              className="w-6 h-6"
+              style={{ color: 'var(--brand)' }}
+            />
           </div>
           <div>
-            <div className="font-semibold mb-2" style={{ color: '#B8912A' }}>
+            <div
+              className="font-semibold mb-2"
+              style={{ color: 'var(--brand)' }}
+            >
               {t('importantRiskWarning', language)}
             </div>
-            <p className="text-sm leading-relaxed" style={{ color: '#8A8A7C' }}>
+            <p
+              className="text-sm leading-relaxed"
+              style={{ color: 'var(--fg-3)' }}
+            >
               {t('riskWarningText', language)}
             </p>
           </div>

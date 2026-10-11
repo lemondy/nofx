@@ -127,16 +127,16 @@ export default function TerminalHero() {
         <div className="hidden lg:flex col-span-3 flex-col justify-between h-full border-r border-nofx-line/50 pr-8 py-10 pointer-events-auto">
           {/* Top: System Health */}
           <div className="space-y-6">
-            <div className="tech-border p-4 bg-[#E9E4D6] ">
+            <div className="tech-border p-4 bg-surface-hover ">
               <h3 className="text-xs font-mono text-nofx-gold mb-4 flex items-center gap-2">
                 <Activity className="w-3 h-3" /> SYSTEM_DIAGNOSTICS
               </h3>
-              <div className="space-y-3 font-mono text-[10px] text-[#6E6E60]">
+              <div className="space-y-3 font-mono text-[10px] text-fg-3">
                 <div className="flex justify-between items-center">
                   <span>KERNEL_LATENCY</span>
                   <span className="text-nofx-accent">12ms</span>
                 </div>
-                <div className="w-full h-1 bg-[#E4E0D0] rounded-full overflow-hidden">
+                <div className="w-full h-1 bg-surface-hover rounded-full overflow-hidden">
                   <div className="w-[90%] h-full bg-nofx-accent/50"></div>
                 </div>
 
@@ -144,19 +144,19 @@ export default function TerminalHero() {
                   <span>MEMORY_INTEGRITY</span>
                   <span className="text-nofx-success">100%</span>
                 </div>
-                <div className="w-full h-1 bg-[#E4E0D0] rounded-full overflow-hidden">
+                <div className="w-full h-1 bg-surface-hover rounded-full overflow-hidden">
                   <div className="w-full h-full bg-nofx-success/50"></div>
                 </div>
 
                 <div className="flex justify-between items-center">
                   <span>UPTIME</span>
-                  <span className="text-[#1E1E1A]">99.999%</span>
+                  <span className="text-fg">99.999%</span>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 border border-[#C0B9A2]/50 rounded bg-[#ECE8DB]/20">
-              <div className="flex items-center gap-3 text-[#6E6E60] mb-2">
+            <div className="p-4 border border-line/50 rounded bg-surface/20">
+              <div className="flex items-center gap-3 text-fg-3 mb-2">
                 <Shield className="w-4 h-4" />
                 <span className="text-[10px] font-mono tracking-widest">
                   SECURITY PROTOCOLS
@@ -166,7 +166,7 @@ export default function TerminalHero() {
                 <div className="h-1 flex-1 bg-nofx-gold"></div>
                 <div className="h-1 flex-1 bg-nofx-gold"></div>
                 <div className="h-1 flex-1 bg-nofx-gold"></div>
-                <div className="h-1 flex-1 bg-[#E4E0D0]"></div>
+                <div className="h-1 flex-1 bg-surface-hover"></div>
               </div>
               <div className="mt-2 text-right text-[10px] text-nofx-gold/80 font-mono">
                 LEVEL 3 ACTIVATE
@@ -175,7 +175,7 @@ export default function TerminalHero() {
           </div>
 
           {/* Bottom: Network Log */}
-          <div className="font-mono text-[10px] text-[#8A8A7C] space-y-1 opacity-70">
+          <div className="font-mono text-[10px] text-fg-3 space-y-1 opacity-70">
             <div>&gt; CONNECTING TO MAINNET... OK</div>
             <div>&gt; SYNCING NODES (424/424)... OK</div>
             <div>&gt; LOADING ASSETS... DONE</div>
@@ -203,15 +203,15 @@ export default function TerminalHero() {
           {/* Main Title - Massive & Impactful */}
           {/* Main Title - Massive & Impactful */}
           <div className="relative z-20 mix-blend-hard-light md:mix-blend-normal">
-            <h1 className="text-5xl sm:text-6xl md:text-8xl lg:text-9xl font-black tracking-tighter leading-[0.9] md:leading-[0.8] mb-6 select-none bg-clip-text text-transparent bg-gradient-to-b from-[#1E1E1A] via-[#3A3A32] to-[#8A8A7C]">
+            <h1 className="text-5xl sm:text-6xl md:text-8xl lg:text-9xl font-black tracking-tighter leading-[0.9] md:leading-[0.8] mb-6 select-none bg-clip-text text-transparent bg-gradient-to-b from-fg via-fg-2 to-fg-3">
               AGENTIC
               <br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#B8912A] via-[#E3D6A3] to-[#B8912A] animate-shimmer bg-[length:200%_auto] tracking-tight">
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand via-brand to-brand animate-shimmer bg-[length:200%_auto] tracking-tight">
                 TRADING
               </span>
             </h1>
 
-            <p className="max-w-xl text-[#2A2A24] md:text-[#6E6E60] text-lg mb-6 font-light leading-relaxed">
+            <p className="max-w-xl text-fg-2 md:text-fg-3 text-lg mb-6 font-light leading-relaxed">
               The World's First Open-Source Agentic Trading OS. Deploy
               autonomous high-frequency trading agents powered by advanced LLMs.
             </p>
@@ -231,9 +231,9 @@ export default function TerminalHero() {
               {['CRYPTO', 'US STOCKS', 'FOREX', 'METALS'].map((market) => (
                 <div key={market} className="relative group cursor-default">
                   <div className="absolute -inset-0.5 bg-gradient-to-r from-nofx-gold/20 to-nofx-accent/20 rounded-lg blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
-                  <div className="relative flex items-center gap-3 px-6 py-3 rounded-lg bg-[#ECE8DB]/80 border border-[#B3AB92] hover:border-nofx-gold/50 transition-all duration-300 ">
-                    <div className="w-1.5 h-1.5 rounded-full bg-nofx-success shadow-[0_0_8px_rgba(74,222,128,0.6)] animate-pulse"></div>
-                    <span className="text-lg md:text-xl font-bold text-[#1E1E1A] tracking-wider group-hover:text-nofx-gold transition-colors">
+                  <div className="relative flex items-center gap-3 px-6 py-3 rounded-lg bg-surface/80 border border-line-strong hover:border-nofx-gold/50 transition-all duration-300 ">
+                    <div className="w-1.5 h-1.5 rounded-full bg-nofx-success shadow-[0_0_8px_color-mix(in_srgb,var(--up)_60%,transparent)] animate-pulse"></div>
+                    <span className="text-lg md:text-xl font-bold text-fg tracking-wider group-hover:text-nofx-gold transition-colors">
                       {market}
                     </span>
                   </div>
@@ -244,7 +244,7 @@ export default function TerminalHero() {
 
           {/* Command Line Input Simulation */}
           <div
-            className="w-full max-w-lg h-12 bg-[#F2EFE6] border border-[#C0B9A2] rounded flex items-center px-4 mb-10 font-mono text-sm shadow-2xl group hover:border-nofx-gold/50 transition-colors cursor-text"
+            className="w-full max-w-lg h-12 bg-surface-2 border border-line rounded flex items-center px-4 mb-10 font-mono text-sm shadow-2xl group hover:border-nofx-gold/50 transition-colors cursor-text"
             onClick={() =>
               document
                 .getElementById('market-scanner')
@@ -253,7 +253,7 @@ export default function TerminalHero() {
           >
             <span className="text-nofx-success mr-2">➜</span>
             <span className="text-nofx-accent mr-2">~</span>
-            <span className="text-[#6E6E60]">deploy agent --strategy=hft</span>
+            <span className="text-fg-3">deploy agent --strategy=hft</span>
             <span className="w-2 h-4 bg-nofx-gold ml-1 animate-pulse"></span>
           </div>
 
@@ -265,7 +265,7 @@ export default function TerminalHero() {
                   .getElementById('market-scanner')
                   ?.scrollIntoView({ behavior: 'smooth' })
               }
-              className="group relative overflow-hidden bg-nofx-gold text-white px-8 py-4 font-bold font-mono tracking-wider hover:scale-105 transition-transform duration-200"
+              className="group relative overflow-hidden bg-nofx-gold text-brand-fg px-8 py-4 font-bold font-mono tracking-wider hover:scale-105 transition-transform duration-200"
               style={{
                 clipPath:
                   'polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%)',
@@ -274,7 +274,7 @@ export default function TerminalHero() {
               <span className="relative z-10 flex items-center gap-2">
                 INITIALIZE PROTOCOL <ArrowRight className="w-4 h-4" />
               </span>
-              <div className="absolute inset-0 bg-[#1E1E1A]/15 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+              <div className="absolute inset-0 bg-fg/15 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
             </button>
           </div>
 
@@ -293,7 +293,7 @@ export default function TerminalHero() {
           className="absolute inset-0 opacity-[0.03] pointer-events-none"
           style={{
             backgroundImage:
-              'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.3) 1px, transparent 0)',
+              'radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--fg) 30%, transparent) 1px, transparent 0)',
             backgroundSize: '40px 40px',
             maskImage:
               'radial-gradient(ellipse 80% 80% at 70% 50%, black 20%, transparent 70%)',
@@ -309,10 +309,10 @@ export default function TerminalHero() {
       </div>
 
       {/* FLOATING TICKER FOOTER */}
-      <div className="absolute bottom-0 w-full bg-[#EFECE1] border-t border-[#C0B9A2]/50 z-30 overflow-hidden py-2 flex items-center">
-        <div className="flex animate-marquee whitespace-nowrap gap-12 text-xs font-mono text-[#6E6E60] px-4">
+      <div className="absolute bottom-0 w-full bg-surface-2 border-t border-line/50 z-30 overflow-hidden py-2 flex items-center">
+        <div className="flex animate-marquee whitespace-nowrap gap-12 text-xs font-mono text-fg-3 px-4">
           <span className="flex items-center gap-2">
-            <Globe className="w-3 h-3 text-[#8A8A7C]" /> GLOBAL MARKET ACCESS
+            <Globe className="w-3 h-3 text-fg-3" /> GLOBAL MARKET ACCESS
           </span>
           <span className="flex items-center gap-2 text-nofx-gold">
             <Zap className="w-3 h-3" /> FLASH LOANS ENABLED
@@ -400,15 +400,15 @@ function CommunityStats() {
           href={stat.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex flex-col items-center justify-center p-3 rounded bg-[#ECE8DB] border border-[#C0B9A2]/50 group hover:border-nofx-gold/30 transition-all cursor-pointer hover:bg-[#1E1E1A]/5"
+          className="flex flex-col items-center justify-center p-3 rounded bg-surface border border-line/50 group hover:border-nofx-gold/30 transition-all cursor-pointer hover:bg-fg/5"
         >
           <div className="flex items-center gap-2 mb-1">
             <stat.icon className={`w-4 h-4 ${stat.color}`} />
-            <span className="text-[10px] font-mono text-[#6E6E60] tracking-wider">
+            <span className="text-[10px] font-mono text-fg-3 tracking-wider">
               {stat.label}
             </span>
           </div>
-          <span className="text-xl font-bold font-mono text-[#1E1E1A] group-hover:text-nofx-gold transition-colors">
+          <span className="text-xl font-bold font-mono text-fg group-hover:text-nofx-gold transition-colors">
             {stat.value}
           </span>
         </a>

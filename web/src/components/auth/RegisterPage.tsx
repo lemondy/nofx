@@ -121,7 +121,7 @@ export function RegisterPage() {
         <div className="flex justify-between items-center mb-8">
           <button
             onClick={() => (window.location.href = '/')}
-            className="flex items-center gap-2 text-[#6E6E60] hover:text-[#1E1E1A] transition-colors group px-3 py-1.5 rounded border border-transparent hover:border-[#B3AB92] bg-[#F2EFE6] "
+            className="flex items-center gap-2 text-fg-3 hover:text-fg transition-colors group px-3 py-1.5 rounded border border-transparent hover:border-line-strong bg-surface-2 "
           >
             <div className="w-2 h-2 rounded-full bg-red-500 group-hover:animate-pulse"></div>
             <span className="text-xs font-mono uppercase tracking-widest">
@@ -141,18 +141,18 @@ export function RegisterPage() {
               />
             </div>
           </div>
-          <h1 className="text-3xl font-bold tracking-tighter text-[#1E1E1A] uppercase mb-2">
+          <h1 className="text-3xl font-bold tracking-tighter text-fg uppercase mb-2">
             <span className="text-nofx-gold">NEW_USER</span> ONBOARDING
           </h1>
-          <p className="text-[#6E6E60] text-xs tracking-[0.2em] uppercase">
+          <p className="text-fg-3 text-xs tracking-[0.2em] uppercase">
             Initializing Registration Sequence...
           </p>
         </div>
 
-        <div className="bg-[#ECE8DB]/40 border border-[#C0B9A2] rounded-lg overflow-hidden shadow-2xl relative group">
-          <div className="absolute inset-0 bg-[#ECE8DB]/50 opacity-0 group-hover:opacity-100 transition duration-700 pointer-events-none"></div>
+        <div className="bg-surface/40 border border-line rounded-lg overflow-hidden shadow-2xl relative group">
+          <div className="absolute inset-0 bg-surface/50 opacity-0 group-hover:opacity-100 transition duration-700 pointer-events-none"></div>
 
-          <div className="flex items-center justify-between px-4 py-2 bg-[#ECE8DB]/80 border-b border-[#C0B9A2]">
+          <div className="flex items-center justify-between px-4 py-2 bg-surface/80 border-b border-line">
             <div className="flex gap-1.5">
               <div
                 className="w-2.5 h-2.5 rounded-full bg-red-500/50 hover:bg-red-500 cursor-pointer transition-colors"
@@ -162,13 +162,13 @@ export function RegisterPage() {
               <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/50"></div>
               <div className="w-2.5 h-2.5 rounded-full bg-green-500/50"></div>
             </div>
-            <div className="text-[10px] text-[#8A8A7C] font-mono flex items-center gap-1">
+            <div className="text-[10px] text-fg-3 font-mono flex items-center gap-1">
               <span className="text-emerald-500">➜</span> setup_account.sh
             </div>
           </div>
 
           <div className="p-6 md:p-8 relative">
-            <div className="mb-6 font-mono text-xs space-y-1 text-[#6E6E60] border-b border-[#C0B9A2]/50 pb-4">
+            <div className="mb-6 font-mono text-xs space-y-1 text-fg-3 border-b border-line/50 pb-4">
               <div className="flex gap-2">
                 <span className="text-emerald-500">➜</span>
                 <span>
@@ -183,14 +183,14 @@ export function RegisterPage() {
 
             <form onSubmit={handleRegister} className="space-y-5">
               <div>
-                <label className="block text-xs uppercase tracking-wider text-[#6E6E60] mb-1.5 ml-1 font-bold">
+                <label className="block text-xs uppercase tracking-wider text-fg-3 mb-1.5 ml-1 font-bold">
                   {t('email', language)}
                 </label>
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-[#F2EFE6] border border-[#B3AB92] rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-[#8A8A7C] text-[#1E1E1A] font-mono"
+                  className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono"
                   placeholder="user@nofx.os"
                   required
                 />
@@ -198,7 +198,7 @@ export function RegisterPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs uppercase tracking-wider text-[#6E6E60] mb-1.5 ml-1 font-bold">
+                  <label className="block text-xs uppercase tracking-wider text-fg-3 mb-1.5 ml-1 font-bold">
                     {t('password', language)}
                   </label>
                   <div className="relative">
@@ -206,14 +206,14 @@ export function RegisterPage() {
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-[#F2EFE6] border border-[#B3AB92] rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-[#8A8A7C] text-[#1E1E1A] font-mono pr-10"
+                      className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono pr-10"
                       placeholder="••••••••"
                       required
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8A8A7C] hover:text-[#6E6E60] transition-colors"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-3 transition-colors"
                     >
                       {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
@@ -221,7 +221,7 @@ export function RegisterPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs uppercase tracking-wider text-[#6E6E60] mb-1.5 ml-1 font-bold">
+                  <label className="block text-xs uppercase tracking-wider text-fg-3 mb-1.5 ml-1 font-bold">
                     {t('confirmPassword', language)}
                   </label>
                   <div className="relative">
@@ -229,7 +229,7 @@ export function RegisterPage() {
                       type={showConfirmPassword ? 'text' : 'password'}
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="w-full bg-[#F2EFE6] border border-[#B3AB92] rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-[#8A8A7C] text-[#1E1E1A] font-mono pr-10"
+                      className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono pr-10"
                       placeholder="••••••••"
                       required
                     />
@@ -238,7 +238,7 @@ export function RegisterPage() {
                       onClick={() =>
                         setShowConfirmPassword(!showConfirmPassword)
                       }
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8A8A7C] hover:text-[#6E6E60] transition-colors"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-3 transition-colors"
                     >
                       {showConfirmPassword ? (
                         <EyeOff size={16} />
@@ -250,12 +250,12 @@ export function RegisterPage() {
                 </div>
               </div>
 
-              <div className="bg-[#ECE8DB]/50 p-3 rounded border border-[#C0B9A2]/50">
-                <div className="text-[10px] uppercase tracking-wider text-[#6E6E60] mb-2 font-bold flex items-center gap-2">
-                  <div className="w-1 h-1 rounded-full bg-zinc-500"></div>
+              <div className="bg-surface/50 p-3 rounded border border-line/50">
+                <div className="text-[10px] uppercase tracking-wider text-fg-3 mb-2 font-bold flex items-center gap-2">
+                  <div className="w-1 h-1 rounded-full bg-line-strong"></div>
                   Password Strength Protocol
                 </div>
-                <div className="text-xs font-mono text-[#6E6E60]">
+                <div className="text-xs font-mono text-fg-3">
                   <PasswordChecklist
                     rules={[
                       'minLength',
@@ -296,12 +296,12 @@ export function RegisterPage() {
                         e.target.value.replace(/[^a-z0-9]/gi, '').toLowerCase()
                       )
                     }
-                    className="w-full bg-[#F2EFE6] border border-[#B3AB92] rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-[#8A8A7C] text-[#1E1E1A] font-mono tracking-widest"
+                    className="w-full bg-surface-2 border border-line-strong rounded px-4 py-3 text-sm focus:border-nofx-gold focus:ring-1 focus:ring-nofx-gold/50 outline-none transition-all placeholder-fg-3 text-fg font-mono tracking-widest"
                     placeholder="XXXXXX"
                     maxLength={6}
                     required={betaMode}
                   />
-                  <p className="text-[10px] text-[#8A8A7C] font-mono mt-1 ml-1">
+                  <p className="text-[10px] text-fg-3 font-mono mt-1 ml-1">
                     * CASE SENSITIVE ALPHANUMERIC
                   </p>
                 </div>
@@ -318,7 +318,7 @@ export function RegisterPage() {
                 disabled={
                   loading || (betaMode && !betaCode.trim()) || !passwordValid
                 }
-                className="w-full bg-nofx-gold text-black font-bold py-3 px-4 rounded text-sm tracking-wide uppercase hover:bg-yellow-400 transition-all transform active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed font-mono shadow-[0_0_15px_rgba(255,215,0,0.1)] hover:shadow-[0_0_25px_rgba(255,215,0,0.25)] flex items-center justify-center gap-2 group mt-4"
+                className="w-full bg-nofx-gold text-brand-fg font-bold py-3 px-4 rounded text-sm tracking-wide uppercase hover:brightness-110 transition-all transform active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed font-mono shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_10%,transparent)] hover:shadow-[0_0_25px_color-mix(in_srgb,var(--brand)_25%,transparent)] flex items-center justify-center gap-2 group mt-4"
               >
                 {loading ? (
                   <span className="animate-pulse">INITIALIZING...</span>
@@ -334,14 +334,14 @@ export function RegisterPage() {
             </form>
           </div>
 
-          <div className="bg-[#ECE8DB]/50 p-3 flex justify-between items-center text-[10px] font-mono text-[#8A8A7C] border-t border-[#C0B9A2]">
+          <div className="bg-surface/50 p-3 flex justify-between items-center text-[10px] font-mono text-fg-3 border-t border-line">
             <div>ENCRYPTION: AES-256</div>
             <div>SECURE_REGISTRY</div>
           </div>
         </div>
 
         <div className="text-center mt-8 space-y-4">
-          <p className="text-xs font-mono text-[#6E6E60]">
+          <p className="text-xs font-mono text-fg-3">
             EXISTING_OPERATOR?{' '}
             <button
               onClick={() => (window.location.href = '/login')}
@@ -352,7 +352,7 @@ export function RegisterPage() {
           </p>
           <button
             onClick={() => (window.location.href = '/')}
-            className="text-[10px] text-[#8A8A7C] hover:text-red-500 transition-colors uppercase tracking-widest hover:underline decoration-red-500/30 font-mono"
+            className="text-[10px] text-fg-3 hover:text-red-500 transition-colors uppercase tracking-widest hover:underline decoration-red-500/30 font-mono"
           >
             [ ABORT_REGISTRATION_RETURN_HOME ]
           </button>

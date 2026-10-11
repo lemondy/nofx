@@ -19,11 +19,11 @@ export function Header({ simple = false }: HeaderProps) {
               <img src="/icons/nofx.svg" alt="NoFx Logo" className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-xl font-bold" style={{ color: '#1E1E1A' }}>
+              <h1 className="text-xl font-bold" style={{ color: 'var(--fg)' }}>
                 {t('appTitle', language)}
               </h1>
               {!simple && (
-                <p className="text-xs mono" style={{ color: '#6E6E60' }}>
+                <p className="text-xs mono" style={{ color: 'var(--fg-3)' }}>
                   {t('subtitle', language)}
                 </p>
               )}
@@ -33,15 +33,15 @@ export function Header({ simple = false }: HeaderProps) {
           {/* Right - Language Toggle (always show) */}
           <div
             className="flex gap-1 rounded p-1"
-            style={{ background: '#E9E4D6' }}
+            style={{ background: 'var(--surface-hover)' }}
           >
             <button
               onClick={() => setLanguage('zh')}
               className="px-3 py-1.5 rounded text-xs font-semibold transition-all"
               style={
                 language === 'zh'
-                  ? { background: '#B8912A', color: '#000' }
-                  : { background: 'transparent', color: '#6E6E60' }
+                  ? { background: 'var(--brand)', color: 'var(--brand-fg)' }
+                  : { background: 'transparent', color: 'var(--fg-3)' }
               }
             >
               中文
@@ -51,8 +51,8 @@ export function Header({ simple = false }: HeaderProps) {
               className="px-3 py-1.5 rounded text-xs font-semibold transition-all"
               style={
                 language === 'en'
-                  ? { background: '#B8912A', color: '#000' }
-                  : { background: 'transparent', color: '#6E6E60' }
+                  ? { background: 'var(--brand)', color: 'var(--brand-fg)' }
+                  : { background: 'transparent', color: 'var(--fg-3)' }
               }
             >
               EN
@@ -62,8 +62,8 @@ export function Header({ simple = false }: HeaderProps) {
               className="px-3 py-1.5 rounded text-xs font-semibold transition-all"
               style={
                 language === 'id'
-                  ? { background: '#B8912A', color: '#000' }
-                  : { background: 'transparent', color: '#6E6E60' }
+                  ? { background: 'var(--brand)', color: 'var(--brand-fg)' }
+                  : { background: 'transparent', color: 'var(--fg-3)' }
               }
             >
               ID

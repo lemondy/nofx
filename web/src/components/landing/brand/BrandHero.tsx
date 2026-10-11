@@ -15,7 +15,7 @@ export default function BrandHero() {
   return (
     <section className="relative w-full min-h-screen bg-nofx-bg text-nofx-text overflow-hidden flex flex-col pt-16">
       {/* Top Marquee */}
-      <div className="w-full bg-nofx-gold text-black font-bold py-2 border-y border-black z-20">
+      <div className="w-full bg-nofx-gold text-brand-fg font-bold py-2 border-y border-line z-20">
         <Marquee speed={40}>
           <span className="mx-8 text-sm md:text-base uppercase tracking-widest">
             NOFX AI TRADING • AUTOMATED WEALTH • DECENTRALIZED INTELLIGENCE •
@@ -42,11 +42,11 @@ export default function BrandHero() {
               <span className="text-nofx-gold">EVOLVED</span>
             </h1>
 
-            <p className="text-xl md:text-2xl text-[#6E6E60] max-w-xl mb-10 font-mono leading-relaxed">
+            <p className="text-xl md:text-2xl text-fg-3 max-w-xl mb-10 font-mono leading-relaxed">
               Autonomous trading agents. High-frequency execution.
               <br />
               Institutional-grade strategies for the
-              <span className="text-[#1E1E1A] font-bold ml-2 bg-nofx-accent px-2 py-0.5">
+              <span className="text-fg font-bold ml-2 bg-nofx-accent px-2 py-0.5">
                 DEGENERATES
               </span>
               .
@@ -55,7 +55,7 @@ export default function BrandHero() {
             <div className="flex flex-wrap gap-4">
               <button
                 onClick={handleScroll}
-                className="bg-nofx-gold text-black text-lg font-black px-8 py-4 uppercase tracking-wider hover:bg-white hover:scale-105 transition-all flex items-center gap-2 clip-path-slant"
+                className="bg-nofx-gold text-brand-fg text-lg font-black px-8 py-4 uppercase tracking-wider hover:brightness-110 hover:scale-105 transition-all flex items-center gap-2 clip-path-slant"
                 style={{ clipPath: 'polygon(0 0, 100% 0, 95% 100%, 0% 100%)' }}
               >
                 Start Trading <ArrowRight className="w-6 h-6" />
@@ -65,13 +65,13 @@ export default function BrandHero() {
                 href={OFFICIAL_LINKS.github}
                 target="_blank"
                 rel="noreferrer"
-                className="border-2 border-[#A9997B] text-[#1E1E1A] text-lg font-bold px-8 py-4 uppercase tracking-wider hover:bg-[#1E1E1A]/10 hover:border-[#1E1E1A] transition-all flex items-center gap-2"
+                className="border-2 border-line-strong text-fg text-lg font-bold px-8 py-4 uppercase tracking-wider hover:bg-fg/10 hover:border-fg transition-all flex items-center gap-2"
               >
                 <Github className="w-5 h-5" /> Source
               </a>
             </div>
 
-            <div className="mt-12 flex items-center gap-8 text-[#6E6E60] font-mono text-xs md:text-sm">
+            <div className="mt-12 flex items-center gap-8 text-fg-3 font-mono text-xs md:text-sm">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                 SYSTEM ONLINE
@@ -95,7 +95,7 @@ export default function BrandHero() {
             className="absolute inset-0 opacity-[0.04]"
             style={{
               backgroundImage:
-                'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.4) 1px, transparent 0)',
+                'radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--fg) 40%, transparent) 1px, transparent 0)',
               backgroundSize: '32px 32px',
             }}
           />

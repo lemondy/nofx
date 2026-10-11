@@ -325,13 +325,13 @@ export function SettingsPage() {
   return (
     <div
       className="min-h-screen pt-20 pb-12 px-4"
-      style={{ background: '#F2EFE6' }}
+      style={{ background: 'var(--bg)' }}
     >
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-xl font-bold text-[#1E1E1A] mb-6">Settings</h1>
+        <h1 className="text-xl font-bold text-fg mb-6">Settings</h1>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-[#ECE8DB]/60 border border-[#C0B9A2] rounded-xl p-1">
+        <div className="flex gap-1 mb-6 bg-surface/60 border border-line rounded-xl p-1">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -339,8 +339,8 @@ export function SettingsPage() {
               className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all
  ${
    activeTab === tab.key
-     ? 'bg-nofx-gold text-black'
-     : 'text-[#6E6E60] hover:text-[#1E1E1A]'
+     ? 'bg-nofx-gold text-brand-fg'
+     : 'text-fg-3 hover:text-fg'
  }`}
             >
               {tab.icon}
@@ -350,24 +350,22 @@ export function SettingsPage() {
         </div>
 
         {/* Tab Content */}
-        <div className="bg-[#ECE8DB]/60 border border-[#C0B9A2]/80 rounded-2xl p-6">
+        <div className="bg-surface/60 border border-line/80 rounded-2xl p-6">
           {/* Account Tab */}
           {activeTab === 'account' && (
             <div className="space-y-6">
               <div>
-                <p className="text-xs text-[#6E6E60] mb-1">Email</p>
-                <p className="text-sm text-[#1E1E1A] font-medium">
-                  {user?.email}
-                </p>
+                <p className="text-xs text-fg-3 mb-1">Email</p>
+                <p className="text-sm text-fg font-medium">{user?.email}</p>
               </div>
 
-              <div className="border-t border-[#C0B9A2] pt-6">
+              <div className="border-t border-line pt-6">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <h3 className="text-sm font-semibold text-[#1E1E1A]">
+                    <h3 className="text-sm font-semibold text-fg">
                       {language === 'zh' ? '使用模式' : 'Usage Mode'}
                     </h3>
-                    <p className="mt-1 text-xs text-[#6E6E60]">
+                    <p className="mt-1 text-xs text-fg-3">
                       {language === 'zh'
                         ? '新手模式会显示钱包引导和 4 步卡片；老手模式保持原来的专业界面。'
                         : 'Beginner mode shows wallet onboarding and quickstart cards. Advanced mode keeps the original pro workflow.'}
@@ -391,13 +389,13 @@ export function SettingsPage() {
                     className={`rounded-2xl border px-4 py-4 text-left transition-all ${
                       userMode === 'beginner'
                         ? 'border-nofx-gold bg-nofx-gold/10'
-                        : 'border-[#C0B9A2] bg-[#F2EFE6]/70 hover:border-[#B3AB92]'
+                        : 'border-line bg-surface-2/70 hover:border-line-strong'
                     }`}
                   >
-                    <div className="text-sm font-semibold text-[#1E1E1A]">
+                    <div className="text-sm font-semibold text-fg">
                       {language === 'zh' ? '新手模式' : 'Beginner Mode'}
                     </div>
-                    <div className="mt-1 text-xs text-[#6E6E60]">
+                    <div className="mt-1 text-xs text-fg-3">
                       {language === 'zh'
                         ? '更简单，优先显示钱包、充值和快速上手引导。'
                         : 'Simpler flow with wallet, funding, and quickstart guidance first.'}
@@ -410,13 +408,13 @@ export function SettingsPage() {
                     className={`rounded-2xl border px-4 py-4 text-left transition-all ${
                       userMode === 'advanced'
                         ? 'border-nofx-gold bg-nofx-gold/10'
-                        : 'border-[#C0B9A2] bg-[#F2EFE6]/70 hover:border-[#B3AB92]'
+                        : 'border-line bg-surface-2/70 hover:border-line-strong'
                     }`}
                   >
-                    <div className="text-sm font-semibold text-[#1E1E1A]">
+                    <div className="text-sm font-semibold text-fg">
                       {language === 'zh' ? '老手模式' : 'Advanced Mode'}
                     </div>
-                    <div className="mt-1 text-xs text-[#6E6E60]">
+                    <div className="mt-1 text-xs text-fg-3">
                       {language === 'zh'
                         ? '保持原来的配置与交易流程，不展示新手引导。'
                         : 'Keeps the original configuration and trading workflow without beginner hints.'}
@@ -425,12 +423,12 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              <div className="border-t border-[#C0B9A2] pt-6">
-                <h3 className="text-sm font-semibold text-[#1E1E1A] mb-4">
+              <div className="border-t border-line pt-6">
+                <h3 className="text-sm font-semibold text-fg mb-4">
                   Change Password
                 </h3>
                 <form onSubmit={handleChangePassword} className="space-y-4">
-                  <label className="block text-xs font-medium text-[#6E6E60]">
+                  <label className="block text-xs font-medium text-fg-3">
                     Current Password
                     <input
                       type="password"
@@ -438,11 +436,11 @@ export function SettingsPage() {
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
                       required
-                      className="w-full mt-2 bg-[#F2EFE6]/80 border border-[#B3AB92]/80 rounded-xl px-4 py-3 text-sm"
+                      className="w-full mt-2 bg-surface-2/80 border border-line-strong/80 rounded-xl px-4 py-3 text-sm"
                     />
                   </label>
                   <div>
-                    <label className="block text-xs font-medium text-[#6E6E60] mb-2">
+                    <label className="block text-xs font-medium text-fg-3 mb-2">
                       New Password
                     </label>
                     <div className="relative">
@@ -450,14 +448,14 @@ export function SettingsPage() {
                         type={showPassword ? 'text' : 'password'}
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
-                        className="w-full bg-[#F2EFE6]/80 border border-[#B3AB92]/80 rounded-xl px-4 py-3 pr-11 text-sm text-[#1E1E1A] placeholder-[#8A8A7C] focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
+                        className="w-full bg-surface-2/80 border border-line-strong/80 rounded-xl px-4 py-3 pr-11 text-sm text-fg placeholder-fg-3 focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
                         placeholder="At least 8 characters"
                         required
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6E6E60] hover:text-[#3A3A32] transition-colors"
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-2 transition-colors"
                       >
                         {showPassword ? (
                           <EyeOff size={16} />
@@ -474,7 +472,7 @@ export function SettingsPage() {
                       !currentPassword ||
                       newPassword.length < 8
                     }
-                    className="w-full bg-nofx-gold hover:bg-yellow-400 active:scale-[0.98] text-black font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-nofx-gold hover:brightness-110 active:scale-[0.98] text-brand-fg font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {changingPassword ? 'Updating...' : 'Update Password'}
                   </button>
@@ -487,7 +485,7 @@ export function SettingsPage() {
           {activeTab === 'models' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-[#6E6E60]">
+                <p className="text-sm text-fg-3">
                   {configuredModels.length} model
                   {configuredModels.length !== 1 ? 's' : ''} configured
                 </p>
@@ -504,7 +502,7 @@ export function SettingsPage() {
               </div>
 
               {configuredModels.length === 0 ? (
-                <div className="text-center py-8 text-[#8A8A7C] text-sm">
+                <div className="text-center py-8 text-fg-3 text-sm">
                   No AI models configured yet
                 </div>
               ) : (
@@ -516,30 +514,28 @@ export function SettingsPage() {
                         setEditingModel(model.id)
                         setShowModelModal(true)
                       }}
-                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-[#E4E0D0]/50 hover:bg-[#E4E0D0] border border-[#B3AB92]/50 transition-colors group"
+                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-hover/50 hover:bg-surface-hover border border-line-strong/50 transition-colors group"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-[#C0B9A2] flex items-center justify-center">
-                          <Cpu size={14} className="text-[#3A3A32]" />
+                        <div className="w-8 h-8 rounded-lg bg-line flex items-center justify-center">
+                          <Cpu size={14} className="text-fg-2" />
                         </div>
                         <div className="text-left">
-                          <p className="text-sm font-medium text-[#1E1E1A]">
+                          <p className="text-sm font-medium text-fg">
                             {model.name}
                           </p>
-                          <p className="text-xs text-[#6E6E60]">
-                            {model.provider}
-                          </p>
+                          <p className="text-xs text-fg-3">{model.provider}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <span
-                          className={`text-xs px-2 py-0.5 rounded-full ${model.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-[#C0B9A2] text-[#6E6E60]'}`}
+                          className={`text-xs px-2 py-0.5 rounded-full ${model.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-line text-fg-3'}`}
                         >
                           {model.enabled ? 'Active' : 'Inactive'}
                         </span>
                         <Pencil
                           size={14}
-                          className="text-[#8A8A7C] group-hover:text-[#6E6E60] transition-colors"
+                          className="text-fg-3 group-hover:text-fg-3 transition-colors"
                         />
                       </div>
                     </button>
@@ -553,7 +549,7 @@ export function SettingsPage() {
           {activeTab === 'exchanges' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-[#6E6E60]">
+                <p className="text-sm text-fg-3">
                   {exchanges.length} account{exchanges.length !== 1 ? 's' : ''}{' '}
                   connected
                 </p>
@@ -570,7 +566,7 @@ export function SettingsPage() {
               </div>
 
               {exchanges.length === 0 ? (
-                <div className="text-center py-8 text-[#8A8A7C] text-sm">
+                <div className="text-center py-8 text-fg-3 text-sm">
                   No exchange accounts connected yet
                 </div>
               ) : (
@@ -582,24 +578,24 @@ export function SettingsPage() {
                         setEditingExchange(exchange.id)
                         setShowExchangeModal(true)
                       }}
-                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-[#E4E0D0]/50 hover:bg-[#E4E0D0] border border-[#B3AB92]/50 transition-colors group"
+                      className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-hover/50 hover:bg-surface-hover border border-line-strong/50 transition-colors group"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-[#C0B9A2] flex items-center justify-center">
-                          <Building2 size={14} className="text-[#3A3A32]" />
+                        <div className="w-8 h-8 rounded-lg bg-line flex items-center justify-center">
+                          <Building2 size={14} className="text-fg-2" />
                         </div>
                         <div className="text-left">
-                          <p className="text-sm font-medium text-[#1E1E1A]">
+                          <p className="text-sm font-medium text-fg">
                             {exchange.account_name || exchange.name}
                           </p>
-                          <p className="text-xs text-[#6E6E60] capitalize">
+                          <p className="text-xs text-fg-3 capitalize">
                             {exchange.exchange_type || exchange.type}
                           </p>
                         </div>
                       </div>
                       <ChevronRight
                         size={14}
-                        className="text-[#8A8A7C] group-hover:text-[#6E6E60] transition-colors"
+                        className="text-fg-3 group-hover:text-fg-3 transition-colors"
                       />
                     </button>
                   ))}
@@ -611,25 +607,25 @@ export function SettingsPage() {
           {/* Telegram Tab */}
           {activeTab === 'telegram' && (
             <div className="space-y-4">
-              <p className="text-sm text-[#6E6E60]">
+              <p className="text-sm text-fg-3">
                 Connect a Telegram bot to receive trading notifications and
                 interact with your traders.
               </p>
               <button
                 onClick={() => setShowTelegramModal(true)}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-[#E4E0D0]/50 hover:bg-[#E4E0D0] border border-[#B3AB92]/50 transition-colors group"
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-surface-hover/50 hover:bg-surface-hover border border-line-strong/50 transition-colors group"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-[#0088cc]/20 flex items-center justify-center">
                     <MessageCircle size={14} className="text-[#0088cc]" />
                   </div>
-                  <span className="text-sm font-medium text-[#1E1E1A]">
+                  <span className="text-sm font-medium text-fg">
                     Configure Telegram Bot
                   </span>
                 </div>
                 <ChevronRight
                   size={14}
-                  className="text-[#8A8A7C] group-hover:text-[#6E6E60] transition-colors"
+                  className="text-fg-3 group-hover:text-fg-3 transition-colors"
                 />
               </button>
             </div>
@@ -639,7 +635,7 @@ export function SettingsPage() {
 
       {/* AI Model Modal */}
       {showModelModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#EFECE1] px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-2 px-4">
           <ModelConfigModal
             allModels={supportedModels}
             configuredModels={configuredModels}
@@ -657,7 +653,7 @@ export function SettingsPage() {
 
       {/* Exchange Modal */}
       {showExchangeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#EFECE1] px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-2 px-4">
           <ExchangeConfigModal
             allExchanges={exchanges}
             editingExchangeId={editingExchange}
@@ -674,7 +670,7 @@ export function SettingsPage() {
 
       {/* Telegram Modal */}
       {showTelegramModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#EFECE1] px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-2 px-4">
           <TelegramConfigModal
             onClose={() => setShowTelegramModal(false)}
             language={language}

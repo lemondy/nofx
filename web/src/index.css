@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -11,77 +11,141 @@ html {
 }
 
 /*
-  NoFX Paper Design System — 平涂米色对比体系
-  页面 #F2EFE6 → 卡片 #ECE8DB(更深,内嵌) → 卡片内控件 #F2EFE6(更亮,浮起)
-  参考基准: DataPage FeaturedCard
+  NOFX 交易平台设计变量 — 规范见 docs/design/TRADING_UI_DESIGN_SYSTEM.md
+  深色为默认主题; 通过 <html data-theme="dark|light"> 切换。
 */
+:root,
+:root[data-theme='dark'] {
+  --bg: #0b0e11;
+  --surface: #14181d;
+  --surface-2: #1c2127;
+  --surface-hover: #232931;
+  --line: #262c34;
+  --line-strong: #363d47;
+  --fg: #eaecef;
+  --fg-2: #b7bdc6;
+  --fg-3: #848e9c;
+  --fg-disabled: #5e6673;
+  --brand: #e0b03a;
+  --brand-fg: #0b0e11;
+  --brand-soft: rgba(224, 176, 58, 0.14);
+  --up: #0ecb81;
+  --up-soft: rgba(14, 203, 129, 0.12);
+  --down: #f6465d;
+  --down-soft: rgba(246, 70, 93, 0.12);
+  --warn: #f0a020;
+  --warn-soft: rgba(240, 160, 32, 0.14);
+  --info: #3b8beb;
+  --info-soft: rgba(59, 139, 235, 0.14);
+  --ai: #9b7bf7;
+  --ai-soft: rgba(155, 123, 247, 0.14);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --overlay: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f3f4f6;
+  --surface-hover: #ebedf0;
+  --line: #e3e6ea;
+  --line-strong: #cdd2d9;
+  --fg: #1e2329;
+  --fg-2: #474d57;
+  --fg-3: #707a8a;
+  --fg-disabled: #b0b6bf;
+  --brand: #b8891a;
+  --brand-fg: #ffffff;
+  --brand-soft: rgba(184, 137, 26, 0.12);
+  --up: #03a66d;
+  --up-soft: rgba(3, 166, 109, 0.1);
+  --down: #cf304a;
+  --down-soft: rgba(207, 48, 74, 0.1);
+  --warn: #c77700;
+  --warn-soft: rgba(199, 119, 0, 0.1);
+  --info: #1f6fd1;
+  --info-soft: rgba(31, 111, 209, 0.1);
+  --ai: #6d4fd8;
+  --ai-soft: rgba(109, 79, 216, 0.1);
+  --shadow: 0 8px 24px rgba(16, 24, 40, 0.1);
+  --overlay: rgba(16, 24, 40, 0.4);
+  color-scheme: light;
+}
+
+/* 旧变量名保留, 全部指向新变量, 使未改造的代码也随主题切换 */
 :root {
-  --nofx-gold: #b8912a;
-  --nofx-bg: #f2efe6; /* page + inset controls */
-  --nofx-card: #ece8db; /* card surface */
-  --nofx-accent: #6b7f5e;
-  --nofx-glass: rgba(236, 232, 219, 0.92);
-  --nofx-border: rgba(184, 145, 42, 0.25);
+  --nofx-gold: var(--brand);
+  --nofx-bg: var(--bg);
+  --nofx-card: var(--surface);
+  --nofx-accent: var(--info);
+  --nofx-glass: var(--surface);
+  --nofx-border: var(--line);
 
-  --background: #f2efe6;
-  --header-bg: rgba(242, 239, 230, 0.88);
+  --background: var(--bg);
+  --header-bg: var(--surface);
 
-  --glass-bg: #ece8db;
-  --glass-border: rgba(192, 185, 162, 0.55);
+  --glass-bg: var(--surface);
+  --glass-border: var(--line);
 
-  --panel-bg: #ece8db;
-  --panel-bg-hover: #e7e2d2;
-  --panel-inset: #f2efe6;
-  --panel-border: rgba(192, 185, 162, 0.7);
-  --panel-border-hover: rgba(184, 145, 42, 0.45);
+  --panel-bg: var(--surface);
+  --panel-bg-hover: var(--surface-hover);
+  --panel-inset: var(--surface-2);
+  --panel-border: var(--line);
+  --panel-border-hover: var(--line-strong);
 
-  --foreground: #1e1e1a;
-  --text-primary: #1e1e1a;
-  --text-secondary: #6e6e60;
-  --text-tertiary: #8a8a7c;
-  --text-disabled: #b5b2a4;
+  --foreground: var(--fg);
+  --text-primary: var(--fg);
+  --text-secondary: var(--fg-3);
+  --text-tertiary: var(--fg-3);
+  --text-disabled: var(--fg-disabled);
 
   /* Trading Colors */
-  --binance-green: #2e7d4f;
-  --binance-green-bg: rgba(46, 125, 79, 0.1);
-  --binance-green-border: rgba(46, 125, 79, 0.3);
-  --binance-red: #c0392b;
-  --binance-red-bg: rgba(192, 57, 43, 0.1);
-  --binance-red-border: rgba(192, 57, 43, 0.3);
-  --binance-yellow: #b8912a;
+  --binance-green: var(--up);
+  --binance-green-bg: var(--up-soft);
+  --binance-green-border: color-mix(in srgb, var(--up) 30%, transparent);
+  --binance-red: var(--down);
+  --binance-red-bg: var(--down-soft);
+  --binance-red-border: color-mix(in srgb, var(--down) 30%, transparent);
+  --binance-yellow: var(--brand);
 
-  /* Shadows — soft, warm */
-  --shadow-sm: 0 1px 3px rgba(30, 30, 26, 0.06);
-  --shadow-md: 0 4px 12px rgba(30, 30, 26, 0.07);
-  --shadow-lg: 0 12px 32px rgba(30, 30, 26, 0.1);
+  --shadow-sm: none;
+  --shadow-md: var(--shadow);
+  --shadow-lg: var(--shadow);
 
-  font-family:
-    'IBM Plex Mono',
-    'Inter',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-  line-height: 1.6;
+  --font-ui:
+    'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-num:
+    'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+
+  font-family: var(--font-ui);
+  line-height: 1.45;
   font-weight: 400;
-  color-scheme: light;
-  color: var(--foreground);
-  background-color: var(--background);
+  color: var(--fg);
+  background-color: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Legacy dark-UI effect classes — neutralized for the flat paper system */
+/* 数字: 等宽 + tabular-nums */
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Legacy dark-UI effect classes — neutralized (no scanlines/glow/glitch) */
 .crt-overlay {
   pointer-events: none;
+  display: none;
 }
 
 .tech-border {
   position: relative;
-  background: var(--panel-inset);
-  border: 1px solid var(--panel-border);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
 }
 
 .text-glow,
@@ -90,24 +154,26 @@ html {
 }
 
 .border-glow {
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .bg-vignette {
   pointer-events: none;
+  display: none;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: var(--background);
+  background-color: var(--bg);
+  color: var(--fg);
 }
 
 /* Selection */
 ::selection {
-  background: rgba(184, 145, 42, 0.25);
-  color: #1e1e1a;
+  background: var(--brand-soft);
+  color: var(--fg);
 }
 
 #root {
@@ -122,17 +188,17 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--background);
+  background: var(--bg);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c0b9a2;
+  background: var(--line-strong);
   border-radius: 4px;
   transition: background 0.2s;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--nofx-gold);
+  background: var(--brand);
 }
 
 /* Animations */
@@ -212,7 +278,7 @@ body {
 /* Header bar — cream, translucent for scroll overlap */
 .header-bar {
   background: var(--header-bg);
-  border-bottom: 1px solid rgba(192, 185, 162, 0.5);
+  border-bottom: 1px solid var(--line);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
 }
@@ -223,7 +289,7 @@ body {
 }
 
 .nofx-toast {
-  background: #f2efe6 !important;
+  background: var(--surface) !important;
   border: 1px solid var(--panel-border) !important;
   color: var(--text-primary) !important;
   box-shadow: var(--shadow-lg) !important;
@@ -241,7 +307,7 @@ body {
 
 /* Success / Error / Warning tint */
 .nofx-toast[data-type='success'] {
-  background: #f2efe6 !important;
+  background: var(--surface) !important;
   border-color: var(--binance-green) !important;
   border-left: 3px solid var(--binance-green) !important;
 }
@@ -252,7 +318,7 @@ body {
 }
 
 .nofx-toast[data-type='error'] {
-  background: #f2efe6 !important;
+  background: var(--surface) !important;
   border-color: var(--binance-red) !important;
   border-left: 3px solid var(--binance-red) !important;
 }
@@ -264,7 +330,7 @@ body {
 
 .nofx-toast[data-type='warning'],
 .nofx-toast[data-type='info'] {
-  background: #f2efe6 !important;
+  background: var(--surface) !important;
   border-color: var(--binance-yellow) !important;
   border-left: 3px solid var(--binance-yellow) !important;
 }
@@ -286,7 +352,7 @@ body {
 
 /* Monospace numbers */
 .mono {
-  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
 }
 
@@ -310,35 +376,35 @@ button:disabled {
 
 /* Button Variants */
 .btn-success {
-  background: rgba(46, 125, 79, 0.1);
-  color: #2e7d4f;
-  border: 1px solid rgba(46, 125, 79, 0.3);
+  background: var(--up-soft);
+  color: var(--up);
+  border: 1px solid color-mix(in srgb, var(--up) 30%, transparent);
 }
 
 .btn-success:hover:not(:disabled) {
-  background: rgba(46, 125, 79, 0.18);
+  background: color-mix(in srgb, var(--up) 20%, transparent);
 }
 
 .btn-danger {
-  background: rgba(192, 57, 43, 0.1);
-  color: #c0392b;
-  border: 1px solid rgba(192, 57, 43, 0.3);
+  background: var(--down-soft);
+  color: var(--down);
+  border: 1px solid color-mix(in srgb, var(--down) 30%, transparent);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: rgba(192, 57, 43, 0.18);
+  background: color-mix(in srgb, var(--down) 20%, transparent);
 }
 
 .btn-outline {
   background: transparent;
-  color: #6e6e60;
-  border: 1px solid #c0b9a2;
+  color: var(--fg-3);
+  border: 1px solid var(--line-strong);
 }
 
 .btn-outline:hover:not(:disabled) {
-  border-color: #b8912a;
-  color: #b8912a;
-  background: rgba(184, 145, 42, 0.08);
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 /* Input styles — inset light blocks on cards */
@@ -355,7 +421,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--binance-yellow);
-  box-shadow: 0 0 0 2px rgba(184, 145, 42, 0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 20%, transparent);
   outline: none;
 }
 
@@ -370,7 +436,7 @@ textarea::placeholder {
   border: 1px solid var(--panel-border);
   border-radius: 8px;
   padding: 0.5rem 0.75rem;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-ui);
   font-size: 16px;
 
   /* Prevent iOS zoom */
@@ -383,12 +449,12 @@ textarea::placeholder {
 }
 
 .premium-input:hover {
-  border-color: rgba(184, 145, 42, 0.4);
+  border-color: color-mix(in srgb, var(--brand) 45%, transparent);
 }
 
 .premium-input:focus {
   border-color: var(--binance-yellow);
-  box-shadow: 0 0 0 2px rgba(184, 145, 42, 0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 20%, transparent);
 }
 
 /* Card surfaces — darker cream panel that lets light inset controls pop */
@@ -431,16 +497,16 @@ textarea::placeholder {
 }
 
 .binance-gradient {
-  background: linear-gradient(135deg, #b8912a 0%, #c9a227 100%);
+  background: var(--brand);
 }
 
 .binance-gradient-subtle {
   background: linear-gradient(
     135deg,
-    rgba(184, 145, 42, 0.12) 0%,
-    rgba(201, 162, 39, 0.05) 100%
+    var(--brand-soft) 0%,
+    var(--brand-soft) 100%
   );
-  border: 1px solid rgba(184, 145, 42, 0.25);
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent);
 }
 
 /* Status colors */
@@ -468,11 +534,11 @@ textarea::placeholder {
 
 /* Skeleton loading */
 .skeleton {
-  background: #e3decd;
+  background: var(--surface-2);
   background-image: linear-gradient(
     90deg,
     transparent,
-    rgba(242, 239, 230, 0.7),
+    var(--surface-hover),
     transparent
   );
   background-size: 200% 100%;
@@ -483,7 +549,7 @@ textarea::placeholder {
 /* Button variants */
 .btn-binance {
   background: var(--binance-yellow);
-  color: #fff;
+  color: var(--brand-fg);
   font-weight: 700;
   border: none;
   border-radius: 8px;
@@ -494,7 +560,8 @@ textarea::placeholder {
 }
 
 .btn-binance:hover {
-  background: #c9a227;
+  background: var(--brand);
+  filter: brightness(1.1);
   box-shadow: var(--shadow-md);
 }
 
@@ -531,7 +598,7 @@ table {
 }
 
 .rank-table tbody tr:hover td {
-  background: #e7e2d2;
+  background: var(--surface-hover);
 }
 
 th {
@@ -549,7 +616,7 @@ td {
 }
 
 tr {
-  border-bottom: 1px solid rgba(192, 185, 162, 0.45);
+  border-bottom: 1px solid var(--line);
   transition: background 0.2s ease;
 }
 
@@ -558,7 +625,7 @@ tr:last-child {
 }
 
 tr:hover {
-  background: rgba(30, 30, 26, 0.03);
+  background: var(--surface-hover);
 }
 
 /* Badge/Chip styles — pill shape */
@@ -574,8 +641,8 @@ tr:hover {
 }
 
 .badge-yellow {
-  background: rgba(184, 145, 42, 0.1);
-  border-color: rgba(184, 145, 42, 0.3);
+  background: var(--brand-soft);
+  border-color: color-mix(in srgb, var(--brand) 30%, transparent);
   color: var(--binance-yellow);
 }
 
@@ -631,7 +698,7 @@ tr:hover {
 /* Divider */
 .divider {
   height: 1px;
-  background: rgba(192, 185, 162, 0.5);
+  background: var(--line);
   margin: 1rem 0;
 }
 
@@ -653,7 +720,7 @@ tr:hover {
 }
 
 .spinner {
-  border: 2px solid rgba(192, 185, 162, 0.5);
+  border: 2px solid var(--line);
   border-top-color: var(--binance-yellow);
   border-radius: 50%;
   width: 20px;
@@ -694,7 +761,7 @@ tr:hover {
 }
 
 .stat-card:hover {
-  border-color: rgba(184, 145, 42, 0.4);
+  border-color: color-mix(in srgb, var(--brand) 45%, transparent);
   box-shadow: var(--shadow-md);
 }
 
@@ -800,13 +867,13 @@ tr:hover {
 }
 
 .dev-toast-controller__actions button:first-child {
-  background: rgba(184, 145, 42, 0.15);
+  background: color-mix(in srgb, var(--brand) 20%, transparent);
   color: var(--binance-yellow);
-  border: 1px solid rgba(184, 145, 42, 0.4);
+  border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
 }
 
 .dev-toast-controller__actions button:last-child {
-  background: rgba(110, 110, 96, 0.1);
+  background: var(--surface-2);
   color: var(--text-secondary);
   border: 1px solid var(--panel-border);
 }
@@ -818,8 +885,8 @@ tr:hover {
 .dev-custom-toast {
   padding: 12px 18px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #b8912a, #c9a227);
-  color: #fff;
+  background: var(--brand);
+  color: var(--brand-fg);
   font-weight: 600;
 }
 

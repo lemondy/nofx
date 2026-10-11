@@ -4,15 +4,15 @@ import type { SystemQuality } from '../lib/api/system'
 import type { TraderInfo } from '../types'
 
 const C = {
-  bg: '#F2EFE6',
-  card: '#ECE8DB',
-  border: '#C0B9A2',
-  inset: '#F2EFE6',
-  text: '#1E1E1A',
-  muted: '#6E6E60',
-  up: '#2E7D4F',
-  down: '#C0392B',
-  gold: '#B8912A',
+  bg: 'var(--bg)',
+  card: 'var(--surface)',
+  border: 'var(--line)',
+  inset: 'var(--surface-2)',
+  text: 'var(--fg)',
+  muted: 'var(--fg-3)',
+  up: 'var(--up)',
+  down: 'var(--down)',
+  gold: 'var(--brand)',
 }
 
 const L = (zh: string, en: string, language: string) =>

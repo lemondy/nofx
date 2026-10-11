@@ -25,7 +25,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
         <div
           className="absolute inset-0 opacity-[0.03]"
           style={{
-            backgroundImage: `linear-gradient(#B8912A 1px, transparent 1px), linear-gradient(90deg, #B8912A 1px, transparent 1px)`,
+            backgroundImage: `linear-gradient(var(--brand) 1px, transparent 1px), linear-gradient(90deg, var(--brand) 1px, transparent 1px)`,
             backgroundSize: '60px 60px',
           }}
         />
@@ -34,13 +34,13 @@ export default function HeroSection({ language }: HeroSectionProps) {
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full"
           style={{
             background:
-              'radial-gradient(circle, rgba(184, 145, 42, 0.08) 0%, transparent 70%)',
+              'radial-gradient(circle, var(--brand-soft) 0%, transparent 70%)',
           }}
         />
         {/* Floating Orbs */}
         <motion.div
           className="absolute top-20 right-20 w-32 h-32 rounded-full blur-3xl"
-          style={{ background: 'rgba(184, 145, 42, 0.15)' }}
+          style={{ background: 'var(--brand-soft)' }}
           animate={{
             y: [0, 30, 0],
             scale: [1, 1.1, 1],
@@ -49,7 +49,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
         />
         <motion.div
           className="absolute bottom-40 left-20 w-48 h-48 rounded-full blur-3xl"
-          style={{ background: 'rgba(184, 145, 42, 0.1)' }}
+          style={{ background: 'var(--brand-soft)' }}
           animate={{
             y: [0, -40, 0],
             scale: [1, 1.2, 1],
@@ -66,12 +66,16 @@ export default function HeroSection({ language }: HeroSectionProps) {
           transition={{ duration: 0.6 }}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-8"
           style={{
-            background: 'rgba(184, 145, 42, 0.1)',
-            border: '1px solid rgba(184, 145, 42, 0.3)',
+            background: 'var(--brand-soft)',
+            border:
+              '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
           }}
         >
-          <Zap className="w-4 h-4" style={{ color: '#B8912A' }} />
-          <span className="text-sm font-medium" style={{ color: '#B8912A' }}>
+          <Zap className="w-4 h-4" style={{ color: 'var(--brand)' }} />
+          <span
+            className="text-sm font-medium"
+            style={{ color: 'var(--brand)' }}
+          >
             {isLoading ? (
               t('githubStarsInDays', language)
             ) : language === 'zh' ? (
@@ -100,12 +104,15 @@ export default function HeroSection({ language }: HeroSectionProps) {
           transition={{ duration: 0.6, delay: 0.1 }}
           className="text-5xl sm:text-6xl lg:text-7xl font-bold mb-6 leading-tight"
         >
-          <span style={{ color: '#1E1E1A' }}>{t('heroTitle1', language)}</span>
+          <span style={{ color: 'var(--fg)' }}>
+            {t('heroTitle1', language)}
+          </span>
           <br />
           <span
             className="relative inline-block"
             style={{
-              background: 'linear-gradient(135deg, #B8912A 0%, #C9A227 100%)',
+              background:
+                'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
             }}
@@ -113,7 +120,10 @@ export default function HeroSection({ language }: HeroSectionProps) {
             {t('heroTitle2', language)}
             <motion.span
               className="absolute -bottom-2 left-0 h-1 rounded-full"
-              style={{ background: 'linear-gradient(90deg, #B8912A, #C9A227)' }}
+              style={{
+                background:
+                  'linear-gradient(90deg, var(--brand), var(--brand))',
+              }}
               initial={{ width: 0 }}
               animate={{ width: '100%' }}
               transition={{ duration: 0.8, delay: 0.8 }}
@@ -127,7 +137,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2 }}
           className="text-lg sm:text-xl max-w-3xl mx-auto mb-10 leading-relaxed"
-          style={{ color: '#6E6E60' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           {t('heroDescription', language)}
         </motion.p>
@@ -143,13 +153,16 @@ export default function HeroSection({ language }: HeroSectionProps) {
             href="/competition"
             className="group flex items-center gap-3 px-8 py-4 rounded-xl font-bold text-lg transition-all"
             style={{
-              background: 'linear-gradient(135deg, #B8912A 0%, #C9A227 100%)',
-              color: '#F2EFE6',
-              boxShadow: '0 4px 24px rgba(184, 145, 42, 0.3)',
+              background:
+                'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
+              color: 'var(--brand-fg)',
+              boxShadow:
+                '0 4px 24px color-mix(in srgb, var(--brand) 30%, transparent)',
             }}
             whileHover={{
               scale: 1.02,
-              boxShadow: '0 8px 32px rgba(184, 145, 42, 0.4)',
+              boxShadow:
+                '0 8px 32px color-mix(in srgb, var(--brand) 40%, transparent)',
             }}
             whileTap={{ scale: 0.98 }}
           >
@@ -164,14 +177,15 @@ export default function HeroSection({ language }: HeroSectionProps) {
             rel="noopener noreferrer"
             className="group flex items-center gap-3 px-8 py-4 rounded-xl font-bold text-lg transition-all"
             style={{
-              background: 'rgba(255, 255, 255, 0.05)',
-              color: '#1E1E1A',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              background: 'color-mix(in srgb, var(--fg) 5%, transparent)',
+              color: 'var(--fg)',
+              border:
+                '1px solid color-mix(in srgb, var(--fg) 10%, transparent)',
             }}
             whileHover={{
               scale: 1.02,
-              background: 'rgba(255, 255, 255, 0.08)',
-              borderColor: 'rgba(184, 145, 42, 0.3)',
+              background: 'color-mix(in srgb, var(--fg) 8%, transparent)',
+              borderColor: 'color-mix(in srgb, var(--brand) 30%, transparent)',
             }}
             whileTap={{ scale: 0.98 }}
           >
@@ -213,14 +227,14 @@ export default function HeroSection({ language }: HeroSectionProps) {
                 className="text-3xl sm:text-4xl font-bold mb-1"
                 style={{
                   background:
-                    'linear-gradient(135deg, #B8912A 0%, #C9A227 100%)',
+                    'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                 }}
               >
                 {stat.value}
               </div>
-              <div className="text-sm" style={{ color: '#8A8A7C' }}>
+              <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
                 {stat.label}
               </div>
             </motion.div>
@@ -233,7 +247,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6, delay: 0.8 }}
           className="mt-16 text-xs"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           {t('poweredBy', language)}
         </motion.p>
@@ -248,13 +262,16 @@ export default function HeroSection({ language }: HeroSectionProps) {
       >
         <motion.div
           className="w-6 h-10 rounded-full flex justify-center pt-2"
-          style={{ border: '2px solid rgba(184, 145, 42, 0.3)' }}
+          style={{
+            border:
+              '2px solid color-mix(in srgb, var(--brand) 30%, transparent)',
+          }}
           animate={{ y: [0, 8, 0] }}
           transition={{ duration: 2, repeat: Infinity }}
         >
           <motion.div
             className="w-1.5 h-3 rounded-full"
-            style={{ background: '#B8912A' }}
+            style={{ background: 'var(--brand)' }}
           />
         </motion.div>
       </motion.div>

@@ -17,19 +17,19 @@ import type { Language } from '../i18n/translations'
 
 // Binance-style dark palette (matches DataPage conventions)
 const C = {
-  bg: '#F2EFE6',
-  card: '#ECE8DB',
-  cardHover: '#EBE7DA',
-  border: '#C0B9A2',
-  rowBorder: '#E9E4D6',
-  text: '#1E1E1A',
-  muted: '#6E6E60',
-  faint: '#8A8A7C',
-  up: '#2E7D4F',
-  down: '#C0392B',
-  gold: '#B8912A',
-  blue: '#4B9EFF',
-  warn: '#B8912A',
+  bg: 'var(--bg)',
+  card: 'var(--surface)',
+  cardHover: 'var(--surface-hover)',
+  border: 'var(--line)',
+  rowBorder: 'var(--line)',
+  text: 'var(--fg)',
+  muted: 'var(--fg-3)',
+  faint: 'var(--fg-3)',
+  up: 'var(--up)',
+  down: 'var(--down)',
+  gold: 'var(--brand)',
+  blue: 'var(--info)',
+  warn: 'var(--brand)',
 }
 
 const CARD_STYLE: React.CSSProperties = {
@@ -179,7 +179,9 @@ export function ReviewPage({ language }: { language: Language }) {
                     ? `2px solid ${C.gold}`
                     : '2px solid transparent',
                 background:
-                  tab === item.key ? 'rgba(184,145,42,0.06)' : 'transparent',
+                  tab === item.key
+                    ? 'color-mix(in srgb, var(--brand) 6%, transparent)'
+                    : 'transparent',
               }}
             >
               {item.label}
@@ -308,7 +310,7 @@ function JournalTab({
             onClick={handleSync}
             disabled={syncing}
             className="text-xs font-semibold rounded px-4 py-2 transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: '#111' }}
+            style={{ background: C.gold, color: 'var(--brand-fg)' }}
           >
             {syncing ? rv('syncing') : rv('syncFromPositions')}
           </button>
@@ -436,7 +438,7 @@ function JournalRow({
   return (
     <tr
       style={{ borderBottom: `1px solid ${C.rowBorder}` }}
-      className="hover:bg-[#1E1E1A]/[0.03]"
+      className="hover:bg-fg/[0.03]"
     >
       <td className="px-4 py-3 font-semibold">{entry.symbol}</td>
       <td className="px-4 py-3">
@@ -451,7 +453,7 @@ function JournalRow({
           <span
             className="px-2 py-0.5 rounded text-[10px]"
             title={rv('sourceAITitle')}
-            style={{ background: 'rgba(184,145,42,0.12)', color: C.gold }}
+            style={{ background: 'var(--brand-soft)', color: C.gold }}
           >
             {rv('sourceAI')}
           </span>
@@ -503,14 +505,14 @@ function JournalRow({
         {entry.review_status === 'reviewed' ? (
           <span
             className="px-2 py-0.5 rounded text-[10px]"
-            style={{ background: 'rgba(46,125,79,0.12)', color: C.up }}
+            style={{ background: 'var(--up-soft)', color: C.up }}
           >
             {rv('reviewed')}
           </span>
         ) : (
           <span
             className="px-2 py-0.5 rounded text-[10px]"
-            style={{ background: 'rgba(184,145,42,0.12)', color: C.gold }}
+            style={{ background: 'var(--brand-soft)', color: C.gold }}
           >
             {rv('pendingReview')}
           </span>
@@ -519,7 +521,7 @@ function JournalRow({
       <td className="px-4 py-3 text-right">
         <button
           onClick={onEdit}
-          className="text-xs rounded px-3 py-1.5 transition-colors hover:bg-[#1E1E1A]/5"
+          className="text-xs rounded px-3 py-1.5 transition-colors hover:bg-fg/5"
           style={{ border: `1px solid ${C.border}`, color: C.gold }}
         >
           {rv('reviewAction')}
@@ -587,7 +589,7 @@ function ReviewEditModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.65)' }}
+      style={{ background: 'var(--overlay)' }}
       onClick={onClose}
     >
       <div
@@ -695,7 +697,7 @@ function ReviewEditModal({
                     color: executedAsPlan === opt.v ? C.gold : C.muted,
                     background:
                       executedAsPlan === opt.v
-                        ? 'rgba(184,145,42,0.08)'
+                        ? 'var(--brand-soft)'
                         : 'transparent',
                   }}
                 >
@@ -722,7 +724,7 @@ function ReviewEditModal({
                     border: `1px solid ${emotions.includes(emo) ? C.blue : C.border}`,
                     color: emotions.includes(emo) ? C.blue : C.muted,
                     background: emotions.includes(emo)
-                      ? 'rgba(75,158,255,0.08)'
+                      ? 'var(--info-soft)'
                       : 'transparent',
                   }}
                 >
@@ -840,7 +842,7 @@ function ReviewEditModal({
             onClick={save}
             disabled={saving}
             className="px-5 py-2 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: '#111' }}
+            style={{ background: C.gold, color: 'var(--brand-fg)' }}
           >
             {saving ? t('loading', language) : rv('saveReview')}
           </button>
@@ -1196,16 +1198,18 @@ function RulesTab({
     try {
       const res = await api.aiApplyRules(
         traderId,
-        proposals.filter((p) => !proposalBlocked(p)).map((p) => ({
-          rule_type: p.rule_type,
-          name: p.name,
-          description: p.description,
-          condition: p.condition,
-          on_violation: p.on_violation,
-          lesson_text: p.lesson_text,
-          tags: p.tags,
-          source_stats: p.source_stats,
-        }))
+        proposals
+          .filter((p) => !proposalBlocked(p))
+          .map((p) => ({
+            rule_type: p.rule_type,
+            name: p.name,
+            description: p.description,
+            condition: p.condition,
+            on_violation: p.on_violation,
+            lesson_text: p.lesson_text,
+            tags: p.tags,
+            source_stats: p.source_stats,
+          }))
       )
       const skipped = res.rejected?.length || 0
       setApplyResult(
@@ -1241,7 +1245,7 @@ function RulesTab({
             style={{
               border: `1px solid ${C.gold}`,
               color: C.gold,
-              background: 'rgba(184,145,42,0.06)',
+              background: 'color-mix(in srgb, var(--brand) 6%, transparent)',
             }}
           >
             {extracting ? rv('extracting') : rv('aiExtractRules')}
@@ -1249,7 +1253,7 @@ function RulesTab({
           <button
             onClick={() => setShowCreate(true)}
             className="text-xs font-semibold rounded px-4 py-2 transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: '#111' }}
+            style={{ background: C.gold, color: 'var(--brand-fg)' }}
           >
             {rv('addRule')}
           </button>
@@ -1279,7 +1283,7 @@ function RulesTab({
                 <button
                   onClick={handleApplyProposals}
                   className="text-xs px-3 py-1.5 rounded"
-                  style={{ background: C.gold, color: '#111' }}
+                  style={{ background: C.gold, color: 'var(--brand-fg)' }}
                 >
                   {rv('applyAll')}
                 </button>
@@ -1460,14 +1464,14 @@ function RuleRow({
           {rule.on_violation === 'block' ? (
             <span
               className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'rgba(192,57,43,0.12)', color: C.down }}
+              style={{ background: 'var(--down-soft)', color: C.down }}
             >
               {rv('violationBlock')}
             </span>
           ) : (
             <span
               className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'rgba(184,145,42,0.12)', color: C.warn }}
+              style={{ background: 'var(--brand-soft)', color: C.warn }}
             >
               {rv('violationWarn')}
             </span>
@@ -1475,7 +1479,7 @@ function RuleRow({
           {rule.source === 'ai_review' && (
             <span
               className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'rgba(75,158,255,0.12)', color: C.blue }}
+              style={{ background: 'var(--info-soft)', color: C.blue }}
             >
               AI
             </span>
@@ -1491,7 +1495,7 @@ function RuleRow({
           {rule.review_due && (
             <span
               className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'rgba(184,145,42,0.12)', color: C.warn }}
+              style={{ background: 'var(--brand-soft)', color: C.warn }}
             >
               {rv('reviewDue')}
             </span>
@@ -1507,15 +1511,17 @@ function RuleRow({
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        {onReverify && rule.rule_type === 'hard' && rule.source === 'ai_review' && (
-          <button
-            onClick={onReverify}
-            className="text-[10px] px-2 py-1 rounded"
-            style={{ border: `1px solid ${C.border}`, color: C.muted }}
-          >
-            {rv('reverify')}
-          </button>
-        )}
+        {onReverify &&
+          rule.rule_type === 'hard' &&
+          rule.source === 'ai_review' && (
+            <button
+              onClick={onReverify}
+              className="text-[10px] px-2 py-1 rounded"
+              style={{ border: `1px solid ${C.border}`, color: C.muted }}
+            >
+              {rv('reverify')}
+            </button>
+          )}
         <button
           onClick={onToggle}
           className="w-9 h-5 rounded-full relative transition-colors"
@@ -1605,8 +1611,8 @@ function ProposalRow({
           style={{
             background:
               proposal.rule_type === 'hard'
-                ? 'rgba(75,158,255,0.12)'
-                : 'rgba(184,145,42,0.12)',
+                ? 'var(--info-soft)'
+                : 'var(--brand-soft)',
             color: proposal.rule_type === 'hard' ? C.blue : C.gold,
           }}
         >
@@ -1719,7 +1725,7 @@ function CreateRuleModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.65)' }}
+      style={{ background: 'var(--overlay)' }}
       onClick={onClose}
     >
       <div
@@ -1749,7 +1755,7 @@ function CreateRuleModal({
                   border: `1px solid ${ruleType === tp ? C.gold : C.border}`,
                   color: ruleType === tp ? C.gold : C.muted,
                   background:
-                    ruleType === tp ? 'rgba(184,145,42,0.08)' : 'transparent',
+                    ruleType === tp ? 'var(--brand-soft)' : 'transparent',
                 }}
               >
                 {tp === 'hard' ? rv('typeHard') : rv('typeSoft')}
@@ -1917,7 +1923,7 @@ function CreateRuleModal({
             onClick={save}
             disabled={saving}
             className="px-5 py-2 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: '#111' }}
+            style={{ background: C.gold, color: 'var(--brand-fg)' }}
           >
             {saving ? t('loading', language) : rv('saveRule')}
           </button>
@@ -2015,7 +2021,7 @@ function AITab({
                 className="px-4 py-1.5 rounded text-xs transition-colors"
                 style={{
                   background: period === p ? C.gold : 'transparent',
-                  color: period === p ? '#111' : C.muted,
+                  color: period === p ? 'var(--brand-fg)' : C.muted,
                   fontWeight: period === p ? 600 : 400,
                 }}
               >
@@ -2027,7 +2033,7 @@ function AITab({
             onClick={run}
             disabled={running}
             className="px-5 py-2 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-            style={{ background: C.gold, color: '#111' }}
+            style={{ background: C.gold, color: 'var(--brand-fg)' }}
           >
             {running ? rv('aiRunning') : rv('aiRunReview')}
           </button>
@@ -2041,7 +2047,7 @@ function AITab({
               (promptCfg.review_custom || promptCfg.rule_extract_custom) && (
                 <span
                   className="ml-1.5 px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'rgba(184,145,42,0.15)', color: C.gold }}
+                  style={{ background: 'var(--brand-soft)', color: C.gold }}
                 >
                   {rv('promptCustomActive')}
                 </span>
@@ -2119,7 +2125,7 @@ function AITab({
                 onClick={savePrompts}
                 disabled={savingPrompts}
                 className="px-4 py-1.5 rounded text-xs font-semibold transition-opacity hover:opacity-80"
-                style={{ background: C.gold, color: '#111' }}
+                style={{ background: C.gold, color: 'var(--brand-fg)' }}
               >
                 {savingPrompts ? t('loading', language) : rv('promptSave')}
               </button>

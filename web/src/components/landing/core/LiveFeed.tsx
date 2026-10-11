@@ -33,7 +33,7 @@ const generateLog = (id: number): LogEntry => {
       break
     case 'NET':
       msg = `Block propagation latency < ${Math.floor(Math.random() * 10)}ms`
-      color = 'text-[#6E6E60]'
+      color = 'text-fg-3'
       break
     default:
       msg = `System optimization cycle complete. Allocating resources.`
@@ -71,15 +71,15 @@ export default function LiveFeed() {
   }, [])
 
   return (
-    <section className="w-full bg-[#EFECE1] border-y border-[#C0B9A2] py-1 overflow-hidden relative">
+    <section className="w-full bg-surface-2 border-y border-line py-1 overflow-hidden relative">
       {/* scanline overlay removed (flat paper) */}
 
       <div className="max-w-[1920px] mx-auto px-4 flex flex-col md:flex-row gap-0 md:gap-8 items-stretch h-[240px] md:h-12 text-xs font-mono">
         {/* Left Status Bar (Static) */}
-        <div className="hidden md:flex items-center gap-6 text-[#8A8A7C] border-r border-[#C0B9A2] pr-6 shrink-0">
+        <div className="hidden md:flex items-center gap-6 text-fg-3 border-r border-line pr-6 shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="font-bold text-[#6E6E60]">WS_CONN: STABLE</span>
+            <span className="font-bold text-fg-3">WS_CONN: STABLE</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-nofx-gold">TPS: 48,291</span>
@@ -97,7 +97,7 @@ export default function LiveFeed() {
                 animate={{ opacity: 1, x: 0 }}
                 className="absolute inset-0 flex items-center gap-4"
               >
-                <span className="text-[#8A8A7C]">[{log.time}]</span>
+                <span className="text-fg-3">[{log.time}]</span>
                 <span
                   className={`font-bold w-10 ${
                     log.type === 'LIQ'
@@ -106,7 +106,7 @@ export default function LiveFeed() {
                         ? 'text-nofx-gold bg-nofx-gold/10 px-1 rounded'
                         : log.type === 'EXE'
                           ? 'text-green-500'
-                          : 'text-[#6E6E60]'
+                          : 'text-fg-3'
                   }`}
                 >
                   {log.type}
@@ -121,9 +121,9 @@ export default function LiveFeed() {
             {logs.map((log) => (
               <div
                 key={log.id}
-                className="flex gap-2 w-full truncate border-b border-[#C0B9A2]/50 pb-1 last:border-0"
+                className="flex gap-2 w-full truncate border-b border-line/50 pb-1 last:border-0"
               >
-                <span className="text-[#8A8A7C] w-16 shrink-0">
+                <span className="text-fg-3 w-16 shrink-0">
                   {log.time.split('.')[0]}
                 </span>
                 <span
@@ -132,7 +132,7 @@ export default function LiveFeed() {
                       ? 'text-red-500'
                       : log.type === 'ARB'
                         ? 'text-nofx-gold'
-                        : 'text-[#6E6E60]'
+                        : 'text-fg-3'
                   }`}
                 >
                   {log.type}

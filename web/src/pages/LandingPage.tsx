@@ -50,7 +50,7 @@ export function LandingPage() {
           }
         }}
       />
-      <div className="min-h-screen bg-nofx-bg text-nofx-text font-sans selection:bg-nofx-gold selection:text-black">
+      <div className="min-h-screen bg-nofx-bg text-nofx-text font-sans selection:bg-nofx-gold selection:text-brand-fg">
         <TerminalHero />
 
         <LiveFeed />

@@ -18,7 +18,7 @@ export function DeepVoidBackground({
       className={`relative w-full min-h-screen bg-nofx-bg text-nofx-text flex flex-col ${className}`}
       {...props}
     >
-      <div className="absolute inset-0 pointer-events-none z-0 bg-[radial-gradient(circle_at_top,rgba(184,145,42,0.05),transparent_45%)]"></div>
+      <div className="absolute inset-0 pointer-events-none z-0 bg-[radial-gradient(circle_at_top,color-mix(in srgb, var(--brand) 5%, transparent),transparent_45%)]"></div>
 
       {/* Content Layer */}
       <div className="relative z-10 flex-1 flex flex-col h-full w-full">

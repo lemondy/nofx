@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, memo } from 'react'
 import { useLanguage } from '../../contexts/LanguageContext'
 import { t } from '../../i18n/translations'
 import { ChevronDown, TrendingUp, X } from 'lucide-react'
+import { useTheme } from '../../lib/theme'
+import { getChartTheme } from '../../lib/chartTheme'
 
 // 支持的交易所列表 (合约格式)
 const EXCHANGES = [
@@ -57,6 +59,7 @@ function TradingViewChartComponent({
   embedded = false,
 }: TradingViewChartProps) {
   const { language } = useLanguage()
+  const appTheme = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const [exchange, setExchange] = useState(defaultExchange)
   const [symbol, setSymbol] = useState(defaultSymbol)
@@ -127,12 +130,13 @@ function TradingViewChartComponent({
       interval: timeInterval,
       timezone:
         Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
-      theme: 'light',
+      theme: appTheme,
       style: '1',
       locale: language === 'zh' ? 'zh_CN' : 'en',
       enable_publishing: false,
-      backgroundColor: 'rgba(244, 241, 232, 1)',
-      gridColor: 'rgba(192, 185, 162, 0.5)',
+      // 外部 TradingView 组件不认识 CSS 变量, 传解析后的实际颜色
+      backgroundColor: getChartTheme().background,
+      gridColor: getChartTheme().grid,
       hide_top_toolbar: !showToolbar,
       hide_legend: false,
       save_image: false,
@@ -148,7 +152,7 @@ function TradingViewChartComponent({
         containerRef.current.innerHTML = ''
       }
     }
-  }, [exchange, symbol, timeInterval, language, showToolbar])
+  }, [exchange, symbol, timeInterval, language, showToolbar, appTheme])
 
   // 处理自定义交易对输入
   const handleCustomSymbolSubmit = () => {
@@ -169,19 +173,19 @@ function TradingViewChartComponent({
       className={`${embedded ? '' : 'binance-card'} overflow-hidden ${embedded ? '' : 'animate-fade-in'} ${
         isFullscreen ? 'fixed inset-0 z-50 rounded-none flex flex-col' : ''
       }`}
-      style={isFullscreen ? { background: '#F2EFE6' } : undefined}
+      style={isFullscreen ? { background: 'var(--surface-2)' } : undefined}
     >
       {/* Header */}
       <div
         className="flex flex-wrap items-center gap-2 p-3 sm:p-4"
-        style={{ borderBottom: embedded ? 'none' : '1px solid #C0B9A2' }}
+        style={{ borderBottom: embedded ? 'none' : '1px solid var(--line)' }}
       >
         {!embedded && (
           <div className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5" style={{ color: '#B8912A' }} />
+            <TrendingUp className="w-5 h-5" style={{ color: 'var(--brand)' }} />
             <h3
               className="text-base sm:text-lg font-bold"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {t('marketChart', language)}
             </h3>
@@ -201,21 +205,24 @@ function TradingViewChartComponent({
               }}
               className="flex items-center gap-1 px-3 py-1.5 rounded text-sm font-medium transition-all"
               style={{
-                background: '#E9E4D6',
-                border: '1px solid #C0B9A2',
-                color: '#1E1E1A',
+                background: 'var(--surface-hover)',
+                border: '1px solid var(--line)',
+                color: 'var(--fg)',
               }}
             >
               {EXCHANGES.find((e) => e.id === exchange)?.name || exchange}
-              <ChevronDown className="w-4 h-4" style={{ color: '#6E6E60' }} />
+              <ChevronDown
+                className="w-4 h-4"
+                style={{ color: 'var(--fg-3)' }}
+              />
             </button>
 
             {showExchangeDropdown && (
               <div
                 className="absolute top-full left-0 mt-1 py-1 rounded-lg shadow-xl z-20 min-w-[120px]"
                 style={{
-                  background: '#E9E4D6',
-                  border: '1px solid #C0B9A2',
+                  background: 'var(--surface-hover)',
+                  border: '1px solid var(--line)',
                 }}
               >
                 {EXCHANGES.map((ex) => (
@@ -227,10 +234,10 @@ function TradingViewChartComponent({
                     }}
                     className="w-full px-4 py-2 text-left text-sm transition-all hover:bg-opacity-50"
                     style={{
-                      color: exchange === ex.id ? '#B8912A' : '#1E1E1A',
+                      color: exchange === ex.id ? 'var(--brand)' : 'var(--fg)',
                       background:
                         exchange === ex.id
-                          ? 'rgba(184, 145, 42, 0.1)'
+                          ? 'var(--brand-soft)'
                           : 'transparent',
                     }}
                   >
@@ -250,9 +257,10 @@ function TradingViewChartComponent({
               }}
               className="flex items-center gap-1 px-3 py-1.5 rounded text-sm font-bold transition-all"
               style={{
-                background: 'rgba(184, 145, 42, 0.1)',
-                border: '1px solid rgba(184, 145, 42, 0.3)',
-                color: '#B8912A',
+                background: 'var(--brand-soft)',
+                border:
+                  '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
+                color: 'var(--brand)',
               }}
             >
               {symbol}
@@ -263,14 +271,14 @@ function TradingViewChartComponent({
               <div
                 className="absolute top-full left-0 mt-1 py-2 rounded-lg shadow-xl z-20 w-[280px]"
                 style={{
-                  background: '#E9E4D6',
-                  border: '1px solid #C0B9A2',
+                  background: 'var(--surface-hover)',
+                  border: '1px solid var(--line)',
                 }}
               >
                 {/* Custom Input */}
                 <div
                   className="px-3 pb-2"
-                  style={{ borderBottom: '1px solid #C0B9A2' }}
+                  style={{ borderBottom: '1px solid var(--line)' }}
                 >
                   <div className="flex gap-2">
                     <input
@@ -285,17 +293,17 @@ function TradingViewChartComponent({
                       placeholder={t('enterSymbol', language)}
                       className="flex-1 px-3 py-1.5 rounded text-sm"
                       style={{
-                        background: '#F2EFE6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                     />
                     <button
                       onClick={handleCustomSymbolSubmit}
                       className="px-3 py-1.5 rounded text-sm font-medium"
                       style={{
-                        background: '#B8912A',
-                        color: '#F2EFE6',
+                        background: 'var(--brand)',
+                        color: 'var(--brand-fg)',
                       }}
                     >
                       OK
@@ -307,7 +315,7 @@ function TradingViewChartComponent({
                 <div className="px-2 pt-2">
                   <div
                     className="text-xs px-2 py-1 mb-1"
-                    style={{ color: '#6E6E60' }}
+                    style={{ color: 'var(--fg-3)' }}
                   >
                     {t('popularSymbols', language)}
                   </div>
@@ -321,11 +329,11 @@ function TradingViewChartComponent({
                         }}
                         className="px-2 py-1.5 rounded text-xs font-medium transition-all"
                         style={{
-                          color: symbol === sym ? '#B8912A' : '#1E1E1A',
+                          color: symbol === sym ? 'var(--brand)' : 'var(--fg)',
                           background:
                             symbol === sym
-                              ? 'rgba(184, 145, 42, 0.1)'
-                              : 'rgba(192, 185, 162, 0.3)',
+                              ? 'var(--brand-soft)'
+                              : 'color-mix(in srgb, var(--line) 30%, transparent)',
                         }}
                       >
                         {sym.replace('USDT', '')}
@@ -340,7 +348,10 @@ function TradingViewChartComponent({
           {/* Interval Selector */}
           <div
             className="flex gap-0.5 p-0.5 rounded"
-            style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+            style={{
+              background: 'var(--surface-2)',
+              border: '1px solid var(--line)',
+            }}
           >
             {INTERVALS.map((int) => (
               <button
@@ -349,8 +360,9 @@ function TradingViewChartComponent({
                 className="px-2 py-1 rounded text-xs font-medium transition-all"
                 style={{
                   background:
-                    timeInterval === int.id ? '#B8912A' : 'transparent',
-                  color: timeInterval === int.id ? '#F2EFE6' : '#6E6E60',
+                    timeInterval === int.id ? 'var(--brand)' : 'transparent',
+                  color:
+                    timeInterval === int.id ? 'var(--brand-fg)' : 'var(--fg-3)',
                 }}
               >
                 {int.label}
@@ -363,9 +375,9 @@ function TradingViewChartComponent({
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="p-1.5 rounded transition-all"
             style={{
-              background: isFullscreen ? '#B8912A' : 'transparent',
-              color: isFullscreen ? '#F2EFE6' : '#6E6E60',
-              border: '1px solid #C0B9A2',
+              background: isFullscreen ? 'var(--brand)' : 'transparent',
+              color: isFullscreen ? 'var(--brand-fg)' : 'var(--fg-3)',
+              border: '1px solid var(--line)',
             }}
             title={
               isFullscreen
@@ -395,7 +407,7 @@ function TradingViewChartComponent({
         ref={containerRef}
         style={{
           height: isFullscreen ? 'calc(100vh - 65px)' : height,
-          background: '#F2EFE6',
+          background: 'var(--bg)',
           overflow: 'hidden',
         }}
       />

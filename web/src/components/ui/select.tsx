@@ -82,7 +82,7 @@ export function NofxSelect({
         createPortal(
           <div
             ref={dropdownRef}
-            className="fixed z-[9999] rounded border border-[#C0B9A2] bg-[#F2EFE6] shadow-xl shadow-black/15 max-h-60 overflow-y-auto"
+            className="fixed z-[9999] rounded border border-line bg-surface-2 shadow-pop max-h-60 overflow-y-auto"
             style={{ top: pos.top, left: pos.left, minWidth: pos.width }}
           >
             {options.map((opt) => (
@@ -91,8 +91,8 @@ export function NofxSelect({
                 className={cn(
                   'px-3 py-1.5 text-sm cursor-pointer transition-colors whitespace-nowrap',
                   String(opt.value) === String(value)
-                    ? 'bg-[#B8912A]/10 text-[#B8912A]'
-                    : 'text-[#1E1E1A] hover:bg-[#E9E4D6]'
+                    ? 'bg-brand-soft text-brand'
+                    : 'text-fg hover:bg-surface-hover'
                 )}
                 onClick={(e) => {
                   e.stopPropagation()

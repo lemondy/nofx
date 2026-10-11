@@ -92,14 +92,14 @@ export function TokenEstimateBar({
   const pct = Math.round((estimate.total * 100) / 200000)
   const barWidth = Math.min(pct, 100)
 
-  let barColor = '#2E7D4F' // green
-  let textColor = '#6E6E60'
+  let barColor = 'var(--up)' // green
+  let textColor = 'var(--fg-3)'
   if (pct >= 100) {
-    barColor = '#C0392B' // red
-    textColor = '#C0392B'
+    barColor = 'var(--down)' // red
+    textColor = 'var(--down)'
   } else if (pct >= 80) {
-    barColor = '#B8912A' // yellow
-    textColor = '#B8912A'
+    barColor = 'var(--brand)' // yellow
+    textColor = 'var(--brand)'
   }
 
   return (
@@ -107,7 +107,7 @@ export function TokenEstimateBar({
       <div className="flex items-center gap-2">
         <div
           className="flex-1 h-1.5 rounded-full overflow-hidden"
-          style={{ background: '#E9E4D6' }}
+          style={{ background: 'var(--surface-hover)' }}
         >
           <div
             className="h-full rounded-full transition-all duration-500"

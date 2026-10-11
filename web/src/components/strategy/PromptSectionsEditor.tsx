@@ -108,12 +108,12 @@ export function PromptSectionsEditor({
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2 mb-4">
-        <FileText className="w-5 h-5 mt-0.5" style={{ color: '#a855f7' }} />
+        <FileText className="w-5 h-5 mt-0.5" style={{ color: 'var(--ai)' }} />
         <div>
-          <h3 className="font-medium" style={{ color: '#1E1E1A' }}>
+          <h3 className="font-medium" style={{ color: 'var(--fg)' }}>
             {ts(promptSectionsI18n.promptSections, language)}
           </h3>
-          <p className="text-xs mt-1" style={{ color: '#6E6E60' }}>
+          <p className="text-xs mt-1" style={{ color: 'var(--fg-3)' }}>
             {ts(promptSectionsI18n.promptSectionsDesc, language)}
           </p>
         </div>
@@ -132,27 +132,30 @@ export function PromptSectionsEditor({
             <div
               key={key}
               className="rounded-lg overflow-hidden"
-              style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+              style={{
+                background: 'var(--surface-2)',
+                border: '1px solid var(--line)',
+              }}
             >
               <button
                 onClick={() => toggleSection(key)}
-                className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-[#1E1E1A]/5 transition-colors text-left"
+                className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-fg/5 transition-colors text-left"
               >
                 <div className="flex items-center gap-2">
                   {isExpanded ? (
                     <ChevronDown
                       className="w-4 h-4"
-                      style={{ color: '#6E6E60' }}
+                      style={{ color: 'var(--fg-3)' }}
                     />
                   ) : (
                     <ChevronRight
                       className="w-4 h-4"
-                      style={{ color: '#6E6E60' }}
+                      style={{ color: 'var(--fg-3)' }}
                     />
                   )}
                   <span
                     className="text-sm font-medium"
-                    style={{ color: '#1E1E1A' }}
+                    style={{ color: 'var(--fg)' }}
                   >
                     {label}
                   </span>
@@ -160,22 +163,22 @@ export function PromptSectionsEditor({
                     <span
                       className="px-1.5 py-0.5 text-[10px] rounded"
                       style={{
-                        background: 'rgba(168, 85, 247, 0.15)',
-                        color: '#a855f7',
+                        background: 'var(--ai-soft)',
+                        color: 'var(--ai)',
                       }}
                     >
                       {ts(promptSectionsI18n.modified, language)}
                     </span>
                   )}
                 </div>
-                <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+                <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
                   {value.length} {ts(promptSectionsI18n.chars, language)}
                 </span>
               </button>
 
               {isExpanded && (
                 <div className="px-3 pb-3">
-                  <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+                  <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
                     {desc}
                   </p>
                   <textarea
@@ -185,9 +188,9 @@ export function PromptSectionsEditor({
                     rows={6}
                     className="w-full px-3 py-2 rounded-lg resize-y font-mono text-xs"
                     style={{
-                      background: '#E9E4D6',
-                      border: '1px solid #C0B9A2',
-                      color: '#1E1E1A',
+                      background: 'var(--surface-hover)',
+                      border: '1px solid var(--line)',
+                      color: 'var(--fg)',
                       minHeight: '120px',
                     }}
                   />
@@ -195,8 +198,8 @@ export function PromptSectionsEditor({
                     <button
                       onClick={() => resetSection(sectionKey)}
                       disabled={disabled || !isModified}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:bg-[#1E1E1A]/5 disabled:opacity-30"
-                      style={{ color: '#6E6E60' }}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:bg-fg/5 disabled:opacity-30"
+                      style={{ color: 'var(--fg-3)' }}
                     >
                       <RotateCcw className="w-3 h-3" />
                       {ts(promptSectionsI18n.resetToDefault, language)}

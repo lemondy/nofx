@@ -93,7 +93,7 @@ export function FAQContent({
                           href="https://github.com/orgs/NoFxAiOS/projects/3"
                           target="_blank"
                           rel="noreferrer"
-                          style={{ color: '#B8912A' }}
+                          style={{ color: 'var(--brand)' }}
                         >
                           {language === 'zh' ? '路线图' : 'Roadmap'}
                         </a>
@@ -102,7 +102,7 @@ export function FAQContent({
                           href="https://github.com/orgs/NoFxAiOS/projects/5"
                           target="_blank"
                           rel="noreferrer"
-                          style={{ color: '#B8912A' }}
+                          style={{ color: 'var(--brand)' }}
                         >
                           {language === 'zh' ? '任务看板' : 'Task Dashboard'}
                         </a>
@@ -221,13 +221,16 @@ export function FAQContent({
                       <div
                         className="rounded p-3 mt-3"
                         style={{
-                          background: 'rgba(184, 145, 42, 0.08)',
-                          border: '1px solid rgba(184, 145, 42, 0.25)',
+                          background: 'var(--brand-soft)',
+                          border:
+                            '1px solid color-mix(in srgb, var(--brand) 25%, transparent)',
                         }}
                       >
                         {language === 'zh' ? (
                           <div className="text-sm">
-                            <strong style={{ color: '#B8912A' }}>提示：</strong>{' '}
+                            <strong style={{ color: 'var(--brand)' }}>
+                              提示：
+                            </strong>{' '}
                             参与贡献将享有激励制度（如
                             Bounty/奖金、荣誉徽章与鸣谢、优先
                             Review/合并与内测资格 等）。 可在任务中优先选择带
@@ -235,7 +238,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               bounty 标签
                             </a>
@@ -244,7 +247,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               Bounty Claim
                             </a>
@@ -252,7 +255,9 @@ export function FAQContent({
                           </div>
                         ) : (
                           <div className="text-sm">
-                            <strong style={{ color: '#B8912A' }}>Note:</strong>{' '}
+                            <strong style={{ color: 'var(--brand)' }}>
+                              Note:
+                            </strong>{' '}
                             Contribution incentives are available (e.g., cash
                             bounties, badges & shout-outs, priority
                             review/merge, beta access). Prefer tasks with
@@ -260,7 +265,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               bounty label
                             </a>
@@ -269,7 +274,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               Bounty Claim
                             </a>
@@ -384,7 +389,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               bounty 标签
                             </a>
@@ -393,7 +398,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               Bounty Claim 模板
                             </a>
@@ -401,7 +406,9 @@ export function FAQContent({
                           </div>
                         ) : (
                           <div className="text-sm">
-                            <strong style={{ color: '#B8912A' }}>Note:</strong>{' '}
+                            <strong style={{ color: 'var(--brand)' }}>
+                              Note:
+                            </strong>{' '}
                             We offer contribution incentives (bounties, badges,
                             shout-outs, priority review/merge, beta access).
                             Look for tasks with
@@ -409,7 +416,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/labels/bounty"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               bounty label
                             </a>
@@ -418,7 +425,7 @@ export function FAQContent({
                               href="https://github.com/NoFxAiOS/nofx/blob/dev/.github/ISSUE_TEMPLATE/bounty_claim.md"
                               target="_blank"
                               rel="noreferrer"
-                              style={{ color: '#B8912A' }}
+                              style={{ color: 'var(--brand)' }}
                             >
                               Bounty Claim
                             </a>
@@ -433,7 +440,7 @@ export function FAQContent({
                 </div>
 
                 {/* Divider */}
-                <div className="mt-6 h-px bg-[#1E1E1A]/5" />
+                <div className="mt-6 h-px bg-fg/5" />
               </section>
             ))}
           </div>

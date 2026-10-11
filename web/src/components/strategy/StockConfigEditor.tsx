@@ -71,16 +71,16 @@ export function StockConfigEditor({
   }
 
   const inputStyle = {
-    background: '#E9E4D6',
-    border: '1px solid #C0B9A2',
-    color: '#1E1E1A',
+    background: 'var(--surface-hover)',
+    border: '1px solid var(--line)',
+    color: 'var(--fg)',
   }
   const sectionStyle = {
-    background: '#F2EFE6',
-    border: '1px solid #C0B9A2',
+    background: 'var(--surface-2)',
+    border: '1px solid var(--line)',
   }
-  const headingStyle = { color: '#1E1E1A' }
-  const mutedStyle = { color: '#6E6E60' }
+  const headingStyle = { color: 'var(--fg)' }
+  const mutedStyle = { color: 'var(--fg-3)' }
 
   // ---- symbol universe (GET /api/usstock/symbols) -------------------------
   const [universe, setUniverse] = useState<USStockSymbol[] | null>(null)
@@ -220,7 +220,10 @@ export function StockConfigEditor({
       {/* Symbols */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <CandlestickChart className="w-5 h-5" style={{ color: '#B8912A' }} />
+          <CandlestickChart
+            className="w-5 h-5"
+            style={{ color: 'var(--brand)' }}
+          />
           <h3 className="font-medium" style={headingStyle}>
             {ts(tx.symbolsSection, language)}
           </h3>
@@ -241,7 +244,10 @@ export function StockConfigEditor({
                   key={sym}
                   data-testid="stock-selected-symbol"
                   className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs"
-                  style={{ background: '#E9E4D6', border: '1px solid #B8912A' }}
+                  style={{
+                    background: 'var(--surface-hover)',
+                    border: '1px solid var(--brand)',
+                  }}
                 >
                   {underlyingOf(sym)} · {sym}
                   {!disabled && (
@@ -284,7 +290,7 @@ export function StockConfigEditor({
               </div>
               <div
                 className="max-h-56 overflow-y-auto rounded"
-                style={{ border: '1px solid #C0B9A2' }}
+                style={{ border: '1px solid var(--line)' }}
               >
                 {filtered.length === 0 && (
                   <p className="p-3 text-xs" style={mutedStyle}>
@@ -297,8 +303,8 @@ export function StockConfigEditor({
                   return (
                     <label
                       key={s.symbol}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-black/5"
-                      style={{ opacity: full ? 0.5 : 1, color: '#1E1E1A' }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-fg/5"
+                      style={{ opacity: full ? 0.5 : 1, color: 'var(--fg)' }}
                     >
                       <input
                         type="checkbox"
@@ -344,14 +350,14 @@ export function StockConfigEditor({
           {symbols.length === 0 && (
             <p
               className="text-xs mt-2 flex items-center gap-1"
-              style={{ color: '#C0392B' }}
+              style={{ color: 'var(--down)' }}
             >
               <AlertTriangle className="w-3 h-3" />
               {ts(tx.symbolsEmptyWarn, language)}
             </p>
           )}
           {symbols.length > MAX_SYMBOLS && (
-            <p className="text-xs mt-2" style={{ color: '#C0392B' }}>
+            <p className="text-xs mt-2" style={{ color: 'var(--down)' }}>
               {ts(tx.symbolsMax, language)}
             </p>
           )}
@@ -361,7 +367,7 @@ export function StockConfigEditor({
       {/* Holding style preset */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Clock className="w-5 h-5" style={{ color: '#2E7D4F' }} />
+          <Clock className="w-5 h-5" style={{ color: 'var(--up)' }} />
           <h3 className="font-medium" style={headingStyle}>
             {ts(tx.presetSection, language)}
           </h3>
@@ -379,7 +385,9 @@ export function StockConfigEditor({
               style={{
                 ...sectionStyle,
                 border:
-                  preset === value ? '1px solid #B8912A' : sectionStyle.border,
+                  preset === value
+                    ? '1px solid var(--brand)'
+                    : sectionStyle.border,
               }}
             >
               <div className="flex items-center gap-2 mb-1">
@@ -406,7 +414,7 @@ export function StockConfigEditor({
       {/* Sessions */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Clock className="w-5 h-5" style={{ color: '#B8912A' }} />
+          <Clock className="w-5 h-5" style={{ color: 'var(--brand)' }} />
           <h3 className="font-medium" style={headingStyle}>
             {ts(tx.sessionsSection, language)}
           </h3>
@@ -455,7 +463,7 @@ export function StockConfigEditor({
             {ts(tx.sessionsNote, language)}
           </p>
           {noSession && (
-            <p className="text-xs" style={{ color: '#C0392B' }}>
+            <p className="text-xs" style={{ color: 'var(--down)' }}>
               {ts(tx.sessionsNoneWarn, language)}
             </p>
           )}
@@ -559,7 +567,10 @@ export function StockConfigEditor({
           style={
             isPaper
               ? sectionStyle
-              : { background: '#FBEAE7', border: '1px solid #C0392B' }
+              : {
+                  background: 'var(--down-soft)',
+                  border: '1px solid var(--down)',
+                }
           }
         >
           <label
@@ -582,7 +593,7 @@ export function StockConfigEditor({
             <p
               className="text-xs mt-2 flex items-center gap-1 font-medium"
               data-testid="stock-live-warning"
-              style={{ color: '#C0392B' }}
+              style={{ color: 'var(--down)' }}
             >
               <AlertTriangle className="w-3 h-3" />
               {ts(tx.liveWarning, language)}

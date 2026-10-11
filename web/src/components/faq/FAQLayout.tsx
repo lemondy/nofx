@@ -63,8 +63,8 @@ export function FAQLayout({ language }: FAQLayoutProps) {
         {/* Page Header */}
         <div className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center bg-gradient-to-br from-nofx-gold to-[#C9A227] shadow-[0_8px_24px_rgba(184,145,42,0.4)]">
-              <HelpCircle className="w-8 h-8 text-[#F2EFE6]" />
+            <div className="w-16 h-16 rounded-full flex items-center justify-center bg-gradient-to-br from-nofx-gold to-brand shadow-[0_8px_24px_color-mix(in_srgb,var(--brand)_40%,transparent)]">
+              <HelpCircle className="w-8 h-8 text-bg" />
             </div>
           </div>
           <h1 className="text-4xl font-bold mb-4 text-nofx-text-main">
@@ -108,7 +108,7 @@ export function FAQLayout({ language }: FAQLayoutProps) {
               />
             ) : (
               <div className="text-center py-12">
-                <p className="text-lg" style={{ color: '#6E6E60' }}>
+                <p className="text-lg" style={{ color: 'var(--fg-3)' }}>
                   {language === 'zh'
                     ? '没有找到匹配的问题'
                     : 'No matching questions found'}
@@ -118,8 +118,8 @@ export function FAQLayout({ language }: FAQLayoutProps) {
                   className="mt-4 px-6 py-2 rounded-lg font-semibold transition-all hover:opacity-90"
                   style={{
                     background:
-                      'linear-gradient(135deg, #B8912A 0%, #C9A227 100%)',
-                    color: '#F2EFE6',
+                      'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
+                    color: 'var(--brand-fg)',
                   }}
                 >
                   {language === 'zh' ? '清除搜索' : 'Clear Search'}
@@ -134,14 +134,15 @@ export function FAQLayout({ language }: FAQLayoutProps) {
           className="mt-16 p-8 rounded-lg text-center"
           style={{
             background:
-              'linear-gradient(135deg, rgba(184, 145, 42, 0.1) 0%, rgba(252, 213, 53, 0.05) 100%)',
-            border: '1px solid rgba(184, 145, 42, 0.2)',
+              'linear-gradient(135deg, var(--brand-soft) 0%, color-mix(in srgb, var(--brand) 5%, transparent) 100%)',
+            border:
+              '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
           }}
         >
-          <h3 className="text-xl font-bold mb-3" style={{ color: '#1E1E1A' }}>
+          <h3 className="text-xl font-bold mb-3" style={{ color: 'var(--fg)' }}>
             {t('faqStillHaveQuestions', language)}
           </h3>
-          <p className="mb-6" style={{ color: '#6E6E60' }}>
+          <p className="mb-6" style={{ color: 'var(--fg-3)' }}>
             {t('faqContactUs', language)}
           </p>
           <div className="flex items-center justify-center gap-4">
@@ -151,9 +152,9 @@ export function FAQLayout({ language }: FAQLayoutProps) {
               rel="noopener noreferrer"
               className="px-6 py-3 rounded-lg font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#1E1E1A',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg)',
+                border: '1px solid var(--line)',
               }}
             >
               GitHub
@@ -164,8 +165,9 @@ export function FAQLayout({ language }: FAQLayoutProps) {
               rel="noopener noreferrer"
               className="px-6 py-3 rounded-lg font-semibold transition-all hover:scale-105"
               style={{
-                background: 'linear-gradient(135deg, #B8912A 0%, #C9A227 100%)',
-                color: '#F2EFE6',
+                background:
+                  'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)',
+                color: 'var(--brand-fg)',
               }}
             >
               {t('community', language)}

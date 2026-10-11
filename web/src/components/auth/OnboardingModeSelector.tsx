@@ -38,7 +38,7 @@ export function OnboardingModeSelector({
 
   return (
     <div className="space-y-2">
-      <div className="text-xs font-medium text-[#6E6E60]">
+      <div className="text-xs font-medium text-fg-3">
         {isZh ? '使用模式' : 'Experience'}
       </div>
       <div className="grid grid-cols-1 gap-2">
@@ -51,19 +51,19 @@ export function OnboardingModeSelector({
               onClick={() => onChange(option.id)}
               className={`w-full rounded-xl border px-4 py-3 text-left transition-all ${
                 selected
-                  ? 'border-nofx-gold/60 bg-nofx-gold/10 shadow-[0_0_0_1px_rgba(184,145,42,0.15)]'
-                  : 'border-[#C0B9A2] bg-[#F2EFE6]/60 hover:border-[#B3AB92]'
+                  ? 'border-nofx-gold/60 bg-nofx-gold/10 shadow-[0_0_0_1px_color-mix(in_srgb,var(--brand)_15%,transparent)]'
+                  : 'border-line bg-surface-2/60 hover:border-line-strong'
               }`}
             >
-              <div className="flex items-center gap-2 text-sm font-semibold text-[#1E1E1A]">
+              <div className="flex items-center gap-2 text-sm font-semibold text-fg">
                 <span>{option.title}</span>
                 {option.badge ? (
-                  <span className="rounded-full bg-nofx-gold px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
+                  <span className="rounded-full bg-nofx-gold px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-fg">
                     {option.badge}
                   </span>
                 ) : null}
               </div>
-              <p className="mt-1 text-xs leading-5 text-[#6E6E60]">
+              <p className="mt-1 text-xs leading-5 text-fg-3">
                 {option.description}
               </p>
             </button>

@@ -10,7 +10,7 @@ export default function LoginModal({ onClose, language }: LoginModalProps) {
   return (
     <motion.div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(30, 30, 26, 0.45)' }}
+      style={{ background: 'color-mix(in srgb, var(--fg) 45%, transparent)' }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -20,7 +20,7 @@ export default function LoginModal({ onClose, language }: LoginModalProps) {
         className="relative max-w-md w-full rounded-2xl p-8"
         style={{
           background: 'var(--brand-dark-gray)',
-          border: '1px solid rgba(184, 145, 42, 0.2)',
+          border: '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
         }}
         initial={{ scale: 0.9, y: 50 }}
         animate={{ scale: 1, y: 0 }}
@@ -59,7 +59,8 @@ export default function LoginModal({ onClose, language }: LoginModalProps) {
             }}
             whileHover={{
               scale: 1.05,
-              boxShadow: '0 10px 30px rgba(184, 145, 42, 0.4)',
+              boxShadow:
+                '0 10px 30px color-mix(in srgb, var(--brand) 40%, transparent)',
             }}
             whileTap={{ scale: 0.95 }}
           >

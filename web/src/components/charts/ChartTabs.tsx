@@ -208,8 +208,11 @@ export function ChartTabs({
     >
       {/* Toolbar: mobile scrolls horizontally; desktop uses flex layout. */}
       <div
-        className="relative z-20 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-2 px-3 py-2 shrink-0 bg-[#F2EFE6]/80 rounded-t-lg"
-        style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}
+        className="relative z-20 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-2 px-3 py-2 shrink-0 bg-surface-2/80 rounded-t-lg"
+        style={{
+          borderBottom:
+            '1px solid color-mix(in srgb, var(--fg) 5%, transparent)',
+        }}
       >
         {/* Left: Tab Switcher */}
         <div className="flex flex-wrap items-center gap-1">
@@ -217,8 +220,8 @@ export function ChartTabs({
             onClick={() => setActiveTab('equity')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium transition-all ${
               activeTab === 'equity'
-                ? 'bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 shadow-[0_0_10px_rgba(184,145,42,0.1)]'
-                : 'text-nofx-text-muted hover:text-nofx-text-main hover:bg-[#1E1E1A]/5'
+                ? 'bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 shadow-[0_0_10px_color-mix(in_srgb,var(--brand)_10%,transparent)]'
+                : 'text-nofx-text-muted hover:text-nofx-text-main hover:bg-fg/5'
             }`}
           >
             <BarChart3 className="w-3.5 h-3.5" />
@@ -232,8 +235,8 @@ export function ChartTabs({
             onClick={() => setActiveTab('kline')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium transition-all ${
               activeTab === 'kline'
-                ? 'bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 shadow-[0_0_10px_rgba(184,145,42,0.1)]'
-                : 'text-nofx-text-muted hover:text-nofx-text-main hover:bg-[#1E1E1A]/5'
+                ? 'bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 shadow-[0_0_10px_color-mix(in_srgb,var(--brand)_10%,transparent)]'
+                : 'text-nofx-text-muted hover:text-nofx-text-main hover:bg-fg/5'
             }`}
           >
             <CandlestickChart className="w-3.5 h-3.5" />
@@ -255,8 +258,8 @@ export function ChartTabs({
                     onClick={() => handleMarketTypeChange(type)}
                     className={`px-2.5 py-1 text-[10px] font-medium rounded transition-all border ${
                       isActive
-                        ? 'bg-[#E9E4D6] text-[#1E1E1A] border-[#A9997B]'
-                        : 'text-nofx-text-muted border-transparent hover:text-nofx-text-main hover:bg-[#1E1E1A]/5'
+                        ? 'bg-surface-hover text-fg border-line-strong'
+                        : 'text-nofx-text-muted border-transparent hover:text-nofx-text-main hover:bg-fg/5'
                     }`}
                   >
                     <span className="mr-1 opacity-70">{config.icon}</span>
@@ -277,7 +280,7 @@ export function ChartTabs({
                 <>
                   <button
                     onClick={() => setShowDropdown(!showDropdown)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-[#E9E4D6] border border-nofx-line rounded text-[11px] font-bold text-nofx-text-main hover:border-nofx-gold/30 hover:text-nofx-gold transition-all"
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-hover border border-nofx-line rounded text-[11px] font-bold text-nofx-text-main hover:border-nofx-gold/30 hover:text-nofx-gold transition-all"
                   >
                     <span>{chartSymbol}</span>
                     <ChevronDown
@@ -285,16 +288,16 @@ export function ChartTabs({
                     />
                   </button>
                   {showDropdown && (
-                    <div className="absolute top-full right-0 mt-2 w-64 bg-[#F2EFE6] border border-nofx-line rounded-lg shadow-[0_12px_32px_-8px_rgba(30,30,26,0.2)] z-50 overflow-hidden nofx-glass ring-1 ring-nofx-line/50">
+                    <div className="absolute top-full right-0 mt-2 w-64 bg-surface-2 border border-nofx-line rounded-lg shadow-[0_12px_32px_-8px_color-mix(in srgb, var(--fg) 20%, transparent)] z-50 overflow-hidden nofx-glass ring-1 ring-nofx-line/50">
                       <div className="p-2 border-b border-nofx-line/50">
-                        <div className="flex items-center gap-2 px-2 py-1.5 bg-[#E9E4D6] rounded border border-nofx-line focus-within:border-nofx-gold/50 transition-colors">
+                        <div className="flex items-center gap-2 px-2 py-1.5 bg-surface-hover rounded border border-nofx-line focus-within:border-nofx-gold/50 transition-colors">
                           <Search className="w-3.5 h-3.5 text-nofx-text-muted" />
                           <input
                             type="text"
                             value={searchFilter}
                             onChange={(e) => setSearchFilter(e.target.value)}
                             placeholder="Search symbol..."
-                            className="flex-1 bg-transparent text-[11px] text-[#1E1E1A] placeholder-[#8A8A7C] focus:outline-none font-mono"
+                            className="flex-1 bg-transparent text-[11px] text-fg placeholder-fg-3 focus:outline-none font-mono"
                             autoFocus
                           />
                         </div>
@@ -315,7 +318,7 @@ export function ChartTabs({
                             }
                             return (
                               <div key={category}>
-                                <div className="px-3 py-1.5 text-[9px] font-bold text-nofx-text-muted/60 bg-[#1E1E1A]/5 uppercase tracking-wider">
+                                <div className="px-3 py-1.5 text-[9px] font-bold text-nofx-text-muted/60 bg-fg/5 uppercase tracking-wider">
                                   {labels[category]}
                                 </div>
                                 {categorySymbols.map((s) => (
@@ -326,7 +329,7 @@ export function ChartTabs({
                                       setShowDropdown(false)
                                       setSearchFilter('')
                                     }}
-                                    className={`w-full px-3 py-2 text-left text-[11px] font-mono hover:bg-[#1E1E1A]/5 transition-all flex items-center justify-between ${chartSymbol === s.symbol ? 'bg-nofx-gold/10 text-nofx-gold' : 'text-nofx-text-muted'}`}
+                                    className={`w-full px-3 py-2 text-left text-[11px] font-mono hover:bg-fg/5 transition-all flex items-center justify-between ${chartSymbol === s.symbol ? 'bg-nofx-gold/10 text-nofx-gold' : 'text-nofx-text-muted'}`}
                                   >
                                     <span>{s.symbol}</span>
                                     <span className="text-[9px] opacity-40">
@@ -343,14 +346,14 @@ export function ChartTabs({
                   )}
                 </>
               ) : (
-                <span className="px-2.5 py-1 bg-[#E9E4D6] border border-nofx-line rounded text-[11px] font-bold text-nofx-text-main font-mono">
+                <span className="px-2.5 py-1 bg-surface-hover border border-nofx-line rounded text-[11px] font-bold text-nofx-text-main font-mono">
                   {chartSymbol}
                 </span>
               )}
             </div>
 
             {/* Interval Selector - Allow scrolling if needed */}
-            <div className="flex items-center bg-[#E9E4D6] rounded border border-nofx-line overflow-x-auto no-scrollbar max-w-[200px] md:max-w-none">
+            <div className="flex items-center bg-surface-hover rounded border border-nofx-line overflow-x-auto no-scrollbar max-w-[200px] md:max-w-none">
               {INTERVALS.map((int) => (
                 <button
                   key={int.value}
@@ -358,7 +361,7 @@ export function ChartTabs({
                   className={`px-2 py-1 text-[10px] font-medium transition-all ${
                     interval === int.value
                       ? 'bg-nofx-gold/20 text-nofx-gold'
-                      : 'text-nofx-text-muted hover:text-[#1E1E1A] hover:bg-[#1E1E1A]/5'
+                      : 'text-nofx-text-muted hover:text-fg hover:bg-fg/5'
                   }`}
                 >
                   {int.label}
@@ -376,11 +379,11 @@ export function ChartTabs({
                 value={symbolInput}
                 onChange={(e) => setSymbolInput(e.target.value)}
                 placeholder="Sym"
-                className="w-16 px-2 py-1 bg-[#E9E4D6] border border-nofx-line rounded-l text-[10px] text-[#1E1E1A] placeholder-[#8A8A7C] focus:outline-none focus:border-nofx-gold/50 font-mono transition-colors"
+                className="w-16 px-2 py-1 bg-surface-hover border border-nofx-line rounded-l text-[10px] text-fg placeholder-fg-3 focus:outline-none focus:border-nofx-gold/50 font-mono transition-colors"
               />
               <button
                 type="submit"
-                className="px-2 py-1 bg-[#1E1E1A]/5 border border-nofx-line border-l-0 rounded-r text-[10px] text-nofx-text-muted hover:text-[#1E1E1A] hover:bg-[#1E1E1A]/10 transition-all"
+                className="px-2 py-1 bg-fg/5 border border-nofx-line border-l-0 rounded-r text-[10px] text-nofx-text-muted hover:text-fg hover:bg-fg/10 transition-all"
               >
                 Go
               </button>
@@ -390,7 +393,7 @@ export function ChartTabs({
       </div>
 
       {/* Tab Content - Chart autosizes to this container */}
-      <div className="relative flex-1 bg-[#F2EFE6]/50 rounded-b-lg overflow-hidden h-full min-h-0">
+      <div className="relative flex-1 bg-surface-2/50 rounded-b-lg overflow-hidden h-full min-h-0">
         <AnimatePresence mode="wait">
           {activeTab === 'equity' ? (
             <motion.div

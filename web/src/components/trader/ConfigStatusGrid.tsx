@@ -65,7 +65,7 @@ export function ConfigStatusGrid({
     if (!state) {
       return {
         label: language === 'zh' ? '未检查' : 'NOT CHECKED',
-        className: 'text-[#6E6E60] border-[#B3AB92]/80 bg-[#ECE8DB]/40',
+        className: 'text-fg-3 border-line-strong/80 bg-surface/40',
       }
     }
 
@@ -78,7 +78,7 @@ export function ConfigStatusGrid({
       case 'disabled':
         return {
           label: language === 'zh' ? '已禁用' : 'DISABLED',
-          className: 'text-[#6E6E60] border-[#B3AB92]/80 bg-[#ECE8DB]/40',
+          className: 'text-fg-3 border-line-strong/80 bg-surface/40',
         }
       case 'missing_credentials':
         return {
@@ -98,7 +98,7 @@ export function ConfigStatusGrid({
       default:
         return {
           label: language === 'zh' ? '暂时无法获取' : 'UNAVAILABLE',
-          className: 'text-[#3A3A32] border-[#A69E86]/60 bg-[#E4E0D0]/50',
+          className: 'text-fg-2 border-line-strong/60 bg-surface-hover/50',
         }
     }
   }
@@ -107,9 +107,9 @@ export function ConfigStatusGrid({
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* AI Models Card */}
       <div className="nofx-glass rounded-lg border border-nofx-line/50 overflow-hidden">
-        <div className="px-4 py-3 border-b border-nofx-line/50 bg-[#F2EFE6] flex items-center gap-2 ">
+        <div className="px-4 py-3 border-b border-nofx-line/50 bg-surface-2 flex items-center gap-2 ">
           <Brain className="w-4 h-4 text-nofx-gold" />
-          <h3 className="text-sm font-mono tracking-widest text-[#3A3A32] uppercase">
+          <h3 className="text-sm font-mono tracking-widest text-fg-2 uppercase">
             {t('aiModels', language)}
           </h3>
         </div>
@@ -122,15 +122,13 @@ export function ConfigStatusGrid({
               <div
                 key={model.id}
                 className={`group relative flex items-center justify-between p-3 rounded-md transition-all border border-transparent ${
-                  inUse
-                    ? 'opacity-80'
-                    : 'hover:bg-[#1E1E1A]/5 hover:border-nofx-line'
-                } bg-[#F2EFE6]`}
+                  inUse ? 'opacity-80' : 'hover:bg-fg/5 hover:border-nofx-line'
+                } bg-surface-2`}
               >
                 <div className="flex items-center gap-4">
                   <div className="relative">
                     <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-sm group-hover:bg-indigo-500/30 transition-all"></div>
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-[#F2EFE6] border border-nofx-line relative z-10">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-2 border border-nofx-line relative z-10">
                       {getModelIcon(model.provider || model.id, {
                         width: 20,
                         height: 20,
@@ -143,10 +141,10 @@ export function ConfigStatusGrid({
                   </div>
 
                   <div className="min-w-0">
-                    <div className="font-mono text-sm text-[#2A2A24] group-hover:text-nofx-gold transition-colors">
+                    <div className="font-mono text-sm text-fg-2 group-hover:text-nofx-gold transition-colors">
                       {getShortName(model.name)}
                     </div>
-                    <div className="text-[10px] text-[#6E6E60] font-mono flex items-center gap-2">
+                    <div className="text-[10px] text-fg-3 font-mono flex items-center gap-2">
                       {model.customModelName ||
                         AI_PROVIDER_CONFIG[model.provider]?.defaultModel ||
                         ''}
@@ -163,7 +161,7 @@ export function ConfigStatusGrid({
                       e.stopPropagation()
                       onModelClick(model.id)
                     }}
-                    className="p-1.5 rounded-md text-[#6E6E60] hover:text-nofx-gold hover:bg-[#1E1E1A]/5 transition-all"
+                    className="p-1.5 rounded-md text-fg-3 hover:text-nofx-gold hover:bg-fg/5 transition-all"
                   >
                     <Pencil className="w-3.5 h-3.5" />
                   </button>
@@ -177,8 +175,8 @@ export function ConfigStatusGrid({
                     }}
                     className={`p-1.5 rounded-md transition-all ${
                       inUse
-                        ? 'text-[#8A8A7C] cursor-not-allowed'
-                        : 'text-[#6E6E60] hover:text-red-400 hover:bg-red-500/10'
+                        ? 'text-fg-3 cursor-not-allowed'
+                        : 'text-fg-3 hover:text-red-400 hover:bg-red-500/10'
                     }`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -195,7 +193,7 @@ export function ConfigStatusGrid({
                         {usageInfo.runningCount}/{usageInfo.totalCount} ACTIVE
                       </span>
                     ) : (
-                      <span className="text-[10px] font-mono text-[#8A8A7C] uppercase tracking-wider">
+                      <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider">
                         {language === 'zh' ? '就绪' : 'STANDBY'}
                       </span>
                     )}
@@ -206,9 +204,9 @@ export function ConfigStatusGrid({
           })}
 
           {configuredModels.length === 0 && (
-            <div className="text-center py-10 border border-dashed border-[#C0B9A2] rounded-lg bg-[#F2EFE6]">
-              <Brain className="w-8 h-8 mx-auto mb-3 text-[#8A8A7C]" />
-              <div className="text-xs font-mono text-[#6E6E60] uppercase tracking-widest">
+            <div className="text-center py-10 border border-dashed border-line rounded-lg bg-surface-2">
+              <Brain className="w-8 h-8 mx-auto mb-3 text-fg-3" />
+              <div className="text-xs font-mono text-fg-3 uppercase tracking-widest">
                 {t('noModelsConfigured', language)}
               </div>
             </div>
@@ -218,9 +216,9 @@ export function ConfigStatusGrid({
 
       {/* Exchanges Card */}
       <div className="nofx-glass rounded-lg border border-nofx-line/50 overflow-hidden">
-        <div className="px-4 py-3 border-b border-nofx-line/50 bg-[#F2EFE6] flex items-center gap-2 ">
+        <div className="px-4 py-3 border-b border-nofx-line/50 bg-surface-2 flex items-center gap-2 ">
           <Landmark className="w-4 h-4 text-nofx-gold" />
-          <h3 className="text-sm font-mono tracking-widest text-[#3A3A32] uppercase">
+          <h3 className="text-sm font-mono tracking-widest text-fg-2 uppercase">
             {t('exchanges', language)}
           </h3>
         </div>
@@ -237,14 +235,14 @@ export function ConfigStatusGrid({
                 className={`group relative flex items-center justify-between p-3 rounded-md transition-all border border-transparent ${
                   inUse
                     ? 'opacity-80'
-                    : 'hover:bg-[#1E1E1A]/5 hover:border-nofx-line cursor-pointer'
-                } bg-[#F2EFE6]`}
+                    : 'hover:bg-fg/5 hover:border-nofx-line cursor-pointer'
+                } bg-surface-2`}
                 onClick={() => onExchangeClick(exchange.id)}
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="relative">
-                    <div className="absolute inset-0 bg-yellow-500/20 rounded-full blur-sm group-hover:bg-yellow-500/30 transition-all"></div>
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-[#F2EFE6] border border-nofx-line relative z-10">
+                    <div className="absolute inset-0 bg-yellow-500/20 rounded-full blur-sm group-hover:brightness-110/30 transition-all"></div>
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-2 border border-nofx-line relative z-10">
                       {getExchangeIcon(exchange.exchange_type || exchange.id, {
                         width: 20,
                         height: 20,
@@ -253,14 +251,14 @@ export function ConfigStatusGrid({
                   </div>
 
                   <div className="min-w-0">
-                    <div className="font-mono text-sm text-[#2A2A24] group-hover:text-nofx-gold transition-colors truncate">
+                    <div className="font-mono text-sm text-fg-2 group-hover:text-nofx-gold transition-colors truncate">
                       {exchange.exchange_type?.toUpperCase() ||
                         getShortName(exchange.name)}
-                      <span className="text-[10px] text-[#6E6E60] ml-2 border border-[#C0B9A2] px-1 rounded">
+                      <span className="text-[10px] text-fg-3 ml-2 border border-line px-1 rounded">
                         {exchange.account_name || 'DEFAULT'}
                       </span>
                     </div>
-                    <div className="text-[10px] text-[#6E6E60] font-mono flex items-center gap-2">
+                    <div className="text-[10px] text-fg-3 font-mono flex items-center gap-2">
                       {exchange.type?.toUpperCase() || 'CEX'}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-mono">
@@ -274,7 +272,7 @@ export function ConfigStatusGrid({
                           : stateMeta.label}
                       </span>
                       {state?.status !== 'ok' && state?.error_message ? (
-                        <span className="text-[#6E6E60] truncate max-w-[220px]">
+                        <span className="text-fg-3 truncate max-w-[220px]">
                           {state.error_message}
                         </span>
                       ) : null}
@@ -298,7 +296,7 @@ export function ConfigStatusGrid({
                         className="flex items-center gap-1"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <span className="text-[10px] font-mono text-[#6E6E60] bg-[#E9E4D6] px-1.5 py-0.5 rounded border border-[#C0B9A2]">
+                        <span className="text-[10px] font-mono text-fg-3 bg-surface-hover px-1.5 py-0.5 rounded border border-line">
                           {isVisible ? walletAddr : truncateAddress(walletAddr)}
                         </span>
                         <button
@@ -306,7 +304,7 @@ export function ConfigStatusGrid({
                             e.stopPropagation()
                             onToggleExchangeAddress(exchange.id)
                           }}
-                          className="text-[#8A8A7C] hover:text-[#3A3A32]"
+                          className="text-fg-3 hover:text-fg-2"
                         >
                           {isVisible ? <EyeOff size={10} /> : <Eye size={10} />}
                         </button>
@@ -315,7 +313,7 @@ export function ConfigStatusGrid({
                             e.stopPropagation()
                             onCopyAddress(`exchange-${exchange.id}`, walletAddr)
                           }}
-                          className="text-[#8A8A7C] hover:text-nofx-gold"
+                          className="text-fg-3 hover:text-nofx-gold"
                         >
                           {isCopied ? (
                             <Check size={10} className="text-green-500" />
@@ -338,7 +336,7 @@ export function ConfigStatusGrid({
                       {usageInfo.runningCount}/{usageInfo.totalCount} ACTIVE
                     </span>
                   ) : (
-                    <span className="text-[10px] font-mono text-[#8A8A7C] uppercase tracking-wider">
+                    <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider">
                       {language === 'zh' ? '就绪' : 'STANDBY'}
                     </span>
                   )}
@@ -347,9 +345,9 @@ export function ConfigStatusGrid({
             )
           })}
           {configuredExchanges.length === 0 && (
-            <div className="text-center py-10 border border-dashed border-[#C0B9A2] rounded-lg bg-[#F2EFE6]">
-              <Landmark className="w-8 h-8 mx-auto mb-3 text-[#8A8A7C]" />
-              <div className="text-xs font-mono text-[#6E6E60] uppercase tracking-widest">
+            <div className="text-center py-10 border border-dashed border-line rounded-lg bg-surface-2">
+              <Landmark className="w-8 h-8 mx-auto mb-3 text-fg-3" />
+              <div className="text-xs font-mono text-fg-3 uppercase tracking-widest">
                 {t('noExchangesConfigured', language)}
               </div>
             </div>

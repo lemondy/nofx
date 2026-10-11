@@ -531,21 +531,25 @@ export function ChartWithOrders({
   return (
     <div
       className="relative"
-      style={{ background: '#F2EFE6', borderRadius: '8px', overflow: 'hidden' }}
+      style={{
+        background: 'var(--surface-2)',
+        borderRadius: '8px',
+        overflow: 'hidden',
+      }}
     >
       {/* Title bar */}
       <div
         className="flex items-center justify-between p-4"
-        style={{ borderBottom: '1px solid #C0B9A2' }}
+        style={{ borderBottom: '1px solid var(--line)' }}
       >
         <div className="flex items-center gap-3">
           <span className="text-xl">📈</span>
-          <h3 className="text-lg font-bold" style={{ color: '#1E1E1A' }}>
+          <h3 className="text-lg font-bold" style={{ color: 'var(--fg)' }}>
             {symbol} {interval}
           </h3>
         </div>
         {loading && (
-          <div className="text-sm" style={{ color: '#6E6E60' }}>
+          <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
             {t('chartWithOrders.loading', language)}
           </div>
         )}
@@ -564,10 +568,11 @@ export function ChartWithOrders({
               left: '10px',
               top: '10px',
               padding: '8px 12px',
-              background: 'rgba(239, 236, 225, 0.95)',
-              border: '1px solid rgba(184, 145, 42, 0.3)',
+              background: 'color-mix(in srgb, var(--surface) 95%, transparent)',
+              border:
+                '1px solid color-mix(in srgb, var(--brand) 30%, transparent)',
               borderRadius: '6px',
-              color: '#1E1E1A',
+              color: 'var(--fg)',
               fontSize: '12px',
               fontFamily: 'monospace',
               pointerEvents: 'none',
@@ -579,7 +584,7 @@ export function ChartWithOrders({
             <div
               style={{
                 marginBottom: '6px',
-                color: '#B8912A',
+                color: 'var(--brand)',
                 fontWeight: 'bold',
                 fontSize: '11px',
               }}
@@ -602,28 +607,28 @@ export function ChartWithOrders({
                 fontSize: '11px',
               }}
             >
-              <span style={{ color: '#6E6E60' }}>O:</span>
-              <span style={{ color: '#1E1E1A', fontWeight: '500' }}>
+              <span style={{ color: 'var(--fg-3)' }}>O:</span>
+              <span style={{ color: 'var(--fg)', fontWeight: '500' }}>
                 {tooltipData.open?.toFixed(2)}
               </span>
 
-              <span style={{ color: '#6E6E60' }}>H:</span>
-              <span style={{ color: '#2E7D4F', fontWeight: '500' }}>
+              <span style={{ color: 'var(--fg-3)' }}>H:</span>
+              <span style={{ color: 'var(--up)', fontWeight: '500' }}>
                 {tooltipData.high?.toFixed(2)}
               </span>
 
-              <span style={{ color: '#6E6E60' }}>L:</span>
-              <span style={{ color: '#C0392B', fontWeight: '500' }}>
+              <span style={{ color: 'var(--fg-3)' }}>L:</span>
+              <span style={{ color: 'var(--down)', fontWeight: '500' }}>
                 {tooltipData.low?.toFixed(2)}
               </span>
 
-              <span style={{ color: '#6E6E60' }}>C:</span>
+              <span style={{ color: 'var(--fg-3)' }}>C:</span>
               <span
                 style={{
                   color:
                     tooltipData.close >= tooltipData.open
-                      ? '#2E7D4F'
-                      : '#C0392B',
+                      ? 'var(--up)'
+                      : 'var(--down)',
                   fontWeight: 'bold',
                 }}
               >
@@ -638,11 +643,13 @@ export function ChartWithOrders({
       {error && (
         <div
           className="absolute inset-0 flex items-center justify-center"
-          style={{ background: 'rgba(244, 241, 232, 0.9)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--surface) 90%, transparent)',
+          }}
         >
           <div className="text-center">
             <div className="text-2xl mb-2">⚠️</div>
-            <div style={{ color: '#C0392B' }}>{error}</div>
+            <div style={{ color: 'var(--down)' }}>{error}</div>
           </div>
         </div>
       )}
@@ -650,16 +657,16 @@ export function ChartWithOrders({
       {/* Legend */}
       <div
         className="flex items-center gap-4 p-4 text-xs"
-        style={{ borderTop: '1px solid #C0B9A2', color: '#6E6E60' }}
+        style={{ borderTop: '1px solid var(--line)', color: 'var(--fg-3)' }}
       >
         <div className="flex items-center gap-2">
-          <span className="font-bold" style={{ color: '#2E7D4F' }}>
+          <span className="font-bold" style={{ color: 'var(--up)' }}>
             B
           </span>
           <span>{t('chartWithOrders.buy', language)}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="font-bold" style={{ color: '#C0392B' }}>
+          <span className="font-bold" style={{ color: 'var(--down)' }}>
             S
           </span>
           <span>{t('chartWithOrders.sell', language)}</span>

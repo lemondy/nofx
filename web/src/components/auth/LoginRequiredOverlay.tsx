@@ -74,7 +74,7 @@ export function LoginRequiredOverlay({
                   <div className="flex justify-center mb-6">
                     <div className="relative">
                       <div className="absolute inset-0 bg-red-500/20 blur-xl animate-pulse"></div>
-                      <div className="bg-nofx-bg border border-red-500/50 text-red-500 px-4 py-2 flex items-center gap-3 shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+                      <div className="bg-nofx-bg border border-red-500/50 text-red-500 px-4 py-2 flex items-center gap-3 shadow-[0_0_15px_color-mix(in_srgb,var(--down)_20%,transparent)]">
                         <AlertTriangle size={18} className="animate-pulse" />
                         <span className="font-bold tracking-widest text-sm uppercase">
                           {tr('accessDenied')}
@@ -86,7 +86,7 @@ export function LoginRequiredOverlay({
                   {/* Terminal Text */}
                   <div className="space-y-4 mb-8">
                     <div className="text-center">
-                      <h2 className="text-xl font-bold text-[#1E1E1A] uppercase tracking-wider mb-2">
+                      <h2 className="text-xl font-bold text-fg uppercase tracking-wider mb-2">
                         {tr('title')}
                       </h2>
                       <p className="text-nofx-gold text-xs uppercase tracking-widest border-b border-nofx-gold/20 pb-4 inline-block">
@@ -117,7 +117,7 @@ export function LoginRequiredOverlay({
                   <div className="space-y-3">
                     <a
                       href="/login"
-                      className="flex items-center justify-center gap-2 w-full py-3 bg-nofx-gold text-black font-bold text-xs uppercase tracking-widest hover:bg-yellow-400 transition-all shadow-neon hover:shadow-[0_0_25px_rgba(184,145,42,0.4)] group"
+                      className="flex items-center justify-center gap-2 w-full py-3 bg-nofx-gold text-brand-fg font-bold text-xs uppercase tracking-widest hover:brightness-110 transition-all shadow-neon hover:shadow-[0_0_25px_color-mix(in_srgb,var(--brand)_40%,transparent)] group"
                     >
                       <LogIn size={14} />
                       <span>{tr('loginButton')}</span>
@@ -128,7 +128,7 @@ export function LoginRequiredOverlay({
 
                     <a
                       href="/register"
-                      className="flex items-center justify-center gap-2 w-full py-3 bg-transparent border border-nofx-gold/20 text-nofx-text-muted hover:text-[#1E1E1A] hover:border-nofx-gold font-bold text-xs uppercase tracking-widest transition-all hover:bg-nofx-gold/10"
+                      className="flex items-center justify-center gap-2 w-full py-3 bg-transparent border border-nofx-gold/20 text-nofx-text-muted hover:text-fg hover:border-nofx-gold font-bold text-xs uppercase tracking-widest transition-all hover:bg-nofx-gold/10"
                     >
                       <UserPlus size={14} />
                       <span>{tr('registerButton')}</span>

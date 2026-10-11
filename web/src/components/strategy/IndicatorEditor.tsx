@@ -10,6 +10,7 @@ import {
 import type { IndicatorConfig } from '../../types'
 import { indicator, ts } from '../../i18n/strategy-translations'
 import { NofxSelect } from '../ui/select'
+import { withAlpha } from '../../lib/colorAlpha'
 
 // Default NofxOS API Key
 
@@ -82,7 +83,7 @@ export function IndicatorEditor({
             : 'Maximum 4 timeframes allowed'
         toast.className =
           'fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm z-50 shadow-lg'
-        toast.style.cssText = 'background:#C0392B;color:#fff;'
+        toast.style.cssText = 'background:var(--down);color:var(--brand-fg);'
         document.body.appendChild(toast)
         setTimeout(() => toast.remove(), 2000)
         return
@@ -112,10 +113,10 @@ export function IndicatorEditor({
   }
 
   const categoryColors: Record<string, string> = {
-    scalp: '#C0392B',
-    intraday: '#B8912A',
-    swing: '#2E7D4F',
-    position: '#5e7a5e',
+    scalp: 'var(--down)',
+    intraday: 'var(--brand)',
+    swing: 'var(--up)',
+    position: 'var(--info)',
   }
 
   // Ensure enable_raw_klines is always true
@@ -142,15 +143,15 @@ export function IndicatorEditor({
         className="rounded-lg overflow-hidden relative"
         style={{
           background:
-            'linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.08) 50%, rgba(236, 72, 153, 0.08) 100%)',
-          border: '1px solid rgba(139, 92, 246, 0.3)',
+            'linear-gradient(135deg, var(--ai-soft) 0%, var(--ai-soft) 50%, rgba(236, 72, 153, 0.08) 100%)',
+          border: '1px solid color-mix(in srgb, var(--ai) 30%, transparent)',
         }}
       >
         {/* Decorative gradient line at top */}
         <div
           className="absolute top-0 left-0 right-0 h-[2px]"
           style={{
-            background: 'linear-gradient(90deg, #6366f1, #a855f7, #ec4899)',
+            background: 'linear-gradient(90deg, var(--ai), var(--ai), #ec4899)',
           }}
         />
 
@@ -161,19 +162,19 @@ export function IndicatorEditor({
               <div
                 className="w-8 h-8 rounded-lg flex items-center justify-center"
                 style={{
-                  background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                  background: 'linear-gradient(135deg, var(--ai), var(--ai))',
                 }}
               >
-                <Zap className="w-4 h-4 text-[#1E1E1A]" />
+                <Zap className="w-4 h-4 text-fg" />
               </div>
               <div>
                 <h3
                   className="text-sm font-semibold"
-                  style={{ color: '#1E1E1A' }}
+                  style={{ color: 'var(--fg)' }}
                 >
                   {ts(indicator.nofxosTitle, language)}
                 </h3>
-                <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+                <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
                   {ts(indicator.nofxosFeatures, language)}
                 </span>
               </div>
@@ -184,7 +185,7 @@ export function IndicatorEditor({
           <div className="mt-4">
             <div
               className="text-[10px] font-medium mb-2"
-              style={{ color: '#6E6E60' }}
+              style={{ color: 'var(--fg-3)' }}
             >
               {ts(indicator.nofxosDataSources, language)}
             </div>
@@ -194,11 +195,11 @@ export function IndicatorEditor({
                 className="p-2.5 rounded-lg transition-all cursor-pointer"
                 style={{
                   background: config.enable_quant_data
-                    ? 'rgba(96, 165, 250, 0.1)'
-                    : 'rgba(236, 232, 219, 0.5)',
+                    ? 'var(--info-soft)'
+                    : 'color-mix(in srgb, var(--surface) 50%, transparent)',
                   border: config.enable_quant_data
-                    ? '1px solid rgba(96, 165, 250, 0.3)'
-                    : '1px solid rgba(192, 185, 162, 0.5)',
+                    ? '1px solid color-mix(in srgb, var(--info) 30%, transparent)'
+                    : '1px solid var(--line)',
                   opacity: disabled ? 0.5 : 1,
                 }}
                 onClick={() =>
@@ -213,11 +214,11 @@ export function IndicatorEditor({
                   <div className="flex items-center gap-2">
                     <div
                       className="w-2 h-2 rounded-full"
-                      style={{ background: '#5e7a5e' }}
+                      style={{ background: 'var(--info)' }}
                     />
                     <span
                       className="text-xs font-medium"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {ts(indicator.quantData, language)}
                     </span>
@@ -237,7 +238,10 @@ export function IndicatorEditor({
                     className="w-3.5 h-3.5 rounded accent-blue-500"
                   />
                 </div>
-                <p className="text-[10px] mt-1" style={{ color: '#8A8A7C' }}>
+                <p
+                  className="text-[10px] mt-1"
+                  style={{ color: 'var(--fg-3)' }}
+                >
                   {ts(indicator.quantDataDesc, language)}
                 </p>
                 {config.enable_quant_data && (
@@ -259,7 +263,7 @@ export function IndicatorEditor({
                       />
                       <span
                         className="text-[10px]"
-                        style={{ color: '#1E1E1A' }}
+                        style={{ color: 'var(--fg)' }}
                       >
                         OI
                       </span>
@@ -281,7 +285,7 @@ export function IndicatorEditor({
                       />
                       <span
                         className="text-[10px]"
-                        style={{ color: '#1E1E1A' }}
+                        style={{ color: 'var(--fg)' }}
                       >
                         Netflow
                       </span>
@@ -295,11 +299,11 @@ export function IndicatorEditor({
                 className="p-2.5 rounded-lg transition-all cursor-pointer"
                 style={{
                   background: config.enable_oi_ranking
-                    ? 'rgba(34, 197, 94, 0.1)'
-                    : 'rgba(236, 232, 219, 0.5)',
+                    ? 'var(--up-soft)'
+                    : 'color-mix(in srgb, var(--surface) 50%, transparent)',
                   border: config.enable_oi_ranking
-                    ? '1px solid rgba(34, 197, 94, 0.3)'
-                    : '1px solid rgba(192, 185, 162, 0.5)',
+                    ? '1px solid color-mix(in srgb, var(--up) 30%, transparent)'
+                    : '1px solid var(--line)',
                   opacity: disabled ? 0.5 : 1,
                 }}
                 onClick={() =>
@@ -320,11 +324,11 @@ export function IndicatorEditor({
                   <div className="flex items-center gap-2">
                     <div
                       className="w-2 h-2 rounded-full"
-                      style={{ background: '#22c55e' }}
+                      style={{ background: 'var(--up)' }}
                     />
                     <span
                       className="text-xs font-medium"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {ts(indicator.oiRanking, language)}
                     </span>
@@ -350,7 +354,10 @@ export function IndicatorEditor({
                     className="w-3.5 h-3.5 rounded accent-green-500"
                   />
                 </div>
-                <p className="text-[10px] mt-1" style={{ color: '#8A8A7C' }}>
+                <p
+                  className="text-[10px] mt-1"
+                  style={{ color: 'var(--fg-3)' }}
+                >
                   {ts(indicator.oiRankingDesc, language)}
                 </p>
                 {config.enable_oi_ranking && (
@@ -367,9 +374,9 @@ export function IndicatorEditor({
                       disabled={disabled}
                       className="flex-1 px-2 py-1 rounded text-[10px]"
                       style={{
-                        background: '#E9E4D6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       options={[
                         { value: '1h', label: '1h' },
@@ -386,9 +393,9 @@ export function IndicatorEditor({
                       disabled={disabled}
                       className="w-14 px-2 py-1 rounded text-[10px]"
                       style={{
-                        background: '#E9E4D6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       options={[5, 10, 15, 20].map((n) => ({
                         value: n,
@@ -404,11 +411,11 @@ export function IndicatorEditor({
                 className="p-2.5 rounded-lg transition-all cursor-pointer"
                 style={{
                   background: config.enable_netflow_ranking
-                    ? 'rgba(245, 158, 11, 0.1)'
-                    : 'rgba(236, 232, 219, 0.5)',
+                    ? 'var(--warn-soft)'
+                    : 'color-mix(in srgb, var(--surface) 50%, transparent)',
                   border: config.enable_netflow_ranking
-                    ? '1px solid rgba(245, 158, 11, 0.3)'
-                    : '1px solid rgba(192, 185, 162, 0.5)',
+                    ? '1px solid color-mix(in srgb, var(--warn) 30%, transparent)'
+                    : '1px solid var(--line)',
                   opacity: disabled ? 0.5 : 1,
                 }}
                 onClick={() =>
@@ -431,11 +438,11 @@ export function IndicatorEditor({
                   <div className="flex items-center gap-2">
                     <div
                       className="w-2 h-2 rounded-full"
-                      style={{ background: '#f59e0b' }}
+                      style={{ background: 'var(--warn)' }}
                     />
                     <span
                       className="text-xs font-medium"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {ts(indicator.netflowRanking, language)}
                     </span>
@@ -462,7 +469,10 @@ export function IndicatorEditor({
                     className="w-3.5 h-3.5 rounded accent-amber-500"
                   />
                 </div>
-                <p className="text-[10px] mt-1" style={{ color: '#8A8A7C' }}>
+                <p
+                  className="text-[10px] mt-1"
+                  style={{ color: 'var(--fg-3)' }}
+                >
                   {ts(indicator.netflowRankingDesc, language)}
                 </p>
                 {config.enable_netflow_ranking && (
@@ -479,9 +489,9 @@ export function IndicatorEditor({
                       disabled={disabled}
                       className="flex-1 px-2 py-1 rounded text-[10px]"
                       style={{
-                        background: '#E9E4D6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       options={[
                         { value: '1h', label: '1h' },
@@ -501,9 +511,9 @@ export function IndicatorEditor({
                       disabled={disabled}
                       className="w-14 px-2 py-1 rounded text-[10px]"
                       style={{
-                        background: '#E9E4D6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       options={[5, 10, 15, 20].map((n) => ({
                         value: n,
@@ -520,10 +530,10 @@ export function IndicatorEditor({
                 style={{
                   background: config.enable_price_ranking
                     ? 'rgba(236, 72, 153, 0.1)'
-                    : 'rgba(236, 232, 219, 0.5)',
+                    : 'color-mix(in srgb, var(--surface) 50%, transparent)',
                   border: config.enable_price_ranking
                     ? '1px solid rgba(236, 72, 153, 0.3)'
-                    : '1px solid rgba(192, 185, 162, 0.5)',
+                    : '1px solid var(--line)',
                   opacity: disabled ? 0.5 : 1,
                 }}
                 onClick={() =>
@@ -550,7 +560,7 @@ export function IndicatorEditor({
                     />
                     <span
                       className="text-xs font-medium"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {ts(indicator.priceRanking, language)}
                     </span>
@@ -576,7 +586,10 @@ export function IndicatorEditor({
                     className="w-3.5 h-3.5 rounded accent-pink-500"
                   />
                 </div>
-                <p className="text-[10px] mt-1" style={{ color: '#8A8A7C' }}>
+                <p
+                  className="text-[10px] mt-1"
+                  style={{ color: 'var(--fg-3)' }}
+                >
                   {ts(indicator.priceRankingDesc, language)}
                 </p>
                 {config.enable_price_ranking && (
@@ -593,9 +606,9 @@ export function IndicatorEditor({
                       disabled={disabled}
                       className="flex-1 px-2 py-1 rounded text-[10px]"
                       style={{
-                        background: '#E9E4D6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       options={[
                         { value: '1h', label: '1h' },
@@ -619,9 +632,9 @@ export function IndicatorEditor({
                       disabled={disabled}
                       className="w-14 px-2 py-1 rounded text-[10px]"
                       style={{
-                        background: '#E9E4D6',
-                        border: '1px solid #C0B9A2',
-                        color: '#1E1E1A',
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--fg)',
                       }}
                       options={[5, 10, 15, 20].map((n) => ({
                         value: n,
@@ -641,17 +654,23 @@ export function IndicatorEditor({
       {/* ============================================ */}
       <div
         className="rounded-lg overflow-hidden"
-        style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+        style={{
+          background: 'var(--surface-2)',
+          border: '1px solid var(--line)',
+        }}
       >
         <div
           className="px-3 py-2 flex items-center gap-2"
-          style={{ background: '#E9E4D6', borderBottom: '1px solid #C0B9A2' }}
+          style={{
+            background: 'var(--surface-hover)',
+            borderBottom: '1px solid var(--line)',
+          }}
         >
-          <BarChart2 className="w-4 h-4" style={{ color: '#B8912A' }} />
-          <span className="text-sm font-medium" style={{ color: '#1E1E1A' }}>
+          <BarChart2 className="w-4 h-4" style={{ color: 'var(--brand)' }} />
+          <span className="text-sm font-medium" style={{ color: 'var(--fg)' }}>
             {ts(indicator.marketData, language)}
           </span>
-          <span className="text-xs" style={{ color: '#6E6E60' }}>
+          <span className="text-xs" style={{ color: 'var(--fg-3)' }}>
             - {ts(indicator.marketDataDesc, language)}
           </span>
         </div>
@@ -661,37 +680,41 @@ export function IndicatorEditor({
           <div
             className="flex items-center justify-between p-3 rounded-lg"
             style={{
-              background: 'rgba(184, 145, 42, 0.08)',
-              border: '1px solid rgba(184, 145, 42, 0.2)',
+              background: 'var(--brand-soft)',
+              border:
+                '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
             }}
           >
             <div className="flex items-center gap-3">
               <div
                 className="w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ background: 'rgba(184, 145, 42, 0.15)' }}
+                style={{ background: 'var(--brand-soft)' }}
               >
-                <TrendingUp className="w-4 h-4" style={{ color: '#B8912A' }} />
+                <TrendingUp
+                  className="w-4 h-4"
+                  style={{ color: 'var(--brand)' }}
+                />
               </div>
               <div>
                 <div className="flex items-center gap-2">
                   <span
                     className="text-sm font-medium"
-                    style={{ color: '#1E1E1A' }}
+                    style={{ color: 'var(--fg)' }}
                   >
                     {ts(indicator.rawKlines, language)}
                   </span>
                   <span
                     className="px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center gap-1"
                     style={{
-                      background: 'rgba(184, 145, 42, 0.2)',
-                      color: '#B8912A',
+                      background: 'var(--brand-soft)',
+                      color: 'var(--brand)',
                     }}
                   >
                     <Lock className="w-2.5 h-2.5" />
                     {ts(indicator.required, language)}
                   </span>
                 </div>
-                <p className="text-xs mt-0.5" style={{ color: '#6E6E60' }}>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--fg-3)' }}>
                   {ts(indicator.rawKlinesDesc, language)}
                 </p>
               </div>
@@ -708,16 +731,19 @@ export function IndicatorEditor({
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
-                <Clock className="w-3.5 h-3.5" style={{ color: '#6E6E60' }} />
+                <Clock
+                  className="w-3.5 h-3.5"
+                  style={{ color: 'var(--fg-3)' }}
+                />
                 <span
                   className="text-xs font-medium"
-                  style={{ color: '#1E1E1A' }}
+                  style={{ color: 'var(--fg)' }}
                 >
                   {ts(indicator.timeframes, language)}
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+                <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
                   {ts(indicator.klineCount, language)}:
                 </span>
                 <input
@@ -738,12 +764,12 @@ export function IndicatorEditor({
                   max={30}
                   className="w-16 px-2 py-1 rounded text-xs text-center"
                   style={{
-                    background: '#E9E4D6',
-                    border: '1px solid #C0B9A2',
-                    color: '#1E1E1A',
+                    background: 'var(--surface-hover)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--fg)',
                   }}
                 />
-                <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+                <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
                   Prompt根数:
                 </span>
                 <input
@@ -765,17 +791,17 @@ export function IndicatorEditor({
                   title="喂给 AI 的每周期最近K线根数:0=默认20,负数=完整历史"
                   className="w-16 px-2 py-1 rounded text-xs text-center"
                   style={{
-                    background: '#E9E4D6',
-                    border: '1px solid #C0B9A2',
-                    color: '#1E1E1A',
+                    background: 'var(--surface-hover)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--fg)',
                   }}
                 />
               </div>
             </div>
-            <p className="text-[10px] mb-2" style={{ color: '#8A8A7C' }}>
+            <p className="text-[10px] mb-2" style={{ color: 'var(--fg-3)' }}>
               {ts(indicator.timeframesDesc, language)}
             </p>
-            <p className="text-[10px] mb-2" style={{ color: '#8A8A7C' }}>
+            <p className="text-[10px] mb-2" style={{ color: 'var(--fg-3)' }}>
               Prompt根数 = 每周期只把最近 N 根已闭合 K 线喂给 AI(0=默认
               20,负数=完整历史);指标仍按完整历史计算。
             </p>
@@ -815,12 +841,12 @@ export function IndicatorEditor({
                               }`}
                               style={{
                                 background: isSelected
-                                  ? `${categoryColors[category]}15`
+                                  ? `${withAlpha(categoryColors[category], 8)}`
                                   : 'transparent',
-                                border: `1px solid ${isSelected ? categoryColors[category] : '#C0B9A2'}`,
+                                border: `1px solid ${isSelected ? categoryColors[category] : 'var(--line)'}`,
                                 color: isSelected
                                   ? categoryColors[category]
-                                  : '#6E6E60',
+                                  : 'var(--fg-3)',
                                 boxShadow: isPrimary
                                   ? `0 0 0 2px ${categoryColors[category]}`
                                   : undefined,
@@ -851,17 +877,23 @@ export function IndicatorEditor({
       {/* ============================================ */}
       <div
         className="rounded-lg overflow-hidden"
-        style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+        style={{
+          background: 'var(--surface-2)',
+          border: '1px solid var(--line)',
+        }}
       >
         <div
           className="px-3 py-2 flex items-center gap-2"
-          style={{ background: '#E9E4D6', borderBottom: '1px solid #C0B9A2' }}
+          style={{
+            background: 'var(--surface-hover)',
+            borderBottom: '1px solid var(--line)',
+          }}
         >
-          <Activity className="w-4 h-4" style={{ color: '#2E7D4F' }} />
-          <span className="text-sm font-medium" style={{ color: '#1E1E1A' }}>
+          <Activity className="w-4 h-4" style={{ color: 'var(--up)' }} />
+          <span className="text-sm font-medium" style={{ color: 'var(--fg)' }}>
             {ts(indicator.technicalIndicators, language)}
           </span>
-          <span className="text-xs" style={{ color: '#6E6E60' }}>
+          <span className="text-xs" style={{ color: 'var(--fg-3)' }}>
             - {ts(indicator.technicalIndicatorsDesc, language)}
           </span>
         </div>
@@ -870,13 +902,15 @@ export function IndicatorEditor({
           {/* Tip */}
           <div
             className="flex items-start gap-2 mb-3 p-2 rounded"
-            style={{ background: 'rgba(46, 125, 79, 0.05)' }}
+            style={{
+              background: 'color-mix(in srgb, var(--up) 5%, transparent)',
+            }}
           >
             <Info
               className="w-3.5 h-3.5 mt-0.5 flex-shrink-0"
-              style={{ color: '#2E7D4F' }}
+              style={{ color: 'var(--up)' }}
             />
-            <p className="text-[10px]" style={{ color: '#6E6E60' }}>
+            <p className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
               {ts(indicator.aiCanCalculate, language)}
             </p>
           </div>
@@ -888,7 +922,7 @@ export function IndicatorEditor({
                 key: 'enable_ema',
                 label: 'ema',
                 desc: 'emaDesc',
-                color: '#B8912A',
+                color: 'var(--brand)',
                 periodKey: 'ema_periods',
                 defaultPeriods: '20,50',
               },
@@ -896,13 +930,13 @@ export function IndicatorEditor({
                 key: 'enable_macd',
                 label: 'macd',
                 desc: 'macdDesc',
-                color: '#a855f7',
+                color: 'var(--ai)',
               },
               {
                 key: 'enable_rsi',
                 label: 'rsi',
                 desc: 'rsiDesc',
-                color: '#C0392B',
+                color: 'var(--down)',
                 periodKey: 'rsi_periods',
                 defaultPeriods: '7,14',
               },
@@ -910,7 +944,7 @@ export function IndicatorEditor({
                 key: 'enable_atr',
                 label: 'atr',
                 desc: 'atrDesc',
-                color: '#5e7a5e',
+                color: 'var(--info)',
                 periodKey: 'atr_periods',
                 defaultPeriods: '14',
               },
@@ -928,9 +962,9 @@ export function IndicatorEditor({
                 className="p-2.5 rounded-lg transition-all"
                 style={{
                   background: config[key as keyof IndicatorConfig]
-                    ? `${color}08`
+                    ? `${withAlpha(color, 3)}`
                     : 'transparent',
-                  border: `1px solid ${config[key as keyof IndicatorConfig] ? `${color}30` : '#C0B9A2'}`,
+                  border: `1px solid ${config[key as keyof IndicatorConfig] ? `${withAlpha(color, 19)}` : 'var(--line)'}`,
                 }}
               >
                 <div className="flex items-center justify-between mb-1">
@@ -941,7 +975,7 @@ export function IndicatorEditor({
                     />
                     <span
                       className="text-xs font-medium"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {ts(indicator[label as keyof typeof indicator], language)}
                     </span>
@@ -959,7 +993,10 @@ export function IndicatorEditor({
                     className="w-4 h-4 rounded accent-yellow-500"
                   />
                 </div>
-                <p className="text-[10px] mb-1.5" style={{ color: '#8A8A7C' }}>
+                <p
+                  className="text-[10px] mb-1.5"
+                  style={{ color: 'var(--fg-3)' }}
+                >
                   {ts(indicator[desc as keyof typeof indicator], language)}
                 </p>
                 {periodKey && config[key as keyof IndicatorConfig] && (
@@ -982,9 +1019,9 @@ export function IndicatorEditor({
                     placeholder={defaultPeriods}
                     className="w-full px-2 py-1 rounded text-[10px] text-center"
                     style={{
-                      background: '#E9E4D6',
-                      border: '1px solid #C0B9A2',
-                      color: '#1E1E1A',
+                      background: 'var(--surface-hover)',
+                      border: '1px solid var(--line)',
+                      color: 'var(--fg)',
                     }}
                   />
                 )}
@@ -999,17 +1036,23 @@ export function IndicatorEditor({
       {/* ============================================ */}
       <div
         className="rounded-lg overflow-hidden"
-        style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+        style={{
+          background: 'var(--surface-2)',
+          border: '1px solid var(--line)',
+        }}
       >
         <div
           className="px-3 py-2 flex items-center gap-2"
-          style={{ background: '#E9E4D6', borderBottom: '1px solid #C0B9A2' }}
+          style={{
+            background: 'var(--surface-hover)',
+            borderBottom: '1px solid var(--line)',
+          }}
         >
-          <TrendingUp className="w-4 h-4" style={{ color: '#22c55e' }} />
-          <span className="text-sm font-medium" style={{ color: '#1E1E1A' }}>
+          <TrendingUp className="w-4 h-4" style={{ color: 'var(--up)' }} />
+          <span className="text-sm font-medium" style={{ color: 'var(--fg)' }}>
             {ts(indicator.marketSentiment, language)}
           </span>
-          <span className="text-xs" style={{ color: '#6E6E60' }}>
+          <span className="text-xs" style={{ color: 'var(--fg-3)' }}>
             - {ts(indicator.marketSentimentDesc, language)}
           </span>
         </div>
@@ -1021,19 +1064,19 @@ export function IndicatorEditor({
                 key: 'enable_volume',
                 label: 'volume',
                 desc: 'volumeDesc',
-                color: '#c084fc',
+                color: 'var(--ai)',
               },
               {
                 key: 'enable_oi',
                 label: 'oi',
                 desc: 'oiDesc',
-                color: '#34d399',
+                color: 'var(--up)',
               },
               {
                 key: 'enable_funding_rate',
                 label: 'fundingRate',
                 desc: 'fundingRateDesc',
-                color: '#fbbf24',
+                color: 'var(--warn)',
               },
             ].map(({ key, label, desc, color }) => (
               <div
@@ -1041,9 +1084,9 @@ export function IndicatorEditor({
                 className="p-2.5 rounded-lg transition-all"
                 style={{
                   background: config[key as keyof IndicatorConfig]
-                    ? `${color}08`
+                    ? `${withAlpha(color, 3)}`
                     : 'transparent',
-                  border: `1px solid ${config[key as keyof IndicatorConfig] ? `${color}30` : '#C0B9A2'}`,
+                  border: `1px solid ${config[key as keyof IndicatorConfig] ? `${withAlpha(color, 19)}` : 'var(--line)'}`,
                 }}
               >
                 <div className="flex items-center justify-between mb-1">
@@ -1054,7 +1097,7 @@ export function IndicatorEditor({
                     />
                     <span
                       className="text-xs font-medium"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {ts(indicator[label as keyof typeof indicator], language)}
                     </span>
@@ -1072,7 +1115,7 @@ export function IndicatorEditor({
                     className="w-4 h-4 rounded accent-yellow-500"
                   />
                 </div>
-                <p className="text-[10px]" style={{ color: '#8A8A7C' }}>
+                <p className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
                   {ts(indicator[desc as keyof typeof indicator], language)}
                 </p>
               </div>

@@ -88,7 +88,7 @@ export function SetupPage() {
   }
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-[#F2EFE6]">
+    <div className="relative min-h-screen w-full overflow-hidden bg-bg">
       {/* Decorative background - simulates the main app behind a modal */}
 
       {/* Grid */}
@@ -112,24 +112,24 @@ export function SetupPage() {
       {/* Faux UI elements in background to simulate the app */}
       <div className="absolute inset-0 pointer-events-none opacity-[0.06]">
         {/* Fake header bar */}
-        <div className="h-14 border-b border-[#A9997B] flex items-center px-6 gap-4">
-          <div className="w-8 h-8 rounded-lg bg-[#1E1E1A]/25" />
-          <div className="h-3 w-20 rounded bg-[#1E1E1A]/20" />
-          <div className="h-3 w-16 rounded bg-[#1E1E1A]/15 ml-4" />
-          <div className="h-3 w-16 rounded bg-[#1E1E1A]/15" />
-          <div className="h-3 w-16 rounded bg-[#1E1E1A]/15" />
+        <div className="h-14 border-b border-line-strong flex items-center px-6 gap-4">
+          <div className="w-8 h-8 rounded-lg bg-fg/25" />
+          <div className="h-3 w-20 rounded bg-fg/20" />
+          <div className="h-3 w-16 rounded bg-fg/15 ml-4" />
+          <div className="h-3 w-16 rounded bg-fg/15" />
+          <div className="h-3 w-16 rounded bg-fg/15" />
         </div>
         {/* Fake content cards */}
         <div className="p-6 grid grid-cols-4 gap-4 mt-2">
           {[...Array(4)].map((_, i) => (
             <div
               key={i}
-              className="h-24 rounded-xl border border-nofx-line bg-[#1E1E1A]/5"
+              className="h-24 rounded-xl border border-nofx-line bg-fg/5"
             />
           ))}
         </div>
         <div className="px-6 mt-2">
-          <div className="h-64 rounded-xl border border-nofx-line bg-[#1E1E1A]/5" />
+          <div className="h-64 rounded-xl border border-nofx-line bg-fg/5" />
         </div>
       </div>
 
@@ -149,29 +149,27 @@ export function SetupPage() {
                 <img
                   src="/icons/nofx.svg"
                   alt="NOFX"
-                  className="w-14 h-14 relative z-10 drop-shadow-[0_0_15px_rgba(184,145,42,0.3)]"
+                  className="w-14 h-14 relative z-10 drop-shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 />
               </div>
             </div>
-            <h1 className="text-2xl font-bold text-[#1E1E1A] mb-1.5">
-              {l.welcome}
-            </h1>
-            <p className="text-[#6E6E60] text-sm">{l.subtitle}</p>
+            <h1 className="text-2xl font-bold text-fg mb-1.5">{l.welcome}</h1>
+            <p className="text-fg-3 text-sm">{l.subtitle}</p>
           </div>
 
           {/* Card */}
-          <div className="bg-[#ECE8DB] border border-nofx-line rounded-2xl p-8 shadow-[0_24px_48px_-16px_rgba(30,30,26,0.18)]">
+          <div className="bg-surface border border-nofx-line rounded-2xl p-8 shadow-[0_24px_48px_-16px_color-mix(in srgb, var(--fg) 18%, transparent)]">
             <form onSubmit={handleSubmit} className="space-y-5">
               {/* Email */}
               <div>
-                <label className="block text-xs font-medium text-[#6E6E60] mb-2">
+                <label className="block text-xs font-medium text-fg-3 mb-2">
                   {l.email}
                 </label>
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-[#F2EFE6] border border-nofx-line rounded-xl px-4 py-3 text-sm text-[#1E1E1A] placeholder-[#8A8A7C] focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
+                  className="w-full bg-surface-2 border border-nofx-line rounded-xl px-4 py-3 text-sm text-fg placeholder-fg-3 focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
                   placeholder={l.emailPlaceholder}
                   required
                   autoFocus
@@ -180,7 +178,7 @@ export function SetupPage() {
 
               {/* Password */}
               <div>
-                <label className="block text-xs font-medium text-[#6E6E60] mb-2">
+                <label className="block text-xs font-medium text-fg-3 mb-2">
                   {l.password}
                 </label>
                 <div className="relative">
@@ -188,14 +186,14 @@ export function SetupPage() {
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-[#F2EFE6] border border-nofx-line rounded-xl px-4 py-3 pr-11 text-sm text-[#1E1E1A] placeholder-[#8A8A7C] focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
+                    className="w-full bg-surface-2 border border-nofx-line rounded-xl px-4 py-3 pr-11 text-sm text-fg placeholder-fg-3 focus:outline-none focus:border-nofx-gold/60 focus:ring-1 focus:ring-nofx-gold/30 transition-all"
                     placeholder={l.passwordPlaceholder}
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6E6E60] hover:text-[#3A3A32] transition-colors"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-fg-3 hover:text-fg-2 transition-colors"
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -219,16 +217,14 @@ export function SetupPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-nofx-gold hover:bg-yellow-400 active:scale-[0.98] text-black font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2 shadow-[0_0_20px_rgba(184,145,42,0.2)]"
+                className="w-full bg-nofx-gold hover:brightness-110 active:scale-[0.98] text-brand-fg font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2 shadow-[0_0_20px_color-mix(in_srgb,var(--brand)_20%,transparent)]"
               >
                 {loading ? l.submitting : l.submit}
               </button>
             </form>
           </div>
 
-          <p className="text-center text-xs text-[#8A8A7C] mt-6">
-            {l.singleUser}
-          </p>
+          <p className="text-center text-xs text-fg-3 mt-6">{l.singleUser}</p>
         </div>
       </div>
 

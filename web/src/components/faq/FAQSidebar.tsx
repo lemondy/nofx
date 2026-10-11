@@ -19,7 +19,7 @@ export function FAQSidebar({
       className="sticky top-24 h-[calc(100vh-120px)] overflow-y-auto pr-4"
       style={{
         scrollbarWidth: 'thin',
-        scrollbarColor: '#C0B9A2 #E9E4D6',
+        scrollbarColor: 'var(--line) var(--surface-hover)',
       }}
     >
       <div className="space-y-6">

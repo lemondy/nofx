@@ -32,12 +32,12 @@ export function CoinSourceEditor({
   const [newExcludedCoin, setNewExcludedCoin] = useState('')
 
   const sourceTypes = [
-    { value: 'static', icon: List, color: '#6E6E60' },
-    { value: 'ai500', icon: Database, color: '#B8912A' },
-    { value: 'oi_top', icon: TrendingUp, color: '#2E7D4F' },
-    { value: 'oi_low', icon: TrendingDown, color: '#C0392B' },
+    { value: 'static', icon: List, color: 'var(--fg-3)' },
+    { value: 'ai500', icon: Database, color: 'var(--brand)' },
+    { value: 'oi_top', icon: TrendingUp, color: 'var(--up)' },
+    { value: 'oi_low', icon: TrendingDown, color: 'var(--down)' },
     { value: 'piggy_dash', icon: Zap, color: '#EC4899' },
-    { value: 'short_scan', icon: ArrowDownRight, color: '#EF4444' },
+    { value: 'short_scan', icon: ArrowDownRight, color: 'var(--down)' },
   ] as const
 
   type SourceKey = (typeof sourceTypes)[number]['value']
@@ -201,7 +201,7 @@ export function CoinSourceEditor({
     toast.textContent = msg
     toast.className =
       'fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm z-50 shadow-lg'
-    toast.style.cssText = 'background:#C0392B;color:#fff;'
+    toast.style.cssText = 'background:var(--down);color:var(--brand-fg);'
     document.body.appendChild(toast)
     setTimeout(() => toast.remove(), 2000)
   }
@@ -309,11 +309,11 @@ export function CoinSourceEditor({
                 className={`relative p-4 rounded-lg border transition-all ${
                   selected
                     ? 'ring-2 ring-nofx-gold bg-nofx-gold/10'
-                    : 'hover:bg-[#1E1E1A]/5 bg-nofx-bg'
+                    : 'hover:bg-fg/5 bg-nofx-bg'
                 } border-nofx-gold/20`}
               >
                 {selected && (
-                  <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-nofx-gold text-black text-[10px] font-bold flex items-center justify-center">
+                  <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-nofx-gold text-brand-fg text-[10px] font-bold flex items-center justify-center">
                     ✓
                   </span>
                 )}
@@ -377,7 +377,7 @@ export function CoinSourceEditor({
               />
               <button
                 onClick={handleAddCoin}
-                className="px-4 py-2 rounded-lg flex items-center gap-2 transition-colors bg-nofx-gold text-black hover:bg-yellow-500"
+                className="px-4 py-2 rounded-lg flex items-center gap-2 transition-colors bg-nofx-gold text-brand-fg hover:brightness-110"
               >
                 <Plus className="w-4 h-4" />
                 {ts(coinSource.addCoin, language)}
@@ -408,7 +408,7 @@ export function CoinSourceEditor({
               {!disabled && (
                 <button
                   onClick={() => handleRemoveExcludedCoin(coin)}
-                  className="ml-1 hover:text-[#1E1E1A] transition-colors"
+                  className="ml-1 hover:text-fg transition-colors"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -433,7 +433,7 @@ export function CoinSourceEditor({
             />
             <button
               onClick={handleAddExcludedCoin}
-              className="px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm bg-nofx-danger text-[#1E1E1A] hover:bg-red-600"
+              className="px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm bg-nofx-danger text-fg hover:bg-red-600"
             >
               <Ban className="w-4 h-4" />
               {ts(coinSource.addExcludedCoin, language)}
@@ -574,7 +574,7 @@ export function CoinSourceEditor({
                   className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
                     (config.piggy_dash_direction || '') === value
                       ? 'bg-nofx-gold/15 text-nofx-gold border border-nofx-gold/40'
-                      : 'bg-nofx-bg text-nofx-text-muted border border-nofx-gold/10 hover:bg-[#1E1E1A]/5'
+                      : 'bg-nofx-bg text-nofx-text-muted border border-nofx-gold/10 hover:bg-fg/5'
                   }`}
                 >
                   {ts(label, language)}
@@ -635,7 +635,10 @@ export function CoinSourceEditor({
       {selectedSources.includes('short_scan') && (
         <div className="space-y-4 p-4 rounded-lg bg-nofx-bg border border-nofx-gold/20">
           <div className="flex items-center gap-2">
-            <ArrowDownRight className="w-4 h-4" style={{ color: '#EF4444' }} />
+            <ArrowDownRight
+              className="w-4 h-4"
+              style={{ color: 'var(--down)' }}
+            />
             <span className="text-sm font-medium text-nofx-text">
               {ts(coinSource.shortScanTitle, language)}
             </span>

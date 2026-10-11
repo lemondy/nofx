@@ -14,7 +14,8 @@ const agents = [
     risk: 'HIGH',
     color: 'text-nofx-gold',
     border: 'border-nofx-gold/50',
-    bg_glow: 'shadow-[0_0_30px_rgba(184,145,42,0.1)]',
+    bg_glow:
+      'shadow-[0_0_30px_color-mix(in_srgb,var(--brand)_10%,transparent)]',
     icon: Zap,
   },
   {
@@ -26,7 +27,7 @@ const agents = [
     risk: 'MED',
     color: 'text-nofx-accent',
     border: 'border-nofx-accent/40',
-    bg_glow: 'shadow-[0_0_30px_rgba(107,127,94,0.12)]',
+    bg_glow: 'shadow-[0_0_30px_color-mix(in_srgb,var(--info)_12%,transparent)]',
     icon: TrendingUp,
   },
   {
@@ -36,9 +37,10 @@ const agents = [
     apy: '24%',
     winRate: '99%',
     risk: 'LOW',
-    color: 'text-[#8A6D1F]',
-    border: 'border-[#8A6D1F]/40',
-    bg_glow: 'shadow-[0_0_30px_rgba(138,109,31,0.12)]',
+    color: 'text-brand',
+    border: 'border-brand/40',
+    bg_glow:
+      'shadow-[0_0_30px_color-mix(in_srgb,var(--brand)_12%,transparent)]',
     icon: Layers,
   },
 ]
@@ -61,7 +63,7 @@ export default function AgentGrid() {
     >
       {/* Background Details */}
       <div className="absolute top-0 right-0 p-10 opacity-20 pointer-events-none">
-        <Hexagon className="w-64 h-64 text-zinc-800" strokeWidth={0.5} />
+        <Hexagon className="w-64 h-64 text-line" strokeWidth={0.5} />
       </div>
 
       <div className="max-w-7xl mx-auto px-6 relative z-10">
@@ -70,14 +72,14 @@ export default function AgentGrid() {
             <div className="flex items-center gap-2 text-nofx-gold font-mono text-xs mb-2 tracking-widest uppercase">
               <Crosshair className="w-4 h-4" /> MARKET SELECT
             </div>
-            <h2 className="text-4xl md:text-5xl font-black text-[#1E1E1A] uppercase tracking-tighter">
+            <h2 className="text-4xl md:text-5xl font-black text-fg uppercase tracking-tighter">
               STRATEGY{' '}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#B8912A] to-[#8A6D1F]">
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand to-brand">
                 UNITS
               </span>
             </h2>
           </div>
-          <div className="font-mono text-right text-xs text-[#6E6E60] max-w-xs">
+          <div className="font-mono text-right text-xs text-fg-3 max-w-xs">
             SELECT AN AUTONOMOUS AGENT TO BEGIN DEPLOYMENT. UNITS ARE
             PRE-TRAINED ON HISTORICAL TICKS.
           </div>
@@ -94,7 +96,7 @@ export default function AgentGrid() {
                 initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className={`group relative bg-[#ECE8DB] border ${agent.border} overflow-hidden transition-all duration-300 min-w-[85vw] md:min-w-0 snap-center shrink-0 rounded-xl md:rounded-none`}
+                className={`group relative bg-surface border ${agent.border} overflow-hidden transition-all duration-300 min-w-[85vw] md:min-w-0 snap-center shrink-0 rounded-xl md:rounded-none`}
               >
                 {/* Top "Hinge" decoration */}
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-nofx-line/50 to-transparent"></div>
@@ -102,11 +104,11 @@ export default function AgentGrid() {
                 <div className="p-8 relative z-10">
                   {/* Header */}
                   <div className="flex justify-between items-start mb-6">
-                    <div className="p-3 bg-[#ECE8DB]/80 rounded border border-[#B3AB92]">
+                    <div className="p-3 bg-surface/80 rounded border border-line-strong">
                       <Icon className={`w-8 h-8 ${agent.color}`} />
                     </div>
                     <div className="text-right">
-                      <div className="text-[10px] font-mono text-[#6E6E60] uppercase">
+                      <div className="text-[10px] font-mono text-fg-3 uppercase">
                         Class
                       </div>
                       <div
@@ -118,33 +120,31 @@ export default function AgentGrid() {
                   </div>
 
                   {/* Name & Desc */}
-                  <h3 className="text-3xl font-bold text-[#1E1E1A] mb-2 tracking-tight group-hover:text-nofx-accent transition-colors">
+                  <h3 className="text-3xl font-bold text-fg mb-2 tracking-tight group-hover:text-nofx-accent transition-colors">
                     {agent.name}
                   </h3>
-                  <p className="text-[#6E6E60] text-sm mb-8 leading-relaxed h-10">
+                  <p className="text-fg-3 text-sm mb-8 leading-relaxed h-10">
                     {agent.desc}
                   </p>
 
                   {/* Stats Grid */}
-                  <div className="grid grid-cols-3 gap-px bg-[#E4E0D0]/50 border border-[#C0B9A2] rounded overflow-hidden mb-8">
-                    <div className="bg-[#F4F1E8] p-3 text-center group-hover:bg-[#ECE8DB]/60 transition-colors">
-                      <div className="text-[10px] text-[#6E6E60] uppercase font-mono mb-1">
+                  <div className="grid grid-cols-3 gap-px bg-surface-hover/50 border border-line rounded overflow-hidden mb-8">
+                    <div className="bg-surface-hover p-3 text-center group-hover:bg-surface/60 transition-colors">
+                      <div className="text-[10px] text-fg-3 uppercase font-mono mb-1">
                         APY
                       </div>
                       <div className="text-green-400 font-bold">
                         {agent.apy}
                       </div>
                     </div>
-                    <div className="bg-[#F4F1E8] p-3 text-center group-hover:bg-[#ECE8DB]/60 transition-colors">
-                      <div className="text-[10px] text-[#6E6E60] uppercase font-mono mb-1">
+                    <div className="bg-surface-hover p-3 text-center group-hover:bg-surface/60 transition-colors">
+                      <div className="text-[10px] text-fg-3 uppercase font-mono mb-1">
                         Win %
                       </div>
-                      <div className="text-[#1E1E1A] font-bold">
-                        {agent.winRate}
-                      </div>
+                      <div className="text-fg font-bold">{agent.winRate}</div>
                     </div>
-                    <div className="bg-[#F4F1E8] p-3 text-center group-hover:bg-[#ECE8DB]/60 transition-colors">
-                      <div className="text-[10px] text-[#6E6E60] uppercase font-mono mb-1">
+                    <div className="bg-surface-hover p-3 text-center group-hover:bg-surface/60 transition-colors">
+                      <div className="text-[10px] text-fg-3 uppercase font-mono mb-1">
                         Risk
                       </div>
                       <div className={`${agent.color} font-bold`}>
@@ -156,7 +156,7 @@ export default function AgentGrid() {
                   {/* Action Btn */}
                   <button
                     onClick={handleInitialize}
-                    className={`w-full py-4 text-xs font-bold font-mono uppercase tracking-[0.2em] border border-[#B3AB92] hover:border-nofx-gold hover:bg-[#1E1E1A]/5 transition-all flex items-center justify-center gap-2 group-hover:text-[#1E1E1A] cursor-pointer`}
+                    className={`w-full py-4 text-xs font-bold font-mono uppercase tracking-[0.2em] border border-line-strong hover:border-nofx-gold hover:bg-fg/5 transition-all flex items-center justify-center gap-2 group-hover:text-fg cursor-pointer`}
                   >
                     <span className={agent.color}>[</span> INITIALIZE{' '}
                     <span className={agent.color}>]</span>

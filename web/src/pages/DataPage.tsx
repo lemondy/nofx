@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLanguage } from '../contexts/LanguageContext'
 import { t } from '../i18n/translations'
+import { withAlpha } from '../lib/colorAlpha'
 
 // Vergex trending data (https://vergex.trade/trending), proxied through
 // the NOFX backend (/api/trending/*) with a short server-side cache.
@@ -210,8 +211,8 @@ function fmtRate4(v: number | undefined): string {
 
 function pctColor(v: number | undefined): string {
   if (v === undefined || v === null || !Number.isFinite(v) || v === 0)
-    return '#6E6E60'
-  return v > 0 ? '#2E7D4F' : '#C0392B'
+    return 'var(--fg-3)'
+  return v > 0 ? 'var(--up)' : 'var(--down)'
 }
 
 const VERGEX_BASE = 'https://vergex.trade'
@@ -376,7 +377,7 @@ function Pagination({
 }) {
   return (
     <div className="flex items-center justify-between pt-3 flex-wrap gap-2">
-      <div className="text-xs" style={{ color: '#6E6E60' }}>
+      <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
         {t('dataPage.totalRows', language, { count: total })}
       </div>
       <div className="flex items-center gap-2">
@@ -385,9 +386,9 @@ function Pagination({
           onChange={(e) => onPageSize(Number(e.target.value))}
           className="px-2 py-1 rounded-lg text-xs"
           style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
         >
           {PAGE_SIZES.map((s) => (
@@ -402,14 +403,14 @@ function Pagination({
           onClick={() => onPage(page - 1)}
           className="px-3 py-1 rounded-lg text-xs disabled:opacity-40"
           style={{
-            background: '#E9E4D6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-hover)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
         >
           ‹
         </button>
-        <span className="text-xs px-2" style={{ color: '#7A7A6C' }}>
+        <span className="text-xs px-2" style={{ color: 'var(--fg-3)' }}>
           {page} / {totalPages}
         </span>
         <button
@@ -418,9 +419,9 @@ function Pagination({
           onClick={() => onPage(page + 1)}
           className="px-3 py-1 rounded-lg text-xs disabled:opacity-40"
           style={{
-            background: '#E9E4D6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-hover)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
         >
           ›
@@ -434,12 +435,12 @@ function RankBadge({ rank }: { rank?: number }) {
   if (!rank) return null
   const color =
     rank === 1
-      ? '#B8912A'
+      ? 'var(--brand)'
       : rank === 2
         ? '#C0C4CC'
         : rank === 3
           ? '#CD7F32'
-          : '#6E6E60'
+          : 'var(--fg-3)'
   return (
     <span
       className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold shrink-0"
@@ -456,7 +457,7 @@ function LoadingRow({ cols }: { cols: number }) {
       <td
         colSpan={cols}
         className="py-10 text-center text-sm"
-        style={{ color: '#6E6E60' }}
+        style={{ color: 'var(--fg-3)' }}
       >
         <span className="inline-block animate-spin mr-2">⏳</span>
         Loading...
@@ -484,14 +485,14 @@ function PredictionTable({
               <Td>
                 <span
                   className="font-semibold line-clamp-1"
-                  style={{ color: '#1E1E1A' }}
+                  style={{ color: 'var(--fg)' }}
                 >
                   {row.title ?? row.symbol}
                 </span>
                 {row.signal && (
                   <span
                     className="ml-2 text-[10px]"
-                    style={{ color: '#6E6E60' }}
+                    style={{ color: 'var(--fg-3)' }}
                   >
                     {row.signal}
                   </span>
@@ -545,7 +546,7 @@ function FeaturedCard({
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       <div
         className="text-sm font-semibold mb-3 flex items-center gap-2"
@@ -558,9 +559,9 @@ function FeaturedCard({
             style={{
               background:
                 session?.session === 'open'
-                  ? 'rgba(46, 125, 79, 0.1)'
-                  : 'rgba(132, 142, 156, 0.1)',
-              color: session?.session === 'open' ? '#2E7D4F' : '#6E6E60',
+                  ? 'var(--up-soft)'
+                  : 'color-mix(in srgb, var(--fg-3) 10%, transparent)',
+              color: session?.session === 'open' ? 'var(--up)' : 'var(--fg-3)',
             }}
           >
             {sessionLabel}
@@ -568,7 +569,10 @@ function FeaturedCard({
         )}
       </div>
       {!data ? (
-        <div className="text-xs py-4 text-center" style={{ color: '#6E6E60' }}>
+        <div
+          className="text-xs py-4 text-center"
+          style={{ color: 'var(--fg-3)' }}
+        >
           Loading...
         </div>
       ) : (
@@ -578,7 +582,7 @@ function FeaturedCard({
           ) : assets.length === 0 ? (
             <div
               className="text-xs py-4 text-center"
-              style={{ color: '#6E6E60' }}
+              style={{ color: 'var(--fg-3)' }}
             >
               {t('dataPage.noData', language)}
             </div>
@@ -588,20 +592,20 @@ function FeaturedCard({
                 <div
                   key={`${a.symbol}-${i}`}
                   className="flex items-center justify-between px-3 py-2 rounded-lg"
-                  style={{ background: '#F2EFE6' }}
+                  style={{ background: 'var(--surface-2)' }}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <RankBadge rank={i + 1} />
                     <span
                       className="text-xs font-semibold truncate"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {a.symbol}
                     </span>
                     {a.signal && (
                       <span
                         className="text-[10px] truncate"
-                        style={{ color: '#6E6E60' }}
+                        style={{ color: 'var(--fg-3)' }}
                       >
                         {a.signal}
                       </span>
@@ -611,7 +615,7 @@ function FeaturedCard({
                     {a.price !== undefined && (
                       <span
                         className="text-xs font-mono"
-                        style={{ color: '#1E1E1A' }}
+                        style={{ color: 'var(--fg)' }}
                       >
                         {typeof a.price === 'string'
                           ? a.price
@@ -672,7 +676,10 @@ function TwoSidedTable<T extends GenericRow>({
     return (
       <div
         className="p-4 rounded-xl"
-        style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--line)',
+        }}
       >
         <table className="w-full rank-table">
           <tbody>
@@ -688,10 +695,13 @@ function TwoSidedTable<T extends GenericRow>({
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       {/* Inflow side */}
-      <div className="text-xs font-semibold mb-2" style={{ color: '#2E7D4F' }}>
+      <div
+        className="text-xs font-semibold mb-2"
+        style={{ color: 'var(--up)' }}
+      >
         ▲ {t('dataPage.topInflow', language)}
       </div>
       <table className="w-full text-xs rank-table">
@@ -705,7 +715,7 @@ function TwoSidedTable<T extends GenericRow>({
       {/* Outflow side */}
       <div
         className="text-xs font-semibold mb-2 mt-5"
-        style={{ color: '#C0392B' }}
+        style={{ color: 'var(--down)' }}
       >
         ▼ {t('dataPage.bottomOutflow', language)}
       </div>
@@ -738,7 +748,7 @@ function Th({ children, right }: { children: ReactNode; right?: boolean }) {
   return (
     <th
       className={`py-2 px-2 font-medium text-[10px] uppercase tracking-wide ${right ? 'text-right' : 'text-left'}`}
-      style={{ color: '#6E6E60' }}
+      style={{ color: 'var(--fg-3)' }}
     >
       {children}
     </th>
@@ -757,7 +767,7 @@ function Td({
   return (
     <td
       className={`py-2 px-2 ${right ? 'text-right' : 'text-left'} ${mono ? 'font-mono' : ''}`}
-      style={{ color: '#1E1E1A' }}
+      style={{ color: 'var(--fg)' }}
     >
       {children}
     </td>
@@ -846,7 +856,7 @@ function DepthTable({
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       {!data ? (
         <table className="w-full rank-table">
@@ -858,7 +868,7 @@ function DepthTable({
         <>
           <div
             className="text-xs font-semibold mb-2"
-            style={{ color: '#5E7A5E' }}
+            style={{ color: 'var(--info)' }}
           >
             {t('dataPage.futuresDepth', language)}
           </div>
@@ -869,7 +879,7 @@ function DepthTable({
           />
           <div
             className="text-xs font-semibold mb-2 mt-5"
-            style={{ color: '#A78BFA' }}
+            style={{ color: 'var(--ai)' }}
           >
             {t('dataPage.spotDepth', language)}
           </div>
@@ -916,7 +926,7 @@ function HLTable({
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <input
@@ -925,13 +935,13 @@ function HLTable({
           placeholder={t('dataPage.searchSymbol', language)}
           className="px-3 py-1.5 rounded-lg text-xs w-48"
           style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
         />
         {data?.generatedAt && (
-          <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+          <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
             {new Date(data.generatedAt).toLocaleTimeString()}
           </span>
         )}
@@ -943,7 +953,10 @@ function HLTable({
           </tbody>
         </table>
       ) : sorted.length === 0 ? (
-        <div className="text-xs py-6 text-center" style={{ color: '#6E6E60' }}>
+        <div
+          className="text-xs py-6 text-center"
+          style={{ color: 'var(--fg-3)' }}
+        >
           {t('dataPage.noData', language)}
         </div>
       ) : (
@@ -973,13 +986,13 @@ function HLTable({
                     <Td>
                       <span
                         className="font-semibold"
-                        style={{ color: '#1E1E1A' }}
+                        style={{ color: 'var(--fg)' }}
                       >
                         {row.base}
                       </span>
                       <span
                         className="ml-1 text-[10px]"
-                        style={{ color: '#6E6E60' }}
+                        style={{ color: 'var(--fg-3)' }}
                       >
                         /{row.quote}
                       </span>
@@ -1059,8 +1072,7 @@ function FlowBar({ value, max }: { value: number; max: number }) {
       className="absolute right-0 top-1/2 -translate-y-1/2 h-4 rounded"
       style={{
         width: `${Math.max(2, pct)}%`,
-        background:
-          value >= 0 ? 'rgba(46, 125, 79, 0.15)' : 'rgba(192, 57, 43, 0.15)',
+        background: value >= 0 ? 'var(--up-soft)' : 'var(--down-soft)',
       }}
     />
   )
@@ -1116,11 +1128,11 @@ function FlowTable({
         <RankBadge rank={globalRank} />
       </Td>
       <Td>
-        <span className="font-semibold" style={{ color: '#1E1E1A' }}>
+        <span className="font-semibold" style={{ color: 'var(--fg)' }}>
           {r.symbol}
         </span>
         {r.marketType === 'hip3_perp' && (
-          <span className="ml-1.5 text-[10px]" style={{ color: '#6E6E60' }}>
+          <span className="ml-1.5 text-[10px]" style={{ color: 'var(--fg-3)' }}>
             HIP-3
           </span>
         )}
@@ -1157,13 +1169,13 @@ function FlowTable({
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       {!flowData ? (
         failed ? (
           <div
             className="py-10 text-center text-sm"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('dataPage.flowUnavailable', language)}
           </div>
@@ -1178,7 +1190,7 @@ function FlowTable({
         <>
           <div
             className="text-xs font-semibold mb-2"
-            style={{ color: '#2E7D4F' }}
+            style={{ color: 'var(--up)' }}
           >
             ▲ {t('dataPage.topInflow', language)}
           </div>
@@ -1194,7 +1206,7 @@ function FlowTable({
           </table>
           <div
             className="text-xs font-semibold mb-2 mt-5"
-            style={{ color: '#C0392B' }}
+            style={{ color: 'var(--down)' }}
           >
             ▼ {t('dataPage.bottomOutflow', language)}
           </div>
@@ -1282,11 +1294,11 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
               className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
               style={{
                 background:
-                  tab === ct.key ? 'rgba(184, 145, 42, 0.15)' : 'transparent',
-                color: tab === ct.key ? '#B8912A' : '#6E6E60',
+                  tab === ct.key ? 'var(--brand-soft)' : 'transparent',
+                color: tab === ct.key ? 'var(--brand)' : 'var(--fg-3)',
                 border:
                   tab === ct.key
-                    ? '1px solid rgba(184, 145, 42, 0.4)'
+                    ? '1px solid color-mix(in srgb, var(--brand) 40%, transparent)'
                     : '1px solid transparent',
               }}
             >
@@ -1303,9 +1315,9 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                 onClick={() => setDuration(d)}
                 className="px-2.5 py-1 rounded-lg text-[11px] font-mono transition-all"
                 style={{
-                  background: duration === d ? '#C0B9A2' : 'transparent',
-                  color: duration === d ? '#1E1E1A' : '#6E6E60',
-                  border: '1px solid #C0B9A2',
+                  background: duration === d ? 'var(--line)' : 'transparent',
+                  color: duration === d ? 'var(--fg)' : 'var(--fg-3)',
+                  border: '1px solid var(--line)',
                 }}
               >
                 {d}
@@ -1355,7 +1367,7 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                   <span style={{ color: pctColor(r.oi_delta_percent) }}>
                     {fmtPctDirect(r.oi_delta_percent)}
                   </span>
-                  <span className="ml-1" style={{ color: '#6E6E60' }}>
+                  <span className="ml-1" style={{ color: 'var(--fg-3)' }}>
                     ({fmtUsd(r.oi_delta_value)})
                   </span>
                 </Td>
@@ -1480,13 +1492,11 @@ function HLSection({ language }: { language: 'en' | 'zh' | 'id' }) {
             className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
             style={{
               background:
-                category === hc.key
-                  ? 'rgba(96, 165, 250, 0.15)'
-                  : 'transparent',
-              color: category === hc.key ? '#5E7A5E' : '#6E6E60',
+                category === hc.key ? 'var(--info-soft)' : 'transparent',
+              color: category === hc.key ? 'var(--info)' : 'var(--fg-3)',
               border:
                 category === hc.key
-                  ? '1px solid rgba(96, 165, 250, 0.4)'
+                  ? '1px solid color-mix(in srgb, var(--info) 40%, transparent)'
                   : '1px solid transparent',
             }}
           >
@@ -1521,13 +1531,13 @@ interface BreakoutRow {
 function gradeColor(grade: string): string {
   switch (grade) {
     case 'strong':
-      return '#2E7D4F'
+      return 'var(--up)'
     case 'medium':
-      return '#B8912A'
+      return 'var(--brand)'
     case 'weak':
-      return '#6E6E60'
+      return 'var(--fg-3)'
     default:
-      return '#8A8A7C'
+      return 'var(--fg-3)'
   }
 }
 
@@ -1536,9 +1546,15 @@ function directionBadge(
   language: 'en' | 'zh' | 'id'
 ): { label: string; color: string } {
   if (dir === 'breakout') {
-    return { label: language === 'zh' ? '突破' : 'Breakout', color: '#2E7D4F' }
+    return {
+      label: language === 'zh' ? '突破' : 'Breakout',
+      color: 'var(--up)',
+    }
   }
-  return { label: language === 'zh' ? '跌破' : 'Breakdown', color: '#C0392B' }
+  return {
+    label: language === 'zh' ? '跌破' : 'Breakdown',
+    color: 'var(--down)',
+  }
 }
 
 function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
@@ -1558,7 +1574,7 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2">
@@ -1566,7 +1582,7 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
             🐷 {t('dataPage.breakoutRanking', language)}
           </span>
           {data?.generated_at && (
-            <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+            <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
               {new Date(data.generated_at).toLocaleTimeString()}
             </span>
           )}
@@ -1578,22 +1594,22 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
               style={{
                 background:
                   rows[0].regime === 'btc_bull'
-                    ? 'rgba(46, 125, 79, 0.1)'
+                    ? 'var(--up-soft)'
                     : rows[0].regime === 'btc_bear'
-                      ? 'rgba(192, 57, 43, 0.1)'
-                      : 'rgba(132, 142, 156, 0.1)',
+                      ? 'var(--down-soft)'
+                      : 'color-mix(in srgb, var(--fg-3) 10%, transparent)',
                 color:
                   rows[0].regime === 'btc_bull'
-                    ? '#2E7D4F'
+                    ? 'var(--up)'
                     : rows[0].regime === 'btc_bear'
-                      ? '#C0392B'
-                      : '#6E6E60',
+                      ? 'var(--down)'
+                      : 'var(--fg-3)',
               }}
             >
               {t(`dataPage.regime_${rows[0].regime}`, language)}
             </span>
           )}
-          <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+          <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
             {t('dataPage.breakoutNote', language)}
           </span>
         </div>
@@ -1606,7 +1622,10 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
           </tbody>
         </table>
       ) : data.warming_up || sorted.length === 0 ? (
-        <div className="text-xs py-6 text-center" style={{ color: '#6E6E60' }}>
+        <div
+          className="text-xs py-6 text-center"
+          style={{ color: 'var(--fg-3)' }}
+        >
           {t('dataPage.noData', language)}
         </div>
       ) : (
@@ -1641,7 +1660,7 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                         <span
                           className="px-2 py-0.5 rounded text-[10px] font-bold"
                           style={{
-                            background: `${badge.color}22`,
+                            background: `${withAlpha(badge.color, 13)}`,
                             color: badge.color,
                           }}
                         >
@@ -1651,8 +1670,8 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                           <span
                             className="ml-1.5 px-1.5 py-0.5 rounded text-[10px]"
                             style={{
-                              background: 'rgba(184, 145, 42, 0.15)',
-                              color: '#B8912A',
+                              background: 'var(--brand-soft)',
+                              color: 'var(--brand)',
                             }}
                             title={t('dataPage.resonance', language)}
                           >
@@ -1679,16 +1698,16 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                           style={{
                             background:
                               row.pattern === 'retest_hold'
-                                ? 'rgba(46, 125, 79, 0.15)'
+                                ? 'var(--up-soft)'
                                 : row.pattern === 'breakout'
-                                  ? 'rgba(96, 165, 250, 0.12)'
-                                  : 'rgba(132, 142, 156, 0.1)',
+                                  ? 'var(--info-soft)'
+                                  : 'color-mix(in srgb, var(--fg-3) 10%, transparent)',
                             color:
                               row.pattern === 'retest_hold'
-                                ? '#2E7D4F'
+                                ? 'var(--up)'
                                 : row.pattern === 'breakout'
-                                  ? '#5E7A5E'
-                                  : '#6E6E60',
+                                  ? 'var(--info)'
+                                  : 'var(--fg-3)',
                           }}
                         >
                           {t(
@@ -1704,7 +1723,7 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                         {row.level > 0 ? row.level.toFixed(4) : '-'}
                         <span
                           className="ml-1 text-[9px]"
-                          style={{ color: '#6E6E60' }}
+                          style={{ color: 'var(--fg-3)' }}
                         >
                           {row.level_source}
                         </span>
@@ -1759,16 +1778,16 @@ function shortUniverseBadge(
   if (universe === 'near_high') {
     return {
       label: t('dataPage.universe_near_high', language),
-      color: '#C0392B',
+      color: 'var(--down)',
     }
   }
   if (universe === 'hist_gainer') {
     return {
       label: t('dataPage.universe_hist_gainer', language),
-      color: '#B8860B',
+      color: 'var(--brand)',
     }
   }
-  return { label: t('dataPage.universe_gainer', language), color: '#2E7D4F' }
+  return { label: t('dataPage.universe_gainer', language), color: 'var(--up)' }
 }
 
 function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
@@ -1789,7 +1808,7 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
       <span
         key={label}
         className="px-1.5 py-0.5 rounded text-[10px] mr-1"
-        style={{ background: 'rgba(192, 57, 43, 0.12)', color: '#C0392B' }}
+        style={{ background: 'var(--down-soft)', color: 'var(--down)' }}
       >
         {label}
       </span>
@@ -1798,20 +1817,23 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
   return (
     <div
       className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
     >
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: '#C0392B' }}>
+          <span
+            className="text-sm font-semibold"
+            style={{ color: 'var(--down)' }}
+          >
             🩸 {t('dataPage.shortScanRanking', language)}
           </span>
           {data?.generated_at && (
-            <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+            <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
               {new Date(data.generated_at).toLocaleTimeString()}
             </span>
           )}
         </div>
-        <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+        <span className="text-[10px]" style={{ color: 'var(--fg-3)' }}>
           {t('dataPage.shortScanNote', language)}
         </span>
       </div>
@@ -1823,7 +1845,10 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
           </tbody>
         </table>
       ) : sorted.length === 0 ? (
-        <div className="text-xs py-6 text-center" style={{ color: '#6E6E60' }}>
+        <div
+          className="text-xs py-6 text-center"
+          style={{ color: 'var(--fg-3)' }}
+        >
           {t('dataPage.noData', language)}
         </div>
       ) : (
@@ -1876,7 +1901,10 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                       <Td>
                         <span
                           className="px-1.5 py-0.5 rounded text-[10px]"
-                          style={{ background: `${u.color}22`, color: u.color }}
+                          style={{
+                            background: `${withAlpha(u.color, 13)}`,
+                            color: u.color,
+                          }}
                         >
                           {u.label}
                         </span>
@@ -1900,7 +1928,7 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                         ) : (
                           <span
                             className="text-[10px]"
-                            style={{ color: '#8A8A7C' }}
+                            style={{ color: 'var(--fg-3)' }}
                           >
                             -
                           </span>
@@ -1911,8 +1939,8 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                           style={{
                             color:
                               row.funding_annualized_pct >= 30
-                                ? '#C0392B'
-                                : '#1E1E1A',
+                                ? 'var(--down)'
+                                : 'var(--fg)',
                           }}
                         >
                           {row.funding_annualized_pct.toFixed(1)}%
@@ -1964,7 +1992,7 @@ export function DataPage() {
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Page title + top-level section switch */}
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <h2 className="text-xl font-bold" style={{ color: '#1E1E1A' }}>
+          <h2 className="text-xl font-bold" style={{ color: 'var(--fg)' }}>
             {t('dataCenter', language)}
           </h2>
           <div className="flex items-center gap-2">
@@ -1974,14 +2002,12 @@ export function DataPage() {
               className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
               style={{
                 background:
-                  section === 'crypto'
-                    ? 'rgba(184, 145, 42, 0.15)'
-                    : 'transparent',
-                color: section === 'crypto' ? '#B8912A' : '#6E6E60',
+                  section === 'crypto' ? 'var(--brand-soft)' : 'transparent',
+                color: section === 'crypto' ? 'var(--brand)' : 'var(--fg-3)',
                 border:
                   section === 'crypto'
-                    ? '1px solid rgba(184, 145, 42, 0.4)'
-                    : '1px solid #C0B9A2',
+                    ? '1px solid color-mix(in srgb, var(--brand) 40%, transparent)'
+                    : '1px solid var(--line)',
               }}
             >
               {t('dataPage.cryptoTrending', language)}
@@ -1992,12 +2018,12 @@ export function DataPage() {
               className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
               style={{
                 background:
-                  section === 'hl' ? 'rgba(96, 165, 250, 0.15)' : 'transparent',
-                color: section === 'hl' ? '#5E7A5E' : '#6E6E60',
+                  section === 'hl' ? 'var(--info-soft)' : 'transparent',
+                color: section === 'hl' ? 'var(--info)' : 'var(--fg-3)',
                 border:
                   section === 'hl'
-                    ? '1px solid rgba(96, 165, 250, 0.4)'
-                    : '1px solid #C0B9A2',
+                    ? '1px solid color-mix(in srgb, var(--info) 40%, transparent)'
+                    : '1px solid var(--line)',
               }}
             >
               {t('dataPage.hlUniverse', language)}
@@ -2011,11 +2037,11 @@ export function DataPage() {
                   section === 'breakout'
                     ? 'rgba(236, 72, 153, 0.15)'
                     : 'transparent',
-                color: section === 'breakout' ? '#EC4899' : '#6E6E60',
+                color: section === 'breakout' ? '#EC4899' : 'var(--fg-3)',
                 border:
                   section === 'breakout'
                     ? '1px solid rgba(236, 72, 153, 0.4)'
-                    : '1px solid #C0B9A2',
+                    : '1px solid var(--line)',
               }}
             >
               🐷 {t('dataPage.breakoutRanking', language)}
@@ -2026,14 +2052,12 @@ export function DataPage() {
               className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
               style={{
                 background:
-                  section === 'shortscan'
-                    ? 'rgba(192, 57, 43, 0.15)'
-                    : 'transparent',
-                color: section === 'shortscan' ? '#C0392B' : '#6E6E60',
+                  section === 'shortscan' ? 'var(--down-soft)' : 'transparent',
+                color: section === 'shortscan' ? 'var(--down)' : 'var(--fg-3)',
                 border:
                   section === 'shortscan'
-                    ? '1px solid rgba(192, 57, 43, 0.4)'
-                    : '1px solid #C0B9A2',
+                    ? '1px solid color-mix(in srgb, var(--down) 40%, transparent)'
+                    : '1px solid var(--line)',
               }}
             >
               🩸 {t('dataPage.shortScanRanking', language)}
@@ -2046,13 +2070,13 @@ export function DataPage() {
           <FeaturedCard
             cacheKey="ai500"
             titleKey="dataPage.ai500"
-            accent="#2E7D4F"
+            accent="var(--up)"
             language={language}
           />
           <FeaturedCard
             cacheKey="prediction"
             titleKey="dataPage.prediction"
-            accent="#5E7A5E"
+            accent="var(--info)"
             language={language}
           />
         </div>
@@ -2070,7 +2094,7 @@ export function DataPage() {
 
         <div
           className="text-center text-[10px] pb-4"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           {t('dataPage.sourceNote', language)}
         </div>

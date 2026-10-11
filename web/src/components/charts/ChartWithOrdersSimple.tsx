@@ -84,7 +84,7 @@ export function ChartWithOrdersSimple({
     <div
       className="relative"
       style={{
-        background: '#F2EFE6',
+        background: 'var(--surface-2)',
         borderRadius: '8px',
         overflow: 'hidden',
         minHeight: height,
@@ -93,16 +93,16 @@ export function ChartWithOrdersSimple({
       {/* 标题栏 */}
       <div
         className="flex items-center justify-between p-4"
-        style={{ borderBottom: '1px solid #C0B9A2' }}
+        style={{ borderBottom: '1px solid var(--line)' }}
       >
         <div className="flex items-center gap-3">
           <span className="text-xl">📈</span>
-          <h3 className="text-lg font-bold" style={{ color: '#1E1E1A' }}>
+          <h3 className="text-lg font-bold" style={{ color: 'var(--fg)' }}>
             {symbol} {interval} (测试模式)
           </h3>
         </div>
         {loading && (
-          <div className="text-sm" style={{ color: '#6E6E60' }}>
+          <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
             加载中...
           </div>
         )}
@@ -113,18 +113,24 @@ export function ChartWithOrdersSimple({
         {error ? (
           <div className="text-center">
             <div className="text-2xl mb-2">⚠️</div>
-            <div style={{ color: '#C0392B' }}>{error}</div>
+            <div style={{ color: 'var(--down)' }}>{error}</div>
           </div>
         ) : (
           <>
             <div
               className="p-4 rounded"
-              style={{ background: '#E9E4D6', border: '1px solid #C0B9A2' }}
+              style={{
+                background: 'var(--surface-hover)',
+                border: '1px solid var(--line)',
+              }}
             >
-              <div className="text-sm mb-2" style={{ color: '#6E6E60' }}>
+              <div className="text-sm mb-2" style={{ color: 'var(--fg-3)' }}>
                 币安K线数据
               </div>
-              <div className="text-2xl font-bold" style={{ color: '#2E7D4F' }}>
+              <div
+                className="text-2xl font-bold"
+                style={{ color: 'var(--up)' }}
+              >
                 {klineCount} 根K线
               </div>
             </div>
@@ -132,14 +138,17 @@ export function ChartWithOrdersSimple({
             {traderID && (
               <div
                 className="p-4 rounded"
-                style={{ background: '#E9E4D6', border: '1px solid #C0B9A2' }}
+                style={{
+                  background: 'var(--surface-hover)',
+                  border: '1px solid var(--line)',
+                }}
               >
-                <div className="text-sm mb-2" style={{ color: '#6E6E60' }}>
+                <div className="text-sm mb-2" style={{ color: 'var(--fg-3)' }}>
                   历史订单数据
                 </div>
                 <div
                   className="text-2xl font-bold"
-                  style={{ color: '#B8912A' }}
+                  style={{ color: 'var(--brand)' }}
                 >
                   {orderCount} 笔订单
                 </div>
@@ -148,12 +157,15 @@ export function ChartWithOrdersSimple({
 
             <div
               className="p-4 rounded"
-              style={{ background: '#E9E4D6', border: '1px solid #C0B9A2' }}
+              style={{
+                background: 'var(--surface-hover)',
+                border: '1px solid var(--line)',
+              }}
             >
-              <div className="text-sm mb-2" style={{ color: '#6E6E60' }}>
+              <div className="text-sm mb-2" style={{ color: 'var(--fg-3)' }}>
                 状态
               </div>
-              <div className="text-lg" style={{ color: '#1E1E1A' }}>
+              <div className="text-lg" style={{ color: 'var(--fg)' }}>
                 ✅ 数据获取正常，图表组件开发中
               </div>
             </div>

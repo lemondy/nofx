@@ -215,14 +215,20 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
         <div className="relative">
           <div
             className="w-16 h-16 border-4 border-t-transparent rounded-full animate-spin"
-            style={{ borderColor: '#B8912A', borderTopColor: 'transparent' }}
+            style={{
+              borderColor: 'var(--brand)',
+              borderTopColor: 'transparent',
+            }}
           />
           <TrendingUp
             className="w-6 h-6 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-            style={{ color: '#B8912A' }}
+            style={{ color: 'var(--brand)' }}
           />
         </div>
-        <div className="text-sm mt-4 font-medium" style={{ color: '#6E6E60' }}>
+        <div
+          className="text-sm mt-4 font-medium"
+          style={{ color: 'var(--fg-3)' }}
+        >
           {t('loadingChartData', language) || 'Loading chart data...'}
         </div>
       </div>
@@ -234,19 +240,19 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       <div className="flex flex-col items-center justify-center py-20">
         <div
           className="w-20 h-20 rounded-2xl flex items-center justify-center mb-4"
-          style={{ background: 'rgba(184, 145, 42, 0.1)' }}
+          style={{ background: 'var(--brand-soft)' }}
         >
           <BarChart3
             className="w-10 h-10"
-            style={{ color: '#B8912A', opacity: 0.6 }}
+            style={{ color: 'var(--brand)', opacity: 0.6 }}
           />
         </div>
-        <div className="text-lg font-bold mb-2" style={{ color: '#1E1E1A' }}>
+        <div className="text-lg font-bold mb-2" style={{ color: 'var(--fg)' }}>
           {t('noHistoricalData', language)}
         </div>
         <div
           className="text-sm text-center max-w-xs"
-          style={{ color: '#6E6E60' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           {t('dataWillAppear', language)}
         </div>
@@ -302,17 +308,21 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
         <div
           className="rounded-xl p-4 shadow-2xl "
           style={{
-            background: 'rgba(236, 232, 219, 0.95)',
-            border: '1px solid rgba(184, 145, 42, 0.2)',
+            background: 'color-mix(in srgb, var(--surface) 95%, transparent)',
+            border:
+              '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
             minWidth: '200px',
           }}
         >
           <div
             className="flex items-center gap-2 mb-3 pb-2"
-            style={{ borderBottom: '1px solid #C0B9A2' }}
+            style={{ borderBottom: '1px solid var(--line)' }}
           >
-            <Zap className="w-3.5 h-3.5" style={{ color: '#B8912A' }} />
-            <span className="text-xs font-medium" style={{ color: '#B8912A' }}>
+            <Zap className="w-3.5 h-3.5" style={{ color: 'var(--brand)' }} />
+            <span
+              className="text-xs font-medium"
+              style={{ color: 'var(--brand)' }}
+            >
               {dateStr} {data.time}
             </span>
           </div>
@@ -335,7 +345,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                     />
                     <span
                       className="text-xs font-medium truncate max-w-[100px]"
-                      style={{ color: '#1E1E1A' }}
+                      style={{ color: 'var(--fg)' }}
                     >
                       {trader.trader_name}
                     </span>
@@ -343,7 +353,9 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                   <div className="text-right">
                     <div
                       className="text-sm font-bold mono flex items-center gap-1"
-                      style={{ color: isPositive ? '#2E7D4F' : '#C0392B' }}
+                      style={{
+                        color: isPositive ? 'var(--up)' : 'var(--down)',
+                      }}
                     >
                       {isPositive ? (
                         <TrendingUp className="w-3 h-3" />
@@ -355,7 +367,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                     </div>
                     <div
                       className="text-[10px] mono"
-                      style={{ color: '#8A8A7C' }}
+                      style={{ color: 'var(--fg-3)' }}
                     >
                       ${equity?.toFixed(2)}
                     </div>
@@ -410,10 +422,13 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
               style={{
                 background:
                   selectedPeriod === period.key
-                    ? 'rgba(184, 145, 42, 0.2)'
-                    : 'rgba(192, 185, 162, 0.5)',
-                color: selectedPeriod === period.key ? '#B8912A' : '#6E6E60',
-                border: `1px solid ${selectedPeriod === period.key ? 'rgba(184, 145, 42, 0.4)' : '#C0B9A2'}`,
+                    ? 'var(--brand-soft)'
+                    : 'color-mix(in srgb, var(--line) 50%, transparent)',
+                color:
+                  selectedPeriod === period.key
+                    ? 'var(--brand)'
+                    : 'var(--fg-3)',
+                border: `1px solid ${selectedPeriod === period.key ? 'color-mix(in srgb, var(--brand) 40%, transparent)' : 'var(--line)'}`,
               }}
             >
               {t(`comparisonChart.${period.key}`, language)}
@@ -430,9 +445,9 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
               style={{
                 background:
                   idx === 0
-                    ? 'rgba(184, 145, 42, 0.15)'
-                    : 'rgba(192, 185, 162, 0.5)',
-                border: `1px solid ${idx === 0 ? 'rgba(184, 145, 42, 0.3)' : '#C0B9A2'}`,
+                    ? 'var(--brand-soft)'
+                    : 'color-mix(in srgb, var(--line) 50%, transparent)',
+                border: `1px solid ${idx === 0 ? 'color-mix(in srgb, var(--brand) 30%, transparent)' : 'var(--line)'}`,
               }}
             >
               <div
@@ -441,14 +456,14 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
               />
               <span
                 className="text-xs font-medium truncate max-w-[80px]"
-                style={{ color: '#1E1E1A' }}
+                style={{ color: 'var(--fg)' }}
               >
                 {trader.trader_name}
               </span>
               <span
                 className="text-xs font-bold mono"
                 style={{
-                  color: trader.currentPnl >= 0 ? '#2E7D4F' : '#C0392B',
+                  color: trader.currentPnl >= 0 ? 'var(--up)' : 'var(--down)',
                 }}
               >
                 {trader.currentPnl >= 0 ? '+' : ''}
@@ -464,7 +479,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
         className="relative rounded-xl overflow-hidden"
         style={{
           background:
-            'linear-gradient(180deg, rgba(244, 241, 232, 0.8) 0%, rgba(244, 241, 232, 1) 100%)',
+            'linear-gradient(180deg, color-mix(in srgb, var(--surface) 80%, transparent) 0%, var(--surface) 100%)',
         }}
       >
         {/* Watermark */}
@@ -476,7 +491,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
             transform: 'translate(-50%, -50%)',
             fontSize: '80px',
             fontWeight: 'bold',
-            color: 'rgba(184, 145, 42, 0.03)',
+            color: 'color-mix(in srgb, var(--brand) 3%, transparent)',
             zIndex: 1,
             pointerEvents: 'none',
             fontFamily: 'monospace',
@@ -525,22 +540,22 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
 
             <CartesianGrid
               strokeDasharray="3 3"
-              stroke="#E9E4D6"
+              stroke="var(--surface-hover)"
               vertical={false}
             />
 
             <XAxis
               dataKey="time"
-              stroke="#C0B9A2"
-              tick={{ fill: '#8A8A7C', fontSize: 10 }}
+              stroke="var(--line)"
+              tick={{ fill: 'var(--fg-3)', fontSize: 10 }}
               tickLine={false}
-              axisLine={{ stroke: '#C0B9A2' }}
+              axisLine={{ stroke: 'var(--line)' }}
               interval={Math.max(Math.floor(displayData.length / 8), 1)}
             />
 
             <YAxis
-              stroke="#C0B9A2"
-              tick={{ fill: '#8A8A7C', fontSize: 10 }}
+              stroke="var(--line)"
+              tick={{ fill: 'var(--fg-3)', fontSize: 10 }}
               tickLine={false}
               axisLine={false}
               domain={calculateYDomain()}
@@ -553,7 +568,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
             {/* Zero reference line */}
             <ReferenceLine
               y={0}
-              stroke="#C0B9A2"
+              stroke="var(--line)"
               strokeDasharray="8 4"
               strokeWidth={1}
             />
@@ -582,7 +597,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                 activeDot={{
                   r: 6,
                   fill: traderColor(trader.trader_id),
-                  stroke: '#F2EFE6',
+                  stroke: 'var(--surface)',
                   strokeWidth: 2,
                   filter: 'url(#glow)',
                 }}
@@ -639,7 +654,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                           />
                           <span
                             style={{
-                              color: '#1E1E1A',
+                              color: 'var(--fg)',
                               fontSize: '12px',
                               fontWeight: 500,
                             }}
@@ -647,7 +662,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
                             {entry.value}
                             <span
                               style={{
-                                color: pnl >= 0 ? '#2E7D4F' : '#C0392B',
+                                color: pnl >= 0 ? 'var(--up)' : 'var(--down)',
                                 marginLeft: '6px',
                                 fontFamily: 'monospace',
                               }}
@@ -672,37 +687,41 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
         <div
           className="p-3 rounded-lg text-center"
           style={{
-            background: 'rgba(184, 145, 42, 0.05)',
-            border: '1px solid rgba(184, 145, 42, 0.1)',
+            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
+            border:
+              '1px solid color-mix(in srgb, var(--brand) 10%, transparent)',
           }}
         >
           <div
             className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('leader', language)}
           </div>
           <div
             className="text-sm font-bold truncate"
-            style={{ color: '#B8912A' }}
+            style={{ color: 'var(--brand)' }}
           >
             {leader?.trader_name || '-'}
           </div>
         </div>
         <div
           className="p-3 rounded-lg text-center"
-          style={{ background: 'rgba(46, 125, 79, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--up) 5%, transparent)',
+          }}
         >
           <div
             className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('leadPnL', language) || 'Lead PnL'}
           </div>
           <div
             className="text-sm font-bold mono"
             style={{
-              color: (leader?.currentPnl || 0) >= 0 ? '#2E7D4F' : '#C0392B',
+              color:
+                (leader?.currentPnl || 0) >= 0 ? 'var(--up)' : 'var(--down)',
             }}
           >
             {(leader?.currentPnl || 0) >= 0 ? '+' : ''}
@@ -711,29 +730,39 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
         </div>
         <div
           className="p-3 rounded-lg text-center"
-          style={{ background: 'rgba(96, 165, 250, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--info) 5%, transparent)',
+          }}
         >
           <div
             className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('currentGap', language)}
           </div>
-          <div className="text-sm font-bold mono" style={{ color: '#5e7a5e' }}>
+          <div
+            className="text-sm font-bold mono"
+            style={{ color: 'var(--info)' }}
+          >
             {gap}%
           </div>
         </div>
         <div
           className="p-3 rounded-lg text-center"
-          style={{ background: 'rgba(139, 92, 246, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--ai) 5%, transparent)',
+          }}
         >
           <div
             className="text-[10px] uppercase tracking-wider mb-1"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('dataPoints', language)}
           </div>
-          <div className="text-sm font-bold mono" style={{ color: '#8b5cf6' }}>
+          <div
+            className="text-sm font-bold mono"
+            style={{ color: 'var(--ai)' }}
+          >
             {displayData.length}
           </div>
         </div>

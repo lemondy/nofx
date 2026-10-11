@@ -74,7 +74,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
         {!embedded && (
           <h3
             className="text-lg font-semibold mb-6"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {t('accountEquityCurve', language)}
           </h3>
@@ -92,16 +92,17 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
         <div
           className="flex items-center gap-3 p-4 rounded"
           style={{
-            background: 'rgba(192, 57, 43, 0.1)',
-            border: '1px solid rgba(192, 57, 43, 0.2)',
+            background: 'var(--down-soft)',
+            border:
+              '1px solid color-mix(in srgb, var(--down) 20%, transparent)',
           }}
         >
-          <AlertTriangle className="w-6 h-6" style={{ color: '#C0392B' }} />
+          <AlertTriangle className="w-6 h-6" style={{ color: 'var(--down)' }} />
           <div>
-            <div className="font-semibold" style={{ color: '#C0392B' }}>
+            <div className="font-semibold" style={{ color: 'var(--down)' }}>
               {t('loadingError', language)}
             </div>
-            <div className="text-sm" style={{ color: '#6E6E60' }}>
+            <div className="text-sm" style={{ color: 'var(--fg-3)' }}>
               {error.message}
             </div>
           </div>
@@ -119,12 +120,12 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
         {!embedded && (
           <h3
             className="text-lg font-semibold mb-6"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {t('accountEquityCurve', language)}
           </h3>
         )}
-        <div className="text-center py-16" style={{ color: '#6E6E60' }}>
+        <div className="text-center py-16" style={{ color: 'var(--fg-3)' }}>
           <div className="mb-4 flex justify-center opacity-50">
             <BarChart3 className="w-16 h-16" />
           </div>
@@ -227,17 +228,20 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
       return (
         <div
           className="rounded p-3 shadow-xl"
-          style={{ background: '#E9E4D6', border: '1px solid #C0B9A2' }}
+          style={{
+            background: 'var(--surface-hover)',
+            border: '1px solid var(--line)',
+          }}
         >
-          <div className="text-xs mb-1" style={{ color: '#6E6E60' }}>
+          <div className="text-xs mb-1" style={{ color: 'var(--fg-3)' }}>
             Cycle #{data.cycle != null ? data.cycle : '—'}
           </div>
-          <div className="font-bold mono" style={{ color: '#1E1E1A' }}>
+          <div className="font-bold mono" style={{ color: 'var(--fg)' }}>
             {data.raw_equity.toFixed(2)} USDT
           </div>
           <div
             className="text-sm mono font-bold"
-            style={{ color: data.raw_pnl >= 0 ? '#2E7D4F' : '#C0392B' }}
+            style={{ color: data.raw_pnl >= 0 ? 'var(--up)' : 'var(--down)' }}
           >
             {data.raw_pnl >= 0 ? '+' : ''}
             {data.raw_pnl.toFixed(2)} USDT ({data.raw_pnl_pct >= 0 ? '+' : ''}
@@ -261,7 +265,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
           {!embedded && (
             <h3
               className="text-base sm:text-lg font-bold mb-2"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {t('accountEquityCurve', language)}
             </h3>
@@ -269,12 +273,12 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
           <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-4">
             <span
               className="text-2xl sm:text-3xl font-bold mono"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {account?.total_equity.toFixed(2) || '0.00'}
               <span
                 className="text-base sm:text-lg ml-1"
-                style={{ color: '#6E6E60' }}
+                style={{ color: 'var(--fg-3)' }}
               >
                 USDT
               </span>
@@ -283,14 +287,12 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               <span
                 className="text-sm sm:text-lg font-bold mono px-2 sm:px-3 py-1 rounded flex items-center gap-1"
                 style={{
-                  color: isProfit ? '#2E7D4F' : '#C0392B',
-                  background: isProfit
-                    ? 'rgba(46, 125, 79, 0.1)'
-                    : 'rgba(192, 57, 43, 0.1)',
+                  color: isProfit ? 'var(--up)' : 'var(--down)',
+                  background: isProfit ? 'var(--up-soft)' : 'var(--down-soft)',
                   border: `1px solid ${
                     isProfit
-                      ? 'rgba(46, 125, 79, 0.2)'
-                      : 'rgba(192, 57, 43, 0.2)'
+                      ? 'color-mix(in srgb, var(--up) 20%, transparent)'
+                      : 'color-mix(in srgb, var(--down) 20%, transparent)'
                   }`,
                 }}
               >
@@ -304,7 +306,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               </span>
               <span
                 className="text-xs sm:text-sm mono"
-                style={{ color: '#6E6E60' }}
+                style={{ color: 'var(--fg-3)' }}
               >
                 ({isProfit ? '+' : ''}
                 {currentValue.raw_pnl.toFixed(2)} USDT)
@@ -316,7 +318,10 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
         {/* Display Mode Toggle */}
         <div
           className="flex gap-0.5 sm:gap-1 rounded p-0.5 sm:p-1 self-start sm:self-auto"
-          style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+          style={{
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+          }}
         >
           <button
             onClick={() => setDisplayMode('dollar')}
@@ -324,11 +329,12 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
             style={
               displayMode === 'dollar'
                 ? {
-                    background: '#B8912A',
-                    color: '#000',
-                    boxShadow: '0 2px 8px rgba(184, 145, 42, 0.4)',
+                    background: 'var(--brand)',
+                    color: 'var(--brand-fg)',
+                    boxShadow:
+                      '0 2px 8px color-mix(in srgb, var(--brand) 40%, transparent)',
                   }
-                : { background: 'transparent', color: '#6E6E60' }
+                : { background: 'transparent', color: 'var(--fg-3)' }
             }
           >
             <DollarSign className="w-4 h-4" /> USDT
@@ -339,11 +345,12 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
             style={
               displayMode === 'percent'
                 ? {
-                    background: '#B8912A',
-                    color: '#000',
-                    boxShadow: '0 2px 8px rgba(184, 145, 42, 0.4)',
+                    background: 'var(--brand)',
+                    color: 'var(--brand-fg)',
+                    boxShadow:
+                      '0 2px 8px color-mix(in srgb, var(--brand) 40%, transparent)',
                   }
-                : { background: 'transparent', color: '#6E6E60' }
+                : { background: 'transparent', color: 'var(--fg-3)' }
             }
           >
             <Percent className="w-4 h-4" />
@@ -358,9 +365,9 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
           }
           className="px-3 py-2 rounded text-xs sm:text-sm font-bold self-start sm:self-auto"
           style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
           title={
             language === 'zh' ? '显示范围（周期数）' : 'Display range (cycles)'
@@ -391,7 +398,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
             right: '15px',
             fontSize: '20px',
             fontWeight: 'bold',
-            color: 'rgba(184, 145, 42, 0.15)',
+            color: 'color-mix(in srgb, var(--brand) 15%, transparent)',
             zIndex: 10,
             pointerEvents: 'none',
             fontFamily: 'monospace',
@@ -406,25 +413,25 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
           >
             <defs>
               <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#B8912A" stopOpacity={0.8} />
-                <stop offset="95%" stopColor="#C9A227" stopOpacity={0.2} />
+                <stop offset="5%" stopColor="var(--brand)" stopOpacity={0.8} />
+                <stop offset="95%" stopColor="var(--brand)" stopOpacity={0.2} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#C0B9A2" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
             <XAxis
               dataKey="time"
-              stroke="#8A8A7C"
-              tick={{ fill: '#6E6E60', fontSize: 11 }}
-              tickLine={{ stroke: '#C0B9A2' }}
+              stroke="var(--fg-3)"
+              tick={{ fill: 'var(--fg-3)', fontSize: 11 }}
+              tickLine={{ stroke: 'var(--line)' }}
               interval={Math.floor(chartData.length / 10)}
               angle={-15}
               textAnchor="end"
               height={60}
             />
             <YAxis
-              stroke="#8A8A7C"
-              tick={{ fill: '#6E6E60', fontSize: 12 }}
-              tickLine={{ stroke: '#C0B9A2' }}
+              stroke="var(--fg-3)"
+              tick={{ fill: 'var(--fg-3)', fontSize: 12 }}
+              tickLine={{ stroke: 'var(--line)' }}
               domain={calculateYDomain()}
               tickFormatter={(value) =>
                 displayMode === 'dollar' ? `$${value.toFixed(0)}` : `${value}%`
@@ -433,14 +440,14 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
             <Tooltip content={<CustomTooltip />} />
             <ReferenceLine
               y={displayMode === 'dollar' ? initialBalance : 0}
-              stroke="#C0B9A2"
+              stroke="var(--line)"
               strokeDasharray="3 3"
               label={{
                 value:
                   displayMode === 'dollar'
                     ? t('initialBalance', language).split(' ')[0]
                     : '0%',
-                fill: '#6E6E60',
+                fill: 'var(--fg-3)',
                 fontSize: 12,
               }}
             />
@@ -449,11 +456,13 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               dataKey="value"
               stroke="url(#colorGradient)"
               strokeWidth={3}
-              dot={chartData.length > 50 ? false : { fill: '#B8912A', r: 3 }}
+              dot={
+                chartData.length > 50 ? false : { fill: 'var(--brand)', r: 3 }
+              }
               activeDot={{
                 r: 6,
-                fill: '#C9A227',
-                stroke: '#B8912A',
+                fill: 'var(--brand)',
+                stroke: 'var(--brand)',
                 strokeWidth: 2,
               }}
               connectNulls={true}
@@ -465,72 +474,80 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
       {/* Footer Stats */}
       <div
         className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 pt-3"
-        style={{ borderTop: '1px solid #C0B9A2' }}
+        style={{ borderTop: '1px solid var(--line)' }}
       >
         <div
           className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{ background: 'rgba(184, 145, 42, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
+          }}
         >
           <div
             className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('initialBalance', language)}
           </div>
           <div
             className="text-xs sm:text-sm font-bold mono"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {initialBalance.toFixed(2)} USDT
           </div>
         </div>
         <div
           className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{ background: 'rgba(184, 145, 42, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
+          }}
         >
           <div
             className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('currentEquity', language)}
           </div>
           <div
             className="text-xs sm:text-sm font-bold mono"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {currentValue.raw_equity.toFixed(2)} USDT
           </div>
         </div>
         <div
           className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{ background: 'rgba(184, 145, 42, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
+          }}
         >
           <div
             className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('historicalCycles', language)}
           </div>
           <div
             className="text-xs sm:text-sm font-bold mono"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {validHistory.length} {t('cycles', language)}
           </div>
         </div>
         <div
           className="p-2 rounded transition-all hover:bg-opacity-50"
-          style={{ background: 'rgba(184, 145, 42, 0.05)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--brand) 5%, transparent)',
+          }}
         >
           <div
             className="text-xs mb-1 uppercase tracking-wider"
-            style={{ color: '#6E6E60' }}
+            style={{ color: 'var(--fg-3)' }}
           >
             {t('displayRange', language)}
           </div>
           <div
             className="text-xs sm:text-sm font-bold mono"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {range === 'all'
               ? t('allData', language)

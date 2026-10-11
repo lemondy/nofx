@@ -54,8 +54,8 @@ export default function FooterSection({ language }: FooterSectionProps) {
   return (
     <footer
       style={{
-        background: '#F2EFE6',
-        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+        background: 'var(--surface-2)',
+        borderTop: '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
       }}
     >
       <div className="max-w-6xl mx-auto px-4 py-8 md:py-12">
@@ -65,11 +65,14 @@ export default function FooterSection({ language }: FooterSectionProps) {
           <div className="md:col-span-1">
             <div className="flex items-center gap-3 mb-4">
               <img src="/icons/nofx.svg" alt="NOFX Logo" className="w-8 h-8" />
-              <span className="text-xl font-bold" style={{ color: '#1E1E1A' }}>
+              <span
+                className="text-xl font-bold"
+                style={{ color: 'var(--fg)' }}
+              >
                 NOFX
               </span>
             </div>
-            <p className="text-sm mb-6" style={{ color: '#8A8A7C' }}>
+            <p className="text-sm mb-6" style={{ color: 'var(--fg-3)' }}>
               {t('futureStandardAI', language)}
             </p>
             {/* Social Icons */}
@@ -82,8 +85,8 @@ export default function FooterSection({ language }: FooterSectionProps) {
                   rel="noopener noreferrer"
                   className="w-9 h-9 rounded-lg flex items-center justify-center transition-all hover:scale-110"
                   style={{
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    color: '#6E6E60',
+                    background: 'color-mix(in srgb, var(--fg) 5%, transparent)',
+                    color: 'var(--fg-3)',
                   }}
                   title={link.name}
                 >
@@ -97,7 +100,7 @@ export default function FooterSection({ language }: FooterSectionProps) {
           <div>
             <h4
               className="text-sm font-semibold mb-4"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {t('links', language)}
             </h4>
@@ -108,8 +111,8 @@ export default function FooterSection({ language }: FooterSectionProps) {
                     href={link.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm transition-colors hover:text-[#B8912A]"
-                    style={{ color: '#8A8A7C' }}
+                    className="text-sm transition-colors hover:text-brand"
+                    style={{ color: 'var(--fg-3)' }}
                   >
                     {link.name}
                   </a>
@@ -122,7 +125,7 @@ export default function FooterSection({ language }: FooterSectionProps) {
           <div>
             <h4
               className="text-sm font-semibold mb-4"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {t('resources', language)}
             </h4>
@@ -133,8 +136,8 @@ export default function FooterSection({ language }: FooterSectionProps) {
                     href={link.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm transition-colors hover:text-[#B8912A] inline-flex items-center gap-1"
-                    style={{ color: '#8A8A7C' }}
+                    className="text-sm transition-colors hover:text-brand inline-flex items-center gap-1"
+                    style={{ color: 'var(--fg-3)' }}
                   >
                     {link.name}
                     <ExternalLink className="w-3 h-3 opacity-50" />
@@ -148,7 +151,7 @@ export default function FooterSection({ language }: FooterSectionProps) {
           <div>
             <h4
               className="text-sm font-semibold mb-4"
-              style={{ color: '#1E1E1A' }}
+              style={{ color: 'var(--fg)' }}
             >
               {t('supporters', language)}
             </h4>
@@ -159,8 +162,8 @@ export default function FooterSection({ language }: FooterSectionProps) {
                   href={link.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs border border-[#C0B9A2] bg-[#ECE8DB]/50 rounded px-3 py-1.5 transition-all hover:border-[#B8912A] hover:text-[#B8912A] hover:bg-[#B8912A]/10 hover:shadow-[0_0_10px_rgba(184,145,42,0.2)]"
-                  style={{ color: '#6E6E60' }}
+                  className="text-xs border border-line bg-surface/50 rounded px-3 py-1.5 transition-all hover:border-brand hover:text-brand hover:bg-brand/10 hover:shadow-[0_0_10px_color-mix(in_srgb,var(--brand)_20%,transparent)]"
+                  style={{ color: 'var(--fg-3)' }}
                 >
                   {link.name}
                 </a>
@@ -173,12 +176,13 @@ export default function FooterSection({ language }: FooterSectionProps) {
         <div
           className="pt-6 text-center text-xs"
           style={{
-            color: '#8A8A7C',
-            borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+            color: 'var(--fg-3)',
+            borderTop:
+              '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
           }}
         >
           <p className="mb-2">{t('footerTitle', language)}</p>
-          <p style={{ color: '#3C4249' }}>{t('footerWarning', language)}</p>
+          <p style={{ color: 'var(--fg-3)' }}>{t('footerWarning', language)}</p>
         </div>
       </div>
     </footer>

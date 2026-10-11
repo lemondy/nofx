@@ -12,8 +12,8 @@ export function LanguageSwitcher() {
   const { language, setLanguage } = useLanguage()
 
   return (
-    <div className="absolute top-4 right-4 z-50 flex items-center gap-1 rounded-lg p-1 border border-nofx-line bg-[#1E1E1A]/5 ">
-      <Globe size={14} className="text-[#6E6E60] ml-1.5 mr-0.5" />
+    <div className="absolute top-4 right-4 z-50 flex items-center gap-1 rounded-lg p-1 border border-nofx-line bg-fg/5 ">
+      <Globe size={14} className="text-fg-3 ml-1.5 mr-0.5" />
       {languages.map(({ code, label }) => (
         <button
           key={code}
@@ -22,7 +22,7 @@ export function LanguageSwitcher() {
           className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${
             language === code
               ? 'bg-nofx-gold/15 text-nofx-gold'
-              : 'text-[#6E6E60] hover:text-[#3A3A32] bg-transparent'
+              : 'text-fg-3 hover:text-fg-2 bg-transparent'
           }`}
         >
           {label}

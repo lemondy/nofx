@@ -20,6 +20,7 @@ import {
   type Kline,
 } from '../../utils/indicators'
 import { Settings, BarChart2 } from 'lucide-react'
+import { getChartTheme, useThemeVersion } from '../../lib/chartTheme'
 
 // Order marker interface
 interface OrderMarker {
@@ -145,6 +146,7 @@ export function AdvancedChart({
 }: AdvancedChartProps) {
   void _onSymbolChange // Prevent unused warning
   const { language } = useLanguage()
+  const themeVersion = useThemeVersion()
   const quoteUnit = getQuoteUnit(exchange)
   const baseUnit = getBaseUnit(exchange, symbol, language)
   const chartContainerRef = useRef<HTMLDivElement>(null)
@@ -447,22 +449,23 @@ export function AdvancedChart({
   useEffect(() => {
     if (!chartContainerRef.current) return
 
+    const th = getChartTheme()
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth || 800,
       height: chartContainerRef.current.clientHeight || height,
       layout: {
-        background: { color: '#F2EFE6' },
-        textColor: '#6E6E60',
+        background: { color: th.background },
+        textColor: th.text,
         fontSize: 12,
       },
       grid: {
         vertLines: {
-          color: 'rgba(192, 185, 162, 0.2)',
+          color: th.grid,
           style: 1,
           visible: true,
         },
         horzLines: {
-          color: 'rgba(192, 185, 162, 0.2)',
+          color: th.grid,
           style: 1,
           visible: true,
         },
@@ -470,20 +473,20 @@ export function AdvancedChart({
       crosshair: {
         mode: 1,
         vertLine: {
-          color: 'rgba(184, 145, 42, 0.5)',
+          color: th.crosshair,
           width: 1,
           style: 2,
-          labelBackgroundColor: '#B8912A',
+          labelBackgroundColor: th.crosshairLabel,
         },
         horzLine: {
-          color: 'rgba(184, 145, 42, 0.5)',
+          color: th.crosshair,
           width: 1,
           style: 2,
-          labelBackgroundColor: '#B8912A',
+          labelBackgroundColor: th.crosshairLabel,
         },
       },
       rightPriceScale: {
-        borderColor: '#C0B9A2',
+        borderColor: th.border,
         scaleMargins: {
           top: 0.1,
           bottom: 0.08,
@@ -492,7 +495,7 @@ export function AdvancedChart({
         entireTextOnly: false,
       },
       timeScale: {
-        borderColor: '#C0B9A2',
+        borderColor: th.border,
         timeVisible: true,
         secondsVisible: false,
         borderVisible: true,
@@ -528,12 +531,12 @@ export function AdvancedChart({
 
     // Create candlestick series
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#2E7D4F',
-      downColor: '#C0392B',
-      borderUpColor: '#2E7D4F',
-      borderDownColor: '#C0392B',
-      wickUpColor: '#2E7D4F',
-      wickDownColor: '#C0392B',
+      upColor: th.up,
+      downColor: th.down,
+      borderUpColor: th.up,
+      borderDownColor: th.down,
+      wickUpColor: th.up,
+      wickDownColor: th.down,
     })
     candlestickSeriesRef.current = candlestickSeries as any
 
@@ -542,7 +545,7 @@ export function AdvancedChart({
     // config let volume occupy the full height and overlap the candles
     // (2026-09-27 user report).
     const volumeSeries = chart.addSeries(HistogramSeries, {
-      color: '#2E7D4F',
+      color: th.up,
       priceFormat: {
         type: 'volume',
       },
@@ -609,6 +612,37 @@ export function AdvancedChart({
       chart.remove()
     }
   }, []) // Chart is created once, ResizeObserver handles dimension changes
+
+  // Re-apply colors when the app theme (dark/light) changes
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const th = getChartTheme()
+    chart.applyOptions({
+      layout: { background: { color: th.background }, textColor: th.text },
+      grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+      crosshair: {
+        vertLine: {
+          color: th.crosshair,
+          labelBackgroundColor: th.crosshairLabel,
+        },
+        horzLine: {
+          color: th.crosshair,
+          labelBackgroundColor: th.crosshairLabel,
+        },
+      },
+      rightPriceScale: { borderColor: th.border },
+      timeScale: { borderColor: th.border },
+    })
+    candlestickSeriesRef.current?.applyOptions({
+      upColor: th.up,
+      downColor: th.down,
+      borderUpColor: th.up,
+      borderDownColor: th.down,
+      wickUpColor: th.up,
+      wickDownColor: th.down,
+    })
+  }, [themeVersion])
 
   // Load data and indicators
   useEffect(() => {
@@ -706,13 +740,12 @@ export function AdvancedChart({
             (i) => i.id === 'volume'
           )?.enabled
           if (volumeEnabled) {
+            const volTheme = getChartTheme()
             const volumeData = klineData.map((k: Kline) => ({
               time: k.time,
               value: k.volume || 0,
               color:
-                k.close >= k.open
-                  ? 'rgba(46, 125, 79, 0.5)'
-                  : 'rgba(192, 57, 43, 0.5)',
+                k.close >= k.open ? volTheme.volumeUp : volTheme.volumeDown,
             }))
             volumeSeriesRef.current.setData(volumeData)
           } else {
@@ -808,7 +841,7 @@ export function AdvancedChart({
                 markers.push({
                   time: candleTime as Time,
                   position: 'belowBar' as const,
-                  color: '#2E7D4F',
+                  color: getChartTheme().up,
                   shape: 'circle' as const,
                   text: counts.buys > 1 ? `B${counts.buys}` : 'B',
                   size: 1,
@@ -819,7 +852,7 @@ export function AdvancedChart({
                 markers.push({
                   time: candleTime as Time,
                   position: 'aboveBar' as const,
-                  color: '#C0392B',
+                  color: getChartTheme().down,
                   shape: 'circle' as const,
                   text: counts.sells > 1 ? `S${counts.sells}` : 'S',
                   size: 1,
@@ -894,7 +927,7 @@ export function AdvancedChart({
       loadData(true)
     }, 5000)
     return () => clearInterval(refreshInterval)
-  }, [symbol, interval, traderID, exchange])
+  }, [symbol, interval, traderID, exchange, themeVersion])
 
   // Refresh open order price lines separately (every 60s, avoid frequent exchange API calls)
   useEffect(() => {
@@ -930,18 +963,19 @@ export function AdvancedChart({
             const isLimit = order.type === 'LIMIT'
 
             // Set price line style
-            let lineColor = '#B8912A' // Default yellow
+            const lineTheme = getChartTheme()
+            let lineColor = lineTheme.brand // Default yellow
             const lineStyle = 2 // dashed
             let title = ''
 
             if (isStopLoss) {
-              lineColor = '#C0392B' // red - stop loss
+              lineColor = lineTheme.down // red - stop loss
               title = `SL ${order.quantity}`
             } else if (isTakeProfit) {
-              lineColor = '#2E7D4F' // green - take profit
+              lineColor = lineTheme.up // green - take profit
               title = `TP ${order.quantity}`
             } else if (isLimit) {
-              lineColor = '#B8912A' // yellow - limit order
+              lineColor = lineTheme.brand // yellow - limit order
               title = `Limit ${order.side} ${order.quantity}`
             } else {
               title = `${order.type} ${order.quantity}`
@@ -976,7 +1010,7 @@ export function AdvancedChart({
       clearTimeout(initialTimeout)
       clearInterval(openOrdersInterval)
     }
-  }, [symbol, traderID])
+  }, [symbol, traderID, themeVersion])
 
   // Handle order marker show/hide separately to avoid reloading data
   useEffect(() => {
@@ -1092,10 +1126,11 @@ export function AdvancedChart({
     <div
       className="relative shadow-xl"
       style={{
-        background: 'linear-gradient(180deg, #EFECE1 0%, #F2EFE6 100%)',
+        background:
+          'linear-gradient(180deg, var(--surface-2) 0%, var(--surface-2) 100%)',
         borderRadius: '12px',
         overflow: 'hidden',
-        border: '1px solid rgba(192, 185, 162, 0.5)',
+        border: '1px solid var(--line)',
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
@@ -1105,8 +1140,8 @@ export function AdvancedChart({
       <div
         className="flex items-center justify-between px-4 py-2"
         style={{
-          borderBottom: '1px solid rgba(192, 185, 162, 0.6)',
-          background: '#EFECE1',
+          borderBottom: '1px solid var(--line)',
+          background: 'var(--surface-2)',
           flexShrink: 0,
         }}
       >
@@ -1114,8 +1149,8 @@ export function AdvancedChart({
         <div className="flex items-center gap-4">
           {/* Symbol & Interval */}
           <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-[#1E1E1A]">{symbol}</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#C0B9A2] text-[#6E6E60]">
+            <span className="text-sm font-bold text-fg">{symbol}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-line text-fg-3">
               {interval}
             </span>
             <span
@@ -1134,11 +1169,12 @@ export function AdvancedChart({
 
           {/* Price Display */}
           {marketStats && (
-            <div className="flex items-center gap-3 pl-3 border-l border-[#C0B9A2]">
+            <div className="flex items-center gap-3 pl-3 border-l border-line">
               <span
                 className="text-base font-bold tabular-nums"
                 style={{
-                  color: marketStats.priceChange >= 0 ? '#10B981' : '#EF4444',
+                  color:
+                    marketStats.priceChange >= 0 ? 'var(--up)' : 'var(--down)',
                 }}
               >
                 {marketStats.price.toLocaleString(undefined, {
@@ -1152,9 +1188,10 @@ export function AdvancedChart({
                 style={{
                   background:
                     marketStats.priceChange >= 0
-                      ? 'rgba(16, 185, 129, 0.1)'
-                      : 'rgba(239, 68, 68, 0.1)',
-                  color: marketStats.priceChange >= 0 ? '#10B981' : '#EF4444',
+                      ? 'var(--up-soft)'
+                      : 'var(--down-soft)',
+                  color:
+                    marketStats.priceChange >= 0 ? 'var(--up)' : 'var(--down)',
                 }}
               >
                 {marketStats.priceChange >= 0 ? '+' : ''}
@@ -1162,23 +1199,23 @@ export function AdvancedChart({
               </span>
 
               {/* Compact H/L */}
-              <div className="flex items-center gap-2 text-[11px] text-[#6E6E60]">
+              <div className="flex items-center gap-2 text-[11px] text-fg-3">
                 <span>
                   H{' '}
-                  <span className="text-[#3A3A32]">
+                  <span className="text-fg-2">
                     {marketStats.high.toFixed(2)}
                   </span>
                 </span>
                 <span>
                   L{' '}
-                  <span className="text-[#3A3A32]">
+                  <span className="text-fg-2">
                     {marketStats.low.toFixed(2)}
                   </span>
                 </span>
                 {marketStats.volume > 0 && baseUnit && (
                   <span>
                     Vol{' '}
-                    <span className="text-[#3A3A32]">
+                    <span className="text-fg-2">
                       {formatVolume(marketStats.volume)}
                     </span>
                   </span>
@@ -1200,9 +1237,9 @@ export function AdvancedChart({
             className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-all"
             style={{
               background: showIndicatorPanel
-                ? 'rgba(96, 165, 250, 0.15)'
+                ? 'var(--info-soft)'
                 : 'transparent',
-              color: showIndicatorPanel ? '#5E7A5E' : '#6B7280',
+              color: showIndicatorPanel ? 'var(--info)' : 'var(--fg-3)',
             }}
           >
             <Settings className="w-3 h-3" />
@@ -1213,10 +1250,8 @@ export function AdvancedChart({
             onClick={() => setShowOrderMarkers(!showOrderMarkers)}
             className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-all"
             style={{
-              background: showOrderMarkers
-                ? 'rgba(16, 185, 129, 0.15)'
-                : 'transparent',
-              color: showOrderMarkers ? '#10B981' : '#6B7280',
+              background: showOrderMarkers ? 'var(--up-soft)' : 'transparent',
+              color: showOrderMarkers ? 'var(--up)' : 'var(--fg-3)',
             }}
             title={t('advancedChart.orderMarkers', language)}
           >
@@ -1230,8 +1265,10 @@ export function AdvancedChart({
         <div
           className="absolute top-16 right-4 z-10 rounded-lg shadow-2xl "
           style={{
-            background: 'linear-gradient(135deg, #E9E4D6 0%, #EFECE1 100%)',
-            border: '1px solid rgba(184, 145, 42, 0.2)',
+            background:
+              'linear-gradient(135deg, var(--surface-hover) 0%, var(--surface-2) 100%)',
+            border:
+              '1px solid color-mix(in srgb, var(--brand) 20%, transparent)',
             maxHeight: '500px',
             minWidth: '280px',
             overflowY: 'auto',
@@ -1240,17 +1277,17 @@ export function AdvancedChart({
           {/* Title bar */}
           <div
             className="flex items-center justify-between px-4 py-3 border-b"
-            style={{ borderColor: 'rgba(192, 185, 162, 0.8)' }}
+            style={{ borderColor: 'var(--line)' }}
           >
             <div className="flex items-center gap-2">
               <BarChart2 className="w-4 h-4 text-yellow-400" />
-              <h4 className="text-sm font-bold text-[#1E1E1A]">
+              <h4 className="text-sm font-bold text-fg">
                 {t('advancedChart.technicalIndicators', language)}
               </h4>
             </div>
             <button
               onClick={() => setShowIndicatorPanel(false)}
-              className="text-[#6E6E60] hover:text-[#1E1E1A] transition-colors"
+              className="text-fg-3 hover:text-fg transition-colors"
             >
               <span className="text-lg">×</span>
             </button>
@@ -1261,21 +1298,21 @@ export function AdvancedChart({
             {indicators.map((indicator) => (
               <label
                 key={indicator.id}
-                className="flex items-center gap-3 p-2.5 rounded-md hover:bg-[#1E1E1A]/5 cursor-pointer transition-all group"
+                className="flex items-center gap-3 p-2.5 rounded-md hover:bg-fg/5 cursor-pointer transition-all group"
               >
                 <div className="relative">
                   <input
                     type="checkbox"
                     checked={indicator.enabled}
                     onChange={() => toggleIndicator(indicator.id)}
-                    className="w-4 h-4 rounded border-[#A69E86] text-yellow-500 focus:ring-2 focus:ring-yellow-500/50"
+                    className="w-4 h-4 rounded border-line-strong text-yellow-500 focus:ring-2 focus:ring-yellow-500/50"
                   />
                 </div>
                 <div
                   className="w-8 h-3 rounded-sm border border-nofx-line"
                   style={{ backgroundColor: indicator.color }}
                 ></div>
-                <span className="text-sm text-[#3A3A32] group-hover:text-[#1E1E1A] transition-colors flex-1">
+                <span className="text-sm text-fg-2 group-hover:text-fg transition-colors flex-1">
                   {indicator.name}
                 </span>
                 {indicator.enabled && (
@@ -1287,8 +1324,8 @@ export function AdvancedChart({
 
           {/* Bottom hint */}
           <div
-            className="px-4 py-2 text-xs text-[#6E6E60] border-t"
-            style={{ borderColor: 'rgba(192, 185, 162, 0.8)' }}
+            className="px-4 py-2 text-xs text-fg-3 border-t"
+            style={{ borderColor: 'var(--line)' }}
           >
             {t('advancedChart.clickToToggle', language)}
           </div>
@@ -1316,14 +1353,14 @@ export function AdvancedChart({
               lineHeight: '18px',
             }}
           >
-            <div style={{ color: '#1E1E1A', fontWeight: 500 }}>
+            <div style={{ color: 'var(--fg)', fontWeight: 500 }}>
               {symbol.replace(/USDT$/, '')} · {interval} ·{' '}
               {exchange?.toUpperCase()}
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 8px' }}>
               {(() => {
                 const bull = legend.close >= legend.open
-                const c = bull ? '#2E7D4F' : '#C0392B'
+                const c = bull ? 'var(--up)' : 'var(--down)'
                 const oLabel = language === 'zh' ? '开' : 'O'
                 const hLabel = language === 'zh' ? '高' : 'H'
                 const lLabel = language === 'zh' ? '低' : 'L'
@@ -1349,12 +1386,12 @@ export function AdvancedChart({
                       {legend.changePercent.toFixed(2)}%)
                     </span>
                     {legend.volume > 0 && baseUnit && (
-                      <span style={{ color: '#6E6E60' }}>
+                      <span style={{ color: 'var(--fg-3)' }}>
                         V({baseUnit}) {formatVolume(legend.volume)}
                       </span>
                     )}
                     {legend.quoteVolume > 0 && quoteUnit && (
-                      <span style={{ color: '#6E6E60' }}>
+                      <span style={{ color: 'var(--fg-3)' }}>
                         V({quoteUnit}) {formatVolume(legend.quoteVolume)}
                       </span>
                     )}
@@ -1380,11 +1417,12 @@ export function AdvancedChart({
             style={{
               fontSize: '56px',
               fontWeight: '700',
-              color: 'rgba(184, 145, 42, 0.12)',
+              color: 'color-mix(in srgb, var(--brand) 12%, transparent)',
               letterSpacing: '4px',
               fontFamily:
                 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-              textShadow: '0 2px 30px rgba(184, 145, 42, 0.2)',
+              textShadow:
+                '0 2px 30px color-mix(in srgb, var(--brand) 20%, transparent)',
             }}
           >
             NOFX
@@ -1396,11 +1434,13 @@ export function AdvancedChart({
       {error && (
         <div
           className="absolute inset-0 flex items-center justify-center"
-          style={{ background: 'rgba(244, 241, 232, 0.9)' }}
+          style={{
+            background: 'color-mix(in srgb, var(--surface) 90%, transparent)',
+          }}
         >
           <div className="text-center">
             <div className="text-2xl mb-2">⚠️</div>
-            <div style={{ color: '#C0392B' }}>{error}</div>
+            <div style={{ color: 'var(--down)' }}>{error}</div>
           </div>
         </div>
       )}

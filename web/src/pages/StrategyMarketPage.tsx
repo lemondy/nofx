@@ -51,51 +51,57 @@ const strategyStyles: Record<
   }
 > = {
   scalper: {
-    color: 'text-[#B8912A]',
-    border: 'border-[#B8912A]/30',
-    glow: 'shadow-[0_0_20px_rgba(184,145,42,0.15)]',
-    shadow: 'hover:shadow-[0_0_30px_rgba(184,145,42,0.25)]',
-    bg: 'bg-[#B8912A]/5',
+    color: 'text-brand',
+    border: 'border-brand/30',
+    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--brand)_15%,transparent)]',
+    shadow:
+      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--brand)_25%,transparent)]',
+    bg: 'bg-brand/5',
     icon: Zap,
   },
   swing: {
     color: 'text-cyan-400',
     border: 'border-cyan-400/30',
-    glow: 'shadow-[0_0_20px_rgba(34,211,238,0.15)]',
-    shadow: 'hover:shadow-[0_0_30px_rgba(34,211,238,0.25)]',
+    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--info)_15%,transparent)]',
+    shadow:
+      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--info)_25%,transparent)]',
     bg: 'bg-cyan-400/5',
     icon: TrendingUp,
   },
   arbitrage: {
     color: 'text-purple-400',
     border: 'border-purple-400/30',
-    glow: 'shadow-[0_0_20px_rgba(192,132,252,0.15)]',
-    shadow: 'hover:shadow-[0_0_30px_rgba(192,132,252,0.25)]',
+    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--ai)_15%,transparent)]',
+    shadow:
+      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--ai)_25%,transparent)]',
     bg: 'bg-purple-400/5',
     icon: Layers,
   },
   conservative: {
     color: 'text-emerald-400',
     border: 'border-emerald-400/30',
-    glow: 'shadow-[0_0_20px_rgba(52,211,153,0.15)]',
-    shadow: 'hover:shadow-[0_0_30px_rgba(52,211,153,0.25)]',
+    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--up)_15%,transparent)]',
+    shadow:
+      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--up)_25%,transparent)]',
     bg: 'bg-emerald-400/5',
     icon: Shield,
   },
   aggressive: {
     color: 'text-red-500',
     border: 'border-red-500/30',
-    glow: 'shadow-[0_0_20px_rgba(239,68,68,0.15)]',
-    shadow: 'hover:shadow-[0_0_30px_rgba(239,68,68,0.25)]',
+    glow: 'shadow-[0_0_20px_color-mix(in_srgb,var(--down)_15%,transparent)]',
+    shadow:
+      'hover:shadow-[0_0_30px_color-mix(in_srgb,var(--down)_25%,transparent)]',
     bg: 'bg-red-500/5',
     icon: Target,
   },
   default: {
-    color: 'text-[#6E6E60]',
-    border: 'border-[#B3AB92]',
+    color: 'text-fg-3',
+    border: 'border-line-strong',
     glow: '',
-    shadow: 'hover:shadow-[0_0_20px_rgba(255,255,255,0.05)]',
-    bg: 'bg-[#E4E0D0]/20',
+    shadow:
+      'hover:shadow-[0_0_20px_color-mix(in_srgb,var(--fg)_5%,transparent)]',
+    bg: 'bg-surface-hover/20',
     icon: Activity,
   },
 }
@@ -191,12 +197,12 @@ export function StrategyMarketPage() {
   }
 
   return (
-    <DeepVoidBackground className="min-h-screen text-[#1E1E1A] font-mono py-12">
+    <DeepVoidBackground className="min-h-screen text-fg font-mono py-12">
       <div className="w-full px-4 md:px-8 space-y-8">
         <div className="w-full relative z-10">
           {/* Header Section */}
-          <div className="mb-12 border-b border-[#C0B9A2] pb-8 relative">
-            <div className="absolute top-0 right-0 p-2 border border-[#C0B9A2] rounded bg-[#F2EFE6] text-xs text-[#6E6E60] font-mono hidden md:block">
+          <div className="mb-12 border-b border-line pb-8 relative">
+            <div className="absolute top-0 right-0 p-2 border border-line rounded bg-surface-2 text-xs text-fg-3 font-mono hidden md:block">
               SYSTEM_STATUS:{' '}
               <span className="text-emerald-500 animate-pulse">ONLINE</span>
               <br />
@@ -205,13 +211,13 @@ export function StrategyMarketPage() {
             </div>
 
             <div className="flex items-center gap-4 mb-4">
-              <div className="bg-[#ECE8DB] border border-[#B3AB92] p-3 rounded-none relative group overflow-hidden">
+              <div className="bg-surface border border-line-strong p-3 rounded-none relative group overflow-hidden">
                 <div className="absolute inset-0 bg-nofx-gold/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                 <Database className="w-8 h-8 text-nofx-gold relative z-10" />
               </div>
               <div>
                 <h1
-                  className="text-4xl font-bold tracking-tighter text-[#1E1E1A] uppercase glitch-text"
+                  className="text-4xl font-bold tracking-tighter text-fg uppercase glitch-text"
                   data-text={tr('title')}
                 >
                   {tr('title')}
@@ -222,7 +228,7 @@ export function StrategyMarketPage() {
                 </p>
               </div>
             </div>
-            <p className="text-sm text-[#6E6E60] max-w-2xl border-l-2 border-[#C0B9A2] pl-4">
+            <p className="text-sm text-fg-3 max-w-2xl border-l-2 border-line pl-4">
               {tr('description')}
             </p>
           </div>
@@ -231,9 +237,9 @@ export function StrategyMarketPage() {
           <div className="flex flex-col md:flex-row gap-4 mb-8">
             {/* Search */}
             <div className="relative flex-1 group">
-              <div className="absolute -inset-0.5 bg-gradient-to-r from-nofx-gold/20 to-[#B3AB92]/30 rounded opacity-0 group-hover:opacity-100 transition duration-500 blur"></div>
-              <div className="relative bg-[#F2EFE6] flex items-center border border-[#C0B9A2] group-hover:border-nofx-gold/50 transition-colors">
-                <div className="pl-4 pr-3 text-[#6E6E60] group-hover:text-nofx-gold transition-colors">
+              <div className="absolute -inset-0.5 bg-gradient-to-r from-nofx-gold/20 to-line-strong/30 rounded opacity-0 group-hover:opacity-100 transition duration-500 blur"></div>
+              <div className="relative bg-surface-2 flex items-center border border-line group-hover:border-nofx-gold/50 transition-colors">
+                <div className="pl-4 pr-3 text-fg-3 group-hover:text-nofx-gold transition-colors">
                   <Terminal size={16} />
                 </div>
                 <input
@@ -241,7 +247,7 @@ export function StrategyMarketPage() {
                   placeholder={tr('search')}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent py-3 text-sm focus:outline-none placeholder-[#8A8A7C] text-nofx-gold font-mono"
+                  className="w-full bg-transparent py-3 text-sm focus:outline-none placeholder-fg-3 text-nofx-gold font-mono"
                 />
                 <div className="pr-4">
                   <div className="w-2 h-4 bg-nofx-gold animate-pulse"></div>
@@ -250,15 +256,15 @@ export function StrategyMarketPage() {
             </div>
 
             {/* Category Filter */}
-            <div className="flex gap-2 bg-[#ECE8DB]/50 p-1 border border-[#C0B9A2]">
+            <div className="flex gap-2 bg-surface/50 p-1 border border-line">
               {['all', 'popular', 'recent'].map((cat) => (
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
                   className={`px-4 py-2 text-xs font-mono uppercase tracking-wider transition-all relative overflow-hidden ${
                     selectedCategory === cat
-                      ? 'text-black font-bold'
-                      : 'text-[#6E6E60] hover:text-[#1E1E1A]'
+                      ? 'text-brand-fg font-bold'
+                      : 'text-fg-3 hover:text-fg'
                   }`}
                 >
                   {selectedCategory === cat && (
@@ -282,7 +288,7 @@ export function StrategyMarketPage() {
           {isLoading && (
             <div className="flex flex-col items-center justify-center py-32 space-y-4">
               <div className="relative w-16 h-16">
-                <div className="absolute inset-0 border-2 border-[#C0B9A2] rounded-full"></div>
+                <div className="absolute inset-0 border-2 border-line rounded-full"></div>
                 <div className="absolute inset-0 border-2 border-nofx-gold rounded-full border-t-transparent animate-spin"></div>
                 <div className="absolute inset-0 flex items-center justify-center">
                   <Cpu size={24} className="text-nofx-gold/50" />
@@ -310,15 +316,15 @@ export function StrategyMarketPage() {
 
           {/* Empty State */}
           {!isLoading && filteredStrategies.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-32 border border-[#C0B9A2] border-dashed bg-[#ECE8DB]/20 rounded">
+            <div className="flex flex-col items-center justify-center py-32 border border-line border-dashed bg-surface/20 rounded">
               <div className="relative mb-6">
                 <div className="absolute -inset-4 bg-red-500/10 rounded-full blur-xl animate-pulse"></div>
-                <Activity className="w-16 h-16 text-[#8A8A7C] relative z-10" />
+                <Activity className="w-16 h-16 text-fg-3 relative z-10" />
               </div>
-              <h3 className="text-xl font-bold text-[#3A3A32] font-mono tracking-tight mb-2">
+              <h3 className="text-xl font-bold text-fg-2 font-mono tracking-tight mb-2">
                 [{tr('noStrategies')}]
               </h3>
-              <p className="text-[#8A8A7C] text-xs tracking-wide uppercase">
+              <p className="text-fg-3 text-xs tracking-wide uppercase">
                 {tr('noStrategiesDesc')}
               </p>
             </div>
@@ -343,7 +349,7 @@ export function StrategyMarketPage() {
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.95 }}
                       transition={{ delay: i * 0.05 }}
-                      className={`group relative bg-[#F2EFE6] border border-[#C0B9A2] hover:border-[#A69E86] transition-all duration-300 ${style.shadow}`}
+                      className={`group relative bg-surface-2 border border-line hover:border-line-strong transition-all duration-300 ${style.shadow}`}
                     >
                       {/* Holographic Border Highlight */}
                       <div
@@ -373,7 +379,7 @@ export function StrategyMarketPage() {
                                 PUBLIC_ACCESS
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1.5 text-[#6E6E60] border border-[#C0B9A2] bg-[#ECE8DB] px-2 py-1">
+                              <div className="flex items-center gap-1.5 text-fg-3 border border-line bg-surface px-2 py-1">
                                 <EyeOff size={10} />
                                 RESTRICTED
                               </div>
@@ -386,36 +392,36 @@ export function StrategyMarketPage() {
                           className={`text-lg font-bold mb-2 tracking-tight group-hover:${style.color} transition-colors uppercase truncate relative`}
                         >
                           {strategy.name}
-                          <span className="absolute -bottom-1 left-0 w-8 h-[2px] bg-[#E4E0D0] group-hover:bg-nofx-gold transition-colors"></span>
+                          <span className="absolute -bottom-1 left-0 w-8 h-[2px] bg-surface-hover group-hover:bg-nofx-gold transition-colors"></span>
                         </h3>
-                        <p className="text-xs text-[#6E6E60] mb-6 line-clamp-2 h-8 leading-relaxed font-sans">
+                        <p className="text-xs text-fg-3 mb-6 line-clamp-2 h-8 leading-relaxed font-sans">
                           {strategy.description || 'NO_DESCRIPTION_AVAILABLE'}
                         </p>
 
                         {/* Meta Data */}
-                        <div className="grid grid-cols-2 gap-y-2 mb-6 text-[10px] font-mono text-[#8A8A7C]">
+                        <div className="grid grid-cols-2 gap-y-2 mb-6 text-[10px] font-mono text-fg-3">
                           <div className="flex flex-col">
-                            <span className="text-[#8A8A7C] uppercase">
+                            <span className="text-fg-3 uppercase">
                               {tr('author')}
                             </span>
-                            <span className="text-[#6E6E60] group-hover:text-[#1E1E1A] transition-colors">
+                            <span className="text-fg-3 group-hover:text-fg transition-colors">
                               @
                               {strategy.author_email?.split('@')[0] ||
                                 'UNKNOWN'}
                             </span>
                           </div>
                           <div className="flex flex-col text-right">
-                            <span className="text-[#8A8A7C] uppercase">
+                            <span className="text-fg-3 uppercase">
                               {tr('createdAt')}
                             </span>
-                            <span className="text-[#6E6E60]">
+                            <span className="text-fg-3">
                               {formatDate(strategy.created_at)}
                             </span>
                           </div>
                         </div>
 
                         {/* Config / Indicators */}
-                        <div className="bg-[#ECE8DB]/30 border border-[#C0B9A2]/50 p-3 mb-4 min-h-[90px]">
+                        <div className="bg-surface/30 border border-line/50 p-3 mb-4 min-h-[90px]">
                           {strategy.config_visible && strategy.config ? (
                             <div className="space-y-3">
                               {/* Indicators */}
@@ -424,13 +430,13 @@ export function StrategyMarketPage() {
                                   indicators.map((ind) => (
                                     <span
                                       key={ind}
-                                      className="px-1.5 py-0.5 border border-[#B3AB92] bg-[#E4E0D0] text-[9px] text-[#3A3A32] font-mono whitespace-nowrap"
+                                      className="px-1.5 py-0.5 border border-line-strong bg-surface-hover text-[9px] text-fg-2 font-mono whitespace-nowrap"
                                     >
                                       {ind}
                                     </span>
                                   ))
                                 ) : (
-                                  <span className="text-[9px] text-[#8A8A7C]">
+                                  <span className="text-[9px] text-fg-3">
                                     NO_INDICATORS
                                   </span>
                                 )}
@@ -441,34 +447,31 @@ export function StrategyMarketPage() {
                                 <div className="flex justify-between items-center text-[10px]">
                                   <div className="flex gap-3">
                                     <div className="flex flex-col">
-                                      <span className="text-[#8A8A7C] scale-90 origin-left">
+                                      <span className="text-fg-3 scale-90 origin-left">
                                         LEV
                                       </span>
-                                      <span className="text-[#3A3A32] font-bold">
+                                      <span className="text-fg-2 font-bold">
                                         {strategy.config.risk_control
                                           .btc_eth_max_leverage || '-'}
                                         x
                                       </span>
                                     </div>
                                     <div className="flex flex-col">
-                                      <span className="text-[#8A8A7C] scale-90 origin-left">
+                                      <span className="text-fg-3 scale-90 origin-left">
                                         POS
                                       </span>
-                                      <span className="text-[#3A3A32] font-bold">
+                                      <span className="text-fg-2 font-bold">
                                         {strategy.config.risk_control
                                           .max_positions || '-'}
                                       </span>
                                     </div>
                                   </div>
-                                  <Activity
-                                    size={12}
-                                    className="text-[#8A8A7C]"
-                                  />
+                                  <Activity size={12} className="text-fg-3" />
                                 </div>
                               )}
                             </div>
                           ) : (
-                            <div className="flex flex-col items-center justify-center h-full text-[#8A8A7C]">
+                            <div className="flex flex-col items-center justify-center h-full text-fg-3">
                               <EyeOff size={16} className="mb-1 opacity-50" />
                               <span className="text-[9px] uppercase tracking-widest">
                                 {tr('configHiddenDesc')}
@@ -482,7 +485,7 @@ export function StrategyMarketPage() {
                           {strategy.config_visible && strategy.config ? (
                             <button
                               onClick={() => handleCopyConfig(strategy)}
-                              className="w-full py-2.5 text-[10px] font-bold font-mono uppercase tracking-widest border border-[#B3AB92] bg-[#F2EFE6] hover:bg-[#ECE8DB] text-[#3A3A32] hover:text-nofx-gold hover:border-nofx-gold transition-all flex items-center justify-center gap-2 group/btn"
+                              className="w-full py-2.5 text-[10px] font-bold font-mono uppercase tracking-widest border border-line-strong bg-surface-2 hover:bg-surface text-fg-2 hover:text-nofx-gold hover:border-nofx-gold transition-all flex items-center justify-center gap-2 group/btn"
                             >
                               {copiedId === strategy.id ? (
                                 <>
@@ -501,7 +504,7 @@ export function StrategyMarketPage() {
                           ) : (
                             <button
                               disabled
-                              className="w-full py-2.5 text-[10px] font-bold font-mono uppercase tracking-widest border border-[#C0B9A2] bg-[#F2EFE6] text-[#8A8A7C] cursor-not-allowed flex items-center justify-center gap-2"
+                              className="w-full py-2.5 text-[10px] font-bold font-mono uppercase tracking-widest border border-line bg-surface-2 text-fg-3 cursor-not-allowed flex items-center justify-center gap-2"
                             >
                               <Shield size={12} />
                               {tr('hideConfig')}
@@ -529,21 +532,21 @@ export function StrategyMarketPage() {
                 onClick={() => (window.location.href = '/strategy')}
               >
                 <div className="absolute -inset-1 bg-gradient-to-r from-nofx-gold to-yellow-600 rounded blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
-                <div className="relative px-8 py-4 bg-[#F2EFE6] border border-[#C0B9A2] hover:border-nofx-gold/50 flex items-center gap-4 transition-all">
+                <div className="relative px-8 py-4 bg-surface-2 border border-line hover:border-nofx-gold/50 flex items-center gap-4 transition-all">
                   <Hexagon
                     className="text-nofx-gold animate-spin-slow"
                     size={24}
                   />
                   <div className="text-left">
-                    <div className="text-sm font-bold text-[#1E1E1A] uppercase tracking-wider group-hover:text-nofx-gold transition-colors">
+                    <div className="text-sm font-bold text-fg uppercase tracking-wider group-hover:text-nofx-gold transition-colors">
                       {tr('shareYours')}
                     </div>
-                    <div className="text-[10px] text-[#6E6E60] font-mono">
+                    <div className="text-[10px] text-fg-3 font-mono">
                       CONTRIBUTE TO THE GLOBAL DATABASE
                     </div>
                   </div>
-                  <div className="w-[1px] h-8 bg-[#E4E0D0] mx-2"></div>
-                  <div className="text-xs font-mono text-[#6E6E60] group-hover:translate-x-1 transition-transform">
+                  <div className="w-[1px] h-8 bg-surface-hover mx-2"></div>
+                  <div className="text-xs font-mono text-fg-3 group-hover:translate-x-1 transition-transform">
                     INITIALIZE_UPLOAD -&gt;
                   </div>
                 </div>

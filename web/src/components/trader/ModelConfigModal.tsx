@@ -93,11 +93,12 @@ export function ModelConfigModal({
   ]
 
   return (
-    <div className="fixed inset-0 bg-[#F4F1E8] flex items-center justify-center z-50 p-4 overflow-y-auto ">
+    <div className="fixed inset-0 bg-surface-hover flex items-center justify-center z-50 p-4 overflow-y-auto ">
       <div
         className="rounded-2xl w-full max-w-2xl relative my-8 shadow-2xl"
         style={{
-          background: 'linear-gradient(180deg, #E9E4D6 0%, #EDE9DC 100%)',
+          background:
+            'linear-gradient(180deg, var(--surface-hover) 0%, var(--surface-hover) 100%)',
           maxHeight: 'calc(100vh - 4rem)',
         }}
       >
@@ -108,11 +109,11 @@ export function ModelConfigModal({
               <button
                 type="button"
                 onClick={handleBack}
-                className="p-2 rounded-lg hover:bg-[#1E1E1A]/10 transition-colors"
+                className="p-2 rounded-lg hover:bg-fg/10 transition-colors"
               >
                 <svg
                   className="w-5 h-5"
-                  style={{ color: '#6E6E60' }}
+                  style={{ color: 'var(--fg-3)' }}
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -126,7 +127,7 @@ export function ModelConfigModal({
                 </svg>
               </button>
             )}
-            <h3 className="text-xl font-bold" style={{ color: '#1E1E1A' }}>
+            <h3 className="text-xl font-bold" style={{ color: 'var(--fg)' }}>
               {editingModelId
                 ? t('editAIModel', language)
                 : t('addAIModel', language)}
@@ -138,7 +139,7 @@ export function ModelConfigModal({
                 type="button"
                 onClick={() => onDelete(editingModelId)}
                 className="p-2 rounded-lg hover:bg-red-500/20 transition-colors"
-                style={{ color: '#C0392B' }}
+                style={{ color: 'var(--down)' }}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -146,8 +147,8 @@ export function ModelConfigModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-[#1E1E1A]/10 transition-colors"
-              style={{ color: '#6E6E60' }}
+              className="p-2 rounded-lg hover:bg-fg/10 transition-colors"
+              style={{ color: 'var(--fg-3)' }}
             >
               ✕
             </button>
@@ -219,36 +220,36 @@ function ModelSelectionStep({
 
   return (
     <div className="space-y-4">
-      <div className="text-sm font-semibold" style={{ color: '#1E1E1A' }}>
+      <div className="text-sm font-semibold" style={{ color: 'var(--fg)' }}>
         {t('modelConfig.chooseProvider', language)}
       </div>
 
       {otherProviders.length > 0 && (
-        <div className="rounded-xl border border-nofx-line bg-[#F2EFE6] overflow-hidden">
+        <div className="rounded-xl border border-nofx-line bg-surface-2 overflow-hidden">
           <button
             type="button"
             onClick={() => setShowOtherProviders((prev) => !prev)}
-            className="w-full flex items-center justify-between px-4 py-4 text-left transition-all hover:bg-[#1E1E1A]/5"
+            className="w-full flex items-center justify-between px-4 py-4 text-left transition-all hover:bg-fg/5"
           >
             <div>
               <div
                 className="text-sm font-semibold"
-                style={{ color: '#1E1E1A' }}
+                style={{ color: 'var(--fg)' }}
               >
                 {t('modelConfig.otherApiEntry', language)}
               </div>
-              <div className="mt-1 text-xs" style={{ color: '#6E6E60' }}>
+              <div className="mt-1 text-xs" style={{ color: 'var(--fg-3)' }}>
                 {t('modelConfig.otherApiEntryDesc', language)}
               </div>
             </div>
             <div className="flex items-center gap-3">
               <span
                 className="rounded-full border border-nofx-line px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em]"
-                style={{ color: '#7A7A6C' }}
+                style={{ color: 'var(--fg-3)' }}
               >
                 {otherProviders.length} API
               </span>
-              <span className="text-sm" style={{ color: '#5E7A5E' }}>
+              <span className="text-sm" style={{ color: 'var(--info)' }}>
                 {showOtherProviders ? '−' : '+'}
               </span>
             </div>
@@ -269,7 +270,7 @@ function ModelSelectionStep({
               </div>
               <div
                 className="text-xs text-center pt-3"
-                style={{ color: '#6E6E60' }}
+                style={{ color: 'var(--fg-3)' }}
               >
                 {t('modelConfig.modelsConfigured', language)}
               </div>
@@ -314,23 +315,26 @@ function StandardProviderConfigForm({
       {/* Selected Model Header */}
       <div
         className="p-4 rounded-xl flex items-center gap-4"
-        style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+        style={{
+          background: 'var(--surface-2)',
+          border: '1px solid var(--line)',
+        }}
       >
-        <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-[#F2EFE6] border border-nofx-line">
+        <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-surface-2 border border-nofx-line">
           {getModelIcon(selectedModel.provider || selectedModel.id, {
             width: 32,
             height: 32,
           }) || (
-            <span className="text-lg font-bold" style={{ color: '#A78BFA' }}>
+            <span className="text-lg font-bold" style={{ color: 'var(--ai)' }}>
               {selectedModel.name[0]}
             </span>
           )}
         </div>
         <div className="flex-1">
-          <div className="font-semibold text-lg" style={{ color: '#1E1E1A' }}>
+          <div className="font-semibold text-lg" style={{ color: 'var(--fg)' }}>
             {getShortName(selectedModel.name)}
           </div>
-          <div className="text-xs" style={{ color: '#6E6E60' }}>
+          <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
             {selectedModel.provider} •{' '}
             {AI_PROVIDER_CONFIG[selectedModel.provider]?.defaultModel ||
               selectedModel.id}
@@ -343,12 +347,16 @@ function StandardProviderConfigForm({
             rel="noopener noreferrer"
             className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all hover:scale-105"
             style={{
-              background: 'rgba(139, 92, 246, 0.1)',
-              border: '1px solid rgba(139, 92, 246, 0.3)',
+              background: 'var(--ai-soft)',
+              border:
+                '1px solid color-mix(in srgb, var(--ai) 30%, transparent)',
             }}
           >
-            <ExternalLink className="w-4 h-4" style={{ color: '#A78BFA' }} />
-            <span className="text-sm font-medium" style={{ color: '#A78BFA' }}>
+            <ExternalLink className="w-4 h-4" style={{ color: 'var(--ai)' }} />
+            <span
+              className="text-sm font-medium"
+              style={{ color: 'var(--ai)' }}
+            >
               {t('modelConfig.getApiKey', language)}
             </span>
           </a>
@@ -360,13 +368,14 @@ function StandardProviderConfigForm({
         <div
           className="p-4 rounded-xl"
           style={{
-            background: 'rgba(192, 57, 43, 0.1)',
-            border: '1px solid rgba(192, 57, 43, 0.3)',
+            background: 'var(--down-soft)',
+            border:
+              '1px solid color-mix(in srgb, var(--down) 30%, transparent)',
           }}
         >
           <div className="flex items-start gap-2">
             <span style={{ fontSize: '16px' }}>⚠️</span>
-            <div className="text-sm" style={{ color: '#C0392B' }}>
+            <div className="text-sm" style={{ color: 'var(--down)' }}>
               {t('kimiApiNote', language)}
             </div>
           </div>
@@ -377,11 +386,11 @@ function StandardProviderConfigForm({
       <div className="space-y-2">
         <label
           className="flex items-center gap-2 text-sm font-semibold"
-          style={{ color: '#1E1E1A' }}
+          style={{ color: 'var(--fg)' }}
         >
           <svg
             className="w-4 h-4"
-            style={{ color: '#A78BFA' }}
+            style={{ color: 'var(--ai)' }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -402,9 +411,9 @@ function StandardProviderConfigForm({
           placeholder={t('enterAPIKey', language)}
           className="w-full px-4 py-3 rounded-xl"
           style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
           required
         />
@@ -414,11 +423,11 @@ function StandardProviderConfigForm({
       <div className="space-y-2">
         <label
           className="flex items-center gap-2 text-sm font-semibold"
-          style={{ color: '#1E1E1A' }}
+          style={{ color: 'var(--fg)' }}
         >
           <svg
             className="w-4 h-4"
-            style={{ color: '#A78BFA' }}
+            style={{ color: 'var(--ai)' }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -445,15 +454,15 @@ function StandardProviderConfigForm({
           }
           className="w-full px-4 py-3 rounded-xl"
           style={{
-            background: '#F2EFE6',
+            background: 'var(--surface-2)',
             border:
               isCustom && !baseUrl.trim()
-                ? '1px solid #C0392B'
-                : '1px solid #C0B9A2',
-            color: '#1E1E1A',
+                ? '1px solid var(--down)'
+                : '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
         />
-        <div className="text-xs" style={{ color: '#6E6E60' }}>
+        <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
           {isCustom
             ? language === 'zh'
               ? '必填：自定义模型的 OpenAI 兼容接口地址（不含 /chat/completions）'
@@ -466,11 +475,11 @@ function StandardProviderConfigForm({
       <div className="space-y-2">
         <label
           className="flex items-center gap-2 text-sm font-semibold"
-          style={{ color: '#1E1E1A' }}
+          style={{ color: 'var(--fg)' }}
         >
           <svg
             className="w-4 h-4"
-            style={{ color: '#A78BFA' }}
+            style={{ color: 'var(--ai)' }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -491,14 +500,14 @@ function StandardProviderConfigForm({
           placeholder={t('customModelNamePlaceholder', language)}
           className="w-full px-4 py-3 rounded-xl"
           style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            color: 'var(--fg)',
           }}
         />
         <div
           className="text-xs"
-          style={{ color: isCustom ? '#B8912A' : '#6E6E60' }}
+          style={{ color: isCustom ? 'var(--brand)' : 'var(--fg-3)' }}
         >
           {isCustom
             ? language === 'zh'
@@ -512,18 +521,18 @@ function StandardProviderConfigForm({
       <div
         className="p-4 rounded-xl"
         style={{
-          background: 'rgba(139, 92, 246, 0.1)',
-          border: '1px solid rgba(139, 92, 246, 0.2)',
+          background: 'var(--ai-soft)',
+          border: '1px solid color-mix(in srgb, var(--ai) 20%, transparent)',
         }}
       >
         <div
           className="text-sm font-semibold mb-2 flex items-center gap-2"
-          style={{ color: '#A78BFA' }}
+          style={{ color: 'var(--ai)' }}
         >
           <Brain className="w-4 h-4" />
           {t('information', language)}
         </div>
-        <div className="text-xs space-y-1" style={{ color: '#6E6E60' }}>
+        <div className="text-xs space-y-1" style={{ color: 'var(--fg-3)' }}>
           <div>• {t('modelConfigInfo1', language)}</div>
           <div>• {t('modelConfigInfo2', language)}</div>
           <div>• {t('modelConfigInfo3', language)}</div>
@@ -535,8 +544,8 @@ function StandardProviderConfigForm({
         <button
           type="button"
           onClick={onBack}
-          className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-[#1E1E1A]/5"
-          style={{ background: '#C0B9A2', color: '#6E6E60' }}
+          className="flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-all hover:bg-fg/5"
+          style={{ background: 'var(--line)', color: 'var(--fg-3)' }}
         >
           {editingModelId
             ? t('cancel', language)
@@ -550,7 +559,7 @@ function StandardProviderConfigForm({
             (isCustom && (!baseUrl.trim() || !modelName.trim()))
           }
           className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ background: '#8B5CF6', color: '#fff' }}
+          style={{ background: 'var(--ai)', color: 'var(--brand-fg)' }}
         >
           {t('saveConfig', language)}
           <svg

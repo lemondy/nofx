@@ -670,7 +670,7 @@ export function StrategyStudioPage() {
     {
       key: 'gridConfig' as const,
       icon: Activity,
-      color: '#2E7D4F',
+      color: 'var(--up)',
       title: tr('gridConfig'),
       forStrategyType: 'grid_trading' as const,
       content: editingConfig?.grid_config && (
@@ -686,7 +686,7 @@ export function StrategyStudioPage() {
     {
       key: 'stockConfig' as const,
       icon: BarChart3,
-      color: '#B8912A',
+      color: 'var(--brand)',
       title: tr('stockConfig'),
       forStrategyType: 'us_stock' as const,
       content: editingConfig?.stock_config && (
@@ -702,7 +702,7 @@ export function StrategyStudioPage() {
     {
       key: 'coinSource' as const,
       icon: Target,
-      color: '#B8912A',
+      color: 'var(--brand)',
       title: tr('coinSource'),
       forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
@@ -717,7 +717,7 @@ export function StrategyStudioPage() {
     {
       key: 'indicators' as const,
       icon: BarChart3,
-      color: '#2E7D4F',
+      color: 'var(--up)',
       title: tr('indicators'),
       forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
@@ -732,7 +732,7 @@ export function StrategyStudioPage() {
     {
       key: 'riskControl' as const,
       icon: Shield,
-      color: '#C0392B',
+      color: 'var(--down)',
       title: tr('riskControl'),
       forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
@@ -747,12 +747,18 @@ export function StrategyStudioPage() {
           />
           <div
             className="p-4 rounded-lg mt-6"
-            style={{ background: '#F2EFE6', border: '1px solid #C0B9A2' }}
+            style={{
+              background: 'var(--surface-2)',
+              border: '1px solid var(--line)',
+            }}
           >
-            <label className="block text-sm mb-1" style={{ color: '#1E1E1A' }}>
+            <label
+              className="block text-sm mb-1"
+              style={{ color: 'var(--fg)' }}
+            >
               {ts(riskControl.statsWindow, language)}
             </label>
-            <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+            <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
               {ts(riskControl.statsWindowDesc, language)}
             </p>
             <input
@@ -769,14 +775,14 @@ export function StrategyStudioPage() {
               max={365}
               className="w-32 px-3 py-2 rounded"
               style={{
-                background: '#E9E4D6',
-                border: '1px solid #C0B9A2',
-                color: '#1E1E1A',
+                background: 'var(--surface-hover)',
+                border: '1px solid var(--line)',
+                color: 'var(--fg)',
               }}
             />
             <p
               className="text-xs mt-2 font-medium"
-              style={{ color: '#2E7D4F' }}
+              style={{ color: 'var(--up)' }}
             >
               {(editingConfig.stats_window_days ?? 0) === 0
                 ? language === 'zh'
@@ -797,7 +803,7 @@ export function StrategyStudioPage() {
     {
       key: 'promptSections' as const,
       icon: FileText,
-      color: '#a855f7',
+      color: 'var(--ai)',
       title: tr('promptSections'),
       forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
@@ -814,12 +820,12 @@ export function StrategyStudioPage() {
     {
       key: 'customPrompt' as const,
       icon: Settings,
-      color: '#5e7a5e',
+      color: 'var(--info)',
       title: tr('customPrompt'),
       forStrategyType: 'ai_trading' as const,
       content: editingConfig && (
         <div>
-          <p className="text-xs mb-2" style={{ color: '#6E6E60' }}>
+          <p className="text-xs mb-2" style={{ color: 'var(--fg-3)' }}>
             {tr('customPromptDesc')}
           </p>
           <textarea
@@ -829,9 +835,9 @@ export function StrategyStudioPage() {
             placeholder={tr('customPromptPlaceholder')}
             className="w-full h-32 px-3 py-2 rounded-lg resize-none font-mono text-xs"
             style={{
-              background: '#F2EFE6',
-              border: '1px solid #C0B9A2',
-              color: '#1E1E1A',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--line)',
+              color: 'var(--fg)',
             }}
           />
         </div>
@@ -840,7 +846,7 @@ export function StrategyStudioPage() {
     {
       key: 'publishSettings' as const,
       icon: Globe,
-      color: '#2E7D4F',
+      color: 'var(--up)',
       title: tr('publishSettings'),
       forStrategyType: 'both' as const,
       content: selectedStrategy && (
@@ -874,7 +880,7 @@ export function StrategyStudioPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-gradient-to-br from-nofx-gold to-yellow-500">
-              <Sparkles className="w-5 h-5 text-black" />
+              <Sparkles className="w-5 h-5 text-brand-fg" />
             </div>
             <div>
               <h1 className="text-lg font-bold text-nofx-text">
@@ -909,7 +915,7 @@ export function StrategyStudioPage() {
               <div className="flex items-center gap-1">
                 {/* Import button with hidden file input */}
                 <label
-                  className="p-1 rounded hover:bg-[#1E1E1A]/10 transition-colors cursor-pointer text-nofx-text-muted hover:text-[#1E1E1A]"
+                  className="p-1 rounded hover:bg-fg/10 transition-colors cursor-pointer text-nofx-text-muted hover:text-fg"
                   title={tr('importStrategy')}
                 >
                   <Upload className="w-4 h-4" />
@@ -922,7 +928,7 @@ export function StrategyStudioPage() {
                 </label>
                 <button
                   onClick={handleCreateStrategy}
-                  className="p-1 rounded hover:bg-[#1E1E1A]/10 transition-colors text-nofx-gold"
+                  className="p-1 rounded hover:bg-fg/10 transition-colors text-nofx-gold"
                   title={tr('newStrategyTooltip')}
                 >
                   <Plus className="w-4 h-4" />
@@ -942,7 +948,7 @@ export function StrategyStudioPage() {
                   }}
                   className={`group px-2 py-2 rounded-lg cursor-pointer transition-all ${
                     selectedStrategy?.id === strategy.id
-                      ? 'ring-1 ring-nofx-gold/50 bg-nofx-gold/10 shadow-[0_0_15px_rgba(184,145,42,0.1)]'
+                      ? 'ring-1 ring-nofx-gold/50 bg-nofx-gold/10 shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_10%,transparent)]'
                       : 'hover:bg-nofx-bg-lighter/60 ring-1 ring-nofx-line hover:ring-nofx-gold/20 bg-transparent'
                   }`}
                 >
@@ -958,7 +964,7 @@ export function StrategyStudioPage() {
                           e.stopPropagation()
                           handleExportStrategy(strategy)
                         }}
-                        className="p-1 rounded hover:bg-[#1E1E1A]/10 text-nofx-text-muted hover:text-[#1E1E1A]"
+                        className="p-1 rounded hover:bg-fg/10 text-nofx-text-muted hover:text-fg"
                         title={tr('export')}
                       >
                         <Download className="w-3 h-3" />
@@ -970,7 +976,7 @@ export function StrategyStudioPage() {
                               e.stopPropagation()
                               handleDuplicateStrategy(strategy.id)
                             }}
-                            className="p-1 rounded hover:bg-[#1E1E1A]/10 text-nofx-text-muted hover:text-[#1E1E1A]"
+                            className="p-1 rounded hover:bg-fg/10 text-nofx-text-muted hover:text-fg"
                             title={tr('duplicate')}
                           >
                             <Copy className="w-3 h-3" />
@@ -1070,7 +1076,7 @@ export function StrategyStudioPage() {
                       onClick={handleSaveStrategy}
                       disabled={isSaving || !hasChanges}
                       className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50
- ${hasChanges ? 'bg-nofx-gold text-black hover:bg-yellow-500' : 'bg-nofx-bg-lighter text-nofx-text-muted cursor-not-allowed'}`}
+ ${hasChanges ? 'bg-nofx-gold text-brand-fg hover:brightness-110' : 'bg-nofx-bg-lighter text-nofx-text-muted cursor-not-allowed'}`}
                     >
                       <Save className="w-3 h-3" />
                       {isSaving ? tr('saving') : tr('save')}
@@ -1094,7 +1100,10 @@ export function StrategyStudioPage() {
               {editingConfig && (
                 <div className="mb-4 p-4 rounded-lg bg-nofx-bg-lighter border border-nofx-gold/20">
                   <div className="flex items-center gap-2 mb-3">
-                    <Zap className="w-4 h-4" style={{ color: '#B8912A' }} />
+                    <Zap
+                      className="w-4 h-4"
+                      style={{ color: 'var(--brand)' }}
+                    />
                     <span className="text-sm font-medium text-nofx-text">
                       {tr('strategyType')}
                     </span>
@@ -1118,7 +1127,10 @@ export function StrategyStudioPage() {
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <Bot className="w-4 h-4" style={{ color: '#B8912A' }} />
+                        <Bot
+                          className="w-4 h-4"
+                          style={{ color: 'var(--brand)' }}
+                        />
                         <span className="text-sm font-medium text-nofx-text">
                           {tr('aiTrading')}
                         </span>
@@ -1147,7 +1159,7 @@ export function StrategyStudioPage() {
                       <div className="flex items-center gap-2 mb-1">
                         <Activity
                           className="w-4 h-4"
-                          style={{ color: '#2E7D4F' }}
+                          style={{ color: 'var(--up)' }}
                         />
                         <span className="text-sm font-medium text-nofx-text">
                           {tr('gridTrading')}
@@ -1179,7 +1191,7 @@ export function StrategyStudioPage() {
                       <div className="flex items-center gap-2 mb-1">
                         <BarChart3
                           className="w-4 h-4"
-                          style={{ color: '#B8912A' }}
+                          style={{ color: 'var(--brand)' }}
                         />
                         <span className="text-sm font-medium text-nofx-text">
                           {tr('usStock')}
@@ -1203,7 +1215,7 @@ export function StrategyStudioPage() {
                     >
                       <button
                         onClick={() => toggleSection(key)}
-                        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-[#1E1E1A]/5 transition-colors"
+                        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-fg/5 transition-colors"
                       >
                         <div className="flex items-center gap-2">
                           <Icon className="w-4 h-4" style={{ color }} />
@@ -1319,7 +1331,7 @@ export function StrategyStudioPage() {
                   <button
                     onClick={fetchPromptPreview}
                     disabled={isLoadingPrompt || !editingConfig}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 bg-purple-600 hover:bg-purple-700 text-[#1E1E1A]"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 bg-purple-600 hover:bg-purple-700 text-fg"
                   >
                     {isLoadingPrompt ? (
                       <Loader2 className="w-3 h-3 animate-spin" />
@@ -1429,7 +1441,7 @@ export function StrategyStudioPage() {
                       disabled={
                         isRunningAiTest || !editingConfig || !selectedModelId
                       }
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 text-[#1E1E1A] shadow-lg shadow-green-500/20 bg-gradient-to-br from-green-500 to-green-600"
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 text-fg shadow-lg shadow-green-500/20 bg-gradient-to-br from-green-500 to-green-600"
                     >
                       {isRunningAiTest ? (
                         <>

@@ -861,18 +861,18 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           <div className="flex items-center gap-4">
             <div className="relative group">
               <div className="absolute -inset-1 bg-nofx-gold/20 rounded-xl blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
-              <div className="w-12 h-12 md:w-14 md:h-14 rounded-xl flex items-center justify-center bg-[#F2EFE6] border border-nofx-gold/30 text-nofx-gold relative z-10 shadow-[0_0_15px_rgba(184,145,42,0.1)]">
+              <div className="w-12 h-12 md:w-14 md:h-14 rounded-xl flex items-center justify-center bg-surface-2 border border-nofx-gold/30 text-nofx-gold relative z-10 shadow-[0_0_15px_color-mix(in_srgb,var(--brand)_10%,transparent)]">
                 <Bot className="w-6 h-6 md:w-7 md:h-7" />
               </div>
             </div>
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold font-mono tracking-tight text-[#1E1E1A] flex items-center gap-3 uppercase">
+              <h1 className="text-2xl md:text-3xl font-bold font-mono tracking-tight text-fg flex items-center gap-3 uppercase">
                 {t('aiTraders', language)}
                 <span className="text-xs font-mono font-normal px-2 py-0.5 rounded bg-nofx-gold/10 text-nofx-gold border border-nofx-gold/20 tracking-wider">
                   {traders?.length || 0} ACTIVE_NODES
                 </span>
               </h1>
-              <p className="text-xs font-mono text-[#6E6E60] uppercase tracking-widest mt-1 ml-1 flex items-center gap-2">
+              <p className="text-xs font-mono text-fg-3 uppercase tracking-widest mt-1 ml-1 flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
                 SYSTEM_READY
               </p>
@@ -882,7 +882,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 hide-scrollbar">
             <button
               onClick={handleAddModel}
-              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-[#B3AB92] bg-[#F2EFE6] text-[#6E6E60] hover:text-[#1E1E1A] hover:border-[#6E6E60] whitespace-nowrap "
+              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-line-strong bg-surface-2 text-fg-3 hover:text-fg hover:border-line-strong whitespace-nowrap "
             >
               <div className="flex items-center gap-2">
                 <Plus className="w-3 h-3" />
@@ -892,7 +892,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
             <button
               onClick={handleAddExchange}
-              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-[#B3AB92] bg-[#F2EFE6] text-[#6E6E60] hover:text-[#1E1E1A] hover:border-[#6E6E60] whitespace-nowrap "
+              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-line-strong bg-surface-2 text-fg-3 hover:text-fg hover:border-line-strong whitespace-nowrap "
             >
               <div className="flex items-center gap-2">
                 <Plus className="w-3 h-3" />
@@ -902,7 +902,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
             <button
               onClick={() => setShowTelegramModal(true)}
-              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-[#7A9BB5]/60 bg-[#F2EFE6] text-[#3D7EA6] hover:text-[#2C5F80] hover:border-[#3D7EA6] whitespace-nowrap "
+              className="px-4 py-2 rounded text-xs font-mono uppercase tracking-wider transition-all border border-info/60 bg-surface-2 text-info hover:text-info hover:border-info whitespace-nowrap "
             >
               <div className="flex items-center gap-2">
                 <MessageCircle className="w-3 h-3" />
@@ -916,13 +916,13 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                 configuredModels.length === 0 ||
                 configuredExchanges.length === 0
               }
-              className="group relative px-6 py-2 rounded text-xs font-bold font-mono uppercase tracking-wider transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap overflow-hidden bg-nofx-gold text-black hover:bg-yellow-400 shadow-[0_0_20px_rgba(184,145,42,0.2)] hover:shadow-[0_0_30px_rgba(184,145,42,0.4)]"
+              className="group relative px-6 py-2 rounded text-xs font-bold font-mono uppercase tracking-wider transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap overflow-hidden bg-nofx-gold text-brand-fg hover:brightness-110 shadow-[0_0_20px_color-mix(in_srgb,var(--brand)_20%,transparent)] hover:shadow-[0_0_30px_color-mix(in_srgb,var(--brand)_40%,transparent)]"
             >
               <span className="relative z-10 flex items-center gap-2">
                 <Plus className="w-4 h-4" />
                 {t('createTrader', language)}
               </span>
-              <div className="absolute inset-0 bg-[#1E1E1A]/15 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+              <div className="absolute inset-0 bg-fg/15 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
             </button>
           </div>
         </div>

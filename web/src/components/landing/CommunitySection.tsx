@@ -26,8 +26,8 @@ function TweetCard({
       rel="noopener noreferrer"
       className="block p-5 rounded-2xl transition-all duration-300 group"
       style={{
-        background: '#ECE8DB',
-        border: '1px solid rgba(255, 255, 255, 0.06)',
+        background: 'var(--surface)',
+        border: '1px solid color-mix(in srgb, var(--fg) 6%, transparent)',
       }}
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
@@ -35,7 +35,7 @@ function TweetCard({
       transition={{ delay }}
       whileHover={{
         y: -4,
-        borderColor: 'rgba(184, 145, 42, 0.3)',
+        borderColor: 'color-mix(in srgb, var(--brand) 30%, transparent)',
       }}
     >
       {/* Header */}
@@ -45,13 +45,19 @@ function TweetCard({
             src={avatarUrl}
             alt={authorName}
             className="w-10 h-10 rounded-full object-cover"
-            style={{ border: '2px solid rgba(255, 255, 255, 0.1)' }}
+            style={{
+              border:
+                '2px solid color-mix(in srgb, var(--fg) 10%, transparent)',
+            }}
           />
           <div>
-            <div className="font-semibold text-sm" style={{ color: '#1E1E1A' }}>
+            <div
+              className="font-semibold text-sm"
+              style={{ color: 'var(--fg)' }}
+            >
               {authorName}
             </div>
-            <div className="text-xs" style={{ color: '#8A8A7C' }}>
+            <div className="text-xs" style={{ color: 'var(--fg-3)' }}>
               {handle}
             </div>
           </div>
@@ -59,7 +65,7 @@ function TweetCard({
         {/* X Logo */}
         <div
           className="w-6 h-6 flex items-center justify-center opacity-50 group-hover:opacity-100 transition-opacity"
-          style={{ color: '#1E1E1A' }}
+          style={{ color: 'var(--fg)' }}
         >
           <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
@@ -70,7 +76,7 @@ function TweetCard({
       {/* Content */}
       <p
         className="text-sm leading-relaxed mb-4 line-clamp-4"
-        style={{ color: '#6E6E60' }}
+        style={{ color: 'var(--fg-3)' }}
       >
         {quote}
       </p>
@@ -78,31 +84,36 @@ function TweetCard({
       {/* Footer */}
       <div
         className="flex items-center gap-6 pt-3"
-        style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}
+        style={{
+          borderTop: '1px solid color-mix(in srgb, var(--fg) 5%, transparent)',
+        }}
       >
         <div
           className="flex items-center gap-1.5 text-xs"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           <MessageCircle className="w-3.5 h-3.5" />
           <span>Reply</span>
         </div>
         <div
           className="flex items-center gap-1.5 text-xs"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           <Repeat2 className="w-3.5 h-3.5" />
           <span>Repost</span>
         </div>
         <div
           className="flex items-center gap-1.5 text-xs"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           <Heart className="w-3.5 h-3.5" />
           <span>Like</span>
         </div>
         <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-          <ExternalLink className="w-3.5 h-3.5" style={{ color: '#B8912A' }} />
+          <ExternalLink
+            className="w-3.5 h-3.5"
+            style={{ color: 'var(--brand)' }}
+          />
         </div>
       </div>
     </motion.a>
@@ -117,7 +128,10 @@ export default function CommunitySection({ language }: CommunitySectionProps) {
   const tweets: TweetProps[] = []
 
   return (
-    <section className="py-24 relative" style={{ background: '#F2EFE6' }}>
+    <section
+      className="py-24 relative"
+      style={{ background: 'var(--surface-2)' }}
+    >
       {/* Background Decoration */}
       <div
         className="absolute right-0 top-1/2 -translate-y-1/2 w-96 h-96 rounded-full blur-3xl opacity-20"
@@ -137,11 +151,11 @@ export default function CommunitySection({ language }: CommunitySectionProps) {
         >
           <h2
             className="text-4xl lg:text-5xl font-bold mb-4"
-            style={{ color: '#1E1E1A' }}
+            style={{ color: 'var(--fg)' }}
           >
             {language === 'zh' ? '社区声音' : 'Community Voices'}
           </h2>
-          <p className="text-lg" style={{ color: '#6E6E60' }}>
+          <p className="text-lg" style={{ color: 'var(--fg-3)' }}>
             {language === 'zh'
               ? '看看大家怎么说'
               : 'See what others are saying'}
