@@ -73,7 +73,7 @@ export function ConfigStatusGrid({
       case 'ok':
         return {
           label: state.display_balance || '0',
-          className: 'text-emerald-300 border-emerald-500/20 bg-emerald-500/10',
+          className: 'text-up border-up/30 bg-up-soft',
         }
       case 'disabled':
         return {
@@ -83,17 +83,17 @@ export function ConfigStatusGrid({
       case 'missing_credentials':
         return {
           label: language === 'zh' ? '配置不完整' : 'INCOMPLETE',
-          className: 'text-amber-300 border-amber-500/20 bg-amber-500/10',
+          className: 'text-warn border-warn/30 bg-warn-soft',
         }
       case 'invalid_credentials':
         return {
           label: language === 'zh' ? '密钥无效' : 'INVALID KEYS',
-          className: 'text-rose-300 border-rose-500/20 bg-rose-500/10',
+          className: 'text-down border-down/30 bg-down-soft',
         }
       case 'permission_denied':
         return {
           label: language === 'zh' ? '无余额权限' : 'NO PERMISSION',
-          className: 'text-orange-300 border-orange-500/20 bg-orange-500/10',
+          className: 'text-warn border-warn/30 bg-warn-soft',
         }
       default:
         return {
@@ -127,13 +127,12 @@ export function ConfigStatusGrid({
               >
                 <div className="flex items-center gap-4">
                   <div className="relative">
-                    <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-sm group-hover:bg-indigo-500/30 transition-all"></div>
                     <div className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-2 border border-nofx-line relative z-10">
                       {getModelIcon(model.provider || model.id, {
                         width: 20,
                         height: 20,
                       }) || (
-                        <span className="text-xs font-bold text-indigo-400">
+                        <span className="text-xs font-bold text-ai">
                           {getShortName(model.name)[0]}
                         </span>
                       )}
@@ -176,7 +175,7 @@ export function ConfigStatusGrid({
                     className={`p-1.5 rounded-md transition-all ${
                       inUse
                         ? 'text-fg-3 cursor-not-allowed'
-                        : 'text-fg-3 hover:text-red-400 hover:bg-red-500/10'
+                        : 'text-fg-3 hover:text-down hover:bg-down-soft'
                     }`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -186,8 +185,8 @@ export function ConfigStatusGrid({
                       <span
                         className={`text-[10px] font-mono px-2 py-1 rounded border ${
                           usageInfo.runningCount > 0
-                            ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                            : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                            ? 'bg-up-soft border-up/30 text-up'
+                            : 'bg-warn-soft border-warn/30 text-warn'
                         }`}
                       >
                         {usageInfo.runningCount}/{usageInfo.totalCount} ACTIVE
@@ -241,7 +240,6 @@ export function ConfigStatusGrid({
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="relative">
-                    <div className="absolute inset-0 bg-yellow-500/20 rounded-full blur-sm group-hover:brightness-110/30 transition-all"></div>
                     <div className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-2 border border-nofx-line relative z-10">
                       {getExchangeIcon(exchange.exchange_type || exchange.id, {
                         width: 20,
@@ -316,7 +314,7 @@ export function ConfigStatusGrid({
                           className="text-fg-3 hover:text-nofx-gold"
                         >
                           {isCopied ? (
-                            <Check size={10} className="text-green-500" />
+                            <Check size={10} className="text-up" />
                           ) : (
                             <Copy size={10} />
                           )}
@@ -329,8 +327,8 @@ export function ConfigStatusGrid({
                     <span
                       className={`text-[10px] font-mono px-2 py-1 rounded border ${
                         usageInfo.runningCount > 0
-                          ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                          : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                          ? 'bg-up-soft border-up/30 text-up'
+                          : 'bg-warn-soft border-warn/30 text-warn'
                       }`}
                     >
                       {usageInfo.runningCount}/{usageInfo.totalCount} ACTIVE

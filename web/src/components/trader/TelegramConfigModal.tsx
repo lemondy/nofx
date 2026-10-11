@@ -288,11 +288,11 @@ export function TelegramConfigModal({
                         >
                           <div>
                             1. {t('telegram.step1Desc1', language)}{' '}
-                            <code className="text-blue-400">@BotFather</code>
+                            <code className="text-info">@BotFather</code>
                           </div>
                           <div>
                             2. {t('telegram.step1Desc2', language)}{' '}
-                            <code className="text-blue-400">/newbot</code>{' '}
+                            <code className="text-info">/newbot</code>{' '}
                             {t('telegram.step1Desc2Suffix', language)}
                           </div>
                           <div>3. {t('telegram.step1Desc3', language)}</div>
@@ -384,7 +384,7 @@ export function TelegramConfigModal({
                           <div>1. {t('telegram.step2Desc1', language)}</div>
                           <div>
                             2. {t('telegram.step2Desc2', language)}{' '}
-                            <code className="text-green-400 break-all">
+                            <code className="text-up break-all">
                               /start {bindCode || '...'}
                             </code>
                             <div>
@@ -407,7 +407,7 @@ export function TelegramConfigModal({
                         border: '1px solid var(--line)',
                       }}
                     >
-                      <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse flex-shrink-0" />
+                      <div className="w-2 h-2 rounded-full bg-warn animate-pulse flex-shrink-0" />
                       <div>
                         <div
                           className="text-xs font-mono"
@@ -511,7 +511,7 @@ export function TelegramConfigModal({
                         border: '1px solid var(--line)',
                       }}
                     >
-                      <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                      <div className="w-2 h-2 rounded-full bg-up flex-shrink-0" />
                       <div className="min-w-0">
                         <div
                           className="text-xs font-mono"

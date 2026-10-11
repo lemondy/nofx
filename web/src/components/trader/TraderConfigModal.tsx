@@ -430,7 +430,7 @@ export function TraderConfigModal({
                       {t('strategyDetails', language)}
                     </span>
                     {selectedStrategy.is_active && (
-                      <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded">
+                      <span className="px-2 py-0.5 bg-up-soft text-up text-xs rounded">
                         {t('activating', language)}
                       </span>
                     )}
@@ -621,7 +621,7 @@ export function TraderConfigModal({
                     {t('balanceUpdateHint', language)}
                   </p>
                   {balanceFetchError && (
-                    <p className="text-xs text-red-500 mt-1">
+                    <p className="text-xs text-down mt-1">
                       {balanceFetchError}
                     </p>
                   )}

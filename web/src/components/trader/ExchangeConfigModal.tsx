@@ -537,7 +537,7 @@ export function ExchangeConfigModal({
               <button
                 type="button"
                 onClick={() => onDelete(editingExchangeId)}
-                className="p-2 rounded-lg hover:bg-red-500/20 transition-colors"
+                className="p-2 rounded-lg hover:bg-down-soft transition-colors"
                 style={{ color: 'var(--down)' }}
               >
                 <Trash2 className="w-4 h-4" />
@@ -759,8 +759,9 @@ export function ExchangeConfigModal({
                     <div
                       className="p-4 rounded-xl cursor-pointer transition-colors"
                       style={{
-                        background: '#1a3a52',
-                        border: '1px solid #2b5278',
+                        background: 'var(--info-soft)',
+                        border:
+                          '1px solid color-mix(in srgb, var(--info) 35%, transparent)',
                       }}
                       onClick={() => setShowBinanceGuide(!showBinanceGuide)}
                     >
@@ -774,7 +775,7 @@ export function ExchangeConfigModal({
                             {t('exchangeConfig.useBinanceFuturesApi', language)}
                           </span>
                         </div>
-                        <span style={{ color: '#8b949e' }}>
+                        <span style={{ color: 'var(--fg-3)' }}>
                           {showBinanceGuide ? '▲' : '▼'}
                         </span>
                       </div>
@@ -782,8 +783,8 @@ export function ExchangeConfigModal({
                         <div
                           className="mt-3 pt-3 text-sm"
                           style={{
-                            borderTop: '1px solid #2b5278',
-                            color: '#c9d1d9',
+                            borderTop: '1px solid var(--line)',
+                            color: 'var(--fg-2)',
                           }}
                         >
                           <a

@@ -29,7 +29,10 @@ export function Tabs<K extends string = string>({
   return (
     <div
       role="tablist"
-      className={cn('flex items-center gap-4 border-b border-line', className)}
+      className={cn(
+        'flex max-w-full items-center gap-4 overflow-x-auto border-b border-line [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        className
+      )}
     >
       {items.map((it) => {
         const active = it.key === value
@@ -81,7 +84,7 @@ export function Segmented<K extends string = string>({
     <div
       role="group"
       className={cn(
-        'inline-flex items-center gap-0.5 rounded-md border border-line bg-surface-2 p-0.5',
+        'inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-md border border-line bg-surface-2 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
         className
       )}
     >

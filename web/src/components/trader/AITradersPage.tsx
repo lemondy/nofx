@@ -873,7 +873,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                 </span>
               </h1>
               <p className="text-xs font-mono text-fg-3 uppercase tracking-widest mt-1 ml-1 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                <span className="w-2 h-2 rounded-full bg-up animate-pulse"></span>
                 SYSTEM_READY
               </p>
             </div>

@@ -6,6 +6,7 @@ import type { CompetitionData } from '../../types'
 import { ComparisonChart } from '../charts/ComparisonChart'
 import { TraderConfigViewModal } from './TraderConfigViewModal'
 import { getTraderColor } from '../../utils/traderColors'
+import { useTheme } from '../../lib/theme'
 import { useLanguage } from '../../contexts/LanguageContext'
 import { t } from '../../i18n/translations'
 import { PunkAvatar, getTraderAvatar } from '../common/PunkAvatar'
@@ -13,6 +14,7 @@ import { DeepVoidBackground } from '../common/DeepVoidBackground'
 
 export function CompetitionPage() {
   const { language } = useLanguage()
+  useTheme() // 主题切换时重渲染, 使 getTraderColor 取到对应调色板
   const [selectedTrader, setSelectedTrader] = useState<any>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
 
@@ -159,7 +161,7 @@ export function CompetitionPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left: Performance Comparison Chart */}
           <div
-            className="bg-surface border border-nofx-line rounded-xl p-6 animate-slide-in hover:border-line-strong transition-colors"
+            className="bg-surface border border-nofx-line rounded-xl p-4 md:p-6 animate-slide-in hover:border-line-strong transition-colors"
             style={{ animationDelay: '0.1s' }}
           >
             <div className="flex items-center justify-between mb-6">
@@ -175,7 +177,7 @@ export function CompetitionPage() {
 
           {/* Right: Leaderboard */}
           <div
-            className="bg-surface border border-nofx-line rounded-xl p-6 animate-slide-in hover:border-line-strong transition-colors"
+            className="bg-surface border border-nofx-line rounded-xl p-4 md:p-6 animate-slide-in hover:border-line-strong transition-colors"
             style={{ animationDelay: '0.1s' }}
           >
             <div className="flex items-center justify-between mb-6">
@@ -209,7 +211,7 @@ export function CompetitionPage() {
                         : '0 1px 4px rgba(30, 30, 26, 0.12)',
                     }}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       {/* Rank & Avatar & Name */}
                       <div className="flex items-center gap-3">
                         {/* Rank Badge */}
@@ -218,14 +220,13 @@ export function CompetitionPage() {
                           style={{
                             background:
                               index === 0
-                                ? 'linear-gradient(135deg, var(--brand) 0%, var(--brand) 100%)'
+                                ? 'linear-gradient(135deg, #D4A62A 0%, #F0CC5B 100%)'
                                 : index === 1
                                   ? 'linear-gradient(135deg, #C0C0C0 0%, #E8E8E8 100%)'
                                   : index === 2
-                                    ? 'linear-gradient(135deg, #CD7F32 0%, var(--warn) 100%)'
-                                    : 'var(--line)',
-                            color:
-                              index < 3 ? 'var(--brand-fg)' : 'var(--fg-3)',
+                                    ? 'linear-gradient(135deg, #CD7F32 0%, #E8A64C 100%)'
+                                    : 'var(--surface-hover)',
+                            color: index < 3 ? '#1A1405' : 'var(--fg)',
                           }}
                         >
                           {index + 1}
@@ -257,7 +258,7 @@ export function CompetitionPage() {
                       </div>
 
                       {/* Stats */}
-                      <div className="flex items-center gap-4 md:gap-6">
+                      <div className="flex flex-wrap items-center gap-3 md:gap-6">
                         {/* Total Equity */}
                         <div className="text-right min-w-[60px] md:min-w-[80px]">
                           <div
@@ -356,7 +357,7 @@ export function CompetitionPage() {
         {/* Head-to-Head Stats */}
         {competition.traders.length === 2 && (
           <div
-            className="bg-surface border border-nofx-line rounded-xl p-6 animate-slide-in"
+            className="bg-surface border border-nofx-line rounded-xl p-4 md:p-6 animate-slide-in"
             style={{ animationDelay: '0.3s' }}
           >
             <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-fg">

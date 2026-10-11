@@ -84,7 +84,7 @@ export function FAQContent({
                 </h3>
 
                 {/* Answer */}
-                <div className="prose prose-invert max-w-[80ch] text-fg-2 leading-relaxed text-[13px]">
+                <div className="max-w-[80ch] text-fg-2 leading-relaxed text-[13px] [overflow-wrap:anywhere]">
                   {item.id === 'github-projects-tasks' ? (
                     <div className="space-y-3">
                       <div className="text-[13px]">

@@ -176,7 +176,7 @@ function TradersEmptyState({
         {t('createFirstTrader', language)}
       </div>
       {(configuredModelsCount === 0 || configuredExchangesCount === 0) && (
-        <div className="text-xs md:text-sm text-yellow-500">
+        <div className="text-xs md:text-sm text-warn">
           {configuredModelsCount === 0 && configuredExchangesCount === 0
             ? t('configureModelsAndExchangesFirst', language)
             : configuredModelsCount === 0
@@ -332,8 +332,8 @@ function TraderRow({
           <div
             className={`px-2 md:px-3 py-1 rounded text-xs font-bold ${
               trader.is_running
-                ? 'bg-green-100 text-green-800'
-                : 'bg-red-100 text-red-800'
+                ? 'bg-up-soft text-up'
+                : 'bg-down-soft text-down'
             }`}
             style={
               trader.is_running

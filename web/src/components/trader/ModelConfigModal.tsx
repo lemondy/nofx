@@ -138,7 +138,7 @@ export function ModelConfigModal({
               <button
                 type="button"
                 onClick={() => onDelete(editingModelId)}
-                className="p-2 rounded-lg hover:bg-red-500/20 transition-colors"
+                className="p-2 rounded-lg hover:bg-down-soft transition-colors"
                 style={{ color: 'var(--down)' }}
               >
                 <Trash2 className="w-4 h-4" />
