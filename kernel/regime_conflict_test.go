@@ -132,6 +132,7 @@ func TestRegimeSkipSynthesizesWaitWithoutLLM(t *testing.T) {
 }
 
 func TestRegimeSkipKeepsCallForAllowedDirection(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	engine := NewStrategyEngine(&store.StrategyConfig{})
 	mock := &recordingAIClient{}
 	ctx := &Context{MarketDataMap: map[string]*market.Data{}}

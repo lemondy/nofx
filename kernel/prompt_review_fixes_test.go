@@ -22,6 +22,7 @@ func TestRenderedPromptTokenEstimateCountsActualContent(t *testing.T) {
 }
 
 func TestPromptBudgetFallbackRemovesRawKlines(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	cfg := store.StrategyConfig{Language: "zh"}
 	cfg.Indicators.EnableRawKlines = true
 	cfg.Indicators.Klines.SelectedTimeframes = []string{"15m", "1h", "4h"}
