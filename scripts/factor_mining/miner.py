@@ -21,7 +21,7 @@ from . import allocation, evaluate, feedback, forward, llm_memory, options, pane
 from .config import CORR_REDUNDANT, MARKETS
 from .data_fetch import ROOT
 from .ensemble import build_ensemble
-from .expr import OPERATORS, canonical, dsl_help, evaluate_expr, expr_hash, validate_expr
+from .expr import OPERATORS, ExprError, canonical, dsl_help, evaluate_expr, expr_hash, validate_expr
 from .families import family_fine
 from .panel import forward_target, load_panels, make_splits
 from . import store
@@ -289,7 +289,16 @@ class Miner:
                 if time.monotonic() - clock >= budget_s:
                     row['budget_exhausted'] = True
                     return old_zoo
-                values = values_for(group[0][1]['id'], group[0][1]['expr'])
+                try:
+                    values = values_for(group[0][1]['id'], group[0][1]['expr'])
+                except ExprError as exc:
+                    if '缺少字段' not in str(exc):
+                        raise
+                    # An optional data field (e.g. $funding) vanished: keep the previous
+                    # snapshot of this factor rather than crash the run or silently drop it.
+                    for key, factor in group:
+                        refreshed[key] = factor
+                    continue
                 for key, factor in group:
                     if time.monotonic() - clock >= budget_s:
                         row['budget_exhausted'] = True
@@ -307,7 +316,7 @@ class Miner:
             factors = refreshed
             for key in list(values_cache):
                 discard_unused_values(key)
-            seeds = [dict(expr=s['expr'], source='seed', family=s['family']) for s in zoo.seed_factors()]
+            seeds = [dict(expr=s['expr'], source='seed', family=s['family']) for s in zoo.seed_factors(market)]
             rng = random.Random(seed)
             pool = []
             for h in cfg['horizons']:

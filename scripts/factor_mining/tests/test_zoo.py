@@ -49,6 +49,15 @@ class SeedFactorTests(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_us_market_skips_alt_data_seeds(self):
+        crypto = seed_factors('crypto')
+        us = seed_factors('us')
+        self.assertEqual(crypto, seed_factors())
+        self.assertTrue(any('$funding' in f['expr'] or '$premium' in f['expr'] for f in crypto))
+        self.assertFalse(any('$funding' in f['expr'] or '$premium' in f['expr'] for f in us))
+        self.assertEqual({f['id'] for f in us}, {f['id'] for f in crypto
+                                                 if '$funding' not in f['expr'] and '$premium' not in f['expr']})
+
     def test_requested_templates_and_all_five_windows(self):
         names = {factor["name"] for factor in self.factors}
         self.assertTrue({"KMID", "KLEN", "KUP", "KLOW", "KSFT", "KMID2",

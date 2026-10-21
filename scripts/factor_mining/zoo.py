@@ -3,7 +3,7 @@
 from .expr import canonical, expr_hash, validate_expr
 
 
-def seed_factors() -> list[dict]:
+def seed_factors(market: str | None = None) -> list[dict]:
     """Build a deterministic, validated library with canonical deduplication.
 
     Each entry contains expr/family/name and its stable expression-derived id.
@@ -105,4 +105,8 @@ def seed_factors() -> list[dict]:
         ("PREM_FUND7", "other", "Mean($premium,7)-Mean($funding,7)"),
     ]:
         add(name, family, expr)
+    if market == 'us':
+        # Alt fields ($funding/$premium) exist for crypto only; skip their seeds elsewhere
+        # instead of counting them as invalid every night.
+        factors = [f for f in factors if '$funding' not in f['expr'] and '$premium' not in f['expr']]
     return factors

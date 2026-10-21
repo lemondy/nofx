@@ -43,7 +43,7 @@ class FamilyFineTests(unittest.TestCase):
             exprs.extend(mutate(expr, rng, pool))
         fine = {family_fine(e) for e in exprs}
         self.assertGreaterEqual(len(fine), 12)
-        self.assertLessEqual(len(fine), 45)
+        self.assertLessEqual(len(fine), 54)  # 6 operator groups x 3 window bands x 3 flavours
         self.assertFalse(any(k == 'other' or k.startswith('other') for k in fine))
         legacy_other = [e for e in exprs if family(e) == 'other']
         self.assertGreater(len({family_fine(e) for e in legacy_other}), 3)
