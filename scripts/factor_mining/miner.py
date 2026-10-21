@@ -17,11 +17,12 @@ import subprocess
 import time
 from typing import TypedDict
 
-from . import evaluate, feedback, forward, panel, zoo
+from . import allocation, evaluate, feedback, forward, llm_memory, options, panel, zoo
 from .config import CORR_REDUNDANT, MARKETS
 from .data_fetch import ROOT
 from .ensemble import build_ensemble
 from .expr import OPERATORS, canonical, dsl_help, evaluate_expr, expr_hash, validate_expr
+from .families import family_fine
 from .panel import forward_target, load_panels, make_splits
 from . import store
 
@@ -120,15 +121,19 @@ def model_call(workdir, prompt_path, out_path):
             out_path.write_bytes(captured)
 
 
-def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='[]', feedback_text='[]'):
+def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='[]', feedback_text='[]',
+                history_text=None):
     stats = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     prompt_path, out_path = workdir / 'prompt.md', workdir / 'out.md'
     description = ('虚拟币日线，点时刻成交额前60，持有1/3/7日。' if market == 'crypto'
                    else '美股日线，SPY基准，持有5/10/20个交易日。')
+    history = (f'前几晚的探索记录（每晚训练集 top5 与初筛失败数，仅 train 指标；避免重复同类失败写法）：\n'
+               f'{history_text}\n' if history_text else '')
     prompt = (f'你是量化因子研究员。{description}\n{dsl_help()}\n'
               f'训练集 top-10（仅 train 指标）：\n{pool_text}\n'
+              f'{history}'
               f'最近10个失败表达式：\n{failed_text}\n'
               f'本次已提出过（不要重复或仅改常数）：\n{avoid_text}\n'
               f'上一批你提出的表达式在训练集上的结果（train_t 为训练集t值；train_screen 为 pass 表示通过训练集初筛，'
@@ -172,7 +177,7 @@ LLM_MAX_BATCHES = 10
 
 
 def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_of_time=lambda: False,
-                        after_batch=None):
+                        after_batch=None, history_text=None):
     """One llm_propose call is capped at LLM_BATCH expressions, so a larger n is
     served by several calls; later calls are told what was already proposed.
     A failed batch is recorded in llm_error and the remaining ones still run."""
@@ -186,7 +191,7 @@ def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_
         batch_dir = Path(workdir) / f'batch{i}' if i else Path(workdir)
         avoid = json.dumps(exprs[-40:], ensure_ascii=False)
         got, stats = llm_propose(market, pool_text, failed_text, min(remaining, LLM_BATCH), runner, batch_dir,
-                                 avoid, feedback)
+                                 avoid, feedback, history_text)
         remaining -= LLM_BATCH
         for key in ('llm_proposed', 'llm_valid', 'llm_invalid'):
             total[key] += stats[key]
@@ -326,10 +331,16 @@ class Miner:
             for s in seeds:
                 add(s['expr'], 'seed', s['family'], seed_batch)
             made = 0
+            weights = None
+            if options.enabled(options.FAMILY_WEIGHT):
+                # Train-only ledger stats (history before this run's evaluations).
+                weights = allocation.pool_weights(
+                    pool, allocation.family_yield(ledger, family_fine), family_fine)
             for _ in range(max(0, n_mutations) * 10):
                 if made >= n_mutations or not pool:
                     break
-                for expr in mutate(rng.choice(pool)['expr'], rng, pool):
+                parent = rng.choice(pool) if weights is None else rng.choices(pool, weights)[0]
+                for expr in mutate(parent['expr'], rng, pool):
                     made += add(expr, 'mutation', None, mutation_batch)
                     if made >= n_mutations:
                         break
@@ -411,10 +422,21 @@ class Miner:
                     for expr in got:
                         add(expr, 'llm', None, fresh)
                     llm_batch.extend(fresh)
-                    return json.dumps(summarize_outcomes(evaluate_batch(fresh)), ensure_ascii=False)
+                    summary = summarize_outcomes(evaluate_batch(fresh))
+                    if memory:
+                        llm_memory.record_batch(self.root, market, run_id, batches[0], summary)
+                        batches[0] += 1
+                    return json.dumps(summary, ensure_ascii=False)
 
+                memory = options.enabled(options.LLM_MEMORY)
+                batches = [0]
+                history_text = None
+                if memory:
+                    past = llm_memory.history(self.root, market, run_id)
+                    history_text = json.dumps(past, ensure_ascii=False) if past else None
                 _, stats = llm_propose_batches(market, pool_text, json.dumps(failures), n_llm, runner,
-                                               self.root / 'llm_work' / run_id, out_of_time, after_batch)
+                                               self.root / 'llm_work' / run_id, out_of_time, after_batch,
+                                               history_text)
                 row.update(stats)
             evaluate_batch(mutation_batch)
             row['trials_total'] = sum(K.values())
@@ -487,7 +509,12 @@ class Miner:
             store.write_ensemble(market, ensemble, self.root)
             try:
                 from .live_scores import export_live_scores
-                export_live_scores(market, retained, panels, root=self.root, values_cache=values_cache)
+                selected_ids = None
+                if options.enabled(options.GREEDY_ENSEMBLE):
+                    # Live reference scores must use exactly the ensemble.json factors.
+                    selected_ids = {int(h): v['factor_ids'] for h, v in ensemble['horizons'].items() if v}
+                export_live_scores(market, retained, panels, root=self.root, values_cache=values_cache,
+                                   selected_ids=selected_ids)
             except Exception as exc:
                 import sys
                 print(f'live_scores export failed for {market}: {type(exc).__name__}: {exc}', file=sys.stderr)
