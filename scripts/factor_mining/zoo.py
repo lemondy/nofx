@@ -1,4 +1,13 @@
-"""Horizon-independent Alpha158-style seed factors and nofx research factors."""
+"""Horizon-independent Alpha158 seed factors and nofx research factors.
+
+All 158 default Alpha158 names (qlib.contrib.data.loader.Alpha158DL) are present.
+Verified numerically against qlib's own operators by audit_qlib/ (2026-10-21):
+124 identical; IMAX/IMIN/IMXD are the same information with the opposite
+orientation (qlib counts 1-based from the oldest bar, we count back from today;
+the evaluator picks direction by train-IC sign, so this is harmless); SUMP/SUMN/
+SUMD use $ret instead of price differences (corr >= 0.998 with qlib's) because
+qlib's literal formula exceeds the 40-node expression budget.
+"""
 
 from .expr import canonical, expr_hash, validate_expr
 
@@ -34,6 +43,10 @@ def seed_factors() -> list[dict]:
         ("KSFT2", shift, length + "+1e-12"),
     ]:
         add(name, "candle", f"{numerator}/({denominator})")
+
+    # Alpha158's "price" block (windows=[0]): raw OHLC/VWAP normalised by close.
+    for name, field in (("OPEN0", "open"), ("HIGH0", "high"), ("LOW0", "low"), ("VWAP0", "vwap")):
+        add(name, "other", f"${field}/$close")
 
     for n in (5, 10, 20, 30, 60):
         specs = [
