@@ -1,6 +1,7 @@
 package market
 
 import (
+	"nofx/market/usstock"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,20 +250,12 @@ func IsUSEquitySymbol(symbol string) bool {
 }
 
 // IsUSMarketOpen reports whether `now` falls inside US regular trading
-// hours (Eastern, Mon–Fri 09:30–16:00) — the session the equity tokens
-// track their underlying most tightly and where the session weighting
-// applies.
+// hours (Eastern 09:30–16:00, or 09:30–13:00 on early-close days) on an NYSE
+// trading day — the session the equity tokens track their underlying most
+// tightly and where the session weighting applies. Holidays (computed by rule
+// in market/usstock) are closed, not just weekends.
 func IsUSMarketOpen(now time.Time) bool {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		loc = time.FixedZone("EST", -5*3600)
-	}
-	et := now.In(loc)
-	if et.Weekday() == time.Saturday || et.Weekday() == time.Sunday {
-		return false
-	}
-	mins := et.Hour()*60 + et.Minute()
-	return mins >= 9*60+30 && mins < 16*60
+	return usstock.SessionAt(now) == usstock.SessionRegular
 }
 
 // IsBStockSymbol reports whether the futures symbol is a Binance tokenized
