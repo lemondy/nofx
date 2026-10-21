@@ -45,19 +45,30 @@ func (at *AutoTrader) stockAccountInfo() (map[string]interface{}, error) {
 	if st.Equity > 0 {
 		usedPct = st.Exposure / st.Equity * 100
 	}
+	// Real shares booked without exchange protection (e.g. a resting live entry
+	// that filled across a switch to paper) must be visible to API readers.
+	unprotected, unsettled, _ := at.stockUnprotectedLive()
+	if unprotected == nil {
+		unprotected = []stockUnprotectedPosition{}
+	}
+	if unsettled == nil {
+		unsettled = []string{}
+	}
 	return map[string]interface{}{
-		"total_equity":      st.Equity,
-		"wallet_balance":    st.Equity - unrealized,
-		"unrealized_profit": unrealized,
-		"available_balance": st.Available,
-		"total_pnl":         totalPnL,
-		"total_pnl_pct":     pnlPct,
-		"initial_balance":   at.initialBalance,
-		"daily_pnl":         at.dailyPnL,
-		"position_count":    len(st.Holdings),
-		"margin_used":       st.Exposure,
-		"margin_used_pct":   usedPct,
-		"paper":             at.stockPaper(),
+		"unprotected_live_positions": unprotected,
+		"unsettled_live_entries":     unsettled,
+		"total_equity":               st.Equity,
+		"wallet_balance":             st.Equity - unrealized,
+		"unrealized_profit":          unrealized,
+		"available_balance":          st.Available,
+		"total_pnl":                  totalPnL,
+		"total_pnl_pct":              pnlPct,
+		"initial_balance":            at.initialBalance,
+		"daily_pnl":                  at.dailyPnL,
+		"position_count":             len(st.Holdings),
+		"margin_used":                st.Exposure,
+		"margin_used_pct":            usedPct,
+		"paper":                      at.stockPaper(),
 	}, nil
 }
 
