@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'factor-mining-rdagent-followups',
+    date: '2026-10-22',
+    title: '因子挖掘后续优化（参考 RD-Agent）：三项均无可测量收益',
+    domain: '加密 · 因子挖掘流程',
+    verdict: 'none',
+    verdictText: '无法证明有价值',
+    idea: '对照 microsoft/RD-Agent 的因子循环，检验我们流程还能怎么优化：增量选择集成因子、按家族历史产出分配变异预算、LLM 跨夜记忆。夜内闭环（每批评估后把训练集结果反馈给下一批）已在 PR #6 上线，不在本条对照之列。',
+    bullets: [
+      '增量贪心选集成（按训练集 IC t 值逐个加入）：不论增益阈值取 0~2%，集成都被压到 2~3 个因子；训练集 t 升（h1 8.3→11.2）、验证集 t 两升一降，但验证集 IC 三个周期都下降（0.085→0.073、0.117→0.092、0.142→0.105）。未采用。',
+      '变异按家族产出加权（仅用训练集 t 统计，保留 30% 均匀探索）：同数据同随机种子各 600 个变异，训练集 t≥3 的比例 49.4% 对 50.0%、t≥5 为 34.6% 对 35.5%。现有 family() 把大多数表达式归为 other，粒度太粗。未采用。',
+      'LLM 跨夜记忆（前 3 晚训练集最优表达式与失败原因统计）：真实 GLM 各连跑两晚（每晚 40 条）；第二晚训练集初筛通过 64% 对 54%，新颖表达式 29 对 29；样本约 87，差距在噪声内。未采用。',
+      '实现过程中发现：evaluate.py 是冻结评估器，其 SHA256 会写入每次运行，不能往里加辅助函数；train_screen / reject_reason 因此放在 feedback.py。',
+    ],
+    conclusion:
+      '三项都没有证据支持，已回退，未增加线上复杂度。需要更大样本或更细的家族划分才可能看出差别；在此之前，把精力放在数据与前向校验上更有价值。',
+    source: 'scripts/factor_mining/ · PR #6（夜内闭环）',
+  },
+  {
     id: 'factor-ensemble-live',
     date: '2026-10-20',
     title: '因子挖掘 ensemble 接入实盘提示词（仅参考字段）',
