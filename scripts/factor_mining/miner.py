@@ -120,7 +120,7 @@ def model_call(workdir, prompt_path, out_path):
             out_path.write_bytes(captured)
 
 
-def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='[]'):
+def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='[]', feedback_text='[]'):
     stats = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
@@ -131,6 +131,8 @@ def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='
               f'训练集 top-10（仅 train 指标）：\n{pool_text}\n'
               f'最近10个失败表达式：\n{failed_text}\n'
               f'本次已提出过（不要重复或仅改常数）：\n{avoid_text}\n'
+              f'上一批你提出的表达式在训练集上的结果（train_t 为训练集t值；train_screen 为 pass 表示通过训练集初筛，'
+              f'fail:原因 表示未通过）。沿 pass 且 train_t 高的结构继续改进，避开同类失败原因的写法：\n{feedback_text}\n'
               f'请提出最多{min(max(n, 0), 20)}条新表达式。只输出一个JSON数组 ["expr",...]，'
               '禁止解释，禁止输出代码，禁止读写其它文件。\n')
     prompt_path.write_text(prompt, encoding='utf-8')
@@ -169,29 +171,48 @@ LLM_BATCH = 20
 LLM_MAX_BATCHES = 10
 
 
-def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_of_time=lambda: False):
+def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_of_time=lambda: False,
+                        after_batch=None):
     """One llm_propose call is capped at LLM_BATCH expressions, so a larger n is
     served by several calls; later calls are told what was already proposed.
     A failed batch is recorded in llm_error and the remaining ones still run."""
     total = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
     exprs, seen = [], set()
+    feedback = '[]'
     remaining = max(n, 0)
     for i in range(min(LLM_MAX_BATCHES, -(-remaining // LLM_BATCH))):
         if i and out_of_time():
             break
         batch_dir = Path(workdir) / f'batch{i}' if i else Path(workdir)
         avoid = json.dumps(exprs[-40:], ensure_ascii=False)
-        got, stats = llm_propose(market, pool_text, failed_text, min(remaining, LLM_BATCH), runner, batch_dir, avoid)
+        got, stats = llm_propose(market, pool_text, failed_text, min(remaining, LLM_BATCH), runner, batch_dir,
+                                 avoid, feedback)
         remaining -= LLM_BATCH
         for key in ('llm_proposed', 'llm_valid', 'llm_invalid'):
             total[key] += stats[key]
         if stats['llm_error']:
             total['llm_error'] = stats['llm_error'] if not total['llm_error'] else total['llm_error'] + '; ' + stats['llm_error']
+        fresh = []
         for expr in got:
             if expr not in seen:
                 seen.add(expr)
                 exprs.append(expr)
+                fresh.append(expr)
+        if after_batch is not None:
+            feedback = after_batch(fresh)
     return exprs, total
+
+
+def summarize_outcomes(outcomes, limit=14):
+    """Compact TRAIN-ONLY feedback for the next LLM batch (best first).
+
+    Validation/holdout results, final status and val-based reasons are deliberately
+    absent: showing them would let the search adapt to the validation segment."""
+    def pick(o):
+        return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in o.items()
+                if k in ('expr', 'horizon', 'train_t', 'train_ic', 'train_screen')}
+    ranked = sorted(outcomes, key=lambda o: -o.get('train_t', float('-inf')))
+    return [pick(o) for o in ranked[:limit]]
 
 
 def frozen_hashes():
@@ -289,8 +310,8 @@ class Miner:
                                     for f in factors.values() if f['horizon'] == h),
                                    key=lambda f: (-f['train']['t'], f['id']))[:20])
             pool.extend(rng.sample(seeds, min(20, len(seeds))))
-            candidates, candidate_ids = [], set()
-            def add(expr, source, category=None):
+            candidate_ids = set()
+            def add(expr, source, category=None, into=None):
                 try:
                     key = expr_hash(expr)
                 except ValueError:
@@ -299,71 +320,103 @@ class Miner:
                 if key in candidate_ids or all((h, key) in seen for h in cfg['horizons']):
                     return False
                 candidate_ids.add(key)
-                candidates.append(dict(expr=expr, source=source, family=category or family(expr)))
+                into.append(dict(expr=expr, source=source, family=category or family(expr)))
                 return True
+            seed_batch, mutation_batch, llm_batch = [], [], []
             for s in seeds:
-                add(s['expr'], 'seed', s['family'])
-            stage('mutation')
+                add(s['expr'], 'seed', s['family'], seed_batch)
             made = 0
             for _ in range(max(0, n_mutations) * 10):
                 if made >= n_mutations or not pool:
                     break
                 for expr in mutate(rng.choice(pool)['expr'], rng, pool):
-                    made += add(expr, 'mutation')
+                    made += add(expr, 'mutation', None, mutation_batch)
                     if made >= n_mutations:
                         break
-            if use_llm and n_llm > 0:
+            store.append_ledger(market, [], self.root)
+
+            def out_of_time():
+                return time.monotonic() - clock >= budget_s
+
+            def evaluate_batch(batch):
+                """Evaluate candidates in order; returns per-candidate outcomes for feedback."""
+                outcomes = []
+                for i, candidate in enumerate(batch):
+                    if i % 20 == 0 and out_of_time():
+                        row['budget_exhausted'] = True
+                        break
+                    if i == 0 or candidate['source'] != batch[i-1]['source']:
+                        stage(candidate['source'])
+                    try:
+                        key = expr_hash(candidate['expr'])
+                        values = values_for(key, candidate['expr'])
+                    except Exception:
+                        row['invalid'] += 1
+                        outcomes.append(dict(expr=candidate['expr'], status='invalid', reason='cannot_evaluate',
+                                             train_screen='fail:cannot_evaluate'))
+                        continue
+                    valid_candidate = False
+                    per_horizon = []
+                    for h in cfg['horizons']:
+                        if (h, key) in seen:
+                            continue
+                        metrics = evaluate.evaluate_factor(values, *targets[h], panels.mask, splits[h], h, cfg)
+                        if metrics is None:
+                            row['invalid'] += 1
+                            continue
+                        K[h] += 1
+                        seen.add((h, key))
+                        t_req = evaluate.t_required(K[h])
+                        state = evaluate.classify(metrics['train'], metrics['val'], K[h], t_req)
+                        per_horizon.append(dict(
+                            horizon=h, status=state, train_t=metrics['train']['t'], train_ic=metrics['train']['ic'],
+                            val_ic=metrics['val']['ic'], val_t=metrics['val']['t'],
+                            reason=evaluate.reject_reason(metrics['train'], metrics['val'], t_req),
+                            train_screen=evaluate.train_screen(metrics['train'], t_req)))
+                        factors[h, key] = dict(id=key, **candidate, horizon=h, first_seen=started.date().isoformat(),
+                                               run_id=run_id, status=state, corr_max=0., corr_with=None, **metrics)
+                        if (h, key) in old_forward:
+                            factors[h, key]['forward'] = old_forward[h, key]
+                        trial = dict(ts=stamp, run_id=run_id, id=key, expr=candidate['expr'],
+                                     source=candidate['source'], horizon=h, train_t=metrics['train']['t'],
+                                     train_ic=metrics['train']['ic'], status=state)
+                        # Persist each valid trial before another horizon can fail.
+                        store.append_ledger(market, [trial], self.root)
+                        ledger.append(trial)
+                        row['trials_total'] = sum(K.values())
+                        if not valid_candidate:
+                            row[candidate['source'] + '_evaluated'] += 1
+                        valid_candidate = True
+                    discard_unused_values(key, finished=True)
+                    if per_horizon:
+                        best = max(per_horizon, key=lambda r: r['train_t'])
+                        outcomes.append(dict(expr=candidate['expr'], **best))
+                    else:
+                        outcomes.append(dict(expr=candidate['expr'], status='invalid', reason='low_coverage_or_seen',
+                                         train_screen='fail:low_coverage'))
+                return outcomes
+
+            evaluate_batch(seed_batch)
+            if use_llm and n_llm > 0 and not out_of_time():
                 stage('llm')
                 top = sorted(factors.values(), key=lambda f: (-f['train']['t'], f['id']))[:10]
                 # Construct the model view explicitly; never serialize zoo/ledger rows.
                 pool_text = json.dumps([dict(expr=f['expr'], horizon=f['horizon'], train_t=f['train']['t'])
                                         for f in top], ensure_ascii=False)
                 failures = [r['expr'] for r in ledger if r['status'] == 'rejected'][-10:]
-                exprs, stats = llm_propose_batches(market, pool_text, json.dumps(failures), n_llm, runner,
-                                                   self.root / 'llm_work' / run_id,
-                                                   lambda: time.monotonic() - clock >= budget_s)
+
+                def after_batch(got):
+                    """Evaluate one LLM batch right away; its outcomes steer the next batch."""
+                    fresh = []
+                    for expr in got:
+                        add(expr, 'llm', None, fresh)
+                    llm_batch.extend(fresh)
+                    return json.dumps(summarize_outcomes(evaluate_batch(fresh)), ensure_ascii=False)
+
+                _, stats = llm_propose_batches(market, pool_text, json.dumps(failures), n_llm, runner,
+                                               self.root / 'llm_work' / run_id, out_of_time, after_batch)
                 row.update(stats)
-                for expr in exprs:
-                    add(expr, 'llm')
-            store.append_ledger(market, [], self.root)
-            for i, candidate in enumerate(candidates):
-                if i % 20 == 0 and time.monotonic() - clock >= budget_s:
-                    row['budget_exhausted'] = True
-                    break
-                if i == 0 or candidate['source'] != candidates[i-1]['source']:
-                    stage(candidate['source'])
-                try:
-                    key = expr_hash(candidate['expr'])
-                    values = values_for(key, candidate['expr'])
-                except Exception:
-                    row['invalid'] += 1
-                    continue
-                valid_candidate = False
-                for h in cfg['horizons']:
-                    if (h, key) in seen:
-                        continue
-                    metrics = evaluate.evaluate_factor(values, *targets[h], panels.mask, splits[h], h, cfg)
-                    if metrics is None:
-                        row['invalid'] += 1
-                        continue
-                    K[h] += 1
-                    seen.add((h, key))
-                    state = evaluate.classify(metrics['train'], metrics['val'], K[h], evaluate.t_required(K[h]))
-                    factors[h, key] = dict(id=key, **candidate, horizon=h, first_seen=started.date().isoformat(),
-                                           run_id=run_id, status=state, corr_max=0., corr_with=None, **metrics)
-                    if (h, key) in old_forward:
-                        factors[h, key]['forward'] = old_forward[h, key]
-                    trial = dict(ts=stamp, run_id=run_id, id=key, expr=candidate['expr'],
-                                       source=candidate['source'], horizon=h, train_t=metrics['train']['t'],
-                                       train_ic=metrics['train']['ic'], status=state)
-                    # Persist each valid trial before another horizon can fail.
-                    store.append_ledger(market, [trial], self.root)
-                    ledger.append(trial)
-                    row['trials_total'] = sum(K.values())
-                    if not valid_candidate:
-                        row[candidate['source'] + '_evaluated'] += 1
-                    valid_candidate = True
-                discard_unused_values(key, finished=True)
+            evaluate_batch(mutation_batch)
             row['trials_total'] = sum(K.values())
             self._classify_and_correlate(factors, K, panels, splits, cfg, values_cache)
             for key, factor in factors.items():

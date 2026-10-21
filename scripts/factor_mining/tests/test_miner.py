@@ -8,8 +8,80 @@ from unittest.mock import patch, Mock
 
 from scripts.factor_mining import miner, store
 from scripts.factor_mining.expr import canonical, expr_hash, validate_expr
-from scripts.factor_mining.miner import Miner, family, llm_propose, llm_propose_batches, mutate
+from scripts.factor_mining.miner import Miner, family, llm_propose, llm_propose_batches, mutate, summarize_outcomes
 from scripts.factor_mining.tests.synth import SIGNAL_EXPR, SIGNAL_SEED, write_market
+
+
+class LlmFeedbackTests(unittest.TestCase):
+    def test_summary_is_train_only_ranked_and_capped(self):
+        outcomes = [dict(expr=f'e{i}', horizon=1, status='accepted', train_t=float(i), train_ic=.01 * i,
+                         val_ic=987654.321, val_t=55., reason='ok', train_screen='pass') for i in range(30)]
+        summary = summarize_outcomes(outcomes)
+        self.assertEqual(len(summary), 14)
+        self.assertEqual(summary[0]['expr'], 'e29')
+        blob = json.dumps(summary)
+        for leaked in ('987654', 'val_', 'status', 'accepted', 'reason'):
+            self.assertNotIn(leaked, blob)
+
+    def test_after_batch_feedback_reaches_next_prompt_without_validation_terms(self):
+        prompts = []
+
+        def runner(workdir, prompt_path, out_path):
+            prompts.append(Path(prompt_path).read_text(encoding='utf-8'))
+            out_path.write_text(json.dumps([f'Mean($close,{len(prompts) + 2})']), encoding='utf-8')
+
+        def after(fresh):
+            return json.dumps([dict(expr=fresh[0], train_t=3.2, train_screen='pass')])
+
+        with tempfile.TemporaryDirectory() as root:
+            llm_propose_batches('crypto', '[]', '[]', 40, runner, root, lambda: False, after)
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn('"train_t": 3.2', prompts[0])
+        self.assertIn('"train_t": 3.2', prompts[1])
+        self.assertIn('Mean($close,3)', prompts[1])
+        for text in prompts:
+            self.assertNotIn('val', text)
+
+    def test_run_market_feeds_each_llm_batch_back_before_the_next_one(self):
+        seen_prompts = []
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+
+            def fake(work, prompt, out):
+                text = prompt.read_text()
+                seen_prompts.append(text)
+                self.assertNotIn('val', text)
+                k = len(seen_prompts)
+                out.write_text(json.dumps([SIGNAL_EXPR, f'Mean($close,{k + 4})', f'Std($close,{k + 4})']))
+
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                search.run_market('crypto', n_mutations=0, n_llm=40, budget_s=120, seed=2,
+                                  use_llm=True, runner=fake)
+        self.assertEqual(len(seen_prompts), 2)
+        self.assertNotIn('"train_screen"', seen_prompts[0])   # nothing evaluated yet
+        self.assertIn('"train_screen":', seen_prompts[1])      # batch 1 outcomes came back
+        self.assertIn(SIGNAL_EXPR, seen_prompts[1])
+
+
+class RejectReasonTests(unittest.TestCase):
+    def test_reasons_agree_with_classify(self):
+        from scripts.factor_mining import evaluate
+        base = dict(t=4., ic=.02, ls_ret=.1, ic_halves=[.02, .02])
+        grid = []
+        for t in (1., 4.):
+            for halves in ([.02, .02], [.02, -.02]):
+                for ic in (.02, -.02):
+                    for vic in (.02, -.02):
+                        for vt in (.5, 3.):
+                            for ls in (.1, -.1):
+                                grid.append((dict(base, t=t, ic_halves=halves, ic=ic),
+                                             dict(ic=vic, t=vt, ls_ret=ls)))
+        for train, val in grid:
+            reason = evaluate.reject_reason(train, val, 3.)
+            verdict = evaluate.classify(train, val, 100, 3.)
+            self.assertEqual(reason == 'ok', verdict == 'accepted', (train, val, reason, verdict))
+            self.assertEqual(verdict == 'rejected', evaluate.train_screen(train, 3.) != 'pass', (train, val))
 
 
 class LlmBatchTests(unittest.TestCase):

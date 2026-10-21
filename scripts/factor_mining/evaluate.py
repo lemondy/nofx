@@ -141,6 +141,36 @@ def classify(train, val, K, t_req):
     return 'candidate'
 
 
+def reject_reason(train, val, t_req):
+    """Why classify() did not accept; mirrors its checks in order. 'ok' = accepted."""
+    halves = train['ic_halves']
+    if train['t'] < t_req:
+        return 'train_t_below_threshold'
+    if np.sign(halves[0]) != np.sign(halves[1]):
+        return 'ic_sign_flips_between_train_halves'
+    if train['ic'] <= 0:
+        return 'train_ic_not_positive'
+    if val['ic'] <= 0:
+        return 'val_ic_not_positive'
+    if val['t'] < VAL_MIN_T:
+        return 'val_t_below_threshold'
+    if val['ls_ret'] <= 0 or train['ls_ret'] <= 0:
+        return 'long_short_not_positive'
+    return 'ok'
+
+
+def train_screen(train, t_req):
+    """Train-only verdict that is safe to show the LLM: never reflects validation or holdout."""
+    halves = train['ic_halves']
+    if train['t'] < t_req:
+        return 'fail:train_t_below_threshold'
+    if np.sign(halves[0]) != np.sign(halves[1]):
+        return 'fail:ic_sign_flips_between_train_halves'
+    if train['ic'] <= 0:
+        return 'fail:train_ic_not_positive'
+    return 'pass'
+
+
 def cross_corr(rankA, rankB, dates_sample):
     a, b = rankA.reindex(dates_sample), rankB.reindex(dates_sample)
     correlations = _row_corr(a.to_numpy(), b.to_numpy())
