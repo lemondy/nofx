@@ -17,7 +17,7 @@ for FM_MARKET in crypto us; do
     (
         echo "=== $FM_MARKET $(date '+%Y-%m-%d %H:%M:%S') ==="
         "$AR_PYTHON" -m scripts.factor_mining.run_mining --market "$FM_MARKET" \
-            --mutations "${FM_MUTATIONS:-300}" --llm "${FM_LLM:-20}" || \
+            --mutations "${FM_MUTATIONS:-1500}" --llm "${FM_LLM:-60}" || \
             echo "$FM_MARKET exited non-zero"
     ) >> "$FM_LOG" 2>&1
 done

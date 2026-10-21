@@ -8,8 +8,43 @@ from unittest.mock import patch, Mock
 
 from scripts.factor_mining import miner, store
 from scripts.factor_mining.expr import canonical, expr_hash, validate_expr
-from scripts.factor_mining.miner import Miner, family, llm_propose, mutate
+from scripts.factor_mining.miner import Miner, family, llm_propose, llm_propose_batches, mutate
 from scripts.factor_mining.tests.synth import SIGNAL_EXPR, SIGNAL_SEED, write_market
+
+
+class LlmBatchTests(unittest.TestCase):
+    def test_large_n_uses_several_capped_calls_and_dedupes(self):
+        calls = []
+
+        def runner(workdir, prompt_path, out_path):
+            calls.append(Path(prompt_path).read_text(encoding='utf-8'))
+            k = len(calls)
+            exprs = [f'Mean($close,{k + 2})'] + ['Mean($close,3)'] * 2
+            out_path.write_text(json.dumps(exprs), encoding='utf-8')
+
+        with tempfile.TemporaryDirectory() as root:
+            exprs, stats = llm_propose_batches('crypto', '[]', '[]', 45, runner, root)
+        self.assertEqual(len(calls), 3)  # 45 -> 20 + 20 + 5
+        self.assertIn('Mean($close,3)', calls[1])  # later calls are told what exists
+        self.assertEqual(len(exprs), len(set(exprs)))
+        self.assertEqual(stats['llm_proposed'], 3 * 3)
+
+    def test_failed_batch_does_not_stop_the_rest_and_budget_stops_early(self):
+        seen = []
+
+        def flaky(workdir, prompt_path, out_path):
+            seen.append(1)
+            if len(seen) == 1:
+                raise RuntimeError('boom')
+            out_path.write_text('["Mean($close,5)"]', encoding='utf-8')
+
+        with tempfile.TemporaryDirectory() as root:
+            exprs, stats = llm_propose_batches('us', '[]', '[]', 40, flaky, root)
+            self.assertEqual(exprs, ['Mean($close,5)'])
+            self.assertIn('boom', stats['llm_error'])
+            seen.clear()
+            exprs, stats = llm_propose_batches('us', '[]', '[]', 60, flaky, root + '/b', lambda: True)
+        self.assertEqual(len(seen), 1)  # out of time before batch 2
 
 
 class MinerTests(unittest.TestCase):
