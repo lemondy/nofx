@@ -44,6 +44,7 @@ import (
 	"sync"
 	"time"
 
+	"nofx/logger"
 	"nofx/store"
 	"nofx/trader/types"
 )
@@ -102,6 +103,10 @@ type PaperFuturesTrader struct {
 	// lotSteps remembers each symbol's LOT_SIZE step (set by quantity()) so a
 	// float64 remainder below half a step is recognised as a flat position.
 	lotSteps map[string]float64
+	// advFailAt is when the last read-path Advance failed (network outage);
+	// reads inside readRetryCooldown serve the cached ledger instead of paying
+	// the HTTP timeout again.
+	advFailAt time.Time
 }
 
 var _ types.GridTrader = (*PaperFuturesTrader)(nil)
@@ -677,4 +682,46 @@ func (p *PaperFuturesTrader) liquidate(now time.Time) []store.PaperLedgerTrade {
 	}
 	p.cancelMatching(func(*order) bool { return true }, now)
 	return trades
+}
+
+const (
+	// readRetryCooldown spaces re-attempts after a failed market sync so an
+	// outage costs one timeout per window, not one per API call.
+	readRetryCooldown = 30 * time.Second
+	// readStaleLimit bounds how old the cached ledger may be when serving a
+	// read while the market feed is down; beyond it the read fails closed.
+	// Paper money only — marks/fills simply lag until the feed returns.
+	readStaleLimit = 30 * time.Minute
+)
+
+// advanceForRead is Advance for read-only account queries (balance, positions,
+// orders, summary). A failed market sync no longer fails the read: within
+// readStaleLimit of the last successful advance it logs and serves the cached
+// ledger, and further attempts are suppressed for readRetryCooldown. The
+// background order sync keeps catching up on its own tick.
+func (p *PaperFuturesTrader) advanceForRead() error {
+	now := p.cfg.Now()
+	p.mu.Lock()
+	lastOK, failAt := p.s.LastAdvance, p.advFailAt
+	p.mu.Unlock()
+	age := now.Sub(lastOK)
+	if !failAt.IsZero() && now.Sub(failAt) < readRetryCooldown && age <= readStaleLimit {
+		return nil
+	}
+	err := p.Advance(now)
+	if err == nil {
+		p.mu.Lock()
+		p.advFailAt = time.Time{}
+		p.mu.Unlock()
+		return nil
+	}
+	if age > readStaleLimit {
+		return err
+	}
+	p.mu.Lock()
+	p.advFailAt = now
+	name := p.displayName
+	p.mu.Unlock()
+	logger.Warnf("paper read [%s]: market sync failed, serving cached ledger (%s old): %v", name, age.Round(time.Second), err)
+	return nil
 }

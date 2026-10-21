@@ -1116,3 +1116,38 @@ func TestExplicitZeroCostsAreKept(t *testing.T) {
 		t.Fatal("negative fee accepted")
 	}
 }
+
+// A market-feed outage must not turn the account page into a 15s-per-click
+// error: reads serve the cached ledger, retry at most once per cooldown, and
+// fail closed once the cache is older than readStaleLimit.
+func TestReadsServeCachedLedgerDuringFeedOutage(t *testing.T) {
+	p, _, f := setup(t, Config{InitialBalance: 1000})
+	_, err := p.OpenLong("BTCUSDT", 1, 10)
+	must(t, err)
+	f.step(time.Minute, 100)
+	f.mu.Lock()
+	f.err = errors.New("proxy down")
+	f.mu.Unlock()
+
+	if _, err := p.GetBalance(); err != nil {
+		t.Fatalf("balance during outage must serve cache, got %v", err)
+	}
+	f.mu.Lock()
+	calls := f.priceCalls
+	f.mu.Unlock()
+	f.step(5 * time.Second, 100)
+	if _, err := p.GetPositions(); err != nil {
+		t.Fatalf("positions during outage must serve cache, got %v", err)
+	}
+	f.mu.Lock()
+	again := f.priceCalls
+	f.mu.Unlock()
+	if again != calls {
+		t.Fatalf("read inside the cooldown must not hit the market again (%d -> %d)", calls, again)
+	}
+
+	f.step(readStaleLimit+time.Minute, 100)
+	if _, err := p.GetBalance(); err == nil {
+		t.Fatal("cache older than readStaleLimit must fail closed")
+	}
+}
