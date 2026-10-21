@@ -300,6 +300,16 @@ func estimateRenderedPromptTokens(parts ...string) int {
 // ============================================================================
 
 // fetchMarketDataWithStrategy fetches market data using strategy config (multiple timeframes)
+// stampSampledAt makes sure a freshly fetched snapshot carries its sampling
+// time (the market layer sets it; this covers fetchers that don't). Closed-bar
+// and staleness judgements downstream use it instead of the later processing
+// clock (review 2026-10-20 #4).
+func stampSampledAt(data *market.Data) {
+	if data != nil && data.SampledAt.IsZero() {
+		data.SampledAt = time.Now()
+	}
+}
+
 func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 	config := engine.GetConfig()
 	ctx.MarketDataMap = make(map[string]*market.Data)
@@ -351,6 +361,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 			logger.Infof("⚠️  Failed to fetch market data for position %s: %v", pos.Symbol, err)
 			continue
 		}
+		stampSampledAt(data)
 		ctx.MarketDataMap[pos.Symbol] = data
 	}
 
@@ -383,6 +394,7 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 			markFiltered(ctx, coin.Symbol, "market data unavailable/stale")
 			continue
 		}
+		stampSampledAt(data)
 
 		// Liquidity filter (skip for xyz dex assets - they don't have OI data from Binance)
 		isExistingPosition := positionSymbols[coin.Symbol]

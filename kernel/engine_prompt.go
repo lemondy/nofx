@@ -1255,7 +1255,7 @@ func fresh60mForInteresting(ctx *Context) map[string]float64 {
 	out := make(map[string]float64, len(ctx.MarketDataMap))
 	for sym := range interestingSymbols(ctx) {
 		if data, ok := ctx.MarketDataMap[sym]; ok {
-			out[sym] = rolling1hChangePct(data, time.Now())
+			out[sym] = rolling1hChangePct(data, snapshotNow(data, time.Time{}))
 		}
 	}
 	return out

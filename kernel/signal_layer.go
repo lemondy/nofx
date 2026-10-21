@@ -359,6 +359,10 @@ type BTCCorrelation struct {
 type DataFreshness struct {
 	SettlementAgeSeconds float64  `json:"settlement_age_seconds"`                  // now - last closed candle close (primary TF)
 	VendorDivergencePct  *float64 `json:"vendor_vs_live_divergence_pct,omitempty"` // vendor forming close vs live ticker before the live-price patch
+	// StaleTimeframes: timeframes whose newest bar is older than
+	// market.MaxStaleBars periods at sampling time (or whose tail has a large
+	// gap). Non-empty ⇒ hard_entry_gate fails DATA_STALE_* in both directions.
+	StaleTimeframes []string `json:"stale_timeframes,omitempty"`
 }
 
 // TraderHistoryStat is this trader's own closed-trade record on one symbol.
@@ -747,10 +751,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	if data.CurrentPrice <= 0 {
 		return nil, fmt.Errorf("invalid price %.8f", data.CurrentPrice)
 	}
-	now := opt.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
+	now := snapshotNow(data, opt.Now)
 	// Limit-entry anchor offset (percent). Strategy-configurable via
 	// risk_control.limit_entry_offset_*; ATR-scaled with a fixed fallback —
 	// the anchors themselves are computed AFTER the TF loop below (they read
@@ -981,6 +982,28 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	fresh := &DataFreshness{SettlementAgeSeconds: primarySettlementAge}
 	if opt.VendorStalenessPct != nil {
 		fresh.VendorDivergencePct = opt.VendorStalenessPct
+	}
+	// Review 2026-10-20 #8: bar-timestamp staleness (fetch layer computed it at
+	// SampledAt; a hand-built snapshot with SampledAt set but no precomputed
+	// result is evaluated here). Warn per timeframe; the gate blocks entries.
+	staleReasons := data.StaleTimeframes
+	if staleReasons == nil && !data.SampledAt.IsZero() {
+		staleReasons = market.StaleTimeframes(data.Symbol, data.TimeframeData, data.SampledAt)
+	}
+	if len(staleReasons) > 0 {
+		for tf := range staleReasons {
+			fresh.StaleTimeframes = append(fresh.StaleTimeframes, tf)
+		}
+		sort.Slice(fresh.StaleTimeframes, func(i, j int) bool {
+			di, dj := tfDuration(fresh.StaleTimeframes[i]), tfDuration(fresh.StaleTimeframes[j])
+			if di != dj {
+				return di < dj
+			}
+			return fresh.StaleTimeframes[i] < fresh.StaleTimeframes[j]
+		})
+		for _, tf := range fresh.StaleTimeframes {
+			sig.Warnings = append(sig.Warnings, "DATA STALE — "+staleReasons[tf]+" — new entries blocked until the feed catches up")
+		}
 	}
 	sig.DataFreshness = fresh
 
@@ -1901,6 +1924,12 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 		add := func(code string) { g.Failed = append(g.Failed, code) }
 		if !bstockDailyReady {
 			add("BSTOCK_DAILY_DATA_UNAVAILABLE")
+		}
+		// Bar-time staleness is unconditional (not strategy-tunable): ATR,
+		// structure and anchors computed off a feed that stopped N bars ago
+		// price the trade against a market that no longer exists.
+		if sig.DataFreshness != nil && len(sig.DataFreshness.StaleTimeframes) > 0 {
+			add("DATA_STALE_" + strings.Join(sig.DataFreshness.StaleTimeframes, "_"))
 		}
 		if floorPct > 0 {
 			if price, dist, code := methodStopPlan(sig, g.EntryPrice, floorPct, isLong); code != "" {
@@ -3005,7 +3034,7 @@ func TimeframeTrend(data *market.Data, tf string) string {
 	if data == nil || data.CurrentPrice <= 0 {
 		return ""
 	}
-	sig, err := ComputeSymbolSignals(data.Symbol, data, SignalOptions{Now: time.Now()})
+	sig, err := ComputeSymbolSignals(data.Symbol, data, SignalOptions{Now: snapshotNow(data, time.Time{})})
 	if err != nil {
 		return ""
 	}
@@ -3013,6 +3042,20 @@ func TimeframeTrend(data *market.Data, tf string) string {
 		return s.Trend
 	}
 	return ""
+}
+
+// snapshotNow is the clock every closed-candle judgement of a market snapshot
+// uses: the moment the klines were SAMPLED, else the caller's `fallback`, else
+// the wall clock. A forming bar fetched at 14:59:30 must not turn "closed"
+// just because the signal is recomputed after 15:00 (review 2026-10-20 #4).
+func snapshotNow(data *market.Data, fallback time.Time) time.Time {
+	if data != nil && !data.SampledAt.IsZero() {
+		return data.SampledAt
+	}
+	if !fallback.IsZero() {
+		return fallback
+	}
+	return time.Now()
 }
 
 func tfDuration(tf string) time.Duration {

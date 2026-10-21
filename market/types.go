@@ -41,6 +41,17 @@ type Data struct {
 	// the live ticker (primary timeframe). nil = not measurable this cycle
 	// (no klines) — the AI gate treats absent as UNKNOWN and fails closed.
 	VendorStalenessPct *float64 `json:"-"`
+	// SampledAt is the moment the klines were fetched. "Is the last bar
+	// closed?" must be judged against THIS clock, not the (later) processing
+	// clock: a forming bar sampled at 14:59:30 must stay forming when the
+	// signal is recomputed at 15:00:05 (review 2026-10-20 #4). Zero = unknown
+	// (hand-built data / tests): consumers fall back to their own `now`.
+	SampledAt time.Time `json:"-"`
+	// StaleTimeframes lists timeframes whose newest bar is too old (or whose
+	// recent series has a large time gap) at SampledAt, tf → reason. Filled by
+	// the fetch layer; the signal layer turns it into a hard entry-gate
+	// failure (review 2026-10-20 #8).
+	StaleTimeframes map[string]string `json:"-"`
 }
 
 // KlineBar single kline bar with OHLCV data

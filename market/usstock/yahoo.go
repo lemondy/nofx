@@ -56,7 +56,7 @@ func yahooChart(ctx context.Context, ticker, interval, chartRange string, prePos
 	}
 	defer func() { <-yahooGate }()
 	key := ticker + "/" + interval + "/" + chartRange + "/" + strconv.FormatBool(prePost)
-	if entry, ok := yahooCache[key]; ok && nowFunc().Sub(entry.loaded) < ttl {
+	if entry, ok := yahooCache[key]; ok && nowFunc().Sub(entry.loaded) < ttl && cacheStillFinal(interval, entry.loaded, nowFunc()) {
 		return entry.result, nil
 	}
 	q := url.Values{"interval": {interval}, "range": {chartRange}, "includePrePost": {strconv.FormatBool(prePost)}, "events": {"div,split"}}
@@ -94,6 +94,48 @@ func yahooChart(ctx context.Context, ticker, interval, chartRange string, prePos
 		}
 	}
 	return yahooResult{}, fmt.Errorf("Yahoo chart %s: %w", ticker, lastErr)
+}
+
+// cacheStillFinal reports whether a cached Yahoo response fetched at `loaded`
+// can still be served at `now` without a bar that was STILL FORMING at fetch
+// time being mistaken for a settled one (review 2026-10-20 #4). yahooBars
+// decides "closed" from the CURRENT clock, so a 15:00 ET response whose last
+// daily bar is intraday would, after 16:00, be accepted from the 6h cache as
+// the final daily bar. The cache entry therefore expires as soon as the clock
+// crosses the close of the bar that was forming when it was loaded:
+//   - 1d: the regular-session close of the load day
+//   - 1wk: the last regular-session close of the load week
+//   - intraday (15m/60m): the end of the load-time bar (anchored at the open)
+//
+// Loads outside regular hours / on non-trading days saw no forming regular bar
+// and stay valid until the TTL.
+func cacheStillFinal(interval string, loaded, now time.Time) bool {
+	switch interval {
+	case "1d":
+		_, close, ok := SessionBounds(loaded)
+		return !(ok && loaded.Before(close) && !now.Before(close))
+	case "1wk":
+		local := loaded.In(newYork)
+		monday := etTime(local, 0, 0).AddDate(0, 0, -((int(local.Weekday()) + 6) % 7))
+		// Friday 16:00 ET; a holiday-shortened week only refreshes slightly
+		// later than strictly needed, never earlier.
+		weekEnd := etTime(monday.AddDate(0, 0, 4), 16, 0)
+		return !(loaded.Before(weekEnd) && !now.Before(weekEnd))
+	default:
+		dur := 15 * time.Minute
+		if interval == "60m" {
+			dur = time.Hour
+		}
+		open, close, ok := SessionBounds(loaded)
+		if !ok || loaded.Before(open) || !loaded.Before(close) {
+			return true
+		}
+		end := open.Add((loaded.Sub(open)/dur + 1) * dur)
+		if end.After(close) {
+			end = close
+		}
+		return now.Before(end)
+	}
 }
 
 func yahooParams(timeframe string, need int) (interval, chartRange string, ttl time.Duration) {
