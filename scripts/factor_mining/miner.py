@@ -120,7 +120,7 @@ def model_call(workdir, prompt_path, out_path):
             out_path.write_bytes(captured)
 
 
-def llm_propose(market, pool_text, failed_text, n, runner, workdir):
+def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='[]'):
     stats = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +130,7 @@ def llm_propose(market, pool_text, failed_text, n, runner, workdir):
     prompt = (f'你是量化因子研究员。{description}\n{dsl_help()}\n'
               f'训练集 top-10（仅 train 指标）：\n{pool_text}\n'
               f'最近10个失败表达式：\n{failed_text}\n'
+              f'本次已提出过（不要重复或仅改常数）：\n{avoid_text}\n'
               f'请提出最多{min(max(n, 0), 20)}条新表达式。只输出一个JSON数组 ["expr",...]，'
               '禁止解释，禁止输出代码，禁止读写其它文件。\n')
     prompt_path.write_text(prompt, encoding='utf-8')
@@ -162,6 +163,35 @@ def llm_propose(market, pool_text, failed_text, n, runner, workdir):
     except Exception as exc:
         stats['llm_error'] = f'{type(exc).__name__}: {exc}'
         return [], stats
+
+
+LLM_BATCH = 20
+LLM_MAX_BATCHES = 10
+
+
+def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_of_time=lambda: False):
+    """One llm_propose call is capped at LLM_BATCH expressions, so a larger n is
+    served by several calls; later calls are told what was already proposed.
+    A failed batch is recorded in llm_error and the remaining ones still run."""
+    total = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
+    exprs, seen = [], set()
+    remaining = max(n, 0)
+    for i in range(min(LLM_MAX_BATCHES, -(-remaining // LLM_BATCH))):
+        if i and out_of_time():
+            break
+        batch_dir = Path(workdir) / f'batch{i}' if i else Path(workdir)
+        avoid = json.dumps(exprs[-40:], ensure_ascii=False)
+        got, stats = llm_propose(market, pool_text, failed_text, min(remaining, LLM_BATCH), runner, batch_dir, avoid)
+        remaining -= LLM_BATCH
+        for key in ('llm_proposed', 'llm_valid', 'llm_invalid'):
+            total[key] += stats[key]
+        if stats['llm_error']:
+            total['llm_error'] = stats['llm_error'] if not total['llm_error'] else total['llm_error'] + '; ' + stats['llm_error']
+        for expr in got:
+            if expr not in seen:
+                seen.add(expr)
+                exprs.append(expr)
+    return exprs, total
 
 
 def frozen_hashes():
@@ -289,8 +319,9 @@ class Miner:
                 pool_text = json.dumps([dict(expr=f['expr'], horizon=f['horizon'], train_t=f['train']['t'])
                                         for f in top], ensure_ascii=False)
                 failures = [r['expr'] for r in ledger if r['status'] == 'rejected'][-10:]
-                exprs, stats = llm_propose(market, pool_text, json.dumps(failures), n_llm, runner,
-                                           self.root / 'llm_work' / run_id)
+                exprs, stats = llm_propose_batches(market, pool_text, json.dumps(failures), n_llm, runner,
+                                                   self.root / 'llm_work' / run_id,
+                                                   lambda: time.monotonic() - clock >= budget_s)
                 row.update(stats)
                 for expr in exprs:
                     add(expr, 'llm')
