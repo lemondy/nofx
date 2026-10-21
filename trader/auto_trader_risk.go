@@ -2002,11 +2002,13 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		if key == "unknown" {
 			return true, "account pending reservations unknown", 0
 		}
-		if key == excludeKey || pe == nil || pe.Price <= 0 || pe.StopLoss <= 0 {
+		if key == excludeKey || pe == nil {
 			continue
 		}
-		remaining := math.Max(0, pe.Quantity-pe.ProtectedQty)
-		risk := remaining * math.Abs(pe.Price-pe.StopLoss)
+		risk := pendingEntryStopRisk(pe)
+		if risk <= 0 {
+			continue
+		}
 		totalRisk += risk
 		if strings.EqualFold(pe.Side, "short") {
 			shortPend += risk
@@ -2119,6 +2121,45 @@ func (at *AutoTrader) candidateStopRiskUSD(d *kernel.Decision, entryPx, equity f
 		risk = maxRisk
 	}
 	return risk
+}
+
+// pendingEntryStopRisk is the stop-risk a resting (or UNKNOWN-submit) entry
+// still reserves: the unprotected remainder × stop distance, floored by the
+// gate reservation retained for an UNKNOWN submit (HeldRiskUSD, scaled to the
+// remainder). 0 while the per-cycle counters still carry it (HeldInCycle) —
+// the entry must not be counted twice in the same batch.
+func pendingEntryStopRisk(pe *pendingEntry) float64 {
+	if pe == nil || pe.HeldInCycle {
+		return 0
+	}
+	remaining := math.Max(0, pe.Quantity-pe.ProtectedQty)
+	risk := 0.0
+	if pe.Price > 0 && pe.StopLoss > 0 {
+		risk = remaining * math.Abs(pe.Price-pe.StopLoss)
+	}
+	if pe.HeldRiskUSD > 0 && pe.Quantity > 0 {
+		risk = math.Max(risk, pe.HeldRiskUSD*remaining/pe.Quantity)
+	}
+	return risk
+}
+
+// releaseCycleReservation gives back the stop-risk an open booked at the
+// exposure gate (R8 release) — total, per-side and per-symbol counters alike.
+func (at *AutoTrader) releaseCycleReservation(d *kernel.Decision) {
+	if d == nil || d.CycleReservedRiskUSD <= 0 {
+		return
+	}
+	amt := d.CycleReservedRiskUSD
+	at.cycleRiskReservedUSD = math.Max(0, at.cycleRiskReservedUSD-amt)
+	if strings.Contains(d.Action, "short") {
+		at.cycleShortRiskReservedUSD = math.Max(0, at.cycleShortRiskReservedUSD-amt)
+	} else if strings.Contains(d.Action, "long") {
+		at.cycleLongRiskReservedUSD = math.Max(0, at.cycleLongRiskReservedUSD-amt)
+	}
+	if at.cycleSymbolRiskReservedUSD != nil {
+		sym := market.Normalize(d.Symbol)
+		at.cycleSymbolRiskReservedUSD[sym] = math.Max(0, at.cycleSymbolRiskReservedUSD[sym]-amt)
+	}
 }
 
 // repriceCycleReservation re-books an open's cycle stop-risk reservation after

@@ -41,6 +41,16 @@ type pendingEntry struct {
 	ExecutedQty    float64 // cumulative observed fill, independent of verified coverage
 	ProtectedQty   float64 // executed size already carrying SL/TP (partial-fill watermark)
 	ExitMode       string  // exit template carried to the position on fill (trend|range|quick; '' = trend)
+
+	// UNKNOWN-submit risk retention (2026-10-21, area2 #1 residual). Memory-only
+	// (a restart falls back to the computed pending risk from the shadow row).
+	// HeldRiskUSD is the stop-risk the exposure gate reserved for this entry
+	// before its submit went UNKNOWN; it stays booked until the entry resolves
+	// (dropped = never landed; real order ID = ordinary pending/position risk).
+	// HeldInCycle marks that the per-cycle reservation counters still carry it,
+	// so the pending-risk loop must not count the entry a second time.
+	HeldRiskUSD float64
+	HeldInCycle bool
 }
 
 func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
@@ -501,8 +511,48 @@ func (at *AutoTrader) resolveUnknownEntry(pe *pendingEntry) bool {
 	}
 	logger.Warnf("📌 [%s] UNKNOWN entry %s %s resolved by client ID: %s → order %s (status %v)", at.name, pe.Symbol, pe.Side, pe.OrderID, realID, status["status"])
 	pe.OrderID = realID
+	// The real order now carries its own pending/position risk accounting.
+	pe.HeldRiskUSD = 0
 	at.persistPendingEntry(pe)
 	return true
+}
+
+// holdUnknownSubmitReservation is the failure-branch hook of the decision
+// loop: when an open's error is an UNKNOWN submit (the order may be live on
+// the exchange) its stop-risk reservation must NOT be given back. The cycle
+// counters keep it for the rest of this batch, and the tracked pending entry
+// remembers the amount (HeldRiskUSD) so the pending-risk accounting keeps
+// charging it after the counters reset, until the entry resolves. Returns true
+// when the reservation was retained (caller skips the release).
+func (at *AutoTrader) holdUnknownSubmitReservation(err error, d *kernel.Decision) bool {
+	if err == nil || d == nil || d.CycleReservedRiskUSD <= 0 || !errors.Is(err, binance.ErrSubmitUnknown) {
+		return false
+	}
+	side := "long"
+	if strings.Contains(d.Action, "short") {
+		side = "short"
+	}
+	if pe := at.getPendingEntry(d.Symbol, side); pe != nil && isUnknownEntryRef(pe.OrderID) {
+		pe.HeldRiskUSD = d.CycleReservedRiskUSD
+		pe.HeldInCycle = true
+	}
+	logger.Warnf("🛡️ [%s] %s %s submit UNKNOWN — stop-risk reservation %.2f USDT retained until the exchange answers",
+		at.name, d.Symbol, d.Action, d.CycleReservedRiskUSD)
+	return true
+}
+
+// settleHeldReservations runs when a decision batch ends (still under the
+// account execution lock, before the per-cycle counters can reset): held
+// entries are handed over from the cycle counters to the pending-risk
+// accounting, so the next cycle neither loses nor double-counts them.
+func (at *AutoTrader) settleHeldReservations() {
+	at.pendingEntriesMu.RLock()
+	defer at.pendingEntriesMu.RUnlock()
+	for _, pe := range at.pendingEntries {
+		if pe != nil {
+			pe.HeldInCycle = false
+		}
+	}
 }
 
 // snapshotPendingKeys returns the symbol+side keys currently holding a resting
