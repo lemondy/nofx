@@ -213,3 +213,62 @@ func TestYahooCanceledBackoff(t *testing.T) {
 		t.Fatalf("expected cancellation: %v", err)
 	}
 }
+
+// Review 2026-10-20 #4: a daily response cached while today's bar was still
+// forming must not be served after the close — yahooBars would then accept the
+// intraday bar as the final daily bar for up to the 6h TTL.
+func TestYahooDailyCacheRefreshedAfterSessionClose(t *testing.T) {
+	times := []time.Time{et("2026-10-08 09:30"), et("2026-10-09 09:30")}
+	calls := 0
+	setupHTTP(t, et("2026-10-09 15:00"), func(r *http.Request) (*http.Response, error) {
+		calls++
+		return response(200, chartJSON(times, true)), nil
+	})
+	bars, err := yahooBars(context.Background(), "AAPL", TF1d, 2)
+	if err != nil || len(bars) != 1 {
+		t.Fatalf("15:00 ET: today's forming bar must be excluded: bars=%d err=%v", len(bars), err)
+	}
+	// Still before the close: same cache entry is fine.
+	nowFunc = func() time.Time { return et("2026-10-09 15:30") }
+	if _, err := yahooBars(context.Background(), "AAPL", TF1d, 2); err != nil || calls != 1 {
+		t.Fatalf("pre-close hit should be cached: calls=%d err=%v", calls, err)
+	}
+	// After the close the entry (loaded at 15:00) must be refetched, not reused.
+	nowFunc = func() time.Time { return et("2026-10-09 16:30") }
+	bars, err = yahooBars(context.Background(), "AAPL", TF1d, 2)
+	if err != nil || calls != 2 || len(bars) != 2 {
+		t.Fatalf("post-close must refetch final bar: calls=%d bars=%d err=%v", calls, len(bars), err)
+	}
+	// The entry loaded at 16:30 is final and stays cached.
+	nowFunc = func() time.Time { return et("2026-10-09 17:00") }
+	if _, err := yahooBars(context.Background(), "AAPL", TF1d, 2); err != nil || calls != 2 {
+		t.Fatalf("post-close entry should stay cached: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestCacheStillFinal(t *testing.T) {
+	cases := []struct {
+		name        string
+		interval    string
+		loaded, now string
+		want        bool
+	}{
+		{"1d same day before close", "1d", "2026-10-09 15:00", "2026-10-09 15:59", true},
+		{"1d crosses close", "1d", "2026-10-09 15:00", "2026-10-09 16:00", false},
+		{"1d crosses to next day", "1d", "2026-10-08 11:00", "2026-10-09 09:00", false},
+		{"1d loaded after close", "1d", "2026-10-09 16:30", "2026-10-09 22:00", true},
+		{"1d loaded on weekend", "1d", "2026-10-10 12:00", "2026-10-12 10:00", true},
+		{"1wk mid-week to next week", "1wk", "2026-10-07 12:00", "2026-10-13 12:00", false},
+		{"1wk mid-week same week", "1wk", "2026-10-07 12:00", "2026-10-08 12:00", true},
+		{"1wk loaded after friday close", "1wk", "2026-10-09 17:00", "2026-10-13 12:00", true},
+		{"60m same bar", "60m", "2026-10-09 10:00", "2026-10-09 10:25", true},
+		{"60m next bar", "60m", "2026-10-09 11:29", "2026-10-09 11:35", false},
+		{"15m crosses bar", "15m", "2026-10-09 10:14", "2026-10-09 10:16", false},
+		{"15m premarket load", "15m", "2026-10-09 08:00", "2026-10-09 09:50", true},
+	}
+	for _, c := range cases {
+		if got := cacheStillFinal(c.interval, et(c.loaded), et(c.now)); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -54,7 +54,9 @@ func (t *StocksTrader) EnsureDisclaimer() error {
 	return nil
 }
 
-// GetBalance returns the spot wallet equity (USD + USDC) as the account value.
+// GetBalance returns the account value: spot cash (USD/USDC/USDT) plus stock
+// holdings valued at the latest quote. An unavailable quote is an error, never
+// a silent zero (that would show as a false drawdown).
 func (t *StocksTrader) GetBalance() (map[string]interface{}, error) {
 	t.balMu.RLock()
 	if t.balCache != nil && time.Since(t.balTime) < 15*time.Second {
@@ -69,25 +71,54 @@ func (t *StocksTrader) GetBalance() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to get spot balances: %w", err)
 	}
 
-	total, available := 0.0, 0.0
+	total, available, holdings := 0.0, 0.0, 0.0
+	var equitySet map[string]bool // lazily loaded tradable equity tickers
 	for _, b := range balances {
 		asset := strings.ToUpper(b.Asset)
-		if asset != "USDC" && asset != "USD" && asset != "USDT" {
-			continue
-		}
 		free, _ := strconv.ParseFloat(b.Free, 64)
 		locked, _ := strconv.ParseFloat(b.Locked, 64)
-		available += free
-		total += free + locked
+		if asset == "USDC" || asset == "USD" || asset == "USDT" {
+			available += free
+			total += free + locked
+			continue
+		}
+		qty := free + locked
+		if qty <= 0 {
+			continue
+		}
+		// A non-cash balance that is a tradable equity is a stock holding: it
+		// must count at market value, or buying shares would look like a
+		// drawdown. Unknown assets (crypto, etc.) are not part of this account.
+		if equitySet == nil {
+			symbols, err := t.client.GetExchangeInfo(context.Background(), "")
+			if err != nil {
+				return nil, fmt.Errorf("cannot value stock holdings (equity list): %w", err)
+			}
+			equitySet = make(map[string]bool, len(symbols))
+			for _, sym := range symbols {
+				equitySet[strings.ToUpper(sym.Symbol)] = true
+			}
+		}
+		if !equitySet[asset] {
+			continue
+		}
+		price, err := t.GetMarketPrice(asset)
+		if err != nil || price <= 0 {
+			// Never under-report equity: a missing quote would fake a drawdown.
+			return nil, fmt.Errorf("cannot value stock holding %s (qty %.6g): quote unavailable (price %v, err %v)", asset, qty, price, err)
+		}
+		holdings += qty * price
 	}
+	total += holdings
 
 	result := map[string]interface{}{
 		"totalEquity":           total,
 		"totalWalletBalance":    total,
 		"availableBalance":      available,
 		"totalUnrealizedProfit": 0.0, // unrealized equity PnL lives in the position value
+		"positionsValue":        holdings,
 	}
-	logger.Infof("✓ Stocks account balance: total=%.2f, available=%.2f (USD/USDC/USDT)", total, available)
+	logger.Infof("✓ Stocks account balance: total=%.2f (holdings %.2f), available=%.2f (USD/USDC/USDT)", total, holdings, available)
 
 	t.balMu.Lock()
 	t.balCache = result
@@ -130,9 +161,11 @@ func (t *StocksTrader) GetPositions() ([]map[string]interface{}, error) {
 	}
 	t.posMu.RUnlock()
 
-	// The equity API has no cross-symbol position endpoint; the caller
-	// (AutoTrader) refreshes per-symbol via GetPositionsForSymbol.
-	return []map[string]interface{}{}, nil
+	// The equity API has no cross-symbol position endpoint and nothing ever
+	// fills posCache, so the account's holdings are UNKNOWN here. Returning a
+	// successful empty list would make every consumer (exposure checks, program
+	// stops, equity) believe the account is flat; fail loudly instead.
+	return nil, fmt.Errorf("binance_stocks: positions are not available (no account-wide position snapshot); refusing to report an empty account")
 }
 
 // GetPositionsForSymbol derives the net position for one symbol from its fill

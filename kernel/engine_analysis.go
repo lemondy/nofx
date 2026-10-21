@@ -300,6 +300,16 @@ func estimateRenderedPromptTokens(parts ...string) int {
 // ============================================================================
 
 // fetchMarketDataWithStrategy fetches market data using strategy config (multiple timeframes)
+// stampSampledAt makes sure a freshly fetched snapshot carries its sampling
+// time (the market layer sets it; this covers fetchers that don't). Closed-bar
+// and staleness judgements downstream use it instead of the later processing
+// clock (review 2026-10-20 #4).
+func stampSampledAt(data *market.Data) {
+	if data != nil && data.SampledAt.IsZero() {
+		data.SampledAt = time.Now()
+	}
+}
+
 func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 	config := engine.GetConfig()
 	ctx.MarketDataMap = make(map[string]*market.Data)
@@ -345,12 +355,13 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 
 	// 1. First fetch data for position coins (must fetch)
 	for _, pos := range ctx.Positions {
-		symbolTimeframes := withRequiredSymbolTimeframes(timeframes, pos.Symbol)
+		symbolTimeframes := withRequiredSymbolTimeframesFor(timeframes, pos.Symbol, config.RiskControl.BlockShort1dUptrend)
 		data, err := market.GetWithTimeframesForVenue(pos.Symbol, symbolTimeframes, primaryTimeframe, klineCount, venue)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for position %s: %v", pos.Symbol, err)
 			continue
 		}
+		stampSampledAt(data)
 		ctx.MarketDataMap[pos.Symbol] = data
 	}
 
@@ -376,13 +387,14 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 			continue
 		}
 
-		symbolTimeframes := withRequiredSymbolTimeframes(timeframes, coin.Symbol)
+		symbolTimeframes := withRequiredSymbolTimeframesFor(timeframes, coin.Symbol, config.RiskControl.BlockShort1dUptrend)
 		data, err := market.GetWithTimeframesForVenue(coin.Symbol, symbolTimeframes, primaryTimeframe, klineCount, venue)
 		if err != nil {
 			logger.Infof("⚠️  Failed to fetch market data for %s: %v", coin.Symbol, err)
 			markFiltered(ctx, coin.Symbol, "market data unavailable/stale")
 			continue
 		}
+		stampSampledAt(data)
 
 		// Liquidity filter (skip for xyz dex assets - they don't have OI data from Binance)
 		isExistingPosition := positionSymbols[coin.Symbol]
@@ -543,8 +555,27 @@ func extractDecisions(response string) ([]Decision, error) {
 
 	var jsonPart string
 	if match := reDecisionTag.FindStringSubmatch(s); match != nil && len(match) > 1 {
-		jsonPart = strings.TrimSpace(match[1])
+		inner := match[1]
+		// A reasoning section that literally mentions "<decision>" must not
+		// widen the payload: the final block is the one after the LAST open tag.
+		if i := strings.LastIndex(inner, "<decision>"); i >= 0 {
+			inner = inner[i+len("<decision>"):]
+		}
+		jsonPart = strings.TrimSpace(inner)
 		logger.Infof("✓ Extracted JSON using <decision> tag")
+	} else if strings.Contains(s, "<decision>") {
+		// review 2026-10-20 area4 #3: once the model opened <decision> the
+		// payload boundary is fixed. A missing </decision> means the final
+		// block was truncated; falling back to a full-text array search would
+		// pick up a draft array abandoned inside <reasoning> (e.g. a discarded
+		// close_long) and could execute it. Reject instead.
+		// Only salvage completed objects from INSIDE the final payload.
+		payload := s[strings.LastIndex(s, "<decision>")+len("<decision>"):]
+		if salvaged := salvageTruncatedDecisionArray(payload); len(salvaged) > 0 {
+			logger.Infof("⚠️  <decision> not closed; salvaged %d complete decisions from the final payload", len(salvaged))
+			return salvaged, nil
+		}
+		return nil, fmt.Errorf("<decision> tag opened but not closed (truncated or malformed final decision block); refusing to search the full text for a decision array")
 	} else {
 		jsonPart = s
 		logger.Infof("⚠️  <decision> tag not found, searching JSON in full text")

@@ -11,7 +11,7 @@ import (
 )
 
 func (p *PaperFuturesTrader) GetBalance() (map[string]interface{}, error) {
-	if err := p.Advance(p.cfg.Now()); err != nil {
+	if err := p.advanceForRead(); err != nil {
 		return nil, err
 	}
 	p.mu.Lock()
@@ -21,7 +21,7 @@ func (p *PaperFuturesTrader) GetBalance() (map[string]interface{}, error) {
 }
 
 func (p *PaperFuturesTrader) GetPositions() ([]map[string]interface{}, error) {
-	if err := p.Advance(p.cfg.Now()); err != nil {
+	if err := p.advanceForRead(); err != nil {
 		return nil, err
 	}
 	p.mu.Lock()
@@ -65,7 +65,7 @@ func (p *PaperFuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 }
 
 func (p *PaperFuturesTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
-	if err := p.Advance(p.cfg.Now()); err != nil {
+	if err := p.advanceForRead(); err != nil {
 		return nil, err
 	}
 	symbol = symbolName(symbol)
@@ -99,7 +99,7 @@ func (p *PaperFuturesTrader) GetOrderStatus(symbol, id string) (map[string]inter
 }
 
 func (p *PaperFuturesTrader) GetClosedPnL(start time.Time, limit int) ([]types.ClosedPnLRecord, error) {
-	if err := p.Advance(p.cfg.Now()); err != nil {
+	if err := p.advanceForRead(); err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
@@ -158,7 +158,7 @@ type AccountSummary struct {
 }
 
 func (p *PaperFuturesTrader) Summary() (AccountSummary, error) {
-	if err := p.Advance(p.cfg.Now()); err != nil {
+	if err := p.advanceForRead(); err != nil {
 		return AccountSummary{}, err
 	}
 	p.mu.Lock()

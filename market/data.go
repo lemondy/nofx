@@ -128,6 +128,8 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 		}
 	}
 
+	sampledAt := time.Now()
+
 	// Data staleness detection: Prevent DOGEUSDT-style price freeze issues
 	if isStaleData(klines3m, symbol) {
 		logger.Infof("⚠️  WARNING: %s detected stale data (consecutive price freeze), skipping symbol", symbol)
@@ -280,6 +282,8 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 		IntradaySeries:     intradayData,
 		LongerTermContext:  longerTermData,
 		TimeframeData:      TimeframeData,
+		SampledAt:          sampledAt,
+		StaleTimeframes:    StaleTimeframes(symbol, TimeframeData, sampledAt),
 	}, nil
 }
 
@@ -400,6 +404,9 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	if len(primaryKlines) == 0 {
 		return nil, fmt.Errorf("Primary timeframe %s K-line data is empty", primaryTimeframe)
 	}
+	// Sampling clock: closed-bar and staleness judgements downstream are made
+	// against this moment, not against whenever the snapshot is processed.
+	sampledAt := time.Now()
 
 	// Data staleness detection
 	if isStaleData(primaryKlines, symbol) {
@@ -492,6 +499,8 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		FundingSettleHours: fundingSettleHours,
 		FundingHistory:     fundingRates,
 		TimeframeData:      timeframeData,
+		SampledAt:          sampledAt,
+		StaleTimeframes:    StaleTimeframes(symbol, timeframeData, sampledAt),
 	}, nil
 }
 

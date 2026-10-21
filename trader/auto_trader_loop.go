@@ -113,6 +113,13 @@ func (at *AutoTrader) runCycle() error {
 	// lazily at the day's first open decision — losses between midnight and
 	// the first open attempt must count toward the daily cap.
 	at.anchorDailyBaseline(ctx.Account.TotalEquity)
+	// 2026-10-20 area2 #6: evaluate + latch the daily-loss halt on EVERY valid
+	// equity snapshot, before the candidate check / model call — a breach seen
+	// in a hold/close-only cycle must stay latched when equity later rebounds
+	// (the old latch only ran when an open decision reached the entry gate).
+	if halt := at.evaluateDailyLossLatch(ctx.Account.TotalEquity); halt != "" {
+		logger.Warnf("🛑 [%s] daily-loss halt active this cycle: %s", at.name, halt)
+	}
 
 	// If no candidate coins available, log but do not error
 	if len(ctx.CandidateCoins) == 0 {
@@ -332,10 +339,11 @@ func (at *AutoTrader) runCycle() error {
 
 	// Pre-trade rule check: evaluate review-derived rules before execution.
 	// Hard rules with action=block reject the decision outright.
-	sortedDecisions = at.preTradeRuleCheck(sortedDecisions, ctx.Account.TotalEquity)
+	sortedDecisions = at.preTradeRuleCheckWithContext(sortedDecisions, ctx.Account.TotalEquity, ctx)
 
 	// Hard risk gates the AI cannot override: 1d-uptrend short block and the
 	// minimum holding period lock on closes (both strategy risk_control driven).
+	at.settleHeldReservations() // defensive: a previous batch that exited early must not leave entries uncounted
 	at.cycleRiskReservedUSD = 0 // fresh batch — the reservation accumulates as opens pass the gate
 	at.cycleLongRiskReservedUSD = 0
 	at.cycleShortRiskReservedUSD = 0
@@ -370,20 +378,19 @@ func (at *AutoTrader) runCycle() error {
 			Success:    false,
 		}
 
-		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
+		origAction := d.Action
+		execErr := at.executeDecisionWithRecord(&d, &actionRecord)
+		// 2026-10-20 area2 #5: a market→limit degrade inside the executor
+		// changes the execution price — re-book the reservation at the anchor.
+		at.repriceCycleReservation(&d, origAction, ctx)
+		if err := execErr; err != nil {
 			// R8 release: an open that FAILED execution must give back the
 			// stop-risk it booked at the exposure gate — otherwise a failed
 			// order keeps eating the account's risk budget for the cycle.
-			if strings.HasPrefix(d.Action, "open_") && d.CycleReservedRiskUSD > 0 {
-				at.cycleRiskReservedUSD -= d.CycleReservedRiskUSD
-				symbol := market.Normalize(d.Symbol)
-				at.cycleSymbolRiskReservedUSD[symbol] -= d.CycleReservedRiskUSD
-				if at.cycleSymbolRiskReservedUSD[symbol] < 0 {
-					at.cycleSymbolRiskReservedUSD[symbol] = 0
-				}
-				if at.cycleRiskReservedUSD < 0 {
-					at.cycleRiskReservedUSD = 0
-				}
+			// An UNKNOWN submit may be live on the exchange: its reservation
+			// stays booked until the pending reconciliation resolves it.
+			if strings.HasPrefix(d.Action, "open_") && d.CycleReservedRiskUSD > 0 && !at.holdUnknownSubmitReservation(err, &d) {
+				at.releaseCycleReservation(&d)
 			}
 			logger.Warnf("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			// Alert dedup (CAPUSDT 09-15): the AI retrying an illegal
@@ -499,6 +506,10 @@ func (at *AutoTrader) runCycle() error {
 			}
 		}
 	}
+
+	// Hand any UNKNOWN-submit reservations over from the cycle counters to the
+	// pending-risk accounting (kept until the exchange answers).
+	at.settleHeldReservations()
 
 	// Chain-of-thought push: whenever the AI proposed at least one actionable
 	// decision, send its reasoning to Telegram with per-decision outcomes —

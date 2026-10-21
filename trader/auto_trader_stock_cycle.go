@@ -48,6 +48,7 @@ func (at *AutoTrader) prepareStockRuntime(ctx context.Context) (*store.StockConf
 		if probe == "" {
 			return nil, fmt.Errorf("us_stock preflight: no listed bStock pair available")
 		}
+		at.stockBindProtectionOwner()
 		if err := at.stockTrader.Preflight(probe); err != nil {
 			logger.Errorf("❌ [%s] us_stock preflight failed on %s: %v", at.name, probe, err)
 			stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚫 美股策略未启动 (预检失败)</b>\n<i>%s: %s</i>", notify.Escape(probe), notify.Escape(err.Error())))
@@ -111,6 +112,18 @@ func (at *AutoTrader) cancelOrphanStockPendings(reason string) {
 			failed = append(failed, fmt.Sprintf("%s: %v", label, err))
 			continue
 		}
+		// CancelOrder succeeds on an order that already FILLED: never forget the
+		// entry while executions beyond the booked watermark exist. Keep the row
+		// (a live start books and protects them) and alert for manual handling.
+		status, serr := exec.GetOrderStatus(r.Symbol, r.OrderID)
+		if serr != nil {
+			failed = append(failed, fmt.Sprintf("%s: final fills unknown (%v), entry kept", label, serr))
+			continue
+		}
+		if executed := numberOf(status, "executedQty"); executed > r.FilledQty+1e-9 {
+			failed = append(failed, fmt.Sprintf("%s: %.6f shares filled but not booked (booked %.6f), entry kept until a live run books and protects them", label, executed, r.FilledQty))
+			continue
+		}
 		done = append(done, label)
 		if err := at.store.StockPaper().DeletePending(at.id, r.Symbol); err != nil {
 			logger.Warnf("⚠️ [%s] cannot delete resting entry row %s: %v", at.name, r.Symbol, err)
@@ -122,7 +135,7 @@ func (at *AutoTrader) cancelOrphanStockPendings(reason string) {
 	if len(failed) > 0 {
 		msg := strings.Join(failed, ", ")
 		logger.Warnf("⚠️ [%s] could not cancel kept resting entries (%s): %s — cancel manually", at.name, reason, msg)
-		stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股限价入场单无人管理</b>\n<i>%s：%s — 请手动撤单，成交后需人工保护</i>", notify.Escape(reason), notify.Escape(msg)))
+		stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股限价入场单无人管理</b>\n<i>%s：%s — 请手动核对或撤单，成交后需人工保护</i>", notify.Escape(reason), notify.Escape(msg)))
 	}
 }
 
@@ -369,6 +382,21 @@ func (at *AutoTrader) stockWeekRisk(now time.Time, equity float64) (halted bool,
 			}
 		}
 		at.stock.weekKey, at.stock.weekStartEquity, at.stock.weekHalted = key, base, false
+		// A circuit tripped earlier THIS ET week (same trader and mode) survives
+		// restarts and reloads: restore it together with the baseline it was
+		// measured against, even if equity has since recovered. A row from an
+		// earlier week is stale and simply ignored (the new week starts clear).
+		if at.store != nil {
+			if h, err := at.store.StockPaper().GetWeekHalt(at.id, stockModeKey(at.stockPaper())); err != nil {
+				logger.Warnf("⚠️ [%s] cannot read the persisted weekly circuit: %v", at.name, err)
+			} else if h != nil && h.WeekKey == key {
+				at.stock.weekHalted = true
+				if h.StartEquity > 0 {
+					at.stock.weekStartEquity = h.StartEquity
+				}
+				logger.Warnf("🛑 [%s] us_stock weekly circuit restored for ET week %s: no new exposure until next week", at.name, key)
+			}
+		}
 	}
 	base := at.stock.weekStartEquity
 	if base > 0 {
@@ -376,11 +404,24 @@ func (at *AutoTrader) stockWeekRisk(now time.Time, equity float64) (halted bool,
 	}
 	if ddPct > stockWeeklyDrawdownHaltPct && !at.stock.weekHalted {
 		at.stock.weekHalted = true
+		if at.store != nil {
+			if err := at.store.StockPaper().SetWeekHalt(at.id, stockModeKey(at.stockPaper()), key, base, now); err != nil {
+				logger.Warnf("⚠️ [%s] cannot persist the weekly circuit (latched in memory only): %v", at.name, err)
+			}
+		}
 		logger.Warnf("🛑 [%s] us_stock weekly drawdown %.2f%% > %.0f%%: no new exposure until next ET week", at.name, ddPct, stockWeeklyDrawdownHaltPct)
 		stockNotify("RISK", at.name, fmt.Sprintf("<b>🛑 美股周回撤熔断</b>\n<i>本周回撤 %.2f%% 超过 %.0f%%，本周不再开新仓（仍管理退出）%s</i>",
 			ddPct, stockWeeklyDrawdownHaltPct, stockPrefixSuffix(at.stockPaper())))
 	}
 	return at.stock.weekHalted, ddPct
+}
+
+// stockModeKey names the trading mode a persisted per-mode state belongs to.
+func stockModeKey(paper bool) string {
+	if paper {
+		return "paper"
+	}
+	return "live"
 }
 
 func stockPrefixSuffix(paper bool) string {
@@ -612,12 +653,12 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 			if xerr == nil {
 				acct.Available -= reserved
 				acct.Exposure += reserved
-				at.setStockRegimeScale(regime, d.Symbol, logf)
+				at.setStockRegimeScale(regime, paper, d.Symbol, logf)
 			}
 		case stockengine.ActionReduceLong, stockengine.ActionCloseLong:
 			out, xerr = at.execStockExit(ctx, d, snap, h, paper, now)
 			if xerr == nil && d.Action == stockengine.ActionCloseLong {
-				at.deleteStockRegimeScale(regime, d.Symbol, logf)
+				at.deleteStockRegimeScale(regime, paper, d.Symbol, logf)
 			}
 		case stockengine.ActionAdjustStop:
 			out, xerr = at.execStockAdjust(ctx, d, snap, h, paper, now)
