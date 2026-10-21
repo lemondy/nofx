@@ -9,6 +9,18 @@ Each symbol is stored as ``<root>/<market>/daily/<SYMBOL>.json``: a list of
 ``[date, open, high, low, close, volume, vwap]`` rows (UTC date, ascending).
 crypto vwap = quoteVolume/volume; us vwap = (high+low+close)/3 because Yahoo
 has no true vwap. Incomplete (current-day) bars are never stored.
+
+crypto only, side files under ``<root>/crypto/alt_daily/<field>/<SYMBOL>.json``
+(rows ``[date, value]``, UTC date, completed days only, best effort):
+  funding  mean of the funding-rate settlements whose fundingTime falls inside
+           that UTC day (00:00/08:00/16:00 on 8h symbols). The 00:00 settlement
+           of day t+1 belongs to t+1, never to t.
+  premium  close of that day's 1d premiumIndexKlines bar (bar closes 23:59:59.999).
+Both are fully known by the close of their own day, so a day-t value is usable
+for a decision taken after close t. History: funding from listing (2019-09),
+premium from ~2019-12. Open interest, long/short ratios and taker buy/sell
+ratio only expose ~30 days upstream, so they are accumulated by ``alt_accum``
+(opt-in) rather than exposed as fields.
 """
 import argparse
 import datetime as dt
@@ -31,6 +43,9 @@ BENCHMARK = 'SPY'
 UA = 'Mozilla/5.0 (nofx-factor-mining)'
 DAY_MS = 86400000
 CRYPTO_START = dt.datetime(2019, 9, 1, tzinfo=dt.timezone.utc)
+FAPI = 'https://fapi.binance.com'
+ALT_FIELDS = ('funding', 'premium')
+FUNDING_PAGE = 1000
 
 
 class Http:
@@ -145,6 +160,82 @@ def us_rows(http, ticker, years=6):
     return [r for r in rows if r[0] < today and _valid(r)]
 
 
+def funding_daily(settlements, today):
+    """Daily mean funding rate per UTC date from ``(fundingTime_ms, rate)`` pairs.
+
+    A settlement is assigned to the UTC date of its own timestamp, so the 00:00
+    settlement of t+1 is never part of day t. Days >= ``today`` (YYYY-MM-DD)
+    are dropped as possibly incomplete. Row: ``[date, mean_rate]``.
+    """
+    by_day = {}
+    for ms, rate in settlements:
+        if rate is not None:
+            by_day.setdefault(date_of(int(ms)), []).append(rate)
+    return [[d, sum(v) / len(v)] for d, v in sorted(by_day.items()) if d < today]
+
+
+def funding_rows(http, symbol, start_ms, now_ms):
+    settlements = []
+    while start_ms < now_ms:
+        page = http.get(FAPI + '/fapi/v1/fundingRate',
+                        {'symbol': symbol, 'startTime': start_ms, 'endTime': now_ms, 'limit': FUNDING_PAGE})
+        if not isinstance(page, list) or not page:
+            break
+        settlements.extend((int(r['fundingTime']), _num(r.get('fundingRate'))) for r in page)
+        nxt = int(page[-1]['fundingTime']) + 1
+        if len(page) < FUNDING_PAGE or nxt <= start_ms:
+            break
+        start_ms = nxt
+    return funding_daily(settlements, date_of(now_ms))
+
+
+def premium_rows(http, symbol, start_ms, now_ms):
+    rows = []
+    while start_ms < now_ms:
+        page = http.get(FAPI + '/fapi/v1/premiumIndexKlines',
+                        {'symbol': symbol, 'interval': '1d', 'startTime': start_ms, 'limit': 1500})
+        if not isinstance(page, list) or not page:
+            break
+        for k in page:
+            open_ms = int(k[0])
+            value = _num(k[4])
+            if open_ms + DAY_MS > now_ms or value is None:   # current day still forming
+                continue
+            rows.append([date_of(open_ms), value])
+        nxt = int(page[-1][0]) + DAY_MS
+        if len(page) < 1500 or nxt <= start_ms:
+            break
+        start_ms = nxt
+    return rows
+
+
+def _day_ms(date):
+    return int(dt.datetime.strptime(date, '%Y-%m-%d').replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
+
+
+def update_alt(root, symbols, http, now_ms, log=print):
+    """Incrementally refresh the crypto funding/premium side files; never raises.
+
+    Returns {'ok': n_symbol_fields, 'failed': {'field/SYMBOL': reason}}.
+    """
+    fetchers = {'funding': funding_rows, 'premium': premium_rows}
+    ok, failed = 0, {}
+    for sym in symbols:
+        for field in ALT_FIELDS:
+            path = Path(root) / 'crypto' / 'alt_daily' / field / f'{sym}.json'
+            try:
+                old = read_symbol(path)
+                start = _day_ms(old[-1][0]) - 3 * DAY_MS if old else int(CRYPTO_START.timestamp() * 1000)
+                new = fetchers[field](http, sym, start, now_ms)
+                if new:
+                    write_symbol(path, merge(old, new))
+                ok += 1
+            except Exception as exc:    # alt data must never break the OHLCV update
+                failed[f'{field}/{sym}'] = f'{type(exc).__name__}: {exc}'[:160]
+    log(f'crypto alt: updated {ok}/{len(symbols) * len(ALT_FIELDS)}, failed {len(failed)}')
+    return {'ok': ok, 'failed': failed}
+
+
 def crypto_universe(path=DATA / 'alt_data' / 'universe_src.json'):
     syms = json.loads(Path(path).read_text(encoding='utf-8')).get('crypto', [])
     return sorted(s for s in set(syms) if s.endswith('USDT') and s not in CRYPTO_EXCLUDED)
@@ -161,7 +252,15 @@ def us_universe(http):
     return keep
 
 
-def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print):
+def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print,
+           alt=True, alt_http=None, accumulate=None, accum_dir=None):
+    """Refresh daily OHLCV (and, for crypto, funding/premium side files).
+
+    ``accumulate`` (default: env FM_ALT_ACCUM == '1') additionally appends the
+    short-history snapshots (OI, long/short ratios, taker ratio) to ``accum_dir``
+    (default ``<root>/alt``); see ``alt_accum``. Alt steps are best effort.
+    """
+    alt_http = alt_http or (http if http is not None else Http(spacing=0.8))
     http = http or Http()
     now_ms = now_ms or int(time.time() * 1000)
     base = Path(root) / market / 'daily'
@@ -191,10 +290,27 @@ def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print):
         rows = new if market == 'us' and new else merge(old, new)
         write_symbol(path, rows)
         ok += 1
+    extra = {}
+    if market == 'crypto' and alt:
+        alt_symbols = [s for s in symbols if s not in failed]
+        try:
+            extra['alt'] = update_alt(root, alt_symbols, alt_http, now_ms, log)
+        except Exception as exc:
+            extra['alt'] = {'ok': 0, 'failed': {'*': f'{type(exc).__name__}: {exc}'[:160]}}
+        if accumulate is None:
+            accumulate = os.environ.get('FM_ALT_ACCUM') == '1'
+        if accumulate:
+            try:
+                from . import alt_accum
+                extra['accum'] = alt_accum.accumulate(alt_symbols, alt_http, now_ms,
+                                                      accum_dir or Path(root) / 'alt', log=log)
+            except Exception as exc:
+                extra['accum'] = {'ok': 0, 'failed': {'*': f'{type(exc).__name__}: {exc}'[:160]}}
     stamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
     meta = Path(root) / market / 'data_meta.json'
     meta.parent.mkdir(parents=True, exist_ok=True)
-    meta.write_text(json.dumps({'updated_at': stamp, 'ok': ok, 'failed': failed}, ensure_ascii=False), encoding='utf-8')
+    meta.write_text(json.dumps({'updated_at': stamp, 'ok': ok, 'failed': failed, **extra}, ensure_ascii=False),
+                    encoding='utf-8')
     log(f'{market}: updated {ok}/{len(symbols)}, failed {len(failed)}')
     return {'ok': ok, 'failed': failed}
 
@@ -204,9 +320,13 @@ def main(argv=None):
     p.add_argument('--market', choices=('crypto', 'us', 'all'), default='all')
     p.add_argument('--symbols', nargs='*')
     p.add_argument('--root', default=str(ROOT))
+    p.add_argument('--no-alt', action='store_true', help='skip crypto funding/premium side files')
+    p.add_argument('--accumulate', action='store_true', help='also append OI/long-short/taker daily snapshots')
+    p.add_argument('--accum-dir', default=None, help='default: <root>/alt')
     a = p.parse_args(argv)
     for m in (('crypto', 'us') if a.market == 'all' else (a.market,)):
-        update(m, root=a.root, symbols=a.symbols or None)
+        update(m, root=a.root, symbols=a.symbols or None, alt=not a.no_alt,
+               accumulate=a.accumulate or None, accum_dir=a.accum_dir)
     return 0
 
 

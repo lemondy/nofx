@@ -22,7 +22,12 @@ class ExprError(ValueError):
     """An invalid DSL expression or input panel."""
 
 
-FIELDS = ("open", "high", "low", "close", "volume", "vwap", "ret")
+# Required panels, derived ret, and optional alternative-data panels. $funding /
+# $premium exist only for markets whose loader supplies them (crypto); an
+# expression using a field the panels lack raises ExprError (judged invalid).
+BASE_FIELDS = ("open", "high", "low", "close", "volume", "vwap")
+ALT_FIELDS = ("funding", "premium")
+FIELDS = BASE_FIELDS + ("ret",) + ALT_FIELDS
 
 # arity is exact; window_arg indicates a literal trailing window, except that
 # Quantile's window precedes q. This table is also the parser's call allowlist.
@@ -206,14 +211,14 @@ def _finite(value):
 
 
 def _panels(panels: dict) -> tuple[dict, pd.DataFrame]:
-    if not isinstance(panels, dict) or any(name not in panels for name in FIELDS[:-1]):
+    if not isinstance(panels, dict) or any(name not in panels for name in BASE_FIELDS):
         raise ExprError("panels 必须包含 open/high/low/close/volume/vwap 面板")
     base = panels["close"]
     if (not isinstance(base, pd.DataFrame) or not isinstance(base.index, pd.DatetimeIndex)
             or not base.index.is_monotonic_increasing or base.index.hasnans):
         raise ExprError("面板必须为 DataFrame，日期索引必须为升序 DatetimeIndex")
     arrays = {}
-    for name in FIELDS[:-1]:
+    for name in BASE_FIELDS + tuple(n for n in ALT_FIELDS if n in panels):
         panel = panels[name]
         if (not isinstance(panel, pd.DataFrame) or not panel.index.equals(base.index)
                 or not panel.columns.equals(base.columns)):
@@ -287,8 +292,11 @@ _ROLLING = {"Mean": "mean", "Sum": "sum", "Std": "std", "Var": "var",
 
 def evaluate_expr(expr: str, panels: dict) -> pd.DataFrame:
     """Interpret a validated AST, returning a finite-or-NaN panel of equal shape."""
-    root, _ = _parse(expr)
+    root, meta = _parse(expr)
     arrays, base = _panels(panels)
+    missing = [name for name in meta["fields"] if name not in arrays]
+    if missing:
+        raise ExprError("面板缺少字段：" + "、".join("$" + name for name in missing))
 
     def as_array(value):
         return np.broadcast_to(value, base.shape)
@@ -374,6 +382,7 @@ def dsl_help() -> str:
         "因子表达式 DSL（纯离线、只使用当日及过去数据）",
         "字段：" + "、".join("$" + field for field in FIELDS),
         "$ret 自动派生为 $close/Ref($close,1)-1。",
+        "$funding（当日资金费率结算均值，约 1e-4 量级）与 $premium（当日溢价指数收盘值，相对值）仅加密货币市场可用，可能缺失为 NaN；美股没有这两个字段，使用即判无效。",
         "允许 int/float 有限常数、括号、+ - * /、一元负号及 > < >= <= 单比较；比较返回 1.0/0.0，缺失值返回 NaN。",
         "除零、无穷值和非法对数/平方根返回 NaN；If 的 NaN 条件按假处理。",
         "窗口是 2..120 的整数字面量（Ref/Delta 为 1..120），包含当日且 min_periods=n；EMA 为累计有效值预热。",

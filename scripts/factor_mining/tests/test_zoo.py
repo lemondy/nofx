@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from scripts.factor_mining.expr import canonical, evaluate_expr, expr_hash, validate_expr
+from scripts.factor_mining.expr import ExprError, canonical, evaluate_expr, expr_hash, validate_expr
 from scripts.factor_mining.tests.test_expr import make_panels
 from scripts.factor_mining.zoo import seed_factors
 
@@ -64,6 +64,10 @@ class SeedFactorTests(unittest.TestCase):
 
     def test_all_evaluate_with_at_least_ninety_percent_usable(self):
         panels = make_panels(180, 8)
+        rng = np.random.default_rng(5)
+        for name, scale in (("funding", 1e-4), ("premium", 5e-4)):
+            panels[name] = pd.DataFrame(rng.normal(scale, scale, panels["close"].shape),
+                                        index=panels["close"].index, columns=panels["close"].columns)
         panels["close"].iloc[0, 0] = np.nan
         panels["volume"].iloc[15, 1] = 0
         usable = 0
@@ -77,6 +81,20 @@ class SeedFactorTests(unittest.TestCase):
                 self.assertFalse(np.isinf(result.to_numpy()).any())
                 usable += bool(result.notna().any().any())
         self.assertGreaterEqual(usable / len(self.factors), 0.9)
+
+    def test_alt_seeds_present_and_need_alt_fields(self):
+        alt = [f for f in self.factors if f["name"].startswith(("FUND", "PREM"))]
+        self.assertGreaterEqual(len(alt), 10)
+        self.assertLessEqual(len(alt), 20)
+        panels = make_panels(60, 5)
+        for factor in alt:
+            with self.subTest(name=factor["name"]):
+                self.assertRegex(factor["expr"], r"\$(funding|premium)")
+                with self.assertRaises(ExprError):        # e.g. the us market
+                    evaluate_expr(factor["expr"], panels)
+        for factor in self.factors:
+            if factor not in alt:
+                self.assertNotRegex(factor["expr"], r"\$(funding|premium)")
 
 
 if __name__ == "__main__":
