@@ -66,7 +66,7 @@ class LlmFeedbackTests(unittest.TestCase):
 
 class RejectReasonTests(unittest.TestCase):
     def test_reasons_agree_with_classify(self):
-        from scripts.factor_mining import evaluate
+        from scripts.factor_mining import evaluate, feedback
         base = dict(t=4., ic=.02, ls_ret=.1, ic_halves=[.02, .02])
         grid = []
         for t in (1., 4.):
@@ -78,10 +78,10 @@ class RejectReasonTests(unittest.TestCase):
                                 grid.append((dict(base, t=t, ic_halves=halves, ic=ic),
                                              dict(ic=vic, t=vt, ls_ret=ls)))
         for train, val in grid:
-            reason = evaluate.reject_reason(train, val, 3.)
+            reason = feedback.reject_reason(train, val, 3.)
             verdict = evaluate.classify(train, val, 100, 3.)
             self.assertEqual(reason == 'ok', verdict == 'accepted', (train, val, reason, verdict))
-            self.assertEqual(verdict == 'rejected', evaluate.train_screen(train, 3.) != 'pass', (train, val))
+            self.assertEqual(verdict == 'rejected', feedback.train_screen(train, 3.) != 'pass', (train, val))
 
 
 class LlmBatchTests(unittest.TestCase):

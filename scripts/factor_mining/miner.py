@@ -17,7 +17,7 @@ import subprocess
 import time
 from typing import TypedDict
 
-from . import evaluate, forward, panel, zoo
+from . import evaluate, feedback, forward, panel, zoo
 from .config import CORR_REDUNDANT, MARKETS
 from .data_fetch import ROOT
 from .ensemble import build_ensemble
@@ -371,8 +371,8 @@ class Miner:
                         per_horizon.append(dict(
                             horizon=h, status=state, train_t=metrics['train']['t'], train_ic=metrics['train']['ic'],
                             val_ic=metrics['val']['ic'], val_t=metrics['val']['t'],
-                            reason=evaluate.reject_reason(metrics['train'], metrics['val'], t_req),
-                            train_screen=evaluate.train_screen(metrics['train'], t_req)))
+                            reason=feedback.reject_reason(metrics['train'], metrics['val'], t_req),
+                            train_screen=feedback.train_screen(metrics['train'], t_req)))
                         factors[h, key] = dict(id=key, **candidate, horizon=h, first_seen=started.date().isoformat(),
                                                run_id=run_id, status=state, corr_max=0., corr_with=None, **metrics)
                         if (h, key) in old_forward:
