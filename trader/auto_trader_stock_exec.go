@@ -288,6 +288,19 @@ func (at *AutoTrader) stockBuyFilled(ctx context.Context, sym string, executed, 
 func (at *AutoTrader) stockOpenLive(ctx context.Context, d stockengine.Decision, qty, entry float64, h *stockHolding, info usstock.SymbolInfo,
 	now time.Time, logf func(string, ...interface{})) (*stockOutcome, error) {
 	stop := floorStep(d.StopLoss, info.TickSize)
+	// Refuse before any order is sent when another trader of this account
+	// already manages the symbol: their protection and ours would contend for
+	// the same shared inventory.
+	others, oerr := at.stockOtherManagers(d.Symbol)
+	if oerr != nil {
+		return nil, fmt.Errorf("cannot verify that no other trader manages %s: %w", d.Symbol, oerr)
+	}
+	if len(others) > 0 {
+		msg := fmt.Sprintf("%s 已由同账户的其他美股交易员(%s)管理，拒绝开仓以免互相接管保护单", d.Symbol, strings.Join(others, ","))
+		logger.Warnf("⚠️ [%s] %s", at.name, msg)
+		stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股开仓被拒绝</b>\n<i>%s</i>", notify.Escape(msg)))
+		return nil, fmt.Errorf("%s", msg)
+	}
 	var res *types.SpotOrderResult
 	var err error
 	if d.EntryType == stockengine.EntryLimit {

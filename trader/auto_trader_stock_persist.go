@@ -9,6 +9,7 @@ import (
 
 	"nofx/logger"
 	"nofx/store"
+	"nofx/trader/binance_bstock"
 	"nofx/trader/types"
 
 	notify "nofx/telegram/notify"
@@ -33,6 +34,89 @@ func (at *AutoTrader) stockSaveProtection(p *types.ProtectionOrders) error {
 			UpdatedAt: at.stockClock().UTC().UnixMilli()})
 	}
 	return at.store.StockPaper().SaveProtectionOrders(rows)
+}
+
+// stockBindProtectionOwner scopes the executor's protection handling to THIS
+// trader (several us_stock traders may share one Binance account): new legs
+// carry the trader's tag in their client IDs and only tagged-as-ours legs, or
+// pre-upgrade untagged legs registered in this trader's own
+// stock_protection_orders rows (by immutable order ID), are ever cancelled,
+// replaced or reported. A shared nxbs_ prefix alone never grants ownership.
+func (at *AutoTrader) stockBindProtectionOwner() {
+	owner, ok := at.stockTrader.(interface {
+		SetProtectionOwner(string, func(string, string) bool)
+	})
+	if !ok || at.store == nil {
+		return
+	}
+	owner.SetProtectionOwner(binance_bstock.OwnerTag(at.id), func(symbol, orderID string) bool {
+		rows, err := at.store.StockPaper().ListProtectionOrders(at.id, symbol)
+		if err != nil {
+			return false // unreadable registry: never claim a foreign order
+		}
+		for _, r := range rows {
+			if r.OrderID == orderID {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// stockOtherManagers lists the OTHER traders of the same account that already
+// manage symbol sym (own positions, live protection legs or a resting entry).
+// Two automatic managers on one symbol cannot be told apart on the exchange
+// (a spot balance is shared, protection locks the same inventory), so opening
+// is refused until the other manager is flat.
+func (at *AutoTrader) stockOtherManagers(sym string) ([]string, error) {
+	if at.store == nil {
+		return nil, nil
+	}
+	exchangeID := at.exchangeID
+	if exchangeID == "" {
+		exchangeID = at.config.ExchangeID
+	}
+	if exchangeID == "" {
+		return nil, nil
+	}
+	peers, err := at.store.Trader().ListByExchangeID(at.userID, exchangeID)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range peers {
+		if p.ID == at.id {
+			continue
+		}
+		managed := false
+		if rows, e := at.store.Position().StockOwnedRows(p.ID, sym); e != nil {
+			return nil, e
+		} else if len(rows) > 0 {
+			managed = true
+		}
+		legs, e := at.store.StockPaper().ListProtectionOrders(p.ID, sym)
+		if e != nil {
+			return nil, e
+		}
+		for _, l := range legs {
+			if !l.Retired {
+				managed = true
+			}
+		}
+		pend, e := at.store.StockPaper().ListPending(p.ID)
+		if e != nil {
+			return nil, e
+		}
+		for _, r := range pend {
+			if r.Symbol == sym {
+				managed = true
+			}
+		}
+		if managed {
+			out = append(out, p.Name)
+		}
+	}
+	return out, nil
 }
 
 type stockProtectionCheck struct {

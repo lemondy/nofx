@@ -48,6 +48,7 @@ func (at *AutoTrader) prepareStockRuntime(ctx context.Context) (*store.StockConf
 		if probe == "" {
 			return nil, fmt.Errorf("us_stock preflight: no listed bStock pair available")
 		}
+		at.stockBindProtectionOwner()
 		if err := at.stockTrader.Preflight(probe); err != nil {
 			logger.Errorf("❌ [%s] us_stock preflight failed on %s: %v", at.name, probe, err)
 			stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚫 美股策略未启动 (预检失败)</b>\n<i>%s: %s</i>", notify.Escape(probe), notify.Escape(err.Error())))
@@ -381,6 +382,21 @@ func (at *AutoTrader) stockWeekRisk(now time.Time, equity float64) (halted bool,
 			}
 		}
 		at.stock.weekKey, at.stock.weekStartEquity, at.stock.weekHalted = key, base, false
+		// A circuit tripped earlier THIS ET week (same trader and mode) survives
+		// restarts and reloads: restore it together with the baseline it was
+		// measured against, even if equity has since recovered. A row from an
+		// earlier week is stale and simply ignored (the new week starts clear).
+		if at.store != nil {
+			if h, err := at.store.StockPaper().GetWeekHalt(at.id, stockModeKey(at.stockPaper())); err != nil {
+				logger.Warnf("⚠️ [%s] cannot read the persisted weekly circuit: %v", at.name, err)
+			} else if h != nil && h.WeekKey == key {
+				at.stock.weekHalted = true
+				if h.StartEquity > 0 {
+					at.stock.weekStartEquity = h.StartEquity
+				}
+				logger.Warnf("🛑 [%s] us_stock weekly circuit restored for ET week %s: no new exposure until next week", at.name, key)
+			}
+		}
 	}
 	base := at.stock.weekStartEquity
 	if base > 0 {
@@ -388,11 +404,24 @@ func (at *AutoTrader) stockWeekRisk(now time.Time, equity float64) (halted bool,
 	}
 	if ddPct > stockWeeklyDrawdownHaltPct && !at.stock.weekHalted {
 		at.stock.weekHalted = true
+		if at.store != nil {
+			if err := at.store.StockPaper().SetWeekHalt(at.id, stockModeKey(at.stockPaper()), key, base, now); err != nil {
+				logger.Warnf("⚠️ [%s] cannot persist the weekly circuit (latched in memory only): %v", at.name, err)
+			}
+		}
 		logger.Warnf("🛑 [%s] us_stock weekly drawdown %.2f%% > %.0f%%: no new exposure until next ET week", at.name, ddPct, stockWeeklyDrawdownHaltPct)
 		stockNotify("RISK", at.name, fmt.Sprintf("<b>🛑 美股周回撤熔断</b>\n<i>本周回撤 %.2f%% 超过 %.0f%%，本周不再开新仓（仍管理退出）%s</i>",
 			ddPct, stockWeeklyDrawdownHaltPct, stockPrefixSuffix(at.stockPaper())))
 	}
 	return at.stock.weekHalted, ddPct
+}
+
+// stockModeKey names the trading mode a persisted per-mode state belongs to.
+func stockModeKey(paper bool) string {
+	if paper {
+		return "paper"
+	}
+	return "live"
 }
 
 func stockPrefixSuffix(paper bool) string {

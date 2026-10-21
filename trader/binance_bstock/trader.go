@@ -25,6 +25,9 @@ import (
 const cacheTTL = 15 * time.Second
 const clientPrefix = "nxbs_"
 
+// ownerTagLen is the length of the trader tag inside protection client IDs.
+const ownerTagLen = 8
+
 // ErrAuthOrPermission allows callers to pause execution until credentials,
 // IP restrictions or spot trading permissions are fixed. APIError is retained
 // in the same error chain so errors.As still exposes Binance's code/message.
@@ -45,6 +48,9 @@ type BStockTrader struct {
 	positionsTime time.Time
 	historyMu     sync.Mutex
 	history       map[string]*fifoHistory
+	// Protection ownership (SetProtectionOwner); empty tag = legacy global prefix.
+	ownerTag    string
+	legacyOwned func(symbol, orderID string) bool
 }
 
 var _ types.SpotStockTrader = (*BStockTrader)(nil)

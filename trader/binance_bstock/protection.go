@@ -2,6 +2,8 @@ package binance_bstock
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,9 +14,66 @@ import (
 	"nofx/trader/types"
 )
 
-func protectionID(role string) string {
-	return clientPrefix + role + "_" + strings.TrimPrefix(clientID(), clientPrefix)
+// protectionID tags a protection leg with its owning trader:
+// nxbs_<role>_<ownerTag>_<random>. Without an owner (unset) the legacy
+// nxbs_<role>_<random> form is produced. Total length stays within Binance's 36.
+func (t *BStockTrader) protectionID(role string) string {
+	rnd := strings.TrimPrefix(clientID(), clientPrefix)
+	if t.ownerTag == "" {
+		return clientPrefix + role + "_" + rnd
+	}
+	return clientPrefix + role + "_" + t.ownerTag + "_" + rnd[:16]
 }
+
+// OwnerTag derives the fixed-length (8 hex) tag a trader embeds in its
+// protection client IDs.
+func OwnerTag(traderID string) string {
+	if traderID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(traderID))
+	return hex.EncodeToString(sum[:])[:ownerTagLen]
+}
+
+// SetProtectionOwner makes this executor manage ONLY protection legs that
+// belong to the given trader tag. legacyOwned decides, by immutable order ID,
+// whether an untagged (pre-upgrade nxbs_<role>_<random>) leg belongs to this
+// trader (the caller's database registry); nil means no legacy leg is owned.
+// Without an owner (never called) the executor keeps the old behaviour of
+// treating every nxbs_ protection leg as its own.
+func (t *BStockTrader) SetProtectionOwner(tag string, legacyOwned func(symbol, orderID string) bool) {
+	t.ownerTag, t.legacyOwned = tag, legacyOwned
+}
+
+// protectionTag extracts the owner tag of a protection client ID; "" for the
+// legacy untagged form.
+func protectionTag(clientOrderID string) string {
+	rest := strings.TrimPrefix(clientOrderID, clientPrefix)
+	i := strings.IndexByte(rest, '_')
+	if i < 0 {
+		return ""
+	}
+	rest = rest[i+1:]
+	if len(rest) > ownerTagLen && rest[ownerTagLen] == '_' {
+		return rest[:ownerTagLen]
+	}
+	return ""
+}
+
+// ownsProtection reports whether protection leg o belongs to this executor's
+// trader. Another trader's tagged leg, or an untagged leg the registry does not
+// claim, is never cancelled, replaced or reported as our protection.
+func (t *BStockTrader) ownsProtection(symbol string, o *binance.Order) bool {
+	if t.ownerTag == "" {
+		return true
+	}
+	tag := protectionTag(o.ClientOrderID)
+	if tag != "" {
+		return tag == t.ownerTag
+	}
+	return t.legacyOwned != nil && t.legacyOwned(symbol, id(o.OrderID))
+}
+
 func isProtection(o *binance.Order) bool {
 	if o.Side != binance.SideTypeSell || !strings.HasPrefix(o.ClientOrderID, clientPrefix) {
 		return false
@@ -24,11 +83,11 @@ func isProtection(o *binance.Order) bool {
 
 // Open orders carry orderListId on both OCO legs, so no local protection state
 // or second order-list query is required to reconstruct the live set.
-func reconstruct(symbol string, orders []*binance.Order) (*types.ProtectionOrders, error) {
+func (t *BStockTrader) reconstruct(symbol string, orders []*binance.Order) (*types.ProtectionOrders, error) {
 	var p *types.ProtectionOrders
 	list := int64(-1)
 	for _, o := range orders {
-		if !isProtection(o) {
+		if !isProtection(o) || !t.ownsProtection(symbol, o) {
 			continue
 		}
 		if p == nil {
@@ -71,7 +130,7 @@ func (t *BStockTrader) GetProtection(symbol string) (*types.ProtectionOrders, er
 	if err != nil {
 		return nil, err
 	}
-	return reconstruct(symbol, o)
+	return t.reconstruct(symbol, o)
 }
 
 func (t *BStockTrader) cancelProtection(symbol string) error {
@@ -81,7 +140,7 @@ func (t *BStockTrader) cancelProtection(symbol string) error {
 	}
 	lists := make(map[int64]bool)
 	for _, o := range orders {
-		if !isProtection(o) {
+		if !isProtection(o) || !t.ownsProtection(symbol, o) {
 			continue
 		}
 		if o.OrderListId >= 0 {
@@ -183,7 +242,7 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 	}
 	p := &types.ProtectionOrders{Symbol: symbol, Quantity: qty, StopPrice: stop, StopLimitPrice: stopLimit, TakeProfit: tp}
 	if tp == 0 {
-		o, e := t.place(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeStopLossLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).StopPrice(value(stop)).Price(value(stopLimit)))
+		o, e := t.placeWithID(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeStopLossLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).StopPrice(value(stop)).Price(value(stopLimit)), t.protectionID("sl"))
 		if e != nil {
 			return nil, fmt.Errorf("protection canceled; replacement stop failed: %w", e)
 		}
@@ -193,7 +252,7 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 	}
 	// v2.8.9 CreateOCOService uses deprecated /api/v3/order/oco. The new
 	// endpoint has explicit above/below leg types and client IDs.
-	below, above := protectionID("sl"), protectionID("tp")
+	below, above := t.protectionID("sl"), t.protectionID("tp")
 	p.ListClientID, p.StopClientID, p.TPClientID = clientID(), below, above
 	params := url.Values{"symbol": {symbol}, "side": {"SELL"}, "quantity": {value(qty)}, "listClientOrderId": {p.ListClientID}, "aboveType": {"LIMIT_MAKER"}, "abovePrice": {value(tp)}, "aboveClientOrderId": {above}, "belowType": {"STOP_LOSS_LIMIT"}, "belowStopPrice": {value(stop)}, "belowPrice": {value(stopLimit)}, "belowTimeInForce": {"GTC"}, "belowClientOrderId": {below}, "newOrderRespType": {"RESULT"}}
 	var result struct {
@@ -299,7 +358,7 @@ func (t *BStockTrader) loneTP(symbol string, qty, tp float64) error {
 	}
 	// place normally generates a generic ID; this role is needed to recognize
 	// the lone limit as protection. Use the SDK directly with the role tag.
-	o, err := t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeLimitMaker).Quantity(value(qty)).Price(value(tp)).NewClientOrderID(protectionID("tp")).Do(context.Background())
+	o, err := t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeLimitMaker).Quantity(value(qty)).Price(value(tp)).NewClientOrderID(t.protectionID("tp")).Do(context.Background())
 	t.invalidate()
 	if err != nil {
 		return fmt.Errorf("protection canceled; replacement take-profit failed: %w", wrap("place take-profit", err))

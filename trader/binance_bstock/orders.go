@@ -11,7 +11,13 @@ import (
 )
 
 func (t *BStockTrader) place(svc *binance.CreateOrderService) (*types.SpotOrderResult, error) {
-	o, err := svc.NewClientOrderID(clientID()).NewOrderRespType(binance.NewOrderRespTypeFULL).Do(context.Background())
+	return t.placeWithID(svc, clientID())
+}
+
+// placeWithID is place with an explicit client order ID (protection legs carry
+// their owner's tag).
+func (t *BStockTrader) placeWithID(svc *binance.CreateOrderService, cid string) (*types.SpotOrderResult, error) {
+	o, err := svc.NewClientOrderID(cid).NewOrderRespType(binance.NewOrderRespTypeFULL).Do(context.Background())
 	t.invalidate() // Even a timeout may have executed at the exchange.
 	if err != nil {
 		return nil, wrap("place spot order", err)
@@ -256,6 +262,9 @@ func (t *BStockTrader) CancelAllOrders(symbol string) error {
 	for _, o := range orders {
 		if !strings.HasPrefix(o.ClientOrderID, clientPrefix) {
 			continue
+		}
+		if isProtection(o) && !t.ownsProtection(symbol, o) {
+			continue // another trader's protection on the shared account
 		}
 		if o.OrderListId >= 0 {
 			if lists[o.OrderListId] {

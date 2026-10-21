@@ -120,3 +120,38 @@ func TestStockBookEntryFillIsAtomicAndIdempotent(t *testing.T) {
 		t.Fatalf("intent not recorded with the fill: %v", in)
 	}
 }
+
+func TestStockWeekHaltPersistsPerTraderAndMode(t *testing.T) {
+	st := newTestStore(t)
+	sp := st.StockPaper()
+	if h, err := sp.GetWeekHalt("tr", "live"); err != nil || h != nil {
+		t.Fatalf("empty: %+v %v", h, err)
+	}
+	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)
+	if err := sp.SetWeekHalt("tr", "live", "2026-10-19", 100, now); err != nil {
+		t.Fatal(err)
+	}
+	h, err := sp.GetWeekHalt("tr", "live")
+	if err != nil || h == nil || h.WeekKey != "2026-10-19" || h.StartEquity != 100 {
+		t.Fatalf("round trip: %+v %v", h, err)
+	}
+	if p, _ := sp.GetWeekHalt("tr", "paper"); p != nil {
+		t.Fatalf("paper must not inherit the live circuit: %+v", p)
+	}
+	if o, _ := sp.GetWeekHalt("other", "live"); o != nil {
+		t.Fatalf("other trader must be untouched: %+v", o)
+	}
+	// Replace within the same key (upsert), then clear.
+	if err := sp.SetWeekHalt("tr", "live", "2026-10-26", 90, now); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := sp.GetWeekHalt("tr", "live"); h == nil || h.WeekKey != "2026-10-26" || h.StartEquity != 90 {
+		t.Fatalf("upsert: %+v", h)
+	}
+	if err := sp.ClearWeekHalt("tr", "live"); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := sp.GetWeekHalt("tr", "live"); h != nil {
+		t.Fatalf("after clear: %+v", h)
+	}
+}

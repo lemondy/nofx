@@ -99,7 +99,7 @@ type StockPaperStore struct {
 func NewStockPaperStore(db *gorm.DB) *StockPaperStore { return &StockPaperStore{db: db} }
 
 func (s *StockPaperStore) initTables() error {
-	return s.db.AutoMigrate(&StockPaperAccount{}, &StockPaperPosition{}, &StockPendingEntry{}, &StockProtectionOrder{}, &StockProtectionIntent{})
+	return s.db.AutoMigrate(&StockPaperAccount{}, &StockPaperPosition{}, &StockPendingEntry{}, &StockProtectionOrder{}, &StockProtectionIntent{}, &StockWeekHalt{})
 }
 
 // EnsureAccount returns the trader's paper account, creating it with
