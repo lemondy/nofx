@@ -35,6 +35,7 @@ const StrategyStudioPage = lazy(() =>
 const DataPage = lazy(() =>
   import('./pages/DataPage').then((m) => ({ default: m.DataPage }))
 )
+const ResearchHubPage = lazy(() => import('./pages/ResearchHubPage'))
 const ReviewPage = lazy(() =>
   import('./pages/ReviewPage').then((m) => ({ default: m.ReviewPage }))
 )
@@ -64,6 +65,7 @@ type Page =
   | 'strategy'
   | 'data'
   | 'review'
+  | 'research'
   | 'login'
   | 'register'
 
@@ -90,6 +92,7 @@ function App() {
     if (path === '/strategy' || hash === 'strategy') return 'strategy'
     if (path === '/data' || hash === 'data') return 'data'
     if (path === '/review' || hash === 'review') return 'review'
+    if (path === '/research') return 'research'
     if (path === '/dashboard' || hash === 'trader' || hash === 'details')
       return 'trader'
     return 'competition' // 默认为竞赛页面
@@ -110,6 +113,7 @@ function App() {
       competition: '/competition',
       data: '/data',
       review: '/review',
+      research: '/research',
       traders: '/traders',
       trader: '/dashboard',
       strategy: '/strategy',
@@ -526,15 +530,47 @@ function App() {
       </div>
     )
   }
-  // 系统质量 / 因子挖掘 / 晋升报告 / 研究记录 已并入系统设置页，旧路径跳转到对应标签
-  const settingsTabByPath: Record<string, string> = {
-    '/system-quality': 'quality',
-    '/factor-mining': 'factor-mining',
-    '/paper-promotion': 'paper-promotion',
-    '/research-log': 'research-log',
+  // 系统质量并入系统设置页；因子挖掘 / 晋升报告 / 研究记录合并为顶部「研究」菜单
+  const legacyRedirects: Record<string, string> = {
+    '/system-quality': '/settings#quality',
+    '/factor-mining': '/research#factor-mining',
+    '/paper-promotion': '/research#paper-promotion',
+    '/research-log': '/research#research-log',
   }
-  if (settingsTabByPath[route]) {
-    return <Redirect to={`/settings#${settingsTabByPath[route]}`} />
+  if (legacyRedirects[route]) {
+    return <Redirect to={legacyRedirects[route]} />
+  }
+  if (route === '/research') {
+    if ((!user || !token) && !hasPersistedAuth) {
+      return <Redirect to="/login" />
+    }
+    return (
+      <div
+        className="min-h-screen"
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
+      >
+        <HeaderBar
+          isLoggedIn={!!user}
+          currentPage="research"
+          language={language}
+          onLanguageChange={setLanguage}
+          user={user}
+          onLogout={logout}
+          onLoginRequired={handleLoginRequired}
+          onPageChange={navigateToPage}
+        />
+        <main className="pt-[52px]">
+          <Suspense fallback={null}>
+            <ResearchHubPage language={language} />
+          </Suspense>
+        </main>
+        <LoginRequiredOverlay
+          isOpen={loginOverlayOpen}
+          onClose={() => setLoginOverlayOpen(false)}
+          featureName={loginOverlayFeature}
+        />
+      </div>
+    )
   }
   if (route === '/' || route === '') {
     return <LandingPage />

@@ -11,9 +11,6 @@ import {
   Plus,
   Pencil,
   Activity,
-  FlaskConical,
-  Dna,
-  FileCheck,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -32,31 +29,19 @@ import { Badge, Button, Card, Input, Tabs } from '../components/ui'
 
 import { PaperBadge } from '../components/trader/PaperBadge'
 
-type Tab =
-  | 'account'
-  | 'models'
-  | 'exchanges'
-  | 'telegram'
-  | 'quality'
-  | 'factor-mining'
-  | 'paper-promotion'
-  | 'research-log'
+type Tab = 'account' | 'models' | 'exchanges' | 'telegram' | 'quality'
 
 const SystemQualityPage = lazy(() => import('./SystemQualityPage'))
-const FactorMiningPage = lazy(() => import('./FactorMiningPage'))
-const PaperPromotionPage = lazy(() => import('./PaperPromotionPage'))
-const ResearchLogPage = lazy(() => import('./ResearchLogPage'))
 
 // 嵌入的诊断/研究类页面：内容较宽，不套设置卡片
-const EMBEDDED_TABS: Tab[] = [
-  'quality',
-  'factor-mining',
-  'paper-promotion',
-  'research-log',
-]
+const EMBEDDED_TABS: Tab[] = ['quality']
 
 function tabFromHash(): Tab {
   const h = window.location.hash.slice(1)
+  // 因子挖掘 / 晋升报告 / 研究记录 已移到顶部「研究」菜单
+  if (['factor-mining', 'paper-promotion', 'research-log'].includes(h)) {
+    window.location.replace(`/research#${h}`)
+  }
   const all: Tab[] = [
     'account',
     'models',
@@ -369,21 +354,6 @@ export function SettingsPage() {
       label: language === 'zh' ? '系统质量' : 'System Quality',
       icon: <Activity size={14} />,
     },
-    {
-      key: 'factor-mining',
-      label: language === 'zh' ? '因子挖掘' : 'Factor Mining',
-      icon: <Dna size={14} />,
-    },
-    {
-      key: 'paper-promotion',
-      label: language === 'zh' ? '晋升报告' : 'Paper Promotion',
-      icon: <FileCheck size={14} />,
-    },
-    {
-      key: 'research-log',
-      label: language === 'zh' ? '研究记录' : 'Research Log',
-      icon: <FlaskConical size={14} />,
-    },
   ]
   const embedded = EMBEDDED_TABS.includes(activeTab)
 
@@ -413,15 +383,6 @@ export function SettingsPage() {
           >
             {activeTab === 'quality' && (
               <SystemQualityPage language={language} />
-            )}
-            {activeTab === 'factor-mining' && (
-              <FactorMiningPage language={language} />
-            )}
-            {activeTab === 'paper-promotion' && (
-              <PaperPromotionPage language={language} />
-            )}
-            {activeTab === 'research-log' && (
-              <ResearchLogPage language={language} />
             )}
           </Suspense>
         )}

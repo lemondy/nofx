@@ -30,6 +30,7 @@ type Page =
   | 'strategy'
   | 'data'
   | 'review'
+  | 'research'
   | 'login'
   | 'register'
 
@@ -51,6 +52,8 @@ interface NavTab {
   path: string
   label: string
   requiresAuth: boolean
+  /** 悬停弹出的子项；点击父项进入第一个子项（默认页） */
+  children?: { key: string; label: string; path: string }[]
 }
 
 const LANGUAGES: { code: Language; label: string }[] = [
@@ -96,6 +99,29 @@ function buildNavTabs(language: Language): NavTab[] {
       path: '/competition',
       label: t('realtimeNav', language),
       requiresAuth: true,
+    },
+    {
+      page: 'research',
+      path: '/research',
+      label: language === 'zh' ? '研究' : 'Research',
+      requiresAuth: true,
+      children: [
+        {
+          key: 'factor-mining',
+          label: language === 'zh' ? '因子挖掘' : 'Factor Mining',
+          path: '/research#factor-mining',
+        },
+        {
+          key: 'paper-promotion',
+          label: t('paperPromotionNav', language),
+          path: '/research#paper-promotion',
+        },
+        {
+          key: 'research-log',
+          label: language === 'zh' ? '研究记录' : 'Research Log',
+          path: '/research#research-log',
+        },
+      ],
     },
   ]
 }
@@ -191,7 +217,11 @@ export default function HeaderBar({
 
   const navTabs = buildNavTabs(language)
 
-  const handleNavClick = (tab: NavTab, closeMobile = false) => {
+  const handleNavClick = (
+    tab: NavTab,
+    closeMobile = false,
+    path: string = tab.path
+  ) => {
     // If requires auth and not logged in, show login prompt
     if (tab.requiresAuth && !isLoggedIn) {
       onLoginRequired?.(tab.label)
@@ -201,7 +231,8 @@ export default function HeaderBar({
     if (onPageChange) {
       onPageChange(tab.page)
     }
-    navigate(tab.path)
+    navigate(path)
+    window.dispatchEvent(new PopStateEvent('popstate'))
     if (closeMobile) setMobileMenuOpen(false)
   }
 
@@ -224,15 +255,15 @@ export default function HeaderBar({
         </button>
 
         {/* Desktop Main Nav */}
-        <div className="hidden min-w-0 flex-1 items-stretch gap-0.5 self-stretch overflow-x-auto pl-4 [scrollbar-width:none] xl:flex 2xl:gap-1 2xl:pl-6 [&::-webkit-scrollbar]:hidden">
+        <div className="hidden min-w-0 flex-1 items-stretch gap-0.5 self-stretch pl-4 xl:flex 2xl:gap-1 2xl:pl-6">
           {navTabs.map((tab) => {
             const active = currentPage === tab.page
-            return (
+            const button = (
               <button
                 key={tab.page}
                 type="button"
                 onClick={() => handleNavClick(tab)}
-                className={`relative flex shrink-0 items-center whitespace-nowrap border-b-2 px-2.5 text-[13px] 2xl:px-3 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50 ${
+                className={`relative flex h-full shrink-0 items-center whitespace-nowrap border-b-2 px-2.5 text-[13px] 2xl:px-3 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/50 ${
                   active
                     ? 'border-brand text-fg'
                     : 'border-transparent text-fg-3 hover:text-fg'
@@ -243,6 +274,26 @@ export default function HeaderBar({
                   <Lock className="ml-1 h-3 w-3 text-fg-disabled" />
                 )}
               </button>
+            )
+            if (!tab.children) return button
+            return (
+              <div key={tab.page} className="group relative flex shrink-0">
+                {button}
+                <div className="invisible absolute left-0 top-full z-50 min-w-[140px] pt-0 opacity-0 transition-opacity group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+                  <div className="rounded-md border border-line bg-surface py-1 shadow-lg">
+                    {tab.children.map((child) => (
+                      <button
+                        key={child.key}
+                        type="button"
+                        onClick={() => handleNavClick(tab, false, child.path)}
+                        className="block w-full whitespace-nowrap px-3 py-2 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface-hover hover:text-fg"
+                      >
+                        {child.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             )
           })}
         </div>
@@ -442,7 +493,7 @@ export default function HeaderBar({
               <nav className="flex flex-col gap-0.5">
                 {navTabs.map((tab) => {
                   const active = currentPage === tab.page
-                  return (
+                  const parentBtn = (
                     <button
                       key={tab.page}
                       type="button"
@@ -463,6 +514,22 @@ export default function HeaderBar({
                         <Lock className="ml-auto h-3.5 w-3.5 text-fg-disabled" />
                       )}
                     </button>
+                  )
+                  if (!tab.children) return parentBtn
+                  return (
+                    <div key={tab.page} className="flex flex-col gap-0.5">
+                      {parentBtn}
+                      {tab.children.map((child) => (
+                        <button
+                          key={child.key}
+                          type="button"
+                          onClick={() => handleNavClick(tab, true, child.path)}
+                          className="rounded-md py-2 pl-9 pr-3 text-left text-[14px] text-fg-3 transition-colors hover:bg-surface-hover hover:text-fg"
+                        >
+                          {child.label}
+                        </button>
+                      ))}
+                    </div>
                   )
                 })}
               </nav>
