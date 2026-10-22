@@ -411,6 +411,19 @@ func TestNextStockDecisionTime(t *testing.T) {
 			t.Errorf("%s: got %v want %v", c.name, got, c.want)
 		}
 	}
+	// Hourly rhythm (swing default): consecutive slots, rolling to the next trading day.
+	hourly := []string{"09:45", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"}
+	for _, c := range []struct{ after, want time.Time }{
+		{et(2026, 10, 14, 9, 46), et(2026, 10, 14, 10, 30)},
+		{et(2026, 10, 14, 10, 30), et(2026, 10, 14, 11, 30)},
+		{et(2026, 10, 14, 14, 31), et(2026, 10, 14, 15, 30)},
+		{et(2026, 10, 14, 15, 30), et(2026, 10, 15, 9, 45)},
+		{et(2026, 10, 16, 15, 30), et(2026, 10, 19, 9, 45)},
+	} {
+		if got := nextStockDecisionTime(c.after, hourly); !got.Equal(c.want) {
+			t.Errorf("hourly after %v: got %v want %v", c.after, got, c.want)
+		}
+	}
 	// DST: 09:45 ET is 13:45Z in EDT and 14:45Z in EST.
 	if got := nextStockDecisionTime(et(2026, 10, 30, 16, 0), swing); !got.Equal(time.Date(2026, 11, 2, 14, 45, 0, 0, time.UTC)) {
 		t.Errorf("EST after fall-back: %v", got.UTC())

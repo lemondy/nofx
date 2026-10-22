@@ -3,6 +3,9 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -59,6 +62,45 @@ func (s *StockConfig) EffectivePreset() string {
 }
 
 // IsScanMode reports whether the price-cycle scanner feeds candidates (scan or hybrid).
+var decisionTimeRE = regexp.MustCompile(`^(\d{1,2}):(\d{2})$`)
+
+// EffectiveDecisionTimes returns the valid, de-duplicated, sorted "HH:MM" override
+// slots (max 24), or nil when the preset default applies.
+func (s *StockConfig) EffectiveDecisionTimes() []string {
+	if s == nil || len(s.DecisionTimes) == 0 {
+		return nil
+	}
+	seen := map[int]bool{}
+	var minutes []int
+	for _, raw := range s.DecisionTimes {
+		match := decisionTimeRE.FindStringSubmatch(strings.TrimSpace(raw))
+		if match == nil {
+			continue
+		}
+		h, _ := strconv.Atoi(match[1])
+		m, _ := strconv.Atoi(match[2])
+		if h > 23 || m > 59 {
+			continue
+		}
+		if !seen[h*60+m] {
+			seen[h*60+m] = true
+			minutes = append(minutes, h*60+m)
+		}
+	}
+	sort.Ints(minutes)
+	if len(minutes) > 24 {
+		minutes = minutes[:24]
+	}
+	out := make([]string, len(minutes))
+	for i, v := range minutes {
+		out[i] = fmt.Sprintf("%02d:%02d", v/60, v%60)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func (s *StockConfig) IsScanMode() bool {
 	return s != nil && (s.SymbolSource == StockSymbolSourceScan || s.SymbolSource == StockSymbolSourceHybrid)
 }
