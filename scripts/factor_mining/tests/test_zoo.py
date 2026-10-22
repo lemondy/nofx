@@ -49,6 +49,15 @@ class SeedFactorTests(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_contains_every_default_alpha158_name(self):
+        rolling = ("ROC MA STD BETA RSQR RESI MAX MIN QTLU QTLD RANK RSV IMAX IMIN IMXD "
+                   "CORR CORD CNTP CNTN CNTD SUMP SUMN SUMD VMA VSTD WVMA VSUMP VSUMN VSUMD").split()
+        expected = ({"KMID", "KLEN", "KMID2", "KUP", "KUP2", "KLOW", "KLOW2", "KSFT", "KSFT2",
+                     "OPEN0", "HIGH0", "LOW0", "VWAP0"}
+                    | {f"{name}{n}" for name in rolling for n in (5, 10, 20, 30, 60)})
+        self.assertEqual(len(expected), 158)
+        self.assertEqual(expected - {factor["name"] for factor in self.factors}, set())
+
     def test_us_market_skips_alt_data_seeds(self):
         crypto = seed_factors('crypto')
         us = seed_factors('us')
