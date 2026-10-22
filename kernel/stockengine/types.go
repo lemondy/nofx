@@ -47,7 +47,7 @@ type Preset struct {
 	Name          string   // store.StockPresetSwing | store.StockPresetPosition
 	TrendTF       string   // usstock.TF1d (swing) | usstock.TF1w (position)
 	EntryTF       string   // usstock.TF1h (swing) | usstock.TF1d (position)
-	DecisionTimes []string // "HH:MM" America/New_York on trading days: swing 09:45,12:30,15:30; position 15:30
+	DecisionTimes []string // "HH:MM" America/New_York on trading days: swing hourly 09:45,10:30…15:30; position 15:30
 	StopATRMin    float64  // ATR(1d) multiples
 	StopATRMax    float64
 	MaxHoldDays   int // review horizon in trading days: swing 30, position 0 (none)

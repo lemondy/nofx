@@ -167,10 +167,14 @@ type StockConfig struct {
 	// ScanRank: scan/hybrid ranking — "kell" (default; Kell cycle long setups
 	// by score) or "momentum" (names above SMA200 ranked by 12-1 momentum).
 	ScanRank string `json:"scan_rank,omitempty"`
-	// Preset: "swing" (default; days–weeks, 1d trend / 1h entry, decisions at
-	// 09:45, 12:30, 15:30 ET) or "position" (weeks–months, 1w trend / 1d
-	// entry, one decision at 15:30 ET).
+	// Preset: "swing" (default; days–weeks, 1d trend / 1h entry, decisions
+	// hourly at 09:45, 10:30 … 15:30 ET) or "position" (weeks–months, 1w trend
+	// / 1d entry, one decision at 15:30 ET).
 	Preset string `json:"preset,omitempty"`
+	// DecisionTimes overrides the preset's decision slots: "HH:MM" America/New_York
+	// on trading days (e.g. ["09:45","12:30","15:30"] for the old three-a-day
+	// rhythm). Invalid entries are dropped; empty/all-invalid = preset default.
+	DecisionTimes []string `json:"decision_times,omitempty"`
 	// Sessions in which NEW exposure (open/add) may be taken. Exits and
 	// stop management run in every session. Default: regular only.
 	Sessions StockSessions `json:"sessions"`
