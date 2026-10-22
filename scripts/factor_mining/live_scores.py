@@ -12,13 +12,15 @@ from .data_fetch import ROOT
 from .ensemble import ensemble_scores, select_ensemble_factors
 
 
-def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None, now=None):
+def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None, now=None, selected_ids=None):
     """Atomically write a snapshot, or remove a stale file if no horizon is usable.
 
     Use the latest panel date strictly before today in UTC, without falling back
     to older dates for thin cross sections. ``universe_size`` counts the mask's
     eligible names on that date, before filtering each horizon's finite scores.
     Inputs, including the caller's expression cache, are never modified.
+    selected_ids ({horizon: [factor ids]}, e.g. from ensemble.json) pins the factors
+    per horizon instead of the default top-20 accepted; a horizon missing from it is skipped.
     """
     generated = pd.Timestamp(now if now is not None else dt.datetime.now(dt.timezone.utc))
     generated = (generated.tz_localize('UTC') if generated.tzinfo is None
@@ -33,7 +35,11 @@ def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None,
     output = dict(version=1, market=market, generated_at=generated.isoformat(),
                   as_of=as_of.strftime('%Y-%m-%d'), universe_size=int(mask.sum()), horizons={})
     for h in MARKETS[market]['horizons']:
-        selected = select_ensemble_factors(factors, h)
+        if selected_ids is None:
+            selected = select_ensemble_factors(factors, h)
+        else:
+            by_id = {f['id']: f for f in factors if f['horizon'] == h}
+            selected = [by_id[i] for i in selected_ids.get(h) or selected_ids.get(str(h)) or [] if i in by_id]
         if not selected:
             continue
         row = ensemble_scores(selected, panels, values_cache=values_cache).loc[as_of]

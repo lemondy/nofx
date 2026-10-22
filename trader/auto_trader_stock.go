@@ -124,6 +124,8 @@ type stockRuntime struct {
 	protectionAlerts map[string]map[string]stockProtectionNotice
 	tickCount        int
 	lastSlot         time.Time
+	// Paper-mode reminder clock for live shares left without protection.
+	unprotectedRemindAt time.Time
 }
 
 func (r *stockRuntime) price(symbol string) float64 {

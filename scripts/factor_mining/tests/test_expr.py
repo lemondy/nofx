@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.factor_mining.expr import (
-    FIELDS, OPERATORS, ExprError, canonical, dsl_help, evaluate_expr, expr_hash,
+    ALT_FIELDS, BASE_FIELDS, FIELDS, OPERATORS, ExprError, canonical, dsl_help, evaluate_expr, expr_hash,
     validate_expr,
 )
 
@@ -64,7 +64,7 @@ class ExpressionTests(unittest.TestCase):
         return out
 
     def test_fields_constants_and_derived_ret(self):
-        for field in FIELDS[:-1]:
+        for field in BASE_FIELDS:
             with self.subTest(field=field):
                 self.check("$" + field, self.panels[field])
         self.check("2.5", 2.5)
@@ -364,6 +364,28 @@ class ExpressionTests(unittest.TestCase):
         for panels in bad:
             with self.subTest(panels_type=type(panels).__name__), self.assertRaises(ExprError):
                 evaluate_expr("$close", panels)
+
+    def test_alt_fields_optional_and_missing_is_invalid(self):
+        self.assertEqual(ALT_FIELDS, ("funding", "premium"))
+        for field in ALT_FIELDS:
+            self.assertIn(field, FIELDS)
+            self.assertEqual(validate_expr(f"Mean(${field},5)")["fields"], [field])
+            # Absent from the panels (e.g. us market): invalid, not a crash.
+            with self.subTest(field=field), self.assertRaisesRegex(ExprError, "缺少字段"):
+                evaluate_expr(f"Mean(${field},5)", self.panels)
+        with_alt = dict(self.panels, funding=self.x * 1e-4)
+        with_alt["funding"].iloc[3, 0] = np.nan
+        result = evaluate_expr("$funding*2", with_alt)
+        pd.testing.assert_frame_equal(result, with_alt["funding"] * 2, check_exact=False)
+        # premium is still missing even though funding is present.
+        with self.assertRaises(ExprError):
+            evaluate_expr("$funding+$premium", with_alt)
+        # Misaligned optional panels are rejected like the required ones.
+        with self.assertRaises(ExprError):
+            evaluate_expr("$close", dict(self.panels, premium=self.x.iloc[::-1]))
+        # Base expressions are unaffected by extra panels.
+        pd.testing.assert_frame_equal(evaluate_expr("Mean($close,5)", with_alt),
+                                      evaluate_expr("Mean($close,5)", self.panels))
 
     def test_slope_performance_smoke(self):
         panels = make_panels(1500, 100)

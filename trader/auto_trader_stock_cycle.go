@@ -97,7 +97,7 @@ func (at *AutoTrader) cancelOrphanStockPendings(reason string) {
 	if exec == nil {
 		exec, execErr = stockOrphanExecutor(at)
 	}
-	var done, failed []string
+	var done, failed, booked []string
 	for _, r := range rows {
 		label := fmt.Sprintf("%s(order %s)", r.Symbol, r.OrderID)
 		if exec == nil {
@@ -108,26 +108,49 @@ func (at *AutoTrader) cancelOrphanStockPendings(reason string) {
 			}
 			continue
 		}
-		if err := exec.CancelOrder(r.Symbol, r.OrderID); err != nil {
-			failed = append(failed, fmt.Sprintf("%s: %v", label, err))
+		cancelErr := exec.CancelOrder(r.Symbol, r.OrderID)
+		// CancelOrder succeeds on an order that already FILLED: never forget the
+		// entry while executions beyond the booked watermark exist. A failed
+		// cancel of an order that is already terminal (a retry) is not a failure.
+		status, serr := exec.GetOrderStatus(r.Symbol, r.OrderID)
+		terminal := serr == nil && stockOrderTerminal(strings.ToUpper(fmt.Sprint(status["status"])))
+		if cancelErr != nil && !terminal {
+			failed = append(failed, fmt.Sprintf("%s: %v", label, cancelErr))
 			continue
 		}
-		// CancelOrder succeeds on an order that already FILLED: never forget the
-		// entry while executions beyond the booked watermark exist. Keep the row
-		// (a live start books and protects them) and alert for manual handling.
-		status, serr := exec.GetOrderStatus(r.Symbol, r.OrderID)
 		if serr != nil {
 			failed = append(failed, fmt.Sprintf("%s: final fills unknown (%v), entry kept", label, serr))
 			continue
 		}
 		if executed := numberOf(status, "executedQty"); executed > r.FilledQty+1e-9 {
-			failed = append(failed, fmt.Sprintf("%s: %.6f shares filled but not booked (booked %.6f), entry kept until a live run books and protects them", label, executed, r.FilledQty))
+			// Real shares were bought. Book them idempotently into the live
+			// ledger with the protection intent (no order is placed here), keep
+			// the row until the order is terminal, and alert: the live
+			// protection tick places the stop after a switch back to live.
+			line, err := at.stockBookOrphanFill(exec, r, status, at.stockClock())
+			if err != nil {
+				failed = append(failed, fmt.Sprintf("%s: %.6f shares filled but not booked (booked %.6f): %v — entry kept", label, executed, r.FilledQty, err))
+				continue
+			}
+			if line != "" {
+				booked = append(booked, line)
+			}
+		}
+		// An order with executions that is not yet terminal after the cancel may
+		// still fill: keep the row (its watermark is already advanced) and retry.
+		if !terminal && numberOf(status, "executedQty") > 1e-12 {
+			failed = append(failed, fmt.Sprintf("%s: order not terminal after cancel (%v), booked fills kept on record, entry kept", label, status["status"]))
 			continue
 		}
 		done = append(done, label)
 		if err := at.store.StockPaper().DeletePending(at.id, r.Symbol); err != nil {
 			logger.Warnf("⚠️ [%s] cannot delete resting entry row %s: %v", at.name, r.Symbol, err)
 		}
+	}
+	if len(booked) > 0 {
+		msg := strings.Join(booked, "；")
+		logger.Warnf("🚨 [%s] kept live entries FILLED (%s): booked into the live ledger, NO exchange protection yet: %s", at.name, reason, msg)
+		stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股限价入场单已成交，当前无保护单</b>\n<i>%s：%s — 已入账实盘持仓记录；模拟盘不会下真实订单，请切回实盘（保护检查按止损补挂）或手动挂止损/卖出</i>", notify.Escape(reason), notify.Escape(msg)))
 	}
 	if len(done) > 0 {
 		logger.Infof("📌 [%s] cancelled kept resting entries (%s): %s", at.name, reason, strings.Join(done, ", "))
