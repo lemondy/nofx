@@ -3,6 +3,16 @@
 Splits contain boolean Series plus ``ranges`` with inclusive date endpoints.
 ``forward_target`` returns (excess, raw); sealed and purged rows are NaN.
 Only the explicit forward_labels path and manual judge read later labels.
+
+Alternative fields (crypto only: ``funding``, ``premium``) come from
+``<root>/crypto/alt_daily/<field>/<SYMBOL>.json`` rows ``[UTC date, value]``.
+Alignment rule: the value stored for date d was computed only from data stamped
+inside d (funding settlements with fundingTime in d; the 1d premium bar closing
+at 23:59:59.999 of d), so it is known by the close of d, exactly when the
+OHLCV bar of d is. Panel row t therefore carries the day-t value and never any
+later settlement; the factor at t is used for the open[t+1] entry. Values are
+placed on the existing calendar only (no forward fill, no interpolation); a
+missing day stays NaN. The field is added only if some symbol has data.
 """
 from dataclasses import dataclass
 import json
@@ -17,6 +27,7 @@ from .data_fetch import ROOT
 
 HOLDOUT_SEALED = True
 FIELD_NAMES = ('open', 'high', 'low', 'close', 'volume', 'vwap')
+ALT_FIELD_MARKETS = {'crypto': ('funding', 'premium')}
 
 
 @dataclass
@@ -55,6 +66,26 @@ def _read_symbol(path):
     return pd.DataFrame.from_dict(valid, orient='index', columns=FIELD_NAMES).sort_index()
 
 
+def _read_alt(path):
+    """Series of finite floats by normalized date from ``[date, value, ...]`` rows."""
+    try:
+        rows = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        rows = []
+    valid = {}
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            if (not isinstance(row, list) or len(row) < 2 or not isinstance(row[0], str) or
+                    not re.fullmatch(r'\d{4}-\d{2}-\d{2}', row[0]) or isinstance(row[1], bool)):
+                continue
+            value = float(row[1])
+            if np.isfinite(value):
+                valid[pd.Timestamp(row[0]).normalize()] = value
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return pd.Series(valid, dtype=float).sort_index()
+
+
 def load_panels(market, root=ROOT) -> Panels:
     cfg = MARKETS[market]
     base = Path(root) / market
@@ -72,6 +103,11 @@ def load_panels(market, root=ROOT) -> Panels:
     calendar.name = 'date'
     fields = {name: pd.DataFrame({s: f[name].reindex(calendar) for s, f in symbols.items()},
                                  index=calendar, dtype=float) for name in FIELD_NAMES}
+    for name in ALT_FIELD_MARKETS.get(market, ()):
+        alt = {s: _read_alt(base / 'alt_daily' / name / f'{s}.json') for s in symbols}
+        if any(len(a) for a in alt.values()):
+            fields[name] = pd.DataFrame({s: a.reindex(calendar) for s, a in alt.items()},
+                                        index=calendar, dtype=float)
     observed = fields['close'].notna()
     mask = observed & observed.cumsum().ge(cfg['min_history'])
     if cfg['universe_n'] is not None:

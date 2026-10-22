@@ -143,3 +143,39 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(len(panels.mask), 100)
             self.assertTrue(np.isnan(panels.fields['close'].iloc[70, 0]))
             self.assertFalse(panels.mask.iloc[70, 0])
+
+    def write_alt(self, root, market, name, symbol, rows):
+        path = Path(root) / market / 'alt_daily' / name / f'{symbol}.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows))
+
+    def test_alt_fields_crypto_only_aligned_by_date_without_fill(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root, rows=100, columns=2)
+            panels = load_panels('crypto', root)
+            self.assertNotIn('funding', panels.fields)       # no side files -> no field
+            dates = panels.mask.index
+            d = lambda i: dates[i].strftime('%Y-%m-%d')
+            self.write_alt(root, 'crypto', 'funding', 'S000',
+                           [[d(i), 1e-4 * i] for i in range(100) if i not in (3, 40)] +
+                           [['2099-01-01', 5.], ['bad', 1.], [d(3), None]])
+            self.write_alt(root, 'crypto', 'premium', 'S001', [[d(10), -0.002], [d(11), 0.003]])
+            panels = load_panels('crypto', root)
+            fund, prem = panels.fields['funding'], panels.fields['premium']
+            for frame in (fund, prem):
+                pd.testing.assert_index_equal(frame.index, panels.fields['close'].index)
+                pd.testing.assert_index_equal(frame.columns, panels.fields['close'].columns)
+            # Row t carries exactly the day-t value; nothing is filled or shifted.
+            self.assertAlmostEqual(fund['S000'].iloc[7], 7e-4)
+            self.assertTrue(np.isnan(fund['S000'].iloc[40]))        # gap stays NaN
+            self.assertTrue(np.isnan(fund['S000'].iloc[3]))         # invalid value dropped
+            self.assertEqual(int(fund['S000'].notna().sum()), 98)   # future date / bad row dropped
+            self.assertTrue(fund['S001'].isna().all())               # symbol without a file
+            self.assertEqual(prem['S001'].dropna().tolist(), [-0.002, 0.003])
+            self.assertEqual(list(prem['S001'].dropna().index), [dates[10], dates[11]])
+
+    def test_alt_fields_not_loaded_for_us(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root, 'us', rows=100, columns=2)
+            self.write_alt(root, 'us', 'funding', 'S000', [['2020-01-05', 1.]])
+            self.assertNotIn('funding', load_panels('us', root).fields)

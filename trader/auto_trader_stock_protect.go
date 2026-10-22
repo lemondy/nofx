@@ -3,12 +3,12 @@ package trader
 import (
 	"context"
 	"fmt"
-	"math"
 	"nofx/market/usstock"
 	"strings"
 	"time"
 
 	"nofx/logger"
+	"nofx/trader/types"
 
 	notify "nofx/telegram/notify"
 )
@@ -42,6 +42,7 @@ func (at *AutoTrader) stockProtectionTick(ctx context.Context) {
 }
 
 func (at *AutoTrader) stockTickPaper(ctx context.Context, now time.Time, logf func(string, ...interface{})) {
+	at.stockRemindUnprotectedLive(now)
 	open, err := at.store.StockPaper().ListOpen(at.id)
 	if err != nil {
 		logf("paper tick: %v", err)
@@ -240,31 +241,11 @@ func (at *AutoTrader) reconcileStockPendings(ctx context.Context, now time.Time,
 // with the position increment. booked reports whether anything was booked.
 func (at *AutoTrader) stockBookPendingProgress(ctx context.Context, sym string, p *stockPending, status map[string]interface{}, now time.Time,
 	logf func(string, ...interface{})) (booked bool, err error) {
-	executed := numberOf(status, "executedQty")
-	inc := executed - p.FilledQty
-	if inc <= 1e-12 {
+	d, ok := stockPendingDelta(p.FilledQty, p.FilledQuote, p.FilledFee, status)
+	if !ok {
 		return false, nil
 	}
-	avg := numberOf(status, "avgPrice")
-	quote := numberOf(status, "cummulativeQuoteQty")
-	fee := numberOf(status, "commission")
-	if avg <= 0 && quote > 0 {
-		avg = quote / executed
-	}
-	if avg <= 0 {
-		return false, nil
-	}
-	// Rows persisted before the quote/fee watermarks existed carry FilledQty
-	// without FilledQuote: fall back to the old cumulative-average estimate.
-	legacy := p.FilledQty > 1e-12 && p.FilledQuote <= 0
-	price, incFee := avg, fee*inc/executed
-	if !legacy && quote > p.FilledQuote+1e-12 {
-		price = (quote - p.FilledQuote) / inc
-		incFee = math.Max(fee-p.FilledFee, 0)
-	}
-	if quote <= 0 {
-		quote = avg * executed
-	}
+	executed, inc, price, incFee, quote, fee := d.Executed, d.Inc, d.Price, d.IncFee, d.Quote, d.Fee
 	net := at.stockNetReceived(sym, inc)
 	lp := at.stock.lastProtect[sym]
 	h := &stockHolding{Symbol: sym, Stop: lp.Stop, TakeProfit: lp.TakeProfit}
@@ -337,7 +318,12 @@ func stockPendingExpiry(placed time.Time) time.Time {
 // stockNetReceived caps a fill increment by the quantity that actually arrived
 // in the account (base-asset commission lowers the received units).
 func (at *AutoTrader) stockNetReceived(sym string, inc float64) float64 {
-	poss, err := at.stockTrader.GetPositions()
+	return at.stockNetReceivedVia(at.stockTrader, sym, inc)
+}
+
+// stockNetReceivedVia is stockNetReceived reading the balance through exec.
+func (at *AutoTrader) stockNetReceivedVia(exec types.SpotStockTrader, sym string, inc float64) float64 {
+	poss, err := exec.GetPositions()
 	if err != nil {
 		return inc
 	}

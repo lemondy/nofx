@@ -817,16 +817,36 @@ func atrPctFromTimeframes(data *market.Data, nominal string, warnSymbol string, 
 	if data == nil {
 		return 0
 	}
-	for _, name := range names {
-		if tf, ok := data.TimeframeData[name]; ok && len(tf.Klines) >= 15 {
-			if warnSymbol != "" && name != nominal {
-				logger.Infof("📏 [%s] ATR yardstick degraded: %s scale unavailable, using %s ATR — the floor/cap multiplier now means something different on this symbol", warnSymbol, nominal, name)
-			}
-			return atrPercentFromSeries(tf)
+	if name := firstATRTimeframe(data, names...); name != "" {
+		if warnSymbol != "" && name != nominal {
+			logger.Infof("📏 [%s] ATR yardstick degraded: %s scale unavailable, using %s ATR — the floor/cap multiplier now means something different on this symbol", warnSymbol, nominal, name)
 		}
+		return atrPercentFromSeries(data.TimeframeData[name])
 	}
 	return 0
 }
+
+// firstATRTimeframe returns the first timeframe in the priority list with
+// enough bars for ATR(14) ("" when none). Shared by the ATR value and the
+// freshness gate so both always judge the SAME series.
+func firstATRTimeframe(data *market.Data, names ...string) string {
+	if data == nil {
+		return ""
+	}
+	for _, name := range names {
+		if tf, ok := data.TimeframeData[name]; ok && tf != nil && len(tf.Klines) >= 15 {
+			return name
+		}
+	}
+	return ""
+}
+
+// ATR fallback chains (priority order) of the stop-band floor (1h scale) and
+// cap (4h scale) yardsticks.
+var (
+	floorATRChain = []string{"1h", "2h", "4h", "6h", "8h", "12h", "1d", "30m", "15m", "5m", "3m"}
+	capATRChain   = []string{"4h", "6h", "8h", "12h", "1d", "2h", "1h", "30m", "15m", "5m", "3m"}
+)
 
 // oneHourATRPct returns ATR(14) as a percent of price on the 1h timeframe.
 // The stop-loss noise FLOOR's yardstick (user directive 2026-09-10: buffer
@@ -860,7 +880,7 @@ func (at *AutoTrader) stopBandATRs(symbol string, data *market.Data) (floorATR, 
 }
 
 func oneHourATRPct(data *market.Data) float64 {
-	return atrPctFromTimeframes(data, "1h", "", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "30m", "15m", "5m", "3m")
+	return atrPctFromTimeframes(data, "1h", "", floorATRChain...)
 }
 
 // fourHourATRPct returns ATR(14) as a percent of price on the 4h timeframe —
@@ -868,7 +888,7 @@ func oneHourATRPct(data *market.Data) float64 {
 // cap bound at the 8% floor and pushed structural stops out of the band on
 // exactly the violent movers the candidate pool surfaces).
 func fourHourATRPct(data *market.Data) float64 {
-	return atrPctFromTimeframes(data, "4h", "", "4h", "6h", "8h", "12h", "1d", "2h", "1h", "30m", "15m", "5m", "3m")
+	return atrPctFromTimeframes(data, "4h", "", capATRChain...)
 }
 
 // atrPercentFromSeries computes Wilder ATR(14) as a percent of the last
@@ -1738,16 +1758,22 @@ func (at *AutoTrader) processProtectionWatchdog() {
 // every downstream consumer treats it as the plan. Returns true when BOTH
 // legs are on the exchange.
 func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string, markPrice float64) bool {
-	data, err := at.getMarketTimeframes(symbol, []string{"1h"}, "1h", 99)
-	if err != nil || data == nil {
+	var data *market.Data
+	var err error
+	if at.computedProtectionDataFn != nil {
+		data, err = at.computedProtectionDataFn(symbol)
+	} else {
+		data, err = at.getMarketTimeframes(symbol, []string{"1h"}, "1h", 99)
+	}
+	// Protecting an EXISTING position never waits for a healthy feed: a stale /
+	// missing 1h series degrades the stop distance to a K-line-free percentage
+	// (computedProtectionATR) instead of leaving the position naked.
+	atrAbs, degraded := computedProtectionATR(markPrice, data, err)
+	if atrAbs <= 0 {
 		return false
 	}
-	tf := data.TimeframeData["1h"]
-	if tf == nil || tf.ATR14 <= 0 {
-		return false
-	}
-	atrPct := tf.ATR14 / markPrice * 100
-	sl, tp, ok := computedProtectionLevels(side, markPrice, tf.ATR14)
+	atrPct := atrAbs / markPrice * 100
+	sl, tp, ok := computedProtectionLevels(side, markPrice, atrAbs)
 	if !ok {
 		return false
 	}
@@ -1766,10 +1792,55 @@ func (at *AutoTrader) placeComputedProtection(symbol, side, positionSide string,
 	}
 	logger.Infof("🛡️ [%s] Protection watchdog: %s naked — computed protection placed: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h) %.2f%% from mark %.6g)",
 		at.name, symbol, sl, tp, atrPct, markPrice)
+	note := ""
+	if degraded != "" {
+		logger.Warnf("⚠️ [%s] Protection watchdog: %s stop distance degraded (%s) — used %.2f%% from the live mark instead of a fresh 1h ATR", at.name, symbol, degraded, atrPct*1.5)
+		note = fmt.Sprintf("\n<b>⚠️ 行情陈旧/缺失,止损距离已降级为 %.2f%%(不依赖K线):</b> %s", atrPct*1.5, notify.Escape(degraded))
+	}
 	notify.Notify("ORDER", at.name, fmt.Sprintf(
-		"<b>🛡️ 裸仓自动保护 %s (%s)</b>\n<i>无挂单且无记录止损,已按最新价程序重算并挂出: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h)=%.2f%%)</i>",
-		notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], sl, tp, atrPct))
+		"<b>🛡️ 裸仓自动保护 %s (%s)</b>\n<i>无挂单且无记录止损,已按最新价程序重算并挂出: SL %.6g / TP %.6g (1:2 RR, SL=1.5×ATR(1h)=%.2f%%)</i>%s",
+		notify.Escape(symbol), strings.ToUpper(side[:1])+side[1:], sl, tp, atrPct, note))
 	return true
+}
+
+const (
+	// Stop distance (percent of mark) the naked-position watchdog falls back to
+	// when no FRESH 1h ATR exists. Close to the computed-protection default
+	// (1.5×ATR(1h) is ≈2-4% on the liquid alts the book trades); a stale
+	// series' own ATR may widen it up to the cap but never narrow it.
+	fallbackProtectionStopPct = 3.0
+	maxProtectionStopPct      = 8.0
+)
+
+// computedProtectionATR resolves the ATR (absolute price units, feeding
+// computedProtectionLevels' 1.5× multiplier) for the naked-position watchdog.
+// Fresh 1h series: its ATR14, degraded "". Stale series: protection is still
+// placed — the stale ATR only sizes the distance inside [3%, 8%] of mark and
+// never narrows below the fixed fallback (a dead feed's calm ATR must not
+// produce a hair-trigger stop). Missing series / failed fetch: the fixed
+// fallback. degraded carries the human-readable reason for logs/alerts.
+func computedProtectionATR(markPrice float64, data *market.Data, fetchErr error) (atrAbs float64, degraded string) {
+	if markPrice <= 0 || math.IsNaN(markPrice) || math.IsInf(markPrice, 0) {
+		return 0, ""
+	}
+	fallbackAbs := markPrice * fallbackProtectionStopPct / 100 / 1.5
+	var tf *market.TimeframeSeriesData
+	if fetchErr == nil && data != nil {
+		tf = data.TimeframeData["1h"]
+	}
+	if tf == nil || tf.ATR14 <= 0 {
+		why := "1h ATR unavailable"
+		if fetchErr != nil {
+			why = "1h klines unavailable: " + fetchErr.Error()
+		}
+		return fallbackAbs, why
+	}
+	if _, reasons := staleAmong(data, "1h"); len(reasons) > 0 {
+		atr := math.Max(tf.ATR14, fallbackAbs)
+		atr = math.Min(atr, markPrice*maxProtectionStopPct/100/1.5)
+		return atr, reasons[0]
+	}
+	return tf.ATR14, ""
 }
 
 // computedProtectionLevels derives the naked-position fallback pair:
@@ -2412,7 +2483,11 @@ func absoluteBanCode(code string) bool {
 		"BTC_4H_STRONGBULL", "SHORT_TOP_CONFIRM_MISSING", "BTC_REGIME_UNKNOWN", "REGIME_LINE_BROKEN":
 		return true
 	}
-	return strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
+	// DATA_STALE_<tf>: the kline feed stopped bars ago — ATR/structure price
+	// the trade against a market that no longer exists (review 2026-10-20 #8).
+	// No exception path on either entry style, and the pending recheck cancels
+	// resting entries priced off the dead feed.
+	return strings.HasPrefix(code, "DATA_STALE_") || strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
 		strings.HasPrefix(code, "EMA20_STRETCH_") || strings.HasPrefix(code, "BTC_WEAK_LONG_") ||
 		strings.HasPrefix(code, "WIDE_STOP_")
 }

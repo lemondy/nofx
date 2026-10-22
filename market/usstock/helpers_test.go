@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -34,7 +33,6 @@ func resetCaches() {
 	quoteCache.Lock()
 	quoteCache.entries = make(map[string]quoteCacheEntry)
 	quoteCache.Unlock()
-	calendarWarning = sync.Once{}
 }
 
 const spotFixture = `{"symbols":[

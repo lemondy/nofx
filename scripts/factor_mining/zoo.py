@@ -3,7 +3,7 @@
 from .expr import canonical, expr_hash, validate_expr
 
 
-def seed_factors() -> list[dict]:
+def seed_factors(market: str | None = None) -> list[dict]:
     """Build a deterministic, validated library with canonical deduplication.
 
     Each entry contains expr/family/name and its stable expression-derived id.
@@ -81,4 +81,32 @@ def seed_factors() -> list[dict]:
         for name, family, expr in specs:
             add(f"{name}{n}", family, expr)
     add("TURNOVER_SHOCK", "price_volume", "Mean($volume*$vwap,5)/Mean($volume*$vwap,60)")
+    # Crypto-only alternative data ($funding/$premium exist only in the crypto
+    # panels; elsewhere these evaluate as invalid). Scale-free time-series
+    # shapes only: cross-sectional rank IC is invariant to monotone transforms.
+    for name, family, expr in [
+        ("FUND_RAW", "other", "$funding"),
+        ("FUND_MA7", "other", "Mean($funding,7)"),
+        ("FUND_MA14", "other", "Mean($funding,14)"),
+        ("FUND_MA30", "other", "Mean($funding,30)"),
+        ("FUND_STD7", "volatility", "Std($funding,7)"),
+        ("FUND_STD30", "volatility", "Std($funding,30)"),
+        ("FUND_DEV10", "reversal", "$funding-Mean($funding,10)"),
+        ("FUND_DEV30", "reversal", "$funding-Mean($funding,30)"),
+        ("FUND_TSRANK30", "momentum", "Rank($funding,30)"),
+        ("FUND_POS10", "other", "Mean($funding>0,10)"),
+        ("FUND_RETCORR20", "price_volume", "Corr($funding,$ret,20)"),
+        ("PREM_RAW", "other", "$premium"),
+        ("PREM_MA5", "other", "Mean($premium,5)"),
+        ("PREM_MA20", "other", "Mean($premium,20)"),
+        ("PREM_STD20", "volatility", "Std($premium,20)"),
+        ("PREM_DEV10", "reversal", "$premium-Mean($premium,10)"),
+        ("PREM_TSRANK30", "momentum", "Rank($premium,30)"),
+        ("PREM_FUND7", "other", "Mean($premium,7)-Mean($funding,7)"),
+    ]:
+        add(name, family, expr)
+    if market == 'us':
+        # Alt fields ($funding/$premium) exist for crypto only; skip their seeds elsewhere
+        # instead of counting them as invalid every night.
+        factors = [f for f in factors if '$funding' not in f['expr'] and '$premium' not in f['expr']]
     return factors

@@ -235,7 +235,7 @@ func TestStockProtectionExitCancelsRestingEntry(t *testing.T) {
 	}
 }
 
-// #5: a kept entry that FILLED must not be forgotten when the mode switches to paper.
+// #5: a kept entry that FILLED is booked (not forgotten) when the mode switches to paper.
 func TestStockOrphanCancelKeepsEntryWithUnbookedFills(t *testing.T) {
 	limit := `[{"symbol":"AAPLBUSDT","action":"open_long","entry_type":"limit","limit_price":119,"stop_loss":115,"take_profit":130,"confidence":80,"thesis":"t","invalidation":"i","reasoning":"r"}]`
 	fx := newStockFixture(t, false, stockTestNow, func(int) string { return limit })
@@ -257,15 +257,20 @@ func TestStockOrphanCancelKeepsEntryWithUnbookedFills(t *testing.T) {
 	if _, err := fx.at.prepareStockRuntime(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if after, _ := fx.at.store.StockPaper().ListPending("t1"); len(after) != 1 {
-		t.Fatalf("a filled entry must stay recorded until its fills are booked: %+v", after)
+	// The fill is booked into the live ledger (with the protection intent) and
+	// only then is the entry forgotten; the paper instance places no order.
+	if after, _ := fx.at.store.StockPaper().ListPending("t1"); len(after) != 0 {
+		t.Fatalf("a booked, terminal entry must be forgotten: %+v", after)
+	}
+	if qty, _ := ownedQty(t, fx); !near(qty, 3) {
+		t.Fatalf("filled shares not booked into the live ledger: %v", qty)
 	}
 	alerted := false
 	for _, a := range fx.alert {
-		alerted = alerted || strings.Contains(a, "filled but not booked")
+		alerted = alerted || strings.Contains(a, "无保护单")
 	}
 	if !alerted {
-		t.Fatalf("no alert about the unbooked fills: %v", fx.alert)
+		t.Fatalf("no alert about the unprotected fills: %v", fx.alert)
 	}
 }
 

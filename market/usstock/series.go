@@ -74,7 +74,7 @@ func bstockBars(ctx context.Context, symbol, timeframe string, need int) ([]Bar,
 	if timeframe == TF1d || timeframe == TF1w {
 		ttl = 30 * time.Minute
 	}
-	if entry, ok := bstockCache.entries[key]; ok && nowFunc().Sub(entry.loaded) < ttl {
+	if entry, ok := bstockCache.entries[key]; ok && nowFunc().Sub(entry.loaded) < ttl && bstockCacheStillFinal(timeframe, entry.loaded, nowFunc()) {
 		return append([]Bar(nil), entry.bars...), nil
 	}
 	now := nowFunc()
@@ -137,6 +137,47 @@ func bstockBars(ctx context.Context, symbol, timeframe string, need int) ([]Bar,
 	bars := sortedBars(byTime)
 	bstockCache.entries[key] = barCacheEntry{append([]Bar(nil), bars...), nowFunc()}
 	return bars, nil
+}
+
+// bstockCacheStillFinal reports whether a cached bStock series loaded at
+// `loaded` can still be served at `now` (same contract as the Yahoo
+// cacheStillFinal, review 2026-10-20 #4). bstockBars only keeps bars that were
+// closed at load time, so a TTL hit that straddles a bar close keeps serving a
+// series that lacks the bar which closed in the meantime — up to 30 minutes
+// for 1d/1w — and downstream treats its last bar as the latest settled one.
+// The entry therefore expires as soon as the clock crosses
+//   - the end of the bar that was forming at load time (UTC-aligned: 15m/1h/4h
+//     on multiples of their length, 1d at 00:00 UTC, 1w on Monday 00:00 UTC), or
+//   - for 1d/1w, the next US regular-session close (holiday-aware NextClose):
+//     the underlying's settlement is when daily/weekly consumers re-read it.
+func bstockCacheStillFinal(timeframe string, loaded, now time.Time) bool {
+	dur, ok := durations[timeframe]
+	if !ok || now.Before(loaded) {
+		return false
+	}
+	if !now.Before(bstockBarEnd(timeframe, dur, loaded)) {
+		return false
+	}
+	if (timeframe == TF1d || timeframe == TF1w) && CrossedClose(loaded, now) {
+		return false
+	}
+	return true
+}
+
+// bstockBarEnd returns the end of the Binance bar containing t.
+func bstockBarEnd(timeframe string, dur time.Duration, t time.Time) time.Time {
+	// Binance weekly bars open Monday 00:00 UTC; the Unix epoch is a Thursday,
+	// so shift by 4 days to align the week grid.
+	var offset int64
+	if timeframe == TF1w {
+		offset = int64(4 * 24 * time.Hour / time.Second)
+	}
+	step := int64(dur / time.Second)
+	n := (t.Unix() - offset) / step
+	if t.Unix()-offset < 0 {
+		n--
+	}
+	return time.Unix((n+1)*step+offset, 0).UTC()
 }
 
 func sortedBars(byTime map[int64]Bar) []Bar {

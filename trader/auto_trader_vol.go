@@ -314,6 +314,19 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			atrPct = oneHourATRPct(data)
 		}
 
+		// Stale feed (review 2026-10-20 #8 follow-up): a yardstick measured off
+		// a series that stopped bars ago is not the volatility the position is
+		// living in now. Drop it so the vol-target rescale and the (fast + cycle)
+		// trailing stop do nothing this cycle — the stop already on the exchange
+		// keeps protecting, and the ATR-free R rules below still run.
+		if stale, why := atrYardstickStale(symbol, data); stale {
+			logger.Warnf("⚠️ [%s] %s ATR yardstick stale (%s) — vol-target rescale and trailing skipped this cycle; exchange stop %.6g stays in force", at.name, symbol, why, currentSL)
+			atrPct = 0
+			if r := at.realtimeState(); r != nil {
+				delete(r.atr, symbol) // fast trailing must not reuse an older ATR either
+			}
+		}
+
 		if r := at.realtimeState(); r != nil && atrPct > 0 {
 			r.atr[symbol] = atrPct // review 2026-10-11: last-cycle ATR is sufficient for fast trailing.
 		}

@@ -155,6 +155,7 @@ type AutoTrader struct {
 	// marketDataFn, when set (tests), replaces the generic execution-quote
 	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
 	marketDataFn               func(symbol string) (*market.Data, error)
+	computedProtectionDataFn   func(symbol string) (*market.Data, error) // tests: replaces the watchdog's 1h fetch
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)

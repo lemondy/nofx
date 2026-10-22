@@ -245,6 +245,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 
 	// [CODE ENFORCED] Entry risk gates: mandatory SL, SL/TP side sanity,
 	// min RR (dual-anchor), stop-distance window [ATR floor, wide cap].
+	if err := at.entryDataStaleBlock(decision, marketData); err != nil {
+		return err
+	}
 	floorATR, capATR := at.stopBandATRs(decision.Symbol, marketData)
 	if err := at.validateOpenRisk(decision, marketData.CurrentPrice, floorATR, capATR); err != nil {
 		return err
@@ -528,6 +531,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 
 	// [CODE ENFORCED] Entry risk gates: mandatory SL, SL/TP side sanity,
 	// min RR (dual-anchor), stop-distance window [ATR floor, wide cap].
+	if err := at.entryDataStaleBlock(decision, marketData); err != nil {
+		return err
+	}
 	floorATR, capATR := at.stopBandATRs(decision.Symbol, marketData)
 	if err := at.validateOpenRisk(decision, marketData.CurrentPrice, floorATR, capATR); err != nil {
 		return err

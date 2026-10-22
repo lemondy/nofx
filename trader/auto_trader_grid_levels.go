@@ -26,6 +26,12 @@ func (at *AutoTrader) calculateATRBounds(price float64, mktData *market.Data, co
 	if mktData.LongerTermContext != nil {
 		atr = mktData.LongerTermContext.ATR14
 	}
+	// A 4h series that stopped bars ago would size the grid range off a market
+	// that no longer exists — use the K-line-free default bounds instead.
+	if _, reasons := staleAmong(mktData, "4h"); len(reasons) > 0 {
+		logger.Warnf("[Grid] 4h ATR stale (%s) — using default bounds instead of ATR bounds", reasons[0])
+		atr = 0
+	}
 
 	if atr <= 0 {
 		at.calculateDefaultBounds(price, config)
@@ -346,6 +352,12 @@ func (at *AutoTrader) calculateATRBoundsLocked(price float64, mktData *market.Da
 	atr := 0.0
 	if mktData.LongerTermContext != nil {
 		atr = mktData.LongerTermContext.ATR14
+	}
+	// A 4h series that stopped bars ago would size the grid range off a market
+	// that no longer exists — use the K-line-free default bounds instead.
+	if _, reasons := staleAmong(mktData, "4h"); len(reasons) > 0 {
+		logger.Warnf("[Grid] 4h ATR stale (%s) — using default bounds instead of ATR bounds", reasons[0])
+		atr = 0
 	}
 
 	if atr <= 0 {

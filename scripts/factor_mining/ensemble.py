@@ -1,8 +1,10 @@
 """Equal-weight, direction-adjusted cross-sectional z-score ensembles."""
 import numpy as np
 
+from . import options
 from .evaluate import evaluate_factor, long_short
 from .expr import evaluate_expr
+from .greedy_ensemble import greedy_ensemble_factors
 
 
 def ensemble_scores(factors, panels, *, values_cache=None):
@@ -20,15 +22,19 @@ def ensemble_scores(factors, panels, *, values_cache=None):
     return total.div(count.where(count > 0))
 
 
-def select_ensemble_factors(accepted, horizon):
+def select_ensemble_factors(accepted, horizon, limit=20):
     return sorted((f for f in accepted if f['horizon'] == horizon and f['status'] == 'accepted'),
-                  key=lambda f: (-f['train']['t'], f['id']))[:20]
+                  key=lambda f: (-f['train']['t'], f['id']))[:limit]
 
 
 def build_ensemble(market, accepted, panels, targets, splits, cfg, *, values_cache=None):
     output = {'horizons': {}}
     for h in cfg['horizons']:
-        factors = select_ensemble_factors(accepted, h)
+        if options.enabled(options.GREEDY_ENSEMBLE) and targets and 'train' in splits[h]:
+            factors = greedy_ensemble_factors(select_ensemble_factors(accepted, h, None), panels,
+                                              targets[h][0], splits[h]['train'], h, cfg, values_cache)
+        else:
+            factors = select_ensemble_factors(accepted, h)
         if not factors:
             output['horizons'][str(h)] = None
             continue
