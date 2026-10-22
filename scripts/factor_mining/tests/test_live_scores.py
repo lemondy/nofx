@@ -54,7 +54,7 @@ class LiveScoresTests(unittest.TestCase):
     def test_direction_equal_weight_percentiles_and_inputs_unchanged(self):
         panels = panels_for_scores()
         panels.mask.iloc[:, -1] = False
-        factors = [factor(forward={'verdict': 'failed'}),
+        factors = [factor(forward={'verdict': 'inconclusive'}),
                    dict(factor('f_volume'), expr='$volume', direction=-1)]
         cache = {'f_close': panels.fields['close'], 'f_volume': panels.fields['volume']}
         before_factors, before_cache = copy.deepcopy(factors), copy.deepcopy(cache)
@@ -65,7 +65,7 @@ class LiveScoresTests(unittest.TestCase):
                                                      root=root, now=NOW, values_cache=cache)
         horizon = output['horizons']['1']
         self.assertEqual(horizon['factor_count'], 2)
-        self.assertEqual(horizon['forward'], {'failed': 1, 'none': 1})
+        self.assertEqual(horizon['forward'], {'inconclusive': 1, 'none': 1})
         self.assertEqual(output['universe_size'], 14)
         close = panels.fields['close'].loc['2026-10-19'].iloc[:-1]
         volume = panels.fields['volume'].loc['2026-10-19'].iloc[:-1]
@@ -174,6 +174,26 @@ class LiveScoresTests(unittest.TestCase):
         self.assertEqual(output['horizons']['1']['forward'], {'inconclusive': 20})
         self.assertEqual(output['horizons']['3']['forward'], {'none': 1})
         self.assertNotIn('7', output['horizons'])
+
+    def test_forward_failed_factors_leave_live_scores_but_not_the_ensemble(self):
+        panels = panels_for_scores()
+        verdicts = ['failed', 'inconclusive', 'confirmed', 'pending', 'failed', 'inconclusive']
+        factors = [factor(f'f_{i:02}', t=float(10 - i), forward={'verdict': v}) for i, v in enumerate(verdicts)]
+        # research side stays forward-blind: all six accepted factors are still selected
+        self.assertEqual([f['id'] for f in ensemble.select_ensemble_factors(factors, 1)],
+                         [f'f_{i:02}' for i in range(6)])
+        with tempfile.TemporaryDirectory() as root:
+            output = live_scores.export_live_scores('crypto', factors, panels, root=root, now=NOW)
+        horizon = output['horizons']['1']
+        self.assertEqual(horizon['factor_count'], 4)
+        self.assertEqual(horizon['forward_failed_excluded'], 2)
+        self.assertEqual(horizon['forward'], {'inconclusive': 2, 'confirmed': 1, 'pending': 1})
+
+    def test_all_failed_horizon_is_omitted(self):
+        panels = panels_for_scores()
+        factors = [factor('a', forward={'verdict': 'failed'}), factor('b', t=4., forward={'verdict': 'failed'})]
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(live_scores.export_live_scores('crypto', factors, panels, root=root, now=NOW))
 
     def test_atomic_write_failure_preserves_previous_snapshot(self):
         with tempfile.TemporaryDirectory() as root:

@@ -1,4 +1,7 @@
-"""Latest closed-day ensemble scores for reference only; never used in selection."""
+"""Latest closed-day ensemble scores for reference only; never used in selection.
+
+Factors whose forward validation FAILED are left out of these scores (see the guard below);
+ensemble.json itself is untouched by forward results."""
 from collections import Counter
 import datetime as dt
 from pathlib import Path
@@ -40,6 +43,11 @@ def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None,
         else:
             by_id = {f['id']: f for f in factors if f['horizon'] == h}
             selected = [by_id[i] for i in selected_ids.get(h) or selected_ids.get(str(h)) or [] if i in by_id]
+        # Consumption-layer guard, NOT ensemble selection: ensemble.json / zoo stay forward-blind
+        # (forward results must not shape selection), but a factor whose forward validation has
+        # FAILED is not shown to the AI as evidence. Its own forward evaluation keeps running.
+        excluded = sum((f.get('forward') or {}).get('verdict') == 'failed' for f in selected)
+        selected = [f for f in selected if (f.get('forward') or {}).get('verdict') != 'failed']
         if not selected:
             continue
         row = ensemble_scores(selected, panels, values_cache=values_cache).loc[as_of]
@@ -49,6 +57,7 @@ def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None,
         percentiles = row.rank(pct=True)
         output['horizons'][str(h)] = dict(
             factor_count=len(selected),
+            forward_failed_excluded=excluded,
             forward=dict(Counter((f.get('forward') or {}).get('verdict', 'none') for f in selected)),
             scores={str(symbol): dict(z=round(float(z), 4), pct=round(float(percentiles[symbol]), 4))
                     for symbol, z in row.items()})
