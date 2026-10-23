@@ -142,6 +142,44 @@ class History:
         self.removed = len(raw)-len(self.keys)
         self.frame = pd.DataFrame(self.bars, index=pd.DatetimeIndex(self.keys),
                                   columns=['open', 'high', 'low', 'close', 'volume'])
+        # Causal EMA seed = first observed close; require span observations.
+        self.ema20 = self.frame['close'].ewm(span=20, adjust=False, min_periods=20).mean().tolist()
+        self.ema50 = self.frame['close'].ewm(span=50, adjust=False, min_periods=50).mean().tolist()
+
+
+def candidate_state(history, i):
+    """State at the completed daily close; no shifted/future observations."""
+    if not 0 <= i < len(history.bars) or not math.isfinite(history.ema50[i]):
+        return 'unavailable'
+    close, e20, e50 = history.bars[i]['close'], history.ema20[i], history.ema50[i]
+    if close > e20 > e50:
+        return 'up'
+    if close < e20 < e50:
+        return 'down'
+    return 'transition'
+
+
+def candidate_basket(study, key, n, trend_filter='NONE'):
+    """Filter the full SMA200-eligible ranking BEFORE taking N; no backfill."""
+    if trend_filter not in ('NONE', 'T1', 'T2'):
+        raise ValueError('candidate filter must be NONE/T1/T2')
+    if trend_filter != 'NONE' and study.tf != '1d':
+        raise ValueError('candidate trend filters require 1d')
+    names = []
+    for symbol, valid, sma200, _ in study.ranks[key]:
+        if not valid or not sma200:
+            continue
+        h = study.daily[symbol]
+        if trend_filter != 'NONE':
+            i = h.index.get(key, -1)
+            if i < 0 or (trend_filter == 'T1' and not h.bars[i]['close'] > h.ema50[i]):
+                continue
+            if trend_filter == 'T2' and candidate_state(h, i) != 'up':
+                continue
+        names.append(symbol)
+        if len(names) == n:
+            break
+    return names
 
 
 def rank_at(symbol, daily, key, tf):

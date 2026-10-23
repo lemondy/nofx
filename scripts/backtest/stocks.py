@@ -3,7 +3,7 @@ import math
 from dataclasses import dataclass
 
 from .backtrader_adapter import _backtrader
-from .stocks_data import NAMES, SPY, death, golden
+from .stocks_data import NAMES, SPY, candidate_basket, death, golden
 
 bt = _backtrader()
 # Same negligible-dollar cutoff as the specification's initialEquity*1e-12.
@@ -21,8 +21,13 @@ class Config:
     floor: float = 0.25
     band: float = 0.20
     target_vol: float = 0.40
+    candidate_filter: str = 'NONE'
 
     def validate(self):
+        if self.candidate_filter not in ('NONE', 'T1', 'T2'):
+            raise ValueError('candidate filter must be NONE/T1/T2')
+        if self.candidate_filter != 'NONE' and self.timeframe != '1d':
+            raise ValueError('candidate trend filters require 1d')
         if self.timeframe not in ('1d', '1h') or self.max_positions <= 0 or self.rebalance_trading_days <= 0:
             raise ValueError('tf must be 1d/1h; maxpos and rebalance must be positive')
         if not math.isfinite(self.commission) or not 0 <= self.commission < 1 or not math.isfinite(self.cash) or self.cash <= 0:
@@ -151,8 +156,10 @@ class StockPortfolio(bt.Strategy):
                          (self.s_applied == 0 and scale > 0)))
         if name in ('MOM_TOP', 'MOM_X_MA') and rebalance:
             targets = {}
-            basket = [r for r in study.ranks[key] if r[1] and r[2]][:cfg.max_positions]
-            for s, *_ in basket:
+            basket = (candidate_basket(study, key, cfg.max_positions, cfg.candidate_filter)
+                      if name == 'MOM_TOP' else
+                      [r[0] for r in study.ranks[key] if r[1] and r[2]][:cfg.max_positions])
+            for s in basket:
                 h = study.histories[s]
                 a = h.ind[h.index[key]]
                 if name != 'MOM_X_MA' or a.fast > a.slow:
@@ -162,7 +169,7 @@ class StockPortfolio(bt.Strategy):
             # A zero-to-positive restart may select a fresh basket. Otherwise
             # only resize held names; never promote unheld ranks mid-period.
             names = (sorted(positions) if positions or self.s_applied != 0 else
-                     [r[0] for r in study.ranks[key] if r[1] and r[2]][:cfg.max_positions])
+                     candidate_basket(study, key, cfg.max_positions, cfg.candidate_filter))
             targets = {s: scale/cfg.max_positions for s in names}
             self.s_applied = scale
         elif name == 'SPY_BH' and j == 0:
@@ -296,6 +303,8 @@ def run_strategy(study, cfg, name, scales=None, overlay=False):
     cfg.validate()
     if name not in NAMES or cfg.timeframe != study.tf:
         raise ValueError('unknown strategy or study/config timeframe mismatch')
+    if cfg.candidate_filter != 'NONE' and name != 'MOM_TOP':
+        raise ValueError('candidate trend filters support MOM_TOP only')
     if (cfg.scaler != 'NONE' or scales is not None or overlay) and name != 'MOM_TOP':
         raise ValueError('regime overlays support MOM_TOP only')
     if scales is not None or overlay:
