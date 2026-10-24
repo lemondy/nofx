@@ -2,11 +2,12 @@
 import argparse
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import sys
 import time
 
-from . import data_fetch, store
+from . import data_fetch, ext_universe, store
 from .config import MARKETS
 from .miner import Miner, frozen_hashes
 
@@ -52,6 +53,14 @@ def main(argv=None):
                     miner.run_market(market, n_mutations=args.mutations, n_llm=args.llm,
                                      budget_s=args.budget_min * 60, seed=args.seed, use_llm=not args.no_llm,
                                      now=started_dt)
+                    if market == 'crypto' and os.environ.get('FM_EXT_UNIVERSE', '1') != '0':
+                        # Scoring-only post-processing: never part of Miner, its
+                        # panel/cache, forward validation or recorded run results.
+                        try:
+                            ext_universe.run_extension(args.root, fetch=not args.no_fetch,
+                                                       not_before=started_dt)
+                        except Exception as exc:
+                            print(f'crypto ext: skipped: {type(exc).__name__}: {exc}', file=sys.stderr)
                     if miner.fetch_error:
                         print(miner.fetch_error, file=sys.stderr)
                 except Exception as exc:

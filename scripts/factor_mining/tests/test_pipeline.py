@@ -233,6 +233,7 @@ class PipelineTests(unittest.TestCase):
             write_market(root)
             args = ['--root', root, '--market', 'crypto', '--mutations', '0', '--no-llm']
             with patch.object(run_mining.data_fetch, 'update', side_effect=RuntimeError('offline fetch')), \
+                 patch.object(run_mining.ext_universe, 'run_extension', return_value=None), \
                  patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]), \
                  contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(run_mining.main(args), 0)
