@@ -1,0 +1,200 @@
+{
+  "generated_at": "2026-10-24T02:00:00Z",
+  "accounts": [
+    {
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "kind": "live_futures",
+      "exchange": "Binance",
+      "initial_balance": 135.18413468,
+      "current_equity": 263.42573007,
+      "unrealized_pnl": -0.56003591,
+      "net_transfers": 86.69679934000004,
+      "trading_pnl": 32.263755259999996,
+      "fees": 23.375268690000006,
+      "funding": 0,
+      "other_income": 0,
+      "unexplained": 3.0874464599999563,
+      "adjusted_pnl": 41.544796049999945,
+      "adjusted_return_pct": 42.44706633474116,
+      "raw_return_pct": 94.86438308279742,
+      "first_date": "2026-08-29",
+      "last_date": "2026-10-24",
+      "sources": [
+        "equity_snapshots",
+        "trader_positions"
+      ],
+      "warnings": [
+        "收支流水读取失败，转账回退到残差推断",
+        "金额按 USDT 计，USD/USDC 等稳定币按 1:1；非稳定币流水保留原币数量但不参与金额对账",
+        "首条快照与初始资金存在差额；首条快照之前的变动无法对账",
+        "部分日期缺少快照：沿用上一收盘权益，仅在快照恢复后推断剩余转账",
+        "推断转账仅按每日残差识别；缺失成交或估值误差也可能形成残差"
+      ]
+    },
+    {
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_glm_5acc7ce2-8f25-4c16-9f26-3a6698fffe7a",
+      "name": "us-stock",
+      "kind": "live_spot",
+      "exchange": "Binance",
+      "initial_balance": 100.076,
+      "current_equity": 730.759030438,
+      "unrealized_pnl": 0.5884239999999977,
+      "net_transfers": 629.789405656,
+      "trading_pnl": 1.741404999999983,
+      "fees": 0.28827799,
+      "funding": 0,
+      "other_income": 0,
+      "unexplained": -1.1479262279999949,
+      "adjusted_pnl": 0.8936247819999608,
+      "adjusted_return_pct": 0.17199240614758635,
+      "raw_return_pct": 630.204075340741,
+      "first_date": "2026-10-13",
+      "last_date": "2026-10-24",
+      "sources": [
+        "equity_snapshots",
+        "trader_positions"
+      ],
+      "warnings": [
+        "美股未平仓行含累计部分卖出盈亏/手续费，按持仓更新时间归日（缺少逐笔时间）",
+        "收支流水读取失败，转账回退到残差推断",
+        "金额按 USDT 计，USD/USDC 等稳定币按 1:1；非稳定币流水保留原币数量但不参与金额对账",
+        "推断转账仅按每日残差识别；缺失成交或估值误差也可能形成残差"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_glm_5acc7ce2-8f25-4c16-9f26-3a6698fffe7a/inferred/2026-10-22",
+      "time": "2026-10-22T15:58:07.504648Z",
+      "date": "2026-10-22",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_glm_5acc7ce2-8f25-4c16-9f26-3a6698fffe7a",
+      "name": "us-stock",
+      "amount": 190.557680496,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 190.55768050（阈值 10.80291256）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-10-22",
+      "time": "2026-10-22T15:58:07.502106Z",
+      "date": "2026-10-22",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": 100.5392262,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 100.53922620（阈值 2.79323944）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_glm_5acc7ce2-8f25-4c16-9f26-3a6698fffe7a/inferred/2026-10-14",
+      "time": "2026-10-14T15:57:18.267072Z",
+      "date": "2026-10-14",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_glm_5acc7ce2-8f25-4c16-9f26-3a6698fffe7a",
+      "name": "us-stock",
+      "amount": 439.23172516,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 439.23172516（阈值 2.00360000）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-10-14",
+      "time": "2026-10-14T15:57:18.265702Z",
+      "date": "2026-10-14",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": 7.970827290000023,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 7.97082729（阈值 2.74268572）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-10-01",
+      "time": "2026-10-01T15:51:47.029008Z",
+      "date": "2026-10-01",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": 40.03136253999999,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 40.03136254（阈值 2.00000000）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-09-21",
+      "time": "2026-09-21T14:46:31.739275Z",
+      "date": "2026-09-21",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": -2.9916549299999904,
+      "type": "inferred_out",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 -2.99165493（阈值 2.00000000）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-09-19",
+      "time": "2026-09-19T15:50:30.926412Z",
+      "date": "2026-09-19",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": 3.0365042700000004,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 3.03650427（阈值 2.00000000）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-09-16",
+      "time": "2026-09-16T15:57:10.957697Z",
+      "date": "2026-09-16",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": 20.0154,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 20.01540000（阈值 2.00000000）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-09-03",
+      "time": "2026-09-03T15:54:09.563047Z",
+      "date": "2026-09-03",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": -6.718069229999998,
+      "type": "inferred_out",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 -6.71806923（阈值 2.00000000）；时间取当日最后快照"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-09-02",
+      "time": "2026-09-02T15:58:46.088465Z",
+      "date": "2026-09-02",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": -157.76172725,
+      "type": "inferred_out",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 -157.76172725（阈值 4.89944455）；时间取当日最后快照；跨缺快照日累计残差，实际发生日期不确定"
+    },
+    {
+      "id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996/inferred/2026-08-30",
+      "time": "2026-08-30T15:14:32.458131Z",
+      "date": "2026-08-30",
+      "trader_id": "d7ff3764_f6b845ba-f7b2-4b27-8501-fcf6af94f276_deepseek_1787982996",
+      "name": "mac-nofx",
+      "amount": 82.57493045000002,
+      "type": "inferred_in",
+      "source": "inferred",
+      "confirmed": false,
+      "note": "对账残差 82.57493045（阈值 3.33889342）；时间取当日最后快照"
+    }
+  ]
+}

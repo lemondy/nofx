@@ -87,16 +87,20 @@ func wrap(op string, err error) error {
 	return fmt.Errorf("%s: %s: %w", op, category, err)
 }
 
-// signed is used only where the pinned SDK lacks the current OCO endpoint.
+// signed is used where the pinned SDK lacks endpoint/response fields.
 // It shares the SDK transport, credentials, BaseURL and server time offset.
 func (t *BStockTrader) signed(method, path string, p url.Values, out interface{}) error {
+	return t.signedContext(context.Background(), method, path, p, out)
+}
+
+func (t *BStockTrader) signedContext(ctx context.Context, method, path string, p url.Values, out interface{}) error {
 	p.Set("timestamp", id(t.now().UnixMilli()-t.client.TimeOffset))
 	p.Set("recvWindow", "5000")
 	query := p.Encode()
 	mac := hmac.New(sha256.New, []byte(t.client.SecretKey))
 	_, _ = mac.Write([]byte(query))
 	query += "&signature=" + hex.EncodeToString(mac.Sum(nil))
-	req, err := http.NewRequestWithContext(context.Background(), method, t.client.BaseURL+path+"?"+query, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, method, t.client.BaseURL+path+"?"+query, http.NoBody)
 	if err != nil {
 		return err
 	}

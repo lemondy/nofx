@@ -21,6 +21,8 @@ import (
 // Server HTTP API server
 type Server struct {
 	traderOpsMu               sync.Mutex
+	fundsSyncMu               sync.Mutex
+	fundsSync                 map[string]*fundsSyncState
 	router                    *gin.Engine
 	traderManager             *manager.TraderManager
 	store                     *store.Store
@@ -375,6 +377,10 @@ Returns: daily-loss halt, account drawdown breaker, loss-streak bans, resting li
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: {"balance":<float>,"equity":<float>,"unrealized_pnl":<float>,"initial_balance":<float>,"total_return_pct":<float>}`,
 				s.handleAccount)
+			s.routeWithSchema(protected, "GET", "/funds/overview", "Funds overview with transfer-adjusted returns",
+				`Query: ?days=<1..365, default 90>&tz=<IANA timezone, default Asia/Shanghai>&include_paper=<0|1, default 0>
+Returns: {generated_at,tz,days,totals,accounts,daily,daily_total,flows}. Only the authenticated user's traders; totals exclude paper. Amounts USDT, returns in percentage points. Account amounts are cumulative; days limits daily/flows.`,
+				s.handleFundsOverview)
 			s.routeWithSchema(protected, "GET", "/positions", "Current open positions",
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: [{"symbol":"<string>","side":"long|short","size":<float>,"entry_price":<float>,"mark_price":<float>,"unrealized_pnl":<float>,"leverage":<int>}]`,
@@ -769,6 +775,7 @@ func (s *Server) Start() error {
 	logger.Infof("  • GET  /api/exchanges        - Get exchange config")
 	logger.Infof("  • PUT  /api/exchanges        - Update exchange config")
 	logger.Infof("  • GET  /api/status?trader_id=xxx     - Specified trader's system status")
+	logger.Infof("  • GET  /api/funds/overview?days=90&tz=Asia/Shanghai - Funds overview (login required)")
 	logger.Infof("  • GET  /api/account?trader_id=xxx    - Specified trader's account info")
 	logger.Infof("  • GET  /api/positions?trader_id=xxx  - Specified trader's position list")
 	logger.Infof("  • GET  /api/decisions?trader_id=xxx  - Specified trader's decision log")
