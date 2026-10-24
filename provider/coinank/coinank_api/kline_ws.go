@@ -120,7 +120,7 @@ func handleResponse(ch <-chan string, needKline bool, needTicker bool) (<-chan *
 			if needKline && strings.HasPrefix(msg, "{\"op\":\"push\",\"success\":true,\"args\":\"kline") {
 				var result WsResult[[]any]
 				err := json.Unmarshal([]byte(msg), &result)
-				if err == nil && result.Success {
+				if err == nil && result.Success && len(result.Data) >= 9 {
 					kline := coinank.KlineResult{}
 					k := result.Data
 					kline.StartTime = toInt64(k[0])

@@ -3,6 +3,9 @@ package coinank
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"nofx/provider/coinank/coinank_enum"
 	"strconv"
 )
@@ -30,15 +33,39 @@ func (c *CoinankClient) Kline(ctx context.Context, symbol string, exchange coina
 	var result CoinankResponse[[][]float64]
 	err = json.Unmarshal([]byte(resp), &result)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidKlineData, err)
 	}
 	if !result.Success {
 		return nil, HttpError
 	}
-	klines := make([]KlineResult, len(result.Data))
-	for i, k := range result.Data {
+	return ParseKlineRows(result.Data)
+}
+
+// ErrInvalidKlineData lets callers identify malformed vendor data and fall
+// back without panicking or consuming a partially valid series.
+var ErrInvalidKlineData = errors.New("coinank: invalid kline data")
+
+// ParseKlineRows validates the row format shared by CoinAnk's REST APIs.
+func ParseKlineRows(rows [][]float64) ([]KlineResult, error) {
+	klines := make([]KlineResult, len(rows))
+	for i, k := range rows {
+		if len(k) < 9 {
+			return nil, fmt.Errorf("%w: row %d has %d columns, need >=9", ErrInvalidKlineData, i, len(k))
+		}
+		for j, v := range k {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("%w: row %d column %d is non-finite", ErrInvalidKlineData, i, j)
+			}
+		}
+		// Guard the float-to-int conversion as well as the series ordering.
+		if k[0] < 0 || k[1] < k[0] || k[0] >= float64(math.MaxInt64) || k[1] >= float64(math.MaxInt64) {
+			return nil, fmt.Errorf("%w: row %d has invalid timestamps", ErrInvalidKlineData, i)
+		}
 		klines[i].StartTime = int64(k[0] + 0.001)
 		klines[i].EndTime = int64(k[1] + 0.001)
+		if i > 0 && (klines[i].StartTime <= klines[i-1].StartTime || klines[i].EndTime <= klines[i-1].EndTime) {
+			return nil, fmt.Errorf("%w: row %d timestamps are not increasing", ErrInvalidKlineData, i)
+		}
 		klines[i].Open = k[2]
 		klines[i].Close = k[3]
 		klines[i].High = k[4]

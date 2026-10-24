@@ -1618,6 +1618,12 @@ func fmtPx(v float64) string {
 // Market Data Formatting
 // ============================================================================
 
+// ShortScanNeedsTopConfirmation is shared by entry and pending rechecks.
+// Breakdown is a continuation signal, rather than a topping reversal.
+func ShortScanNeedsTopConfirmation(universe string) bool {
+	return universe != "breakdown"
+}
+
 // computeCoinSignal builds the SignalOptions for one symbol, runs the signal
 // layer, and records the program-side bookkeeping the decision validator and
 // datasets read (anchors / RR ceilings / gate states). Returns nil when the
@@ -1733,7 +1739,7 @@ func (e *StrategyEngine) computeCoinSignalForSide(data *market.Data, quantData *
 				// bounce in a downtrend): it can never print a topping
 				// confirmation, so it is exempt from the top-confirm gate
 				// (the 15m MICRO_TREND gate still applies).
-				if coin.ShortUniverse != "breakdown" {
+				if ShortScanNeedsTopConfirmation(coin.ShortUniverse) {
 					conf := coin.ShortConfirmed
 					opt.ShortScanConfirmed = &conf
 				}

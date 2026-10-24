@@ -17,6 +17,13 @@ import (
 
 // runCycle runs one trading cycle (using AI full decision-making)
 func (at *AutoTrader) runCycle() error {
+	return at.runCycleWithDecision(func(ctx *kernel.Context) (*kernel.FullDecision, error) {
+		return kernel.GetFullDecisionWithStrategy(ctx, at.mcpClient, at.strategyEngine, "balanced")
+	})
+}
+
+// Keep the cycle orchestration testable without market-data or model requests.
+func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel.FullDecision, error)) error {
 	mu := at.executionMutex()
 	mu.Lock()
 	defer mu.Unlock()
@@ -121,8 +128,9 @@ func (at *AutoTrader) runCycle() error {
 		logger.Warnf("🛑 [%s] daily-loss halt active this cycle: %s", at.name, halt)
 	}
 
-	// If no candidate coins available, log but do not error
-	if len(ctx.CandidateCoins) == 0 {
+	// A source outage/empty entry pool must not suppress management of live
+	// positions or unresolved entries. The pending lifecycle already ran above.
+	if len(ctx.CandidateCoins) == 0 && len(ctx.Positions) == 0 && len(at.snapshotPendingKeys()) == 0 {
 		logger.Infof("ℹ️  No candidate coins available, skipping this cycle")
 		record.Success = true // Not an error, just no candidate coins
 		record.ExecutionLog = append(record.ExecutionLog, "No candidate coins available, cycle skipped")
@@ -138,6 +146,10 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	logger.Info(strings.Repeat("=", 70))
+	if len(ctx.CandidateCoins) == 0 {
+		logger.Infof("ℹ️  No entry candidates; continuing with position/pending management only")
+		record.ExecutionLog = append(record.ExecutionLog, "No entry candidates; management-only cycle")
+	}
 	// Candidate-source attribution snapshot: rebuild the normalized-symbol
 	// map from THIS cycle's pool — wholesale replacement, so a symbol dropped
 	// from the pool can't attribute stale sources at a later fill.
@@ -157,7 +169,7 @@ func (at *AutoTrader) runCycle() error {
 	// 5. Use strategy engine to call AI for decision
 	logger.Infof("🤖 Requesting AI analysis and decision... [Strategy Engine]")
 	aiDecision, err := withoutExecutionLock(mu, func() (*kernel.FullDecision, error) {
-		return kernel.GetFullDecisionWithStrategy(ctx, at.mcpClient, at.strategyEngine, "balanced")
+		return decide(ctx)
 	})
 	at.isRunningMutex.RLock()
 	stopped := !at.isRunning
@@ -303,19 +315,25 @@ func (at *AutoTrader) runCycle() error {
 		return nil
 	}
 
-	// Safe mode: filter out open positions, only allow close/hold
-	if at.safeMode {
+	// Held AI positions normally remain eligible for adds in cycleEntryPool.
+	// An empty candidate pool must explicitly forbid those as well as fresh
+	// opens, while keeping close/hold/protection decisions available.
+	if at.safeMode || len(ctx.CandidateCoins) == 0 {
+		reason := "No entry candidates"
+		if at.safeMode {
+			reason = "Safe mode"
+		}
 		filtered := make([]kernel.Decision, 0)
 		for _, d := range sortedDecisions {
-			if d.Action == "open_long" || d.Action == "open_short" || d.Action == "open_long_limit" || d.Action == "open_short_limit" {
-				logger.Warnf("🛡️ [%s] Safe mode: BLOCKED %s %s (no new positions allowed)", at.name, d.Action, d.Symbol)
+			if kernel.IsOpenDecision(d.Action) {
+				logger.Warnf("🛡️ [%s] %s: BLOCKED %s %s (no new positions allowed)", at.name, reason, d.Action, d.Symbol)
 				continue
 			}
 			filtered = append(filtered, d)
 		}
 		sortedDecisions = filtered
 		if len(sortedDecisions) == 0 {
-			logger.Infof("🛡️ [%s] Safe mode: all decisions were open positions, nothing to execute", at.name)
+			logger.Infof("🛡️ [%s] %s: all decisions were open positions, nothing to execute", at.name, reason)
 		}
 	}
 
