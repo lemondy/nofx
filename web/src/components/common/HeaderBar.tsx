@@ -31,6 +31,7 @@ type Page =
   | 'data'
   | 'review'
   | 'research'
+  | 'funds'
   | 'login'
   | 'register'
 
@@ -80,6 +81,12 @@ function buildNavTabs(language: Language): NavTab[] {
       page: 'trader',
       path: '/dashboard',
       label: t('dashboardNav', language),
+      requiresAuth: true,
+    },
+    {
+      page: 'funds',
+      path: '/funds',
+      label: language === 'zh' ? '资金' : 'Funds',
       requiresAuth: true,
     },
     {
