@@ -1,0 +1,962 @@
+{
+  "split": {
+    "calendar_start": "2019-09-09 00:00:00+00:00",
+    "calendar_end": "2026-10-23 00:00:00+00:00",
+    "cutoff": "2023-12-18 00:00:00+00:00",
+    "train_end_exclusive": "2023-12-11 00:00:00+00:00",
+    "purge_bars": 7
+  },
+  "inventory": [
+    {
+      "symbol": "1000PEPEUSDT",
+      "bars": 1267,
+      "missing": 0,
+      "first": "2023-05-06 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1207
+    },
+    {
+      "symbol": "1000SHIBUSDT",
+      "bars": 1992,
+      "missing": 0,
+      "first": "2021-05-11 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1932
+    },
+    {
+      "symbol": "AAVEUSDT",
+      "bars": 2198,
+      "missing": 0,
+      "first": "2020-10-17 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2138
+    },
+    {
+      "symbol": "ADAUSDT",
+      "bars": 2457,
+      "missing": 0,
+      "first": "2020-02-01 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2397
+    },
+    {
+      "symbol": "AEROUSDT",
+      "bars": 688,
+      "missing": 0,
+      "first": "2024-12-05 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 628
+    },
+    {
+      "symbol": "AGTUSDT",
+      "bars": 521,
+      "missing": 0,
+      "first": "2025-05-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 461
+    },
+    {
+      "symbol": "AKEUSDT",
+      "bars": 392,
+      "missing": 0,
+      "first": "2025-09-27 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 332
+    },
+    {
+      "symbol": "ALTUSDT",
+      "bars": 1002,
+      "missing": 0,
+      "first": "2024-01-26 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 942
+    },
+    {
+      "symbol": "APTUSDT",
+      "bars": 1465,
+      "missing": 0,
+      "first": "2022-10-20 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1405
+    },
+    {
+      "symbol": "ARBUSDT",
+      "bars": 1310,
+      "missing": 0,
+      "first": "2023-03-24 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1250
+    },
+    {
+      "symbol": "ASTERUSDT",
+      "bars": 399,
+      "missing": 0,
+      "first": "2025-09-20 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 339
+    },
+    {
+      "symbol": "AUSDT",
+      "bars": 513,
+      "missing": 0,
+      "first": "2025-05-29 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 453
+    },
+    {
+      "symbol": "AVAAIUSDT",
+      "bars": 644,
+      "missing": 0,
+      "first": "2025-01-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 584
+    },
+    {
+      "symbol": "AVAUSDT",
+      "bars": 679,
+      "missing": 0,
+      "first": "2024-12-14 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 619
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "bars": 2221,
+      "missing": 0,
+      "first": "2020-09-24 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2161
+    },
+    {
+      "symbol": "BASEDUSDT",
+      "bars": 207,
+      "missing": 0,
+      "first": "2026-03-31 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 147
+    },
+    {
+      "symbol": "BATUSDT",
+      "bars": 2444,
+      "missing": 0,
+      "first": "2020-02-14 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2384
+    },
+    {
+      "symbol": "BCHUSDT",
+      "bars": 2500,
+      "missing": 0,
+      "first": "2019-12-20 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2440
+    },
+    {
+      "symbol": "BERAUSDT",
+      "bars": 624,
+      "missing": 0,
+      "first": "2025-02-07 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 564
+    },
+    {
+      "symbol": "BNBUSDT",
+      "bars": 2447,
+      "missing": 0,
+      "first": "2020-02-11 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2387
+    },
+    {
+      "symbol": "BRUSDT",
+      "bars": 581,
+      "missing": 0,
+      "first": "2025-03-22 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 521
+    },
+    {
+      "symbol": "BTCUSDT",
+      "bars": 2602,
+      "missing": 0,
+      "first": "2019-09-09 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2542
+    },
+    {
+      "symbol": "CAKEUSDT",
+      "bars": 1086,
+      "missing": 0,
+      "first": "2023-11-03 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1026
+    },
+    {
+      "symbol": "CRVUSDT",
+      "bars": 2243,
+      "missing": 0,
+      "first": "2020-09-02 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2183
+    },
+    {
+      "symbol": "CYSUSDT",
+      "bars": 315,
+      "missing": 0,
+      "first": "2025-12-13 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 255
+    },
+    {
+      "symbol": "DASHUSDT",
+      "bars": 2453,
+      "missing": 0,
+      "first": "2020-02-05 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2393
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "bars": 2296,
+      "missing": 0,
+      "first": "2020-07-11 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2236
+    },
+    {
+      "symbol": "DOTUSDT",
+      "bars": 2253,
+      "missing": 0,
+      "first": "2020-08-23 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2193
+    },
+    {
+      "symbol": "DUSKUSDT",
+      "bars": 1750,
+      "missing": 0,
+      "first": "2022-01-08 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1690
+    },
+    {
+      "symbol": "EIGENUSDT",
+      "bars": 752,
+      "missing": 0,
+      "first": "2024-10-02 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 692
+    },
+    {
+      "symbol": "ENAUSDT",
+      "bars": 934,
+      "missing": 0,
+      "first": "2024-04-03 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 874
+    },
+    {
+      "symbol": "EPICUSDT",
+      "bars": 589,
+      "missing": 0,
+      "first": "2025-03-14 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 529
+    },
+    {
+      "symbol": "ERAUSDT",
+      "bars": 463,
+      "missing": 0,
+      "first": "2025-07-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 403
+    },
+    {
+      "symbol": "ETCUSDT",
+      "bars": 2472,
+      "missing": 0,
+      "first": "2020-01-17 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2412
+    },
+    {
+      "symbol": "ETHFIUSDT",
+      "bars": 949,
+      "missing": 0,
+      "first": "2024-03-19 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 889
+    },
+    {
+      "symbol": "ETHUSDT",
+      "bars": 2522,
+      "missing": 0,
+      "first": "2019-11-28 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2462
+    },
+    {
+      "symbol": "FARTCOINUSDT",
+      "bars": 672,
+      "missing": 0,
+      "first": "2024-12-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 612
+    },
+    {
+      "symbol": "FETUSDT",
+      "bars": 1375,
+      "missing": 0,
+      "first": "2023-01-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1315
+    },
+    {
+      "symbol": "FILUSDT",
+      "bars": 2198,
+      "missing": 0,
+      "first": "2020-10-17 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2138
+    },
+    {
+      "symbol": "FOLKSUSDT",
+      "bars": 351,
+      "missing": 0,
+      "first": "2025-11-07 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 291
+    },
+    {
+      "symbol": "GTCUSDT",
+      "bars": 1960,
+      "missing": 0,
+      "first": "2021-06-12 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1900
+    },
+    {
+      "symbol": "HBARUSDT",
+      "bars": 2046,
+      "missing": 0,
+      "first": "2021-03-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1986
+    },
+    {
+      "symbol": "HYPEUSDT",
+      "bars": 511,
+      "missing": 0,
+      "first": "2025-05-31 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 451
+    },
+    {
+      "symbol": "ICNTUSDT",
+      "bars": 477,
+      "missing": 0,
+      "first": "2025-07-04 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 417
+    },
+    {
+      "symbol": "ICPUSDT",
+      "bars": 1487,
+      "missing": 0,
+      "first": "2022-09-28 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1427
+    },
+    {
+      "symbol": "INJUSDT",
+      "bars": 1528,
+      "missing": 0,
+      "first": "2022-08-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1468
+    },
+    {
+      "symbol": "KMNOUSDT",
+      "bars": 672,
+      "missing": 0,
+      "first": "2024-12-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 612
+    },
+    {
+      "symbol": "LDOUSDT",
+      "bars": 1492,
+      "missing": 0,
+      "first": "2022-09-23 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1432
+    },
+    {
+      "symbol": "LINKUSDT",
+      "bars": 2471,
+      "missing": 0,
+      "first": "2020-01-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2411
+    },
+    {
+      "symbol": "LITUSDT",
+      "bars": 304,
+      "missing": 0,
+      "first": "2025-12-24 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 244
+    },
+    {
+      "symbol": "LSKUSDT",
+      "bars": 1002,
+      "missing": 0,
+      "first": "2024-01-26 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 942
+    },
+    {
+      "symbol": "LTCUSDT",
+      "bars": 2479,
+      "missing": 0,
+      "first": "2020-01-10 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2419
+    },
+    {
+      "symbol": "MAGICUSDT",
+      "bars": 1367,
+      "missing": 0,
+      "first": "2023-01-26 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1307
+    },
+    {
+      "symbol": "MINAUSDT",
+      "bars": 1354,
+      "missing": 0,
+      "first": "2023-02-08 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1294
+    },
+    {
+      "symbol": "MUBARAKUSDT",
+      "bars": 585,
+      "missing": 0,
+      "first": "2025-03-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 525
+    },
+    {
+      "symbol": "NEARUSDT",
+      "bars": 2199,
+      "missing": 0,
+      "first": "2020-10-16 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2139
+    },
+    {
+      "symbol": "NILUSDT",
+      "bars": 578,
+      "missing": 0,
+      "first": "2025-03-25 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 518
+    },
+    {
+      "symbol": "NMRUSDT",
+      "bars": 1219,
+      "missing": 0,
+      "first": "2023-06-23 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1159
+    },
+    {
+      "symbol": "NXPCUSDT",
+      "bars": 526,
+      "missing": 0,
+      "first": "2025-05-16 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 466
+    },
+    {
+      "symbol": "OGNUSDT",
+      "bars": 2031,
+      "missing": 0,
+      "first": "2021-04-02 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1971
+    },
+    {
+      "symbol": "ONDOUSDT",
+      "bars": 1007,
+      "missing": 0,
+      "first": "2024-01-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 947
+    },
+    {
+      "symbol": "OPUSDT",
+      "bars": 1605,
+      "missing": 0,
+      "first": "2022-06-02 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1545
+    },
+    {
+      "symbol": "PAXGUSDT",
+      "bars": 575,
+      "missing": 0,
+      "first": "2025-03-28 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 515
+    },
+    {
+      "symbol": "PENDLEUSDT",
+      "bars": 1183,
+      "missing": 0,
+      "first": "2023-07-29 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1123
+    },
+    {
+      "symbol": "PENGUUSDT",
+      "bars": 675,
+      "missing": 0,
+      "first": "2024-12-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 615
+    },
+    {
+      "symbol": "PROMUSDT",
+      "bars": 646,
+      "missing": 0,
+      "first": "2025-01-16 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 586
+    },
+    {
+      "symbol": "PUMPUSDT",
+      "bars": 470,
+      "missing": 0,
+      "first": "2025-07-11 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 410
+    },
+    {
+      "symbol": "PYTHUSDT",
+      "bars": 1066,
+      "missing": 0,
+      "first": "2023-11-23 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1006
+    },
+    {
+      "symbol": "QNTUSDT",
+      "bars": 1464,
+      "missing": 0,
+      "first": "2022-10-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1404
+    },
+    {
+      "symbol": "QUSDT",
+      "bars": 416,
+      "missing": 0,
+      "first": "2025-09-03 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 356
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "bars": 819,
+      "missing": 0,
+      "first": "2024-07-27 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 759
+    },
+    {
+      "symbol": "RLCUSDT",
+      "bars": 2275,
+      "missing": 0,
+      "first": "2020-08-01 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2215
+    },
+    {
+      "symbol": "RSRUSDT",
+      "bars": 2195,
+      "missing": 0,
+      "first": "2020-10-20 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2135
+    },
+    {
+      "symbol": "SANDUSDT",
+      "bars": 2097,
+      "missing": 0,
+      "first": "2021-01-26 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2037
+    },
+    {
+      "symbol": "SEIUSDT",
+      "bars": 1163,
+      "missing": 0,
+      "first": "2023-08-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1103
+    },
+    {
+      "symbol": "SIRENUSDT",
+      "bars": 580,
+      "missing": 0,
+      "first": "2025-03-23 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 520
+    },
+    {
+      "symbol": "SOLUSDT",
+      "bars": 2230,
+      "missing": 0,
+      "first": "2020-09-15 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2170
+    },
+    {
+      "symbol": "STBLUSDT",
+      "bars": 401,
+      "missing": 0,
+      "first": "2025-09-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 341
+    },
+    {
+      "symbol": "STRKUSDT",
+      "bars": 976,
+      "missing": 0,
+      "first": "2024-02-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 916
+    },
+    {
+      "symbol": "SUIUSDT",
+      "bars": 1269,
+      "missing": 0,
+      "first": "2023-05-04 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1209
+    },
+    {
+      "symbol": "TAOUSDT",
+      "bars": 925,
+      "missing": 0,
+      "first": "2024-04-12 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 865
+    },
+    {
+      "symbol": "TIAUSDT",
+      "bars": 1088,
+      "missing": 0,
+      "first": "2023-11-01 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1028
+    },
+    {
+      "symbol": "TRUMPUSDT",
+      "bars": 643,
+      "missing": 0,
+      "first": "2025-01-19 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 583
+    },
+    {
+      "symbol": "TRUTHUSDT",
+      "bars": 387,
+      "missing": 0,
+      "first": "2025-10-02 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 327
+    },
+    {
+      "symbol": "TRXUSDT",
+      "bars": 2473,
+      "missing": 0,
+      "first": "2020-01-16 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2413
+    },
+    {
+      "symbol": "UNIUSDT",
+      "bars": 2226,
+      "missing": 0,
+      "first": "2020-09-19 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2166
+    },
+    {
+      "symbol": "USUSDT",
+      "bars": 315,
+      "missing": 0,
+      "first": "2025-12-13 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 255
+    },
+    {
+      "symbol": "VVVUSDT",
+      "bars": 632,
+      "missing": 0,
+      "first": "2025-01-30 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 572
+    },
+    {
+      "symbol": "WALUSDT",
+      "bars": 575,
+      "missing": 0,
+      "first": "2025-03-28 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 515
+    },
+    {
+      "symbol": "WLDUSDT",
+      "bars": 1187,
+      "missing": 0,
+      "first": "2023-07-25 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 1127
+    },
+    {
+      "symbol": "WUSDT",
+      "bars": 933,
+      "missing": 0,
+      "first": "2024-04-04 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 873
+    },
+    {
+      "symbol": "XLMUSDT",
+      "bars": 2468,
+      "missing": 0,
+      "first": "2020-01-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2408
+    },
+    {
+      "symbol": "XMRUSDT",
+      "bars": 2454,
+      "missing": 0,
+      "first": "2020-02-04 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2394
+    },
+    {
+      "symbol": "XPLUSDT",
+      "bars": 427,
+      "missing": 0,
+      "first": "2025-08-23 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 367
+    },
+    {
+      "symbol": "XRPUSDT",
+      "bars": 2482,
+      "missing": 0,
+      "first": "2020-01-07 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2422
+    },
+    {
+      "symbol": "ZECUSDT",
+      "bars": 2452,
+      "missing": 0,
+      "first": "2020-02-06 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2392
+    },
+    {
+      "symbol": "ZEREBROUSDT",
+      "bars": 659,
+      "missing": 0,
+      "first": "2025-01-03 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 599
+    },
+    {
+      "symbol": "ZILUSDT",
+      "bars": 2318,
+      "missing": 0,
+      "first": "2020-06-19 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 2258
+    },
+    {
+      "symbol": "ZKUSDT",
+      "bars": 858,
+      "missing": 0,
+      "first": "2024-06-18 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 798
+    },
+    {
+      "symbol": "ZROUSDT",
+      "bars": 855,
+      "missing": 0,
+      "first": "2024-06-21 00:00:00+00:00",
+      "last": "2026-10-23 00:00:00+00:00",
+      "eligible": 795
+    }
+  ],
+  "bars": 130583,
+  "eligible_bars": 124583,
+  "market": "crypto",
+  "timeframe": "1d",
+  "protocol": "2026-10-24-v3",
+  "code_sha256": "9f70ca075c16542d2098515ba16d34b2befa96138fd5c34e4c7557dd84546fc6",
+  "input_sha256": {
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/1000PEPEUSDT.json": "3fd9d55735beb63f880f5e821f048a3337f91206c02c9bc127946dde00606d89",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/1000SHIBUSDT.json": "9c795bbaf929b12dc0ab3561ca264507fcd4683058205b46eeee8e5c421a3560",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AAVEUSDT.json": "f8a119db40d6c2c4092ba921ea98a48efbfa3f30cff8ca222f38ecb1f4de0983",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ADAUSDT.json": "dbd1eb563ff9330ef1264d8c8250a6a6936caf468cb7cbdb7ede96629e3c01bc",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AEROUSDT.json": "f8891ae010828d34de4ddcef830624af2a48ec38be3502439af03fd1ec5074c2",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AGTUSDT.json": "f40ad595aa2f1e740951c366f5787a4225fab142e9d9b5826c133fc3ee9f1444",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AKEUSDT.json": "ea72b9aa9a16e63ae0dd8e617b003d7b69d5d7066c9de1fe1b9b09a63c80083e",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ALTUSDT.json": "8ac05a3811cf7466208c12173a9617cf38439d881f5841b2ad4be4935e5ae546",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/APTUSDT.json": "d9709e1be12d08abc7ad8722a34cc1fd680e7f10235f6cf9f861ffb9bcb31122",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ARBUSDT.json": "cccaedb3a435663e275c3d1f2646a047dfeb14c832cbe18c59640c5ac7e7e092",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ASTERUSDT.json": "5571f620864a6cfb49fc7d7e4bd3d913b7873a10174269f52fd9709364a977db",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AUSDT.json": "728d5aebefc48d991644b9e772b26a4ade66e53db85f419bb2779fdcb4f9a54d",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AVAAIUSDT.json": "f7f926ab46fbb822e2ca3386bac5c281e192d3b7c708ec839e6eb2753738b094",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AVAUSDT.json": "3b37f0df17803436a4ab4dbf33b4bcb111be3a5bbe3e1cf966888ca04f837f1d",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/AVAXUSDT.json": "c2bee40e639ac425067581cbc911cbf4462f3a1e4ba213e8f8bfef789bc29bfb",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BASEDUSDT.json": "a461528b71ffe5bddf9f45735c90f4be107f548674f4c3b6cef84b84d288d34a",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BATUSDT.json": "bc596ffb802133ca754a0e39f79487b91ceef925606075f96bcdaeda63160941",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BCHUSDT.json": "93d3a82f4b22be57ce19f8c359da1846ba34ff209269c245c66c57412d7bd39a",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BERAUSDT.json": "62b25bfefd7b173356e3e33c40a5d53b20a939e28302038a7f0dbaee7f340a78",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BNBUSDT.json": "83f189cdea4716f8a2be70bec959e6636c6eb64e1bba200c5098cc0f42763760",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BRUSDT.json": "b1509778e082493eba2313bd38b8383e21691768ffac08af2972f917f283a584",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/BTCUSDT.json": "bd742aa57091fea08c3e5b8ed634febbb40ff08a714c9e5682610fcd87e96df9",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/CAKEUSDT.json": "2cdfd96e57b7499efd3dc51e645713c26ee708599bddb458359affe65bd004ef",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/CRVUSDT.json": "e0c55658c5aa0e54e833f204be7cd7bb779d48e93be02277a09891b597345d7c",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/CYSUSDT.json": "26cfc1072a80ac33f0b0e4f092366b215effb46a1d48aae3ae0ca16eb683b3e4",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/DASHUSDT.json": "a28030ae7c367ebd1f6ba169ae70504cfc26042e3728c7f7980a81229607bd16",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/DOGEUSDT.json": "682142a83d823bbb6899ea3a103357d60b102c2ef9ed329ce8d35d00c62af54a",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/DOTUSDT.json": "f760ef58fe9cdc9aaccf44b814853efab46bd1b5c59b687310ffea0736893da4",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/DUSKUSDT.json": "c6833a85647ec6116eb6104122a42870c66bb75a43d3722c52aa0681d36d4321",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/EIGENUSDT.json": "8c8a2c01525134924b508d95778bb17c3e14967053a20f1a800b2c14df48b2ff",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ENAUSDT.json": "5a92c9e61bcfb8d5d57af7066c3ce6fc7152734e30ee801aa55d7f79bd0f162f",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/EPICUSDT.json": "72fff3e10ab31ad5efc8e138ec46878cd7bc6efe1d5f7bae2e3e87dfac6a385a",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ERAUSDT.json": "b2e4967830da7f592658127e30abc1a13901dfa238bcb498ed21a9e09bc2a6eb",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ETCUSDT.json": "a3964cc4e1e066d98a162fee88c459559c2a8742c66f33fee2120166be2f7d28",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ETHFIUSDT.json": "9bbd345ab205e1a97b806e1007c2beb876f0c6f7a4657bcc6e958bc76917195e",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ETHUSDT.json": "0a3fd3cea78256dfbf5ad91b96f6c6e6f90b996684e6d7da6359110d4e733c9d",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/FARTCOINUSDT.json": "f83a97e81af910f837b8a96e7f1fa6d94d081d8c1799a6945eda3c5bc950e74c",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/FETUSDT.json": "86cab5ea80a008e60eb27e325d68bc2512787834f4374c4e0b8606dd69005f4e",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/FILUSDT.json": "0f4c848dad2ef5431b96c48b931d4a5e3555a2c8311860a30af35cf6802fde99",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/FOLKSUSDT.json": "91ca3a1749492825205868ebb4efa78b05452a073c4e314f2f458901b255ca02",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/GTCUSDT.json": "ed74e735c9d4d2f8f2391957cc748041ce3ada7c4334e6b93bf5212b28c4053c",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/HBARUSDT.json": "5c84cb354f71c52f12a4e476876cdd5e52f5e9389e87473fe6408823387c869d",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/HYPEUSDT.json": "df30a75f727f5a0acee447e92cc0cea482bcd2cf1fb4f31737e43a8c601162bc",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ICNTUSDT.json": "e137e644b1829be1d4abf60de7960008d35f2f2695a502953d636231bef6ab1d",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ICPUSDT.json": "71a2fefff68cd03ee729fa88edf33fdce73be1a38592993b9eef95e55fb01269",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/INJUSDT.json": "4a6247dcd5ed8a60bcbb1fdf6f6e19a819fd4985106cd013fdf521fe0b0ee8a5",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/KMNOUSDT.json": "f1ce2721da603bb9969ce18b2c8caba329fbc3ade2fbdce2749021cf9b0c3a76",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/LDOUSDT.json": "4497ade440a424ed7b8a6364de97baa593b041bb1b3669fbf651ddac4f9603c0",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/LINKUSDT.json": "a27e3773ec8bb05538dd0d3c77e0dd6fad90ba0b6680e08a0ee5f2b24cc18cc6",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/LITUSDT.json": "746a7bfcab6b20c02b21b0d4a7e61a363e9946f4da69564c5584404c5ee63133",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/LSKUSDT.json": "6cb01a8e72ef0ac7e60d117da273f6902ebbe6c16dd247a836b1b96645b2753d",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/LTCUSDT.json": "78f96ef2769b4f89dc173a4408ae8cf011200a592586563dc469ea2ea9f86b5f",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/MAGICUSDT.json": "b82b664068f78a4c7dc2dddf003d6ce8b34c9670853a50eb2cb661c99fcf43b6",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/MINAUSDT.json": "5f5d495d9070d1bccd832f456b12ef1beb3065f27d36558298210c40ab0cef67",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/MUBARAKUSDT.json": "7d69502b3d390b18bdf2f43b7491c2408d70309d69d1a633a4d2a1965aa674c6",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/NEARUSDT.json": "4cd6b4f6ffbb88c8d89ea5e8274f03832bf3ef0942f7fe42fcebcc0c39f3a6a7",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/NILUSDT.json": "c06eb3b2b5125890b0c67fcdd924952aa9abb3a9fa96d7910fec9699d8e99d7b",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/NMRUSDT.json": "213b0cac846d3fdc6ba51407c31c2608ede2c4c206dcac790e222e824d20ba35",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/NXPCUSDT.json": "de1061c91dc0ac3c0fff340ec9fa4097344150ff36939a63dba388c772e83772",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/OGNUSDT.json": "8aee5992158832981b5f56653d9982df21867698ab2a07210bebb139a23c23d8",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ONDOUSDT.json": "3500e9e64d13063a2b9ee2bf56946ae042cdff05a4addb2808a83049939ff31c",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/OPUSDT.json": "066dd98d1daec8829fc69ae54e13f8b2e61526b891fd77c378183afc5969c3dd",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/PAXGUSDT.json": "d798d7d0c3ed654d7e2c3d8e8a4c85279393404c775a28ee27692964212b1bf6",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/PENDLEUSDT.json": "5e1bfd1f7a2d5309f26cf9a84c1f8c1a6b4d3eb71b818c9349f7fc8c5405c798",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/PENGUUSDT.json": "9c7887b147e6944b12a3faea41e6fc7535119561905979e46d95c146a57bd460",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/PROMUSDT.json": "86017a4625f9a3445f4917fa9a5ba5243bc3122453224c06425b0070579ad1fd",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/PUMPUSDT.json": "9da44198803c91a26ef18f4e83ac1b00b902f8dffa282787c8872ac24597e3f4",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/PYTHUSDT.json": "6eb105e9ece0d438eb8251c37875fe2d8c9007297fb94022c0bd654640422e9c",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/QNTUSDT.json": "8b14cac4069c13ca79d46ddb3471c16914fe477cb86b84e162cf1dd26a0d6e74",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/QUSDT.json": "dc7424ae6bdc6a673d541f1091cab69701cf8bbca9e1d53569fb03e78c7eb443",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/RENDERUSDT.json": "65e57af8befb503d3def8fa8a998dac0929e60517a0497ff2138de43493e4282",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/RLCUSDT.json": "1c09dbb55b10c1f4c2acb629e4e6b5b681cbf753fc287027cf04ab519ef707fe",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/RSRUSDT.json": "013a3038fac9e4072ce1e1b6010d22fc9e69d57208e0bb9f3744a898b0730080",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/SANDUSDT.json": "03150dbc0f43afc88ff0f0dcac3b18383eab479fe26dcecada13e1bdf11e0991",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/SEIUSDT.json": "3c6381f60c55f32cc31188dc4aeffd62c8f543edaced71f0ceaf13ab49ddcb23",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/SIRENUSDT.json": "7e2c4d3a73a81b92ef72c7387a00a75eadddf036a24510151adc0e99dcc03dbb",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/SOLUSDT.json": "c0f614e0af653a5ed51678307f658ea8ee7268fc7032b783310c93d46b517c19",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/STBLUSDT.json": "2d95c08b674d46b34a2ca547333d44a74167c6ca7afbd24f17f33b299f723ffe",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/STRKUSDT.json": "78d1af2a63d95a447afaaf97dc216a443d9b7421544534e85eb045b77ac0cdf3",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/SUIUSDT.json": "c4e329c00b4551415a360bf4d99a32651660bb86553c745f77c62dd8d2a065da",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/TAOUSDT.json": "0f9db9f61f20e47a7041932ef25d10179792893478ef10f86acc14671d97c5c2",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/TIAUSDT.json": "55fe2f47696fea19cbc7b96b81657fe1e47d2127abdba35ae96b6a40dfb8d716",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/TRUMPUSDT.json": "7703464265b636bdcc952d2f2f50c9554d9498da2702309c66363ef359a8301c",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/TRUTHUSDT.json": "538512549e7236771f2b27d58a2a3b589ab3f02bf7a72ba971e6d3a008f719fa",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/TRXUSDT.json": "a0a5d41af5ee2eaf706b78c8f71ea587b592cae2ed35ed272434db81aa7d7caa",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/UNIUSDT.json": "05fc46f4f3d1a4b3e0041f9f61bd9038ecf201e7cfbfadc3d03b3c045a55bc44",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/USUSDT.json": "5580714c06c9f79bffbb848b41f3736df21b0b9a2471ab43b3871b4d5a598d1f",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/VVVUSDT.json": "263b7295509770f5044a321d9564bbe49add999dbd9e6a9880f339e31330893e",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/WALUSDT.json": "f90a901f9c570631778417bfad1f4a0d0d1a4fa8eed253bf33bd9f9d12802d89",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/WLDUSDT.json": "ba4ab02aa3f568b8105314bc34e6a18ea280efa311483334ce1368cb30301625",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/WUSDT.json": "d50ad819c4c88b5e3ace3b275cb18a2e2f75acf9e7f4be2f71949074e0c0acc1",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/XLMUSDT.json": "5a33b5d8c65640db01a0de7aa5524289576fee34f381fd5af72b121888e012c1",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/XMRUSDT.json": "98a85152f66d42b651fc7225a82c60ce6195cfdf3b8ba32e51982643464dd9d8",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/XPLUSDT.json": "d431ba1b88e9be0da743440bd2fed0d1abfab155593158cc367d7fc84391a3c9",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/XRPUSDT.json": "f0c6bda01a64e62fc5bd46ad2b673d00949371928e479b7b1d44d77bf470f83a",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ZECUSDT.json": "844e001faef2d0baec279bebf2c0b7133296fdd648eb4731c01440745155fe4e",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ZEREBROUSDT.json": "d75512a2a2fa8f6068d02db1d35d5187e1fdfaf00362f54fdfa42aad74c36eca",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ZILUSDT.json": "d5fbd11c5236be1c36305fa31a975f71bea563910d5eb4ed8f671ac98f09a927",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ZKUSDT.json": "772f39e9796bf8e15cace98102addacf17fe7a12b8327944468e8b9391d4be62",
+    "/Users/zhangyun/workspace/nofx/data/factor_mining/crypto/daily/ZROUSDT.json": "9444ba245ec23715ec6634e79ff699e877c06a318126660fdcbcd6e755a591f0"
+  },
+  "windows": [
+    20,
+    30,
+    40,
+    50,
+    60
+  ],
+  "features": [
+    "er",
+    "vr4",
+    "vr8",
+    "rho1",
+    "hurst",
+    "convexity_t",
+    "acceleration",
+    "stretch",
+    "ewma_ratio",
+    "arch1",
+    "volvol",
+    "bb_percentile",
+    "squeeze_duration",
+    "breakout",
+    "kurtosis",
+    "tail_frequency",
+    "jump_share",
+    "last_jump",
+    "bars_since_jump",
+    "wick_lower",
+    "wick_upper",
+    "median_cross",
+    "upper_touches",
+    "lower_touches",
+    "donchian_atr",
+    "drawdown",
+    "rebound",
+    "recovery_speed"
+  ],
+  "horizons": [
+    1,
+    3,
+    7
+  ],
+  "planned_tests": 2955
+}
