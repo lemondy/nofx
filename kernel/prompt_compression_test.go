@@ -139,6 +139,22 @@ func TestLockedPositionCompresses(t *testing.T) {
 	if !strings.Contains(out, `"hard_entry_gate"`) {
 		t.Fatal("near-stop position must keep full JSON")
 	}
+
+	// The trader's opening-risk calculation permits active profit-taking.
+	// Preserve full analysis instead of telling the AI its close is locked.
+	pos.EntryPrice = 19.8
+	pos.StopLossPrice = 19.85
+	pos.EarlyCloseProfitOK = true
+	out = engine.formatPositionInfo(1, pos, ctx)
+	if strings.Contains(out, "平仓门锁定") || !strings.Contains(out, `"hard_entry_gate"`) {
+		t.Fatalf("profitable early close must keep full JSON:\n%s", out)
+	}
+	// The profit exception only removes the early-close lock.
+	engine.config.RiskControl.MinHoldMinutes = 60
+	out = engine.formatPositionInfo(1, pos, ctx)
+	if !strings.Contains(out, "平仓门锁定") || !strings.Contains(out, "持仓不足60min") {
+		t.Fatalf("profit bypass must preserve the separate min-hold lock:\n%s", out)
+	}
 }
 
 func TestRenderSignalJSONPrecision(t *testing.T) {
