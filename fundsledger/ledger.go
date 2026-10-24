@@ -291,6 +291,18 @@ func reconcile(in AccountInput, o Options) (Account, []Daily, []Flow, float64) {
 	if missing {
 		a.Warnings = unique(a.Warnings, "部分日期缺少快照：沿用上一收盘权益，仅在快照恢复后推断剩余转账")
 	}
+	var timingWarning string
+	flows, timingWarning = cancelTimingOffsets(days, flows, byDate)
+	if timingWarning != "" {
+		a.Warnings = unique(a.Warnings, timingWarning)
+		// Keep lifetime net transfers on the original reconciliation basis,
+		// including any small difference between approximately offsetting flows.
+		// Daily unexplained amounts must reflect the removed inferred transfers.
+		a.Unexplained = 0
+		for _, d := range days {
+			a.Unexplained += d.Unexplained
+		}
+	}
 	capital := in.InitialBalance
 	duration := last.Time.Sub(first.Time).Seconds()
 	for _, f := range flows {
@@ -313,6 +325,85 @@ func reconcile(in AccountInput, o Options) (Account, []Daily, []Flow, float64) {
 	finishReturns(&a.Amounts, capital)
 	return a, days, flows, capital
 }
+
+// cancelTimingOffsets runs on one account's full history before presentation
+// filtering. Daily rows cover consecutive local calendar dates, so index distance
+// measures natural days even across DST. Inferred flows are emitted in day order,
+// at most one per day; confirmed flows never participate in pairing.
+func cancelTimingOffsets(days []Daily, flows []Flow, snapshots map[string]Snapshot) ([]Flow, string) {
+	inferred := []int{}
+	for i, f := range flows {
+		if f.Source == "inferred" && !f.Confirmed {
+			inferred = append(inferred, i)
+		}
+	}
+	if len(inferred) < 2 {
+		return flows, ""
+	}
+	dayIndex := make(map[string]int, len(days))
+	missingBefore := make([]int, len(days)+1)
+	for i, d := range days {
+		dayIndex[d.Date] = i
+		missingBefore[i+1] = missingBefore[i]
+		if _, observed := snapshots[d.Date]; !observed {
+			missingBefore[i+1]++
+		}
+	}
+	removed := make([]bool, len(flows))
+	pairs := []string{}
+	for i, ai := range inferred {
+		if removed[ai] {
+			continue
+		}
+		a := flows[ai]
+		ad := dayIndex[a.Date]
+		best, bestDifference := -1, math.Inf(1)
+		for _, bi := range inferred[i+1:] {
+			b := flows[bi]
+			if removed[bi] || (a.Amount > 0) == (b.Amount > 0) {
+				continue
+			}
+			bd := dayIndex[b.Date]
+			if bd-ad > 3 && missingBefore[bd] == missingBefore[ad+1] {
+				continue
+			}
+			threshold := math.Max(2, .02*math.Max(days[ad].OpenEquity, days[bd].OpenEquity))
+			difference := math.Abs(a.Amount + b.Amount)
+			// Strict improvement preserves the earliest candidate on a tie.
+			if difference <= threshold && difference < bestDifference {
+				best, bestDifference = bi, difference
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		for _, fi := range []int{ai, best} {
+			removed[fi] = true
+			f := flows[fi]
+			d := &days[dayIndex[f.Date]]
+			d.NetTransfer -= f.Amount
+			d.Unexplained += f.Amount
+			if d.TransferSource == "mixed" {
+				d.TransferSource = "exchange"
+			} else {
+				d.TransferSource = "none"
+			}
+		}
+		b := flows[best]
+		pairs = append(pairs, fmt.Sprintf("%s %+.2f / %s %+.2f", a.Date, a.Amount, b.Date, b.Amount))
+	}
+	if len(pairs) == 0 {
+		return flows, ""
+	}
+	kept := flows[:0]
+	for i, f := range flows {
+		if !removed[i] {
+			kept = append(kept, f)
+		}
+	}
+	return kept, fmt.Sprintf("%d 笔推断转账因快照时点错位互相抵消：%s", 2*len(pairs), strings.Join(pairs, "；"))
+}
+
 func finishReturns(a *Amounts, capital float64) {
 	a.AdjustedPnL = a.CurrentEquity - a.InitialBalance - a.NetTransfers
 	if a.InitialBalance > 0 {
