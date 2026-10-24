@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -34,7 +33,7 @@ func TestBinanceFullCloseCancelsOwnSideProtection(t *testing.T) {
 				var mu sync.Mutex
 				var cancelledAlgo []string
 				orderPosts := 0
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := newMemoryHTTPServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					mu.Lock()
 					defer mu.Unlock()
 					w.Header().Set("Content-Type", "application/json")

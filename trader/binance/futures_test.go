@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/adshao/go-binance/v2/futures"
 	"github.com/stretchr/testify/assert"
+	"nofx/hook"
 	"nofx/trader/testutil"
 	"nofx/trader/types"
 )
@@ -23,13 +23,13 @@ import (
 // Inherits TraderTestSuite and adds Binance Futures specific mock logic
 type BinanceFuturesTestSuite struct {
 	*testutil.TraderTestSuite // Embeds base test suite
-	mockServer                *httptest.Server
+	mockServer                *memoryHTTPServer
 }
 
 // NewBinanceFuturesTestSuite Creates Binance Futures test suite
 func NewBinanceFuturesTestSuite(t *testing.T) *BinanceFuturesTestSuite {
 	// Create mock HTTP server
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := newMemoryHTTPServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Return different mock responses based on URL path
 		path := r.URL.Path
 
@@ -332,7 +332,7 @@ func TestSetMarginModeFailsClosedWhenExchangeStateDisagrees(t *testing.T) {
 		{name: "cross margin", hedge: true, marginType: "CROSSED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newMemoryHTTPServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/fapi/v1/positionSide/dual":
@@ -368,7 +368,7 @@ func TestSetMarginModeFailsClosedWhenExchangeStateDisagrees(t *testing.T) {
 // TestNewFuturesTrader tests creating Binance Futures trader
 func TestNewFuturesTrader(t *testing.T) {
 	// Create mock HTTP server
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := newMemoryHTTPServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
 		var respBody interface{}
@@ -392,6 +392,25 @@ func TestNewFuturesTrader(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
+	// Install the SDK client before construction, so time sync and mode setup
+	// are also handled in memory and cannot call Binance with real credentials.
+	oldHook, hadHook := hook.Hooks[hook.NEW_BINANCE_TRADER]
+	oldEnabled := hook.EnableHooks
+	hook.EnableHooks = true
+	hook.RegisterHook(hook.NEW_BINANCE_TRADER, func(args ...any) any {
+		c := futures.NewClient("test_api_key", "test_secret_key")
+		c.BaseURL = mockServer.URL
+		c.HTTPClient = mockServer.Client()
+		return &hook.NewBinanceTraderResult{Client: c}
+	})
+	t.Cleanup(func() {
+		hook.EnableHooks = oldEnabled
+		if hadHook {
+			hook.Hooks[hook.NEW_BINANCE_TRADER] = oldHook
+		} else {
+			delete(hook.Hooks, hook.NEW_BINANCE_TRADER)
+		}
+	})
 	// Test successful creation
 	t1 := NewFuturesTrader("test_api_key", "test_secret_key", "test_user")
 

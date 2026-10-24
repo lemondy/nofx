@@ -27,6 +27,7 @@ type Store struct {
 	position       *PositionStore
 	strategy       *StrategyStore
 	equity         *EquityStore
+	accountIncome  *AccountIncomeStore
 	order          *OrderStore
 	grid           *GridStore
 	pendingEntry   *PendingEntryStore
@@ -167,6 +168,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Strategy().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize strategy tables: %w", err)
+	}
+	if err := s.AccountIncome().initTables(); err != nil {
+		return fmt.Errorf("init account income: %w", err)
 	}
 	if err := s.Equity().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize equity tables: %w", err)
