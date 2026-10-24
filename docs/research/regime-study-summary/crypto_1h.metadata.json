@@ -1,0 +1,962 @@
+{
+  "split": {
+    "calendar_start": "2023-10-01 00:00:00+00:00",
+    "calendar_end": "2026-10-24 00:00:00+00:00",
+    "cutoff": "2025-08-03 00:00:00+00:00",
+    "train_end_exclusive": "2025-07-31 00:00:00+00:00",
+    "purge_bars": 72
+  },
+  "inventory": [
+    {
+      "symbol": "1000PEPEUSDT",
+      "bars": 26867,
+      "missing": 0,
+      "first": "2023-10-01 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 25427
+    },
+    {
+      "symbol": "1000SHIBUSDT",
+      "bars": 26867,
+      "missing": 0,
+      "first": "2023-10-01 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 25427
+    },
+    {
+      "symbol": "AAVEUSDT",
+      "bars": 26867,
+      "missing": 0,
+      "first": "2023-10-01 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 25427
+    },
+    {
+      "symbol": "ADAUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "AEROUSDT",
+      "bars": 16533,
+      "missing": 0,
+      "first": "2024-12-04 15:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 15093
+    },
+    {
+      "symbol": "AGTUSDT",
+      "bars": 12529,
+      "missing": 0,
+      "first": "2025-05-20 11:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 11089
+    },
+    {
+      "symbol": "AKEUSDT",
+      "bars": 9431,
+      "missing": 0,
+      "first": "2025-09-26 13:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 7991
+    },
+    {
+      "symbol": "ALTUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "APTUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ARBUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ASTERUSDT",
+      "bars": 9599,
+      "missing": 0,
+      "first": "2025-09-19 13:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 8159
+    },
+    {
+      "symbol": "AUSDT",
+      "bars": 12339,
+      "missing": 0,
+      "first": "2025-05-28 09:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 10899
+    },
+    {
+      "symbol": "AVAAIUSDT",
+      "bars": 15478,
+      "missing": 0,
+      "first": "2025-01-17 14:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14038
+    },
+    {
+      "symbol": "AVAUSDT",
+      "bars": 16318,
+      "missing": 0,
+      "first": "2024-12-13 14:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14878
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "BASEDUSDT",
+      "bars": 4993,
+      "missing": 0,
+      "first": "2026-03-30 11:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 3553
+    },
+    {
+      "symbol": "BATUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "BCHUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "BERAUSDT",
+      "bars": 14996,
+      "missing": 0,
+      "first": "2025-02-06 16:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 13556
+    },
+    {
+      "symbol": "BNBUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "BRUSDT",
+      "bars": 13967,
+      "missing": 0,
+      "first": "2025-03-21 13:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12527
+    },
+    {
+      "symbol": "BTCUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "CAKEUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "CRVUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "CYSUSDT",
+      "bars": 7584,
+      "missing": 0,
+      "first": "2025-12-12 12:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 6144
+    },
+    {
+      "symbol": "DASHUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "DOTUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "DUSKUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "EIGENUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ENAUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "EPICUSDT",
+      "bars": 14163,
+      "missing": 0,
+      "first": "2025-03-13 09:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12723
+    },
+    {
+      "symbol": "ERAUSDT",
+      "bars": 11132,
+      "missing": 0,
+      "first": "2025-07-17 16:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 9692
+    },
+    {
+      "symbol": "ETCUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ETHFIUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ETHUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "FARTCOINUSDT",
+      "bars": 16145,
+      "missing": 0,
+      "first": "2024-12-20 19:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14705
+    },
+    {
+      "symbol": "FETUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "FILUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "FOLKSUSDT",
+      "bars": 8447,
+      "missing": 0,
+      "first": "2025-11-06 13:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 7007
+    },
+    {
+      "symbol": "GTCUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "HBARUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "HYPEUSDT",
+      "bars": 12289,
+      "missing": 0,
+      "first": "2025-05-30 11:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 10849
+    },
+    {
+      "symbol": "ICNTUSDT",
+      "bars": 11470,
+      "missing": 0,
+      "first": "2025-07-03 14:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 10030
+    },
+    {
+      "symbol": "ICPUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "INJUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "KMNOUSDT",
+      "bars": 16144,
+      "missing": 0,
+      "first": "2024-12-20 20:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14704
+    },
+    {
+      "symbol": "LDOUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "LINKUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "LITUSDT",
+      "bars": 7314,
+      "missing": 0,
+      "first": "2025-12-23 18:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 5874
+    },
+    {
+      "symbol": "LSKUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "LTCUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "MAGICUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "MINAUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "MUBARAKUSDT",
+      "bars": 14062,
+      "missing": 0,
+      "first": "2025-03-17 14:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12622
+    },
+    {
+      "symbol": "NEARUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "NILUSDT",
+      "bars": 13894,
+      "missing": 0,
+      "first": "2025-03-24 14:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12454
+    },
+    {
+      "symbol": "NMRUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "NXPCUSDT",
+      "bars": 12653,
+      "missing": 0,
+      "first": "2025-05-15 07:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 11213
+    },
+    {
+      "symbol": "OGNUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ONDOUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "OPUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "PAXGUSDT",
+      "bars": 13825,
+      "missing": 0,
+      "first": "2025-03-27 11:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12385
+    },
+    {
+      "symbol": "PENDLEUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "PENGUUSDT",
+      "bars": 16219,
+      "missing": 0,
+      "first": "2024-12-17 17:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14779
+    },
+    {
+      "symbol": "PROMUSDT",
+      "bars": 15527,
+      "missing": 0,
+      "first": "2025-01-15 13:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14087
+    },
+    {
+      "symbol": "PUMPUSDT",
+      "bars": 11308,
+      "missing": 0,
+      "first": "2025-07-10 08:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 9868
+    },
+    {
+      "symbol": "PYTHUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "QNTUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "QUSDT",
+      "bars": 10012,
+      "missing": 0,
+      "first": "2025-09-02 08:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 8572
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "RLCUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "RSRUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "SANDUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "SEIUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "SIRENUSDT",
+      "bars": 13946,
+      "missing": 0,
+      "first": "2025-03-22 10:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12506
+    },
+    {
+      "symbol": "SOLUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "STBLUSDT",
+      "bars": 9654,
+      "missing": 0,
+      "first": "2025-09-17 06:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 8214
+    },
+    {
+      "symbol": "STRKUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "SUIUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "TAOUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "TIAUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "TRUMPUSDT",
+      "bars": 15454,
+      "missing": 0,
+      "first": "2025-01-18 14:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14014
+    },
+    {
+      "symbol": "TRUTHUSDT",
+      "bars": 9311,
+      "missing": 0,
+      "first": "2025-10-01 13:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 7871
+    },
+    {
+      "symbol": "TRXUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "UNIUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "USUSDT",
+      "bars": 7585,
+      "missing": 0,
+      "first": "2025-12-12 11:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 6145
+    },
+    {
+      "symbol": "VVVUSDT",
+      "bars": 15195,
+      "missing": 0,
+      "first": "2025-01-29 09:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 13755
+    },
+    {
+      "symbol": "WALUSDT",
+      "bars": 13820,
+      "missing": 0,
+      "first": "2025-03-27 16:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 12380
+    },
+    {
+      "symbol": "WLDUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "WUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "XLMUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "XMRUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "XPLUSDT",
+      "bars": 10274,
+      "missing": 0,
+      "first": "2025-08-22 10:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 8834
+    },
+    {
+      "symbol": "XRPUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ZECUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ZEREBROUSDT",
+      "bars": 15837,
+      "missing": 0,
+      "first": "2025-01-02 15:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 14397
+    },
+    {
+      "symbol": "ZILUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ZKUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    },
+    {
+      "symbol": "ZROUSDT",
+      "bars": 17531,
+      "missing": 0,
+      "first": "2024-10-24 01:00:00+00:00",
+      "last": "2026-10-24 11:00:00+00:00",
+      "eligible": 16091
+    }
+  ],
+  "bars": 1599439,
+  "eligible_bars": 1455439,
+  "market": "crypto",
+  "timeframe": "1h",
+  "protocol": "2026-10-24-v3",
+  "code_sha256": "9f70ca075c16542d2098515ba16d34b2befa96138fd5c34e4c7557dd84546fc6",
+  "input_sha256": {
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/1000PEPEUSDT.json": "22d70d2bd33040260668196d50c8eff5e2b71f155161acc3bb75b178e155813b",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/1000SHIBUSDT.json": "06e9a7a5b371e053dbd77e2f586bd136d31d5656d11ef435580cc0d4093ee485",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AAVEUSDT.json": "bdb9babcf8655d03c455b9807cca35ccdd16d26c8814179e68c1b283fcaa2715",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ADAUSDT.json": "638e859a455dc5cf608e4423b16e0f5b202f7fc3d44f7a0e61277906832b1748",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AEROUSDT.json": "fc59686d88ebac84eb642031545956cf2aab4cb51f299b28926f267f8026b6d8",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AGTUSDT.json": "28acd3ce5851240c73dea00d1f837c7abf47c49b3c643a702dbcc076f9237824",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AKEUSDT.json": "32dbb4fac932eb2f9167d827f7df5c3c095456c46e714927401ca81fc6c0c56f",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ALTUSDT.json": "1701f88eb053d18a4074470de05a072259a8434922ffc15d15a6dae76e308fa6",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/APTUSDT.json": "9c7b9b2c43bc162873505cb941e2c71bb732e6978a8e36dea128dddbee5759db",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ARBUSDT.json": "21b8ed94ee761427c12bf6cdeaff3802a1920b4a3e337d8633d7fa54f2241035",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ASTERUSDT.json": "29c470e884f9783f44d7786462ae2a2bed35e21023c30fe2f889fe7a66b9f1d4",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AUSDT.json": "a53517c45e6f843d63581f42252cb828db53241df6cb57911271c0b9b6ac4f0d",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AVAAIUSDT.json": "348f755687826659e341ddcd3545c3f1706a9c6cedd164c8f4ca07420c09b2b7",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AVAUSDT.json": "1ffe477cce77e81f953552f09392d89399d224a4774b51f287b10da8d162d615",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/AVAXUSDT.json": "73a658ee43661cc7f3e52be3f0307f3d44b96536f58b2933d6ed446e5afaa73e",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BASEDUSDT.json": "4429253b489cadc39a1fd25e80255a4035a62300defd3899d9c83a774efb4d27",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BATUSDT.json": "820404da30357ef06cb49432ea0d42272f3a7107e75d05489818f3fcb8d25842",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BCHUSDT.json": "481295d88a0b08db256e403311755e7fde3823f5db8049a0687668dc2ddfe9ea",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BERAUSDT.json": "2b7fd1acc1eef619c9a69be1295e3977f4a5a68b38d0fc430d184ba8939a7227",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BNBUSDT.json": "9accfb7510ce5bb69e659dbe47fff70594238f06fdede6d2deb995619f9018da",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BRUSDT.json": "ef732c1c732db8d2111351f6bac388892463d3ef30905a7c567d128d84273bd0",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/BTCUSDT.json": "f479964b93414415eb7cdc0047451087f7bc995ec4417c983c55714c33c29e53",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/CAKEUSDT.json": "f368ba173f7e47785bfec7365c2f1f1e540456b47ddf66ef9717a51f2b95ed1c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/CRVUSDT.json": "e5232922d17a199e2add2d091a74e283f5d33dde262739d19ad98763fa06c143",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/CYSUSDT.json": "1aa609149ddcbde3973e2f8e72d1d4079cdd9fe418d1c9fd22948437ebc2317e",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/DASHUSDT.json": "6bb1dc8b981a2295dc22525893c494ec979622ed3b9369096cba1555b6d4e74c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/DOGEUSDT.json": "cd25636f357957f8714694c0bd56278f81a9f747931e475bbf909d548055f61b",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/DOTUSDT.json": "a219e9d3565dca41ea1b7d9e94c13518e4b64f69d0db5338228d00d65658f314",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/DUSKUSDT.json": "3085cf53af70da3e16bdbb780617f7cc1b6960158153cf3d00fb120489c51627",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/EIGENUSDT.json": "993d75c78217c33a2523c7da4b5c4d31669b5c6995cb3ad5ccc63102fe4930ae",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ENAUSDT.json": "ab0a7eef9e33e2d447150a2128f33604dd4914d95df2481bb285d57c3340973c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/EPICUSDT.json": "9914cc979c01f1716c0de289f411cb9dce5d74e6858cb9138a8b8778b6a38927",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ERAUSDT.json": "84a9a0dd97f53692e3e36f2254fb0946247eb85f9368f37056ddb6eeb5f7d0b5",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ETCUSDT.json": "0c35fb6a4eac7e9b782e10f1a03c26339b20160c13e0f09b1233ed8605150978",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ETHFIUSDT.json": "f0630e149b6ec9d8cf820be2e0150d3bcb6cf09a516d21df57e8d6d013c71ac2",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ETHUSDT.json": "2ae8f2362a70f967eea6ea3db9f4090137635b8b28d54d97d1ae163c1ab12633",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/FARTCOINUSDT.json": "1192f8f487709f01de1f502076c2caf7a50d5796faac2511d26ac939303f032c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/FETUSDT.json": "a9a37d44f4f88a322e375ff3a39522918191737c7c6dd026ec38e60cb8c1d890",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/FILUSDT.json": "4a650f30e8f0b17174e7ec3c676562cb4427226ab7611506113fb1da7b4824e3",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/FOLKSUSDT.json": "e229fe7339c9d3bea20e97731258180a700ed483fe5f319f59f9a4a2556056c4",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/GTCUSDT.json": "dc73e001aed39616b24984e8ff293938cc9f99dd5e11c0ef78521e562c934df0",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/HBARUSDT.json": "dcdd146d60592937c3d3a5f139c4c3e340259d2ee0637a78883ba3d2ba647f44",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/HYPEUSDT.json": "e1958fd8bc9af8a4dd15716afa1980ec4081a5ec4f8614c8bebbda4e21b7b683",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ICNTUSDT.json": "4b66a46157cecba2551b959a287c5a88fa22bdfdac76c9803776e2721ee73af6",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ICPUSDT.json": "6373c47ea2fd13885645a8310e586a1dc1e2575a03f270f876195e808d351bf9",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/INJUSDT.json": "68976266d7e9bdd915a9b26a1956eddd4eabba1652a7d35fa700b1d9b154bfc6",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/KMNOUSDT.json": "dced0d5402b0ba0c7aee20541cc1487603d98fd67d1dccf310e1a1e3df7989e8",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/LDOUSDT.json": "01387d32e801e56ed1ed76fbac97bf4d18ff46517166e9c7750c80891cd3d5e2",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/LINKUSDT.json": "a5754cb508fca3955e6f0b9e6fb7bf4a833430f25a2615af2b02e0decae1c6b2",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/LITUSDT.json": "4c06bb4b285cabb7a542bde72ea4beef7471aba1a2808280a1ac19ce36c7be0b",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/LSKUSDT.json": "b2ada8e2806ff87a76de8aa09301be6933b778d4545c1619036b2836c9afad44",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/LTCUSDT.json": "435770bd7395a19ef30a96a64a7b927f824f3dc85ec3f41e68065d5b93ab3c76",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/MAGICUSDT.json": "744ee5e77fa644769a584c4b52098c522983734e793519df0d70c404806fbbab",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/MINAUSDT.json": "ba12d8b11be26aee1baf4100669c3d2eb635a5002011d77df445c7fe85b346ca",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/MUBARAKUSDT.json": "3e3c2a3004b65cfa7abc0846a55cb62ae0e8746c46aca80ec38e6e6e4513fed1",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/NEARUSDT.json": "c0ba2479b7892b30982efba4c40fdb77ece421ae7c297d92eb63d458cb2ab42e",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/NILUSDT.json": "918953cf625fa69b38820efbbddde48fa70eb55f050cfb5e634b6018447fdb37",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/NMRUSDT.json": "5e9a0f1b1157dd7d2faebe6499a95b80c111a2b786dc0764868a4779c9cbc769",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/NXPCUSDT.json": "9d3704b2ce1ba36b7f4cc0b1016cc35304fbf2711dcea5088561d4872660b4d1",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/OGNUSDT.json": "ec7044ca8969545c3575f7579ed0f5ae6d5060fb83c67773ef8e0fe27ef6271c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ONDOUSDT.json": "be61ea2269aceb8a1f5afc0e32108b096952a791a7c95e83b425f7fde123ef8c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/OPUSDT.json": "83c80ef4cabcff7cb93fa6bb77c050b491cafcf55c58edd4c13e4b6732689c92",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/PAXGUSDT.json": "681e44997f1d103f9e481efac667413fcd7b4f4cdd888db790ee46f0046d8026",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/PENDLEUSDT.json": "edab3329742833cdd7c1716a2db42ca35f87895e5ed9cc6e85a6deff0d0c61a0",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/PENGUUSDT.json": "b7ce9ceec12880820f39c87c0f8351a7b1b798bfd78d0f1b2316773a20084f96",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/PROMUSDT.json": "b85253e72d164d83ebd846989eebcf95385e39d5a56360839f0be4e863f3cf2a",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/PUMPUSDT.json": "791717f7366f8a7d9ce2a504b6a96a70e33f9af0958218bde98a470c691a2670",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/PYTHUSDT.json": "37394f280cbbe9ed2b40b535068d9650fdd19393cd8a6c44da0cbcc97d498421",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/QNTUSDT.json": "7d092f9eec1041f5f3228823c7d0aff5cee70122b77f942a1f28d88e93ffe82a",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/QUSDT.json": "923e2d7473d16ea16d1cec5c2472478e57f2a443f86a4061bf52c12f309942a5",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/RENDERUSDT.json": "3634264ad2f95462daee27ce2d875e4df1ce9b090b8ba7302fe435befa62ce83",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/RLCUSDT.json": "4b0007a179ed8bc9bedd7779ec57feab6159c78767ff09737440b4c857287deb",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/RSRUSDT.json": "4954a126dc1cb340ea167da38281d544ce11dd30e0cba72ae0df79815b64d4f0",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/SANDUSDT.json": "233d9e09e038d9a50f9934efda6d552318b11a3d091fba9feff636de80c2a42c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/SEIUSDT.json": "5ac62beb164d0db774e27a34bd485f60603e66a4e8fea1dcacbb6a610df3503f",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/SIRENUSDT.json": "c1528568dee24d6a888ec0e3f1036d2fb9e81c912cf51bfc1ee09f65cea46e01",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/SOLUSDT.json": "4fb1a43a5833108421b2d077c4b4f2e04be797a1ec305a18e0212bf8aaecc4f5",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/STBLUSDT.json": "3711ad7cd9e947bd9a93269a59cc4eddd51b8ff2545bdff8355718bf2b4586ae",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/STRKUSDT.json": "72a5d01feeb05e9306d46eae6ee1de9b2f668bf5ff683bb4800341ed576a3c17",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/SUIUSDT.json": "1b72436968ff50937c4fa3f32d970fcf4a80591d72c8c56534b99c0835ba7976",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/TAOUSDT.json": "c39eb57c6bf6a5c0c75734f7906e56b521aff6b6c2750050aee9a2307ba8f01d",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/TIAUSDT.json": "9e2db2120604a1950508575a381aa110f5cee33f46c3cd2c7879c3d6af69410e",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/TRUMPUSDT.json": "2ab76598e475769f1021feb0305afb4030432f344015ebee3835d39f21298ded",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/TRUTHUSDT.json": "f8bc87eedb3bcce1319a92e8e3473476619252a42181989a996456738087f2b8",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/TRXUSDT.json": "64ab6647fa3c89fe5149a309e62dd9b91613ed997d8a8998a309d45c3cefb188",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/UNIUSDT.json": "c329b4a50962a58999bdb6a865c65d74e20eda33e1ddd2783cb22e70aef8f46e",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/USUSDT.json": "9cdafbd91a2ebba63d2fde6a911719def79ea93c76436ba687f12900bbf63691",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/VVVUSDT.json": "b985780870a2c62bff78aa0b70a04c427af101aa7f19c3c596c71fcf1c63315c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/WALUSDT.json": "79099a8f69781a029636d4d247a106635aa36d23034f8bdc4fd1307749b692f9",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/WLDUSDT.json": "4552615f8b275040c1653c47fe38082f1f416fd582440e1057f3f663763c6497",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/WUSDT.json": "57720ee2d4c98936f18d4fcd9735f3c031e4b91bc29da233520daa477eaebf2c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/XLMUSDT.json": "15b3f4e174f7ce01157013a949489eb19131f4f0de4f6775695a001d575c68a5",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/XMRUSDT.json": "b51d29f12360ec11cd4e3081163a2542cc30ecaa6b64dd9ad1dbb2df4b51ee24",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/XPLUSDT.json": "f433480956268bba266393b63b4a1215bf654464347ef0b162c376c407f08439",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/XRPUSDT.json": "1e3bbbbf0528802a55f99ee1ef2e59a891bc3b8272d622f7fa9b42baf9f2f0bb",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ZECUSDT.json": "2d3ad867cb045553dedeae82fdcf41b3295b0e274fcf9e0df244cc9d5e04f90c",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ZEREBROUSDT.json": "7c4d9ec72f74b579c25001ee41f30460301f762da15c8d3a0250a253009d118f",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ZILUSDT.json": "7e8765959be96fa20d14ee1da703cc2cafff259d1f0aeb3dd32f08d716cb8b75",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ZKUSDT.json": "8445a479edb4216b5b1248184144978eb5b85b5abf5b518157261d40647d3334",
+    "/Users/zhangyun/workspace/nofx/data/regime_study/klines_1h/ZROUSDT.json": "96d73b066507f8eabb65827c95f5e2914f4e9f4be0ca670c9b0f0fdd6e4dcfe1"
+  },
+  "windows": [
+    48,
+    72,
+    96,
+    120,
+    144
+  ],
+  "features": [
+    "er",
+    "vr4",
+    "vr8",
+    "rho1",
+    "hurst",
+    "convexity_t",
+    "acceleration",
+    "stretch",
+    "ewma_ratio",
+    "arch1",
+    "volvol",
+    "bb_percentile",
+    "squeeze_duration",
+    "breakout",
+    "kurtosis",
+    "tail_frequency",
+    "jump_share",
+    "last_jump",
+    "bars_since_jump",
+    "wick_lower",
+    "wick_upper",
+    "median_cross",
+    "upper_touches",
+    "lower_touches",
+    "donchian_atr",
+    "drawdown",
+    "rebound",
+    "recovery_speed"
+  ],
+  "horizons": [
+    4,
+    24,
+    72
+  ],
+  "planned_tests": 2955
+}
