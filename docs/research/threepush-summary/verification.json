@@ -1,0 +1,57 @@
+{
+  "version": "2026-10-24-v2",
+  "tests": {
+    "command": "/Users/zhangyun/workspace/nofx/.venv/bin/python -m unittest discover -s scripts/backtest/tests -v",
+    "total": 255,
+    "skipped": 5,
+    "skipped_reason": "existing ML tests require unavailable scikit-learn",
+    "status": "passed",
+    "log_sha256": "19c263c2c1a21705f0f88750d6f95d6f989f787dec268d2b656774f2f9dd20b1",
+    "ci_scaled_pipeline_observed_seconds": 0.876
+  },
+  "git_diff_check": "passed",
+  "untracked_additions_whitespace_check": "passed",
+  "v1_archived_files_verified": 68,
+  "v1_preregistration_prefix": "byte-identical",
+  "unchanged_ast_functions": [
+    "Detector",
+    "parameter_grid",
+    "atr14",
+    "confirmed_pivots",
+    "pattern_features",
+    "detect_patterns",
+    "study_split",
+    "phase_mask",
+    "fit_thresholds",
+    "classify",
+    "forward_outcome",
+    "breakout_outcome",
+    "match_controls",
+    "matched_inference",
+    "refine_matched_contrast",
+    "partition",
+    "select_training"
+  ],
+  "v1_v2_thresholds_splits_inventory_and_raw_counts": "identical",
+  "calibration_before_real_seal": true,
+  "holdout_single_use_markers": [
+    "crypto_1d.holdout.started.json",
+    "crypto_1h.holdout.started.json",
+    "us_1d.holdout.started.json"
+  ],
+  "real_inference_test_count": 21384,
+  "geometric_statistics_have_no_inference_columns": true,
+  "calibration": {
+    "passed": true,
+    "complete_large_panels": true,
+    "null_reject_families": 0,
+    "null_train_rejections": 0,
+    "null_hold_confirmations": 0,
+    "planted_medium_detected": true,
+    "criterion": "10 fixed large panels; <=3 with any train BH rejection; hold<=max(1,train*.25); matched edge estimable; planted H2_edge same-key train+hold",
+    "reason": "passed"
+  },
+  "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+  "test_code_sha256": "44a697cb89f7da78140b507fa602915093120ea3f495ba5f6dd6e83a74367767",
+  "verified_utc": "2026-10-24T13:14:06.091246+00:00"
+}
