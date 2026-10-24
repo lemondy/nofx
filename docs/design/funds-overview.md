@@ -29,7 +29,13 @@ residual  = delta_equity - explained - confirmed_transfer
 若 |residual| > max(2 USDT, 2% × open_equity) 且当日没有已确认转账覆盖它 → 记一条 inferred 转账，amount = residual，type = inferred_in/inferred_out；
 否则 unexplained = residual（快照时点误差、缺失成交等小额噪声）。
 ```
-累计口径：`net_transfers = Σ(confirmed + inferred 转账)`；`adjusted_pnl = current_equity - initial_balance - net_transfers`（剔除转账后的真实盈亏）；`adjusted_return_pct` 用 Modified Dietz：`adjusted_pnl / (initial_balance + Σ flow_i × (T - t_i)/T)`，T 为区间总时长；`raw_return_pct = current_equity / initial_balance - 1`（与看板现有口径一致，用于对比）。
+每日推断完成后，按账户在全历史上做“时点错位配对”，再应用 `days` 展示过滤：按时间顺序遍历未配对的 inferred 转账，在之后的候选中选择金额最接近者（相同差额取时间最早者），每笔最多配对一次。候选必须符号相反、间隔不超过 3 个自然日（按 `tz` 的日期计算；若两笔之间存在缺快照日，可超过 3 天），且 `|a + b| <= max(2 USDT, 2% × max(open_equity(a), open_equity(b)))`。交易所确认流水不参与配对。
+
+配对的两笔从 `flows` 移除；两个日期的 `net_transfer` 回退为仅含已确认转账，`transfer_source` 回退为 `exchange` 或 `none`，各自推断金额加回该日 `unexplained`，保持每日对账恒等式。`daily_total` 从修正后的每日行汇总；账户 warnings 记录抵消笔数、日期和金额。Modified Dietz 使用移除后的流水计算加权本金。
+
+累计 `net_transfers`（账户及 totals）保留配对前的对账值。精确相抵时累计与每日合计一致；允许容差的近似相抵若存在净差额，该差额会进入 `unexplained`，累计 `net_transfers` 与修正后的每日/流水合计会相差该净差额。这是保留累计净转账口径的取舍；配对仅是时点错位启发式，也可能抵消恰好符合条件的真实往返转账。
+
+累计口径：`net_transfers = Σ(配对前的 confirmed + inferred 转账)`；`adjusted_pnl = current_equity - initial_balance - net_transfers`（剔除转账后的真实盈亏）；`adjusted_return_pct` 用 Modified Dietz：`adjusted_pnl / (initial_balance + Σ flow_i × (T - t_i)/T)`，T 为区间总时长，flow 使用配对后保留的流水；`raw_return_pct = current_equity / initial_balance - 1`（与看板现有口径一致，用于对比）。
 合计（totals）只汇总实盘账户（`kind != paper`）；各币种统一按 USDT（USDC 等稳定币按 1:1，注明）。
 
 ## API
