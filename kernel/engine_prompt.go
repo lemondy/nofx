@@ -253,7 +253,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString("- liquidity_sweep 为程序预计算的扫荡证据:sellside_swept 支持做多,buyside_swept 支持做空;mss_confirmed=true 表示结构已转向;仅是参考证据,不是独立入场理由,不能绕过 hard_entry_gate / rr_scan;没有该字段表示近期无扫荡。\n")
 	}
 	if e.config.Indicators.EnableFactorEnsemble {
-		sb.WriteString("- factor_ensemble 为程序每日预计算的多因子截面参考:pct 越大越被因子看多、越小越看空,按 horizon 天数;前向校验仍未证明有效,仅是参考证据,不是独立入场理由,不能绕过 hard_entry_gate / rr_scan;没有该字段表示该币不在因子宇宙或数据过期。\n")
+		sb.WriteString("- factor_ensemble 为程序每日预计算的多因子截面参考:pct 越大越被因子看多、越小越看空,z 为方向调整后的截面标准分,按 horizon 天数;scope=core 表示因子在该币所在的流动性宇宙验证过;scope=extended 表示未在该币流动性档位验证、仅相对核心宇宙外推,参考权重应低于 core;bull/bear/neutral 为各因子对该币的方向投票(z≥0.5/≤-0.5/其余),top 为影响最大的至多3个因子(含 family、val_t、前向状态);scope=none 表示该币没经过因子校验(reason 说明原因),不能据此推断看多/看空;前向状态 inconclusive/pending 表示尚未被样本外证明;全部仅是参考证据,不是独立入场理由,不能绕过 hard_entry_gate / rr_scan;字段缺失表示无可用参考。\n")
 	}
 	if TPMenuEnabled(&e.config.RiskControl) {
 		sb.WriteString("- stop_loss 复制 stop_plan_price;take_profit 从 rr_scan.tp_options 菜单选编号填 tp_option(并把所选 level 复制为 take_profit):level 全部是程序按 stop_plan 同口径算出的结构位,touch_count 只是近30日触及该价位的次数(中性证据,非概率承诺),beyond_structure=超出全部周期结构极值(历史无参考)。usable=false 或菜单为空→引用 MAX_STRUCTURAL_RR=best_rr 并 wait。\n")
