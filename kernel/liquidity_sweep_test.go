@@ -389,8 +389,8 @@ func TestLiquiditySweepPromptOptIn(t *testing.T) {
 		limit    bool
 		baseline string
 	}{
-		{false, "b042604a9c85afb5cbe8b69a49395258ca2536bd97dc20a68e13acda6fd18ac7"},
-		{true, "082cf65a2cafabeefb1c01bcc72bf0f0eca5182ea62a15cbcbf10e422d781e78"},
+		{false, "caaa7d3670c69c40871f8b817480145a867f32ff4d12bf5c182792291887f78c"},
+		{true, "57768d1bf8a4c180331ea6b75fd9afda43057b05ef3741f8d663aedce79973b3"},
 	} {
 		cfg := &store.StrategyConfig{Language: "zh"}
 		cfg.RiskControl.LimitEntryEnabled = tc.limit

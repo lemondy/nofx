@@ -1113,6 +1113,42 @@ func (at *AutoTrader) marginBudgetBlocksOpen(symbol, side string, newSizeUSD, ne
 // Early-close lock
 // ============================================================================
 
+const (
+	// Taking profit on a winning position is not conceding a noise-driven
+	// loss: allow active full/partial profit-taking once it has earned 0.5R.
+	earlyCloseProfitBypassR = 0.5
+	// Without an opening-risk anchor, use unleveraged directional price profit.
+	earlyCloseProfitBypassPct = 1.5
+)
+
+// earlyCloseProfitBypass shares the profit exception with prompt compression,
+// so an allowed take-profit is never presented to the AI as close-locked.
+func (at *AutoTrader) earlyCloseProfitBypass(symbol, side string, entryPrice, markPrice float64) (bool, string) {
+	if entryPrice <= 0 || markPrice <= 0 {
+		return false, ""
+	}
+	fav := markPrice - entryPrice
+	if side != "long" {
+		fav = entryPrice - markPrice
+	}
+	if fav <= 0 {
+		return false, ""
+	}
+	anchor := at.initialStopAnchor(symbol, side, at.GetRecordedStopLoss(symbol, side))
+	if anchor > 0 {
+		if riskDist := math.Abs(entryPrice - anchor); riskDist > 0 {
+			if pnlR := fav / riskDist; pnlR >= earlyCloseProfitBypassR {
+				return true, fmt.Sprintf("profit %.2fR ≥ %.2fR", pnlR, earlyCloseProfitBypassR)
+			}
+		}
+		return false, ""
+	}
+	if profitPct := fav / entryPrice * 100; profitPct >= earlyCloseProfitBypassPct {
+		return true, fmt.Sprintf("price profit %.2f%% ≥ %.2f%% (no opening-risk anchor)", profitPct, earlyCloseProfitBypassPct)
+	}
+	return false, ""
+}
+
 // oneHAgainstCandles counts the trailing consecutive CLOSED 1h candles that
 // run AGAINST the position direction (long → bearish candles, short →
 // bullish candles). The forming bar is excluded. This is the trend-change
@@ -1143,14 +1179,14 @@ func oneHAgainstCandles(data *market.Data, side string) int {
 
 // earlyCloseBlocksClose gates AI-initiated closes that happen BEFORE the
 // position has ridden its intended swing (user directive 2026-09-11): a close
-// earlier than EarlyCloseMinHours (default 4h) is only allowed when the 1h
-// timeframe shows ≥2 closed candles against the position direction — real
-// trend-change evidence, not a wobble. Exempt by construction: exchange
-// SL/TP triggers and the drawdown-protect close are program paths, not AI
+// earlier than EarlyCloseMinHours (default 4h) needs either sufficient profit
+// for active profit-taking or ≥2 closed 1h candles against the position
+// direction — real trend-change evidence, not a wobble. Exempt by construction:
+// exchange SL/TP triggers and the drawdown-protect close are program paths, not AI
 // decisions; a mark at/beyond the recorded stop also passes (the position is
 // stopping out regardless). Fail-open on missing data — a gate must never
 // trap a position it cannot see.
-func (at *AutoTrader) earlyCloseBlocksClose(symbol, side string, markPrice float64, data *market.Data) (bool, string) {
+func (at *AutoTrader) earlyCloseBlocksClose(symbol, side string, entryPrice, markPrice float64, data *market.Data) (bool, string) {
 	if at.config.StrategyConfig == nil {
 		return false, ""
 	}
@@ -1172,6 +1208,10 @@ func (at *AutoTrader) earlyCloseBlocksClose(symbol, side string, markPrice float
 		if (side == "long" && markPrice <= sl) || (side == "short" && markPrice >= sl) {
 			return false, ""
 		}
+	}
+	if bypass, reason := at.earlyCloseProfitBypass(symbol, side, entryPrice, markPrice); bypass {
+		logger.Infof("🛡️ [%s] %s %s early-close lock bypassed: %s", at.name, symbol, side, reason)
+		return false, ""
 	}
 	evidence := oneHAgainstCandles(data, side)
 	if evidence >= 2 {
@@ -2887,9 +2927,9 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				continue
 			}
 			// Early-close lock: before EarlyCloseMinHours (default 4h) an AI
-			// close needs ≥2 closed 1h candles against the position —
-			// SL/TP fills and drawdown-protect never pass through here.
-			if blocked, reason := at.earlyCloseBlocksClose(d.Symbol, side, markPrice, ctx.MarketDataMap[d.Symbol]); blocked {
+			// close needs sufficient profit or ≥2 closed 1h candles against
+			// the position. SL/TP fills and drawdown-protect never pass here.
+			if blocked, reason := at.earlyCloseBlocksClose(d.Symbol, side, entryPrice, markPrice, ctx.MarketDataMap[d.Symbol]); blocked {
 				logger.Warnf("🛡️ [%s] GATE BLOCKED %s %s: %s", at.name, d.Action, d.Symbol, reason)
 				continue
 			}

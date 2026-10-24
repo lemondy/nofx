@@ -667,9 +667,10 @@ type RiskControlConfig struct {
 	TpTrimYieldsToLock *bool `json:"tp_trim_yields_to_lock,omitempty"`
 	// EarlyCloseMinHours: AI-initiated closes before this many hours of hold
 	// time are blocked unless the 1h timeframe shows ≥2 closed candles against
-	// the position direction (trend-change evidence). Exchange SL/TP triggers
-	// and the drawdown-protect close bypass it by construction (neither is an
-	// AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
+	// the position direction (trend-change evidence), or profit reaches 0.5R
+	// (1.5% directional price profit without an opening-risk anchor). Exchange
+	// SL/TP triggers and the drawdown-protect close bypass it by construction
+	// (neither is an AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
 	EarlyCloseMinHours int `json:"early_close_min_hours"`
 	// MaxEntrySlippageBps: the maximum ADVERSE fill slippage a MARKET open
 	// may realize vs its pre-trade checked price (F21c, 2026-10-01 review:

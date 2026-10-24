@@ -428,7 +428,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		params.WriteString("- 保护单看门狗(程序强制): 每周期核对全部持仓的止损/止盈挂单,缺失时按开仓计划价自动补挂(止盈只平部分的剩余趋势跑单、以及止盈距离走完转跟踪止损的仓位除外——它们的出场由移动止损接管)——保护单由程序保障,你只负责按结构规划输出 SL/TP 数值\n")
 		if EarlyCloseHours(&e.config.RiskControl) > 0 {
-			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 还必须有至少 2 根逆持仓方向的已收盘 1h K线。该门与浮亏结构位门、最短持仓门串联(AND):所有当前适用的门都通过才放行;任一门拦截就 hold。交易所 SL/TP 与回撤保护不走这些 AI close 门。持仓满 %dh 后不再适用本时间门\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
+			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 还必须有至少 2 根逆持仓方向的已收盘 1h K线。已有 ≥0.5R 浮盈时可主动止盈/分批止盈,豁免本时间门;无开仓风险锚点时以价格方向浮盈 ≥1.5%% 兜底。该门与浮亏结构位门、最短持仓门串联(AND):所有当前适用的门都通过才放行;任一门拦截就 hold。交易所 SL/TP 与回撤保护不走这些 AI close 门。持仓满 %dh 后不再适用本时间门\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
 		}
 		if e.config.RiskControl.MinHoldMinutes > 0 {
 			params.WriteString(fmt.Sprintf("- 最短持仓限制(程序强制): 持仓不足 %d 分钟时,close/partial_close 会被程序拦截(现价已触及记录止损的硬退出除外)——不要在时间未到且无 1h 逆势证据时输出平仓动作\n", e.config.RiskControl.MinHoldMinutes))
@@ -2269,7 +2269,7 @@ func positionCloseLocked(pos PositionInfo, data *market.Data, rc *store.RiskCont
 		}
 	}
 	var locks []string
-	if hours := EarlyCloseHours(rc); hours > 0 && held < time.Duration(hours)*time.Hour {
+	if hours := EarlyCloseHours(rc); hours > 0 && held < time.Duration(hours)*time.Hour && !pos.EarlyCloseProfitOK {
 		if oneHAgainstCandles(data, strings.ToLower(pos.Side)) < 2 {
 			locks = append(locks, fmt.Sprintf("持仓不足%dh且1h逆向收盘<2根", hours))
 		}
