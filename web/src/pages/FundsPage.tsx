@@ -368,7 +368,8 @@ export default function FundsPage({ language }: { language: string }) {
     totals != null
       ? totals.trading_pnl - totals.fees + totals.funding + totals.other_income
       : 0
-  const feesFunding = totals != null ? totals.fees + totals.funding : 0
+  // 净成本：手续费支出减去资金费收入，正数为净支出
+  const netCost = totals != null ? totals.fees - totals.funding : 0
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -494,13 +495,18 @@ export default function FundsPage({ language }: { language: string }) {
                 tone={statTone(totals?.adjusted_return_pct ?? 0)}
               />
               <Stat
-                label={L('手续费+资金费', 'Fees + funding', language)}
-                value={fmtMoney(feesFunding)}
-                hint={L(
-                  '手续费（支出为正）+ 资金费（收入为正）',
-                  'fees (expense+) + funding (income+)',
+                label={L(
+                  '手续费+资金费净成本',
+                  'Net fees & funding cost',
                   language
                 )}
+                value={fmtMoney(netCost)}
+                hint={L(
+                  '手续费 − 资金费收入（正数为净支出）',
+                  'fees − funding income (positive = net expense)',
+                  language
+                )}
+                tone={statTone(-netCost)}
               />
               <Stat
                 label={L('未解释差额', 'Unexplained', language)}
