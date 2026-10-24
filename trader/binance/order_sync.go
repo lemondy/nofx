@@ -42,10 +42,21 @@ var (
 //     caught by the next probe run).
 //   - carry-over: symbols whose query failed or filled its page are retried
 //     next run, so the throttled probe window cannot lose them.
+//   - invalid-symbol quarantine: -1121 (delisted/renamed) failures are
+//     permanent — the symbol is quarantined for orderSyncInvalidSymbolQuarantine
+//     instead of pending-retried, because pending carry-over, held DB rows and
+//     the recent-fill window would otherwise re-add it on EVERY run (P1-1,
+//     2026-10-24: AAPLBUSDT/LLYBUSDT burned 32k userTrades calls in 10 days).
+//     Quarantine expiry re-probes once in case of a relist.
 const (
 	orderSyncProbeEvery   = 2 * time.Minute
 	orderSyncProbeOverlap = 10 * time.Minute // income rows can lag the fill
 	orderSyncTradesLimit  = 500
+
+	// orderSyncInvalidSymbolQuarantine is how long a -1121 symbol is skipped
+	// before one re-probe (relist check). One query per symbol per day beats
+	// one query per 30s that can only fail again.
+	orderSyncInvalidSymbolQuarantine = 24 * time.Hour
 )
 
 // orderSyncAcct is the per-trader sync bookkeeping.
@@ -53,6 +64,11 @@ type orderSyncAcct struct {
 	lastProbe time.Time         // start time of the last fully successful probe pair
 	pending   map[string]bool   // symbols to re-query next run (failed / truncated at the page limit)
 	queriedFP map[string]string // symbol -> exchange position fingerprint at its last query
+	// quarantine: -1121 symbols -> earliest retry time. Guarded by
+	// binanceSyncStateMutex like the rest of the struct. Memory-only: a
+	// restart re-learns each dead symbol with a single query.
+	quarantine    map[string]time.Time
+	quarantineSig string // last logged skip list — dedups the per-run INFO line
 }
 
 var orderSyncAccts = map[string]*orderSyncAcct{} // guarded by binanceSyncStateMutex
@@ -61,8 +77,11 @@ func orderSyncAcctLocked(traderID, exchangeID string) *orderSyncAcct {
 	key := traderID + "|" + exchangeID
 	a := orderSyncAccts[key]
 	if a == nil {
-		a = &orderSyncAcct{pending: map[string]bool{}, queriedFP: map[string]string{}}
+		a = &orderSyncAcct{pending: map[string]bool{}, queriedFP: map[string]string{}, quarantine: map[string]time.Time{}}
 		orderSyncAccts[key] = a
+	}
+	if a.quarantine == nil {
+		a.quarantine = map[string]time.Time{}
 	}
 	return a
 }
@@ -168,6 +187,10 @@ func (t *FuturesTrader) syncOrders(traderID string, exchangeID string, exchangeT
 	prevFP := make(map[string]string, len(acct.queriedFP))
 	for s, fp := range acct.queriedFP {
 		prevFP[s] = fp
+	}
+	quarantinedUntil := make(map[string]time.Time, len(acct.quarantine))
+	for s, at := range acct.quarantine {
+		quarantinedUntil[s] = at
 	}
 	binanceSyncStateMutex.Unlock()
 
@@ -295,6 +318,39 @@ func (t *FuturesTrader) syncOrders(traderID string, exchangeID string, exchangeT
 	}
 	sort.Strings(changedSymbols)
 
+	// Quarantine choke point: a -1121 symbol is re-added by pending
+	// carry-over, held DB rows (never successfully queried → never in
+	// queriedFP → the unchanged-skip never applies) and the recent-fill
+	// window, so filtering only the pending set cannot stop the loop. Drop
+	// every actively-quarantined symbol here, after all discovery methods
+	// have spoken.
+	{
+		var skipped []string
+		kept := changedSymbols[:0]
+		for _, s := range changedSymbols {
+			if until, q := quarantinedUntil[s]; q && runStart.Before(until) {
+				skipped = append(skipped, s)
+				continue
+			}
+			kept = append(kept, s)
+		}
+		changedSymbols = kept
+		if len(skipped) > 0 {
+			sig := strings.Join(skipped, ",")
+			logged := false
+			binanceSyncStateMutex.Lock()
+			if a := orderSyncAcctLocked(traderID, exchangeID); a.quarantineSig != sig {
+				a.quarantineSig = sig
+				logged = true
+			}
+			binanceSyncStateMutex.Unlock()
+			if logged {
+				logger.Infof("  🧊 %d quarantined invalid symbols skipped (exchange rejects them as -1121; delisted/renamed): %v — one re-probe per symbol per %v; DB open rows are the orphan reconciler's business",
+					len(skipped), skipped, orderSyncInvalidSymbolQuarantine)
+			}
+		}
+	}
+
 	if len(changedSymbols) == 0 {
 		logger.Infof("📭 No symbols with new trades to sync")
 		// DON'T update lastSyncTime to current time here!
@@ -309,7 +365,8 @@ func (t *FuturesTrader) syncOrders(traderID string, exchangeID string, exchangeT
 	var failedSymbols []string
 	apiCalls := 0
 	newPending := map[string]bool{}
-	queriedOK := map[string]string{} // symbol -> position fingerprint at query time
+	quarantined := map[string]time.Time{} // -1121 hits this run -> retry-at
+	queriedOK := map[string]string{}      // symbol -> position fingerprint at query time
 	for _, symbol := range changedSymbols {
 		var trades []types.TradeRecord
 		var queryErr error
@@ -324,6 +381,14 @@ func (t *FuturesTrader) syncOrders(traderID string, exchangeID string, exchangeT
 		apiCalls++
 
 		if queryErr != nil {
+			if isInvalidSymbolError(queryErr) {
+				// Permanent: pending would retry every run forever (P1-1).
+				// Quarantine instead; expiry re-probes once for relists.
+				logger.Infof("  🧊 Invalid symbol %s (-1121, delisted/renamed) — quarantined from trade sync until %s",
+					symbol, runStart.Add(orderSyncInvalidSymbolQuarantine).Format("2006-01-02 15:04"))
+				quarantined[symbol] = runStart.Add(orderSyncInvalidSymbolQuarantine)
+				continue
+			}
 			logger.Infof("  ⚠️ Failed to get trades for %s: %v", symbol, queryErr)
 			failedSymbols = append(failedSymbols, symbol)
 			newPending[symbol] = true // the throttled probe window may no longer reach back to it
@@ -344,6 +409,14 @@ func (t *FuturesTrader) syncOrders(traderID string, exchangeID string, exchangeT
 	acct.pending = newPending
 	for s := range newPending {
 		delete(acct.queriedFP, s)
+	}
+	for s, at := range quarantined {
+		acct.quarantine[s] = at
+	}
+	// A successful query means the symbol trades again (relist case) —
+	// drop any stale quarantine so it re-enters the normal flow.
+	for s := range queriedOK {
+		delete(acct.quarantine, s)
 	}
 	if fps != nil {
 		for s, fp := range queriedOK {

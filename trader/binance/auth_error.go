@@ -40,6 +40,23 @@ func isStaleProtectiveOrder(err error) bool {
 	return false
 }
 
+// isInvalidSymbolError reports whether err is a Binance -1121 (Invalid
+// symbol): the symbol no longer exists on the exchange — delisted or renamed
+// (2026-10 stock tokens AAPLBUSDT/LLYBUSDT). No amount of retrying can
+// succeed until a relist; callers should quarantine the symbol instead of
+// pending-retrying it (2026-10-24 review P1-1: 32k wasted userTrades calls
+// over 10 days).
+func isInvalidSymbolError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *common.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Code == -1121
+	}
+	return false
+}
+
 // IsAuthOrIPError reports whether err is a Binance -2015/-2014 auth error
 // (directly or wrapped).
 func IsAuthOrIPError(err error) bool {
