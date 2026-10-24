@@ -50,30 +50,44 @@ FUNDING_PAGE = 1000
 
 class Http:
     """Proxy-aware JSON GET with spacing and bounded retries; ``get`` is the test seam."""
-    def __init__(self, spacing=0.4, proxy=PROXY, sleep=time.sleep):
+    def __init__(self, spacing=0.4, proxy=PROXY, sleep=time.sleep, *, deadline=None,
+                 clock=time.monotonic):
         handlers = [urllib.request.ProxyHandler({'http': proxy, 'https': proxy})] if proxy else []
         self.opener = urllib.request.build_opener(*handlers)
         self.spacing, self.sleep, self.last = spacing, sleep, 0.0
+        self.deadline, self.clock = deadline, clock
+
+    def _remaining(self):
+        if self.deadline is None:
+            return float('inf')
+        remaining = self.deadline - self.clock()
+        if remaining <= 0:
+            raise TimeoutError('fetch deadline exceeded')
+        return remaining
+
+    def _sleep(self, seconds):
+        self.sleep(min(seconds, self._remaining()))
+        self._remaining()
 
     def get(self, url, params=None):
         if params:
             url += '?' + urllib.parse.urlencode(params)
         err = None
         for attempt in range(5):
-            self.sleep(max(0.0, self.spacing - (time.monotonic() - self.last)))
-            self.last = time.monotonic()
+            self._sleep(max(0.0, self.spacing - (self.clock() - self.last)))
+            self.last = self.clock()
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': UA})
-                with self.opener.open(req, timeout=30) as resp:
+                with self.opener.open(req, timeout=min(30, self._remaining())) as resp:
                     return json.load(resp)
             except urllib.error.HTTPError as exc:
                 err = exc
                 if exc.code in (400, 401, 403, 404):
                     break
-                self.sleep(min(120, 8 * 2 ** attempt) if exc.code in (418, 429) else 2 ** (attempt + 1))
+                self._sleep(min(120, 8 * 2 ** attempt) if exc.code in (418, 429) else 2 ** (attempt + 1))
             except (OSError, ValueError) as exc:
                 err = exc
-                self.sleep(2 ** (attempt + 1))
+                self._sleep(2 ** (attempt + 1))
         raise RuntimeError(f'{url}: {err}')
 
 
