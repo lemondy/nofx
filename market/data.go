@@ -976,7 +976,7 @@ func IsXyzDexAsset(symbol string) bool {
 // For crypto: ensures it's a USDT trading pair
 // For xyz dex assets (stocks, forex, commodities): uses xyz: prefix without USDT suffix
 func Normalize(symbol string) string {
-	symbol = strings.ToUpper(symbol)
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
 
 	// Check if this is an xyz dex asset
 	if IsXyzDexAsset(symbol) {

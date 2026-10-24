@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"nofx/logger"
+	hlprovider "nofx/provider/hyperliquid"
 	"nofx/trader/types"
 	"strconv"
 	"strings"
@@ -72,7 +73,7 @@ var defaultBuilder *hyperliquid.BuilderInfo = nil
 // isXyzDexAsset checks if a symbol is an xyz dex asset
 func isXyzDexAsset(symbol string) bool {
 	// Remove common suffixes to get base symbol
-	base := strings.ToUpper(symbol) // Convert to uppercase for case-insensitive matching
+	base := strings.ToUpper(strings.TrimSpace(symbol)) // Convert to uppercase for case-insensitive matching
 	for _, suffix := range []string{"USDT", "USD", "-USDC", "-USD"} {
 		if strings.HasSuffix(base, suffix) {
 			base = strings.TrimSuffix(base, suffix)
@@ -89,7 +90,7 @@ func isXyzDexAsset(symbol string) bool {
 // Example: "BTCUSDT" -> "BTC", "TSLA" -> "xyz:TSLA", "silver" -> "xyz:SILVER"
 func convertSymbolToHyperliquid(symbol string) string {
 	// Convert to uppercase for consistent handling
-	base := strings.ToUpper(symbol)
+	base := strings.ToUpper(strings.TrimSpace(symbol))
 
 	// Remove common suffixes to get base symbol
 	for _, suffix := range []string{"USDT", "USD", "-USDC", "-USD"} {
@@ -108,6 +109,36 @@ func convertSymbolToHyperliquid(symbol string) string {
 		return "xyz:" + base
 	}
 	return base
+}
+
+// resolveCoin restores the exact venue name from this trader's metadata,
+// including k-prefixed and delisted contracts. Unknown names never reach the
+// SDK: NameToAsset silently maps an unknown name to asset zero (BTC).
+func (t *HyperliquidTrader) resolveCoin(symbol string) (string, error) {
+	coin := convertSymbolToHyperliquid(symbol)
+	if strings.HasPrefix(coin, "xyz:") {
+		// Preserve existing known-XYZ routing without adding a metadata
+		// request to position protection. XYZ order helpers already resolve
+		// and reject unknown asset indices against their own dex metadata.
+		return coin, nil
+	}
+	t.metaMutex.RLock()
+	defer t.metaMutex.RUnlock()
+	if t.meta == nil {
+		return "", fmt.Errorf("Hyperliquid metadata unavailable for %q", symbol)
+	}
+	universe := make([]hlprovider.AssetInfo, len(t.meta.Universe))
+	for i, asset := range t.meta.Universe {
+		universe[i] = hlprovider.AssetInfo{Name: asset.Name, IsDelisted: asset.IsDelisted}
+	}
+	asset, err := hlprovider.ResolveAsset(coin, hlprovider.AssetMappings(universe))
+	if err != nil {
+		return "", err
+	}
+	if t.exchange != nil && t.exchange.Info().NameToAsset(asset.Name) != asset.AssetID {
+		return "", fmt.Errorf("Hyperliquid asset ID mismatch for %q", symbol)
+	}
+	return asset.Name, nil
 }
 
 // absFloat returns absolute value of float
@@ -233,7 +264,10 @@ func NewHyperliquidTrader(privateKeyHex string, walletAddr string, testnet bool,
 
 // FormatQuantity formats quantity to correct precision
 func (t *HyperliquidTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return "", err
+	}
 	szDecimals := t.getSzDecimals(coin)
 
 	// Format quantity using szDecimals
