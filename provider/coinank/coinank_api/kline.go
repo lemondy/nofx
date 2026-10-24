@@ -32,24 +32,12 @@ func Kline(ctx context.Context, symbol string, exchange coinank_enum.Exchange, t
 	var result coinank.CoinankResponse[[][]float64]
 	err = json.Unmarshal([]byte(resp), &result)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", coinank.ErrInvalidKlineData, err)
 	}
 	if !result.Success {
 		return nil, coinank.HttpError
 	}
-	klines := make([]coinank.KlineResult, len(result.Data))
-	for i, k := range result.Data {
-		klines[i].StartTime = int64(k[0] + 0.001)
-		klines[i].EndTime = int64(k[1] + 0.001)
-		klines[i].Open = k[2]
-		klines[i].Close = k[3]
-		klines[i].High = k[4]
-		klines[i].Low = k[5]
-		klines[i].Volume = k[6]
-		klines[i].Quantity = k[7]
-		klines[i].Count = k[8]
-	}
-	return klines, nil
+	return coinank.ParseKlineRows(result.Data)
 }
 
 func get(ctx context.Context, path string, paramsMap map[string]string) (string, error) {

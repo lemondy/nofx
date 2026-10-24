@@ -58,12 +58,15 @@ func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
 func (at *AutoTrader) setPendingEntry(pe *pendingEntry) {
 	registerAccountTrader(at)
 	at.pendingEntriesMu.Lock()
-	defer at.pendingEntriesMu.Unlock()
 	if at.pendingEntries == nil {
 		at.pendingEntries = make(map[string]*pendingEntry)
 	}
 	at.pendingEntries[pendingEntryKey(pe.Symbol, pe.Side)] = pe
 	at.persistPendingEntry(pe)
+	at.pendingEntriesMu.Unlock()
+	// Startup recovery also comes through this registration point. Retain
+	// ownership until cancellation AND any executed slice's protection verify.
+	at.cancelExcludedPending(pe)
 }
 
 func (at *AutoTrader) dropPendingEntry(symbol, side string) {
@@ -620,6 +623,12 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 	for _, sym := range symbols {
 		pe := snapshot[sym]
 		if isUnknownEntryRef(pe.OrderID) && !at.resolveUnknownEntry(pe) {
+			continue
+		}
+		// Exclusion is a configuration veto, not a market-direction wobble:
+		// enforce it on the fast protection pass too, before any status/data
+		// failure can leave the remaining entry risk resting unchecked.
+		if at.cancelExcludedPending(pe) {
 			continue
 		}
 		status, err := at.trader.GetOrderStatus(pe.Symbol, pe.OrderID)

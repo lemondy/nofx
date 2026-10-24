@@ -135,6 +135,9 @@ func (at *AutoTrader) cancelAccountPendingRisk(reason string) {
 }
 
 func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
+	if reason := at.pendingExcludedReason(pe.Symbol); reason != "" {
+		return reason
+	}
 	if gs := at.cycleGateStates[market.Normalize(pe.Symbol)]; gs != nil {
 		allowed, failed := gs.LongAllowed, gs.LongFailed
 		if pe.Side == "short" {
@@ -206,14 +209,46 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		}
 		if pe.Side == "short" && rc.EffectiveShortTopConfirmGate() {
 			shorts, _ := breakout.DefaultScheduler().ShortSnapshot()
-			for _, s := range shorts {
-				if market.Normalize(s.Symbol) == market.Normalize(pe.Symbol) && !s.Confirmed {
-					return "pending short topping confirmation lost"
-				}
+			if pendingShortTopConfirmationLost(pe.Symbol, shorts) {
+				return "pending short topping confirmation lost"
 			}
 		}
 	}
 	return ""
+}
+
+func pendingShortTopConfirmationLost(symbol string, shorts []breakout.ShortSignal) bool {
+	for _, s := range shorts {
+		if market.Normalize(s.Symbol) == market.Normalize(symbol) && kernel.ShortScanNeedsTopConfirmation(s.Universe) && !s.Confirmed {
+			return true
+		}
+	}
+	return false
+}
+
+func (at *AutoTrader) pendingExcludedReason(symbol string) string {
+	if at.config.StrategyConfig == nil {
+		return ""
+	}
+	normalized := market.Normalize(strings.TrimSpace(symbol))
+	for _, excluded := range at.config.StrategyConfig.CoinSource.ExcludedCoins {
+		if strings.TrimSpace(excluded) != "" && market.Normalize(strings.TrimSpace(excluded)) == normalized {
+			return "pending entry excluded: EXCLUDED_COIN"
+		}
+	}
+	return ""
+}
+
+func (at *AutoTrader) cancelExcludedPending(pe *pendingEntry) bool {
+	reason := at.pendingExcludedReason(pe.Symbol)
+	if reason == "" {
+		return false
+	}
+	logger.Infof("🗑️ [%s] Cancelling excluded limit entry %s %s: %s", at.name, pe.Symbol, pe.Side, reason)
+	if err := at.cancelPending(pe); err != nil {
+		logger.Warnf("%s: %v", reason, err)
+	}
+	return true
 }
 
 func (at *AutoTrader) entryExecutionBlocked(symbol, side string) error {
