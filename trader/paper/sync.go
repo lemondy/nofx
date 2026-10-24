@@ -51,8 +51,14 @@ func (p *PaperFuturesTrader) StartOrderSync(traderID, exchangeID, exchangeType s
 		logger.Errorf("paper order sync: %v", err)
 		return
 	}
-	if interval <= 0 || interval > 10*time.Second {
-		interval = 10 * time.Second
+	// Paper fills resolve on 1m klines, so sub-minute ticks add zero fill
+	// resolution while every Advance costs a klines call per active symbol
+	// (limit=1500 → weight 10) on the shared proxy/IP budget — two paper
+	// traders at the old 10s floor burned ~120 weight/min against the live
+	// traders' allocation (2026-10-24 review). Floor at 60s: exactly one
+	// Advance per bar close.
+	if interval < 60*time.Second {
+		interval = 60 * time.Second
 	}
 	p.mu.Lock()
 	if p.stop != nil {
