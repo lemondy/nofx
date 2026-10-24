@@ -251,6 +251,18 @@ func (at *AutoTrader) stockGatherLiveWithQuarantine(ctx context.Context, now tim
 		qty, avg, initial, opened := sumRows(rows)
 		balance := st.Balances[sym]
 		info := stockSymbolInfo(ctx, sym)
+		if reconcile && quarantined[sym] == "" && qty-balance > maxFloat(info.StepSize, 1e-9)/2 {
+			raw, e := at.stockRawBalance(sym)
+			if e != nil {
+				// Keep the ledger and existing protection on an ambiguous read.
+				quarantine(sym, "raw_balance", e)
+				balance = qty
+			} else {
+				st.Exposure += (raw - st.Balances[sym]) * st.Marks[sym]
+				balance = raw
+				st.Balances[sym] = raw
+			}
+		}
 		replaceProtection := checks[sym].Filled
 		if reconcile && quarantined[sym] == "" && qty-balance > maxFloat(info.StepSize, 1e-9)/2 && checks[sym].Known {
 			// A fill can race the first status read and the balance snapshot.
@@ -365,8 +377,7 @@ func maxFloat(a, b float64) float64 {
 // exchange balance after an unexplained external reduction. No
 // exit is booked and no PnL attributed. Returns the new owned quantity.
 func (at *AutoTrader) stockShrinkOwned(sym string, rows []*store.TraderPosition, owned, balance, mark float64, now time.Time, st *stockState) float64 {
-	info := stockSymbolInfo(context.Background(), sym)
-	target := floorStep(balance, info.StepSize)
+	target := balance
 	if target < 0 {
 		target = 0
 	}

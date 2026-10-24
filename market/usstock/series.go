@@ -44,13 +44,13 @@ func GetSeries(ctx context.Context, symbol, timeframe string, need int, allowYah
 		return nil, fmt.Errorf("unknown or unavailable bStock symbol %q", symbol)
 	}
 	series := &Series{Symbol: symbol, Underlying: info.Underlying, Timeframe: timeframe, Source: SourceBStock}
-	bars, err := bstockBars(ctx, symbol, timeframe, need)
+	bars, err := freshBars(ctx, symbol, timeframe, need, SourceBStock)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if allowYahoo && (err != nil || len(bars) < need) {
 		series.Source = SourceYahoo
-		bars, err = yahooBars(ctx, info.Underlying, timeframe, need)
+		bars, err = freshBars(ctx, info.Underlying, timeframe, need, SourceYahoo)
 	}
 	series.Bars = bars
 	if len(bars) > need {
@@ -74,7 +74,7 @@ func bstockBars(ctx context.Context, symbol, timeframe string, need int) ([]Bar,
 	if timeframe == TF1d || timeframe == TF1w {
 		ttl = 30 * time.Minute
 	}
-	if entry, ok := bstockCache.entries[key]; ok && nowFunc().Sub(entry.loaded) < ttl && bstockCacheStillFinal(timeframe, entry.loaded, nowFunc()) {
+	if entry, ok := bstockCache.entries[key]; ok && !forceRefresh(ctx) && nowFunc().Sub(entry.loaded) < ttl && bstockCacheStillFinal(timeframe, entry.loaded, nowFunc()) {
 		return append([]Bar(nil), entry.bars...), nil
 	}
 	now := nowFunc()
@@ -135,7 +135,7 @@ func bstockBars(ctx context.Context, symbol, timeframe string, need int) ([]Bar,
 		endTime = nextEnd
 	}
 	bars := sortedBars(byTime)
-	bstockCache.entries[key] = barCacheEntry{append([]Bar(nil), bars...), nowFunc()}
+	bstockCache.entries[key] = barCacheEntry{append([]Bar(nil), bars...), now}
 	return bars, nil
 }
 
@@ -201,7 +201,7 @@ func GetUnderlyingSeries(ctx context.Context, symbol, timeframe string, need int
 	if !ok {
 		return nil, fmt.Errorf("unknown or unavailable bStock symbol %q", symbol)
 	}
-	bars, err := yahooBars(ctx, info.Underlying, timeframe, need)
+	bars, err := freshBars(ctx, info.Underlying, timeframe, need, SourceYahoo)
 	series := &Series{Symbol: symbol, Underlying: info.Underlying, Timeframe: timeframe, Source: SourceYahoo, Bars: bars}
 	if len(bars) > need {
 		series.Bars = append([]Bar(nil), bars[len(bars)-need:]...)

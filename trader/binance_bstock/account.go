@@ -117,7 +117,7 @@ func (t *BStockTrader) GetPositions() ([]map[string]interface{}, error) {
 	for _, symbol := range sortedSymbols(rules) {
 		s := rules[symbol]
 		_, qty := holding(a, s.BaseAsset)
-		if qty <= field(filter(s, "LOT_SIZE"), "stepSize") {
+		if qty <= 0 {
 			continue
 		}
 		entry, known, e := t.CostBasis(symbol)
@@ -128,8 +128,31 @@ func (t *BStockTrader) GetPositions() ([]map[string]interface{}, error) {
 		if e != nil {
 			return nil, e
 		}
-		out = append(out, map[string]interface{}{"symbol": symbol, "side": "long", "positionAmt": qty, "entryPrice": entry, "markPrice": mark, "unRealizedProfit": min(qty, known) * (mark - entry), "leverage": 1.0, "liquidationPrice": 0.0})
+		lot := filter(s, "LOT_SIZE")
+		tradableQty := round(qty, field(lot, "stepSize"), false)
+		minimum := max(field(filter(s, "MIN_NOTIONAL"), "minNotional"), field(filter(s, "NOTIONAL"), "minNotional"))
+		dust := tradableQty <= 0 || tradableQty < field(lot, "minQty") || tradableQty*mark < minimum
+		out = append(out, map[string]interface{}{"symbol": symbol, "side": "long", "positionAmt": qty, "dust": dust, "entryPrice": entry, "markPrice": mark, "unRealizedProfit": min(qty, known) * (mark - entry), "leverage": 1.0, "liquidationPrice": 0.0})
 	}
 	t.positions, t.positionsTime = out, t.now()
 	return clonePositions(out), nil
+}
+
+// RawStockBalance reads free+locked inventory directly, bypassing position,
+// valuation and dust caches. Reconciliation must verify this before reducing
+// program ownership or retiring protection.
+func (t *BStockTrader) RawStockBalance(symbol string) (float64, error) {
+	s, err := t.rule(symbol)
+	if err != nil {
+		return 0, err
+	}
+	a, err := t.account()
+	if err != nil {
+		return 0, err
+	}
+	_, total := holding(a, s.BaseAsset)
+	if !finite(total) || total < 0 {
+		return 0, fmt.Errorf("invalid raw balance for %s", symbol)
+	}
+	return total, nil
 }

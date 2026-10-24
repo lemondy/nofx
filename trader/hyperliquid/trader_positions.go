@@ -3,6 +3,7 @@ package hyperliquid
 import (
 	"fmt"
 	"nofx/logger"
+	"nofx/market"
 	"strconv"
 	"strings"
 )
@@ -31,7 +32,7 @@ func (t *HyperliquidTrader) GetPositions() ([]map[string]interface{}, error) {
 		posMap := make(map[string]interface{})
 
 		// Normalize symbol format (Hyperliquid uses "BTC", we convert to "BTCUSDT")
-		symbol := position.Coin + "USDT"
+		symbol := market.Normalize(position.Coin)
 		posMap["symbol"] = symbol
 
 		// Position amount and direction
@@ -153,11 +154,14 @@ func (t *HyperliquidTrader) SetMarginMode(symbol string, isCrossMargin bool) err
 // SetLeverage sets leverage
 func (t *HyperliquidTrader) SetLeverage(symbol string, leverage int) error {
 	// Hyperliquid symbol format (remove USDT suffix)
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return err
+	}
 
 	// Call UpdateLeverage (leverage int, name string, isCross bool)
 	// Third parameter: true=cross margin mode, false=isolated margin mode
-	_, err := t.exchange.UpdateLeverage(t.ctx, leverage, coin, t.isCrossMargin)
+	_, err = t.exchange.UpdateLeverage(t.ctx, leverage, coin, t.isCrossMargin)
 	if err != nil {
 		return fmt.Errorf("failed to set leverage: %w", err)
 	}

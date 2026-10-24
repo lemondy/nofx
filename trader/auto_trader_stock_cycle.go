@@ -190,17 +190,23 @@ func (at *AutoTrader) stockPreflightSymbol(ctx context.Context, pins []string) s
 // symbols, after the held ones and before the scanner's picks.
 func (at *AutoTrader) stockCycleSymbols(ctx context.Context, sc *store.StockConfig, state *stockState,
 	logf func(string, ...interface{})) ([]string, *stockengine.ScanReport) {
-	if !sc.IsScanMode() {
-		return sc.Symbols, stockCachedScan()
-	}
-	report, err := stockGetScanReport(ctx, stockScanMaxAge)
-	if err != nil {
-		if report == nil {
-			logf("scan failed, no report: %v", err)
-		} else {
-			logf("scan refresh failed (%v) — using the previous report from %s", err, report.GeneratedAt.In(stockET).Format("01-02 15:04 MST"))
+	list, _, report := at.stockCycleSelection(ctx, sc, state, logf)
+	return list, report
+}
+
+func (at *AutoTrader) stockCycleSelection(ctx context.Context, sc *store.StockConfig, state *stockState,
+	logf func(string, ...interface{})) ([]string, map[string]bool, *stockengine.ScanReport) {
+	report := stockCachedScan()
+	if sc.IsScanMode() {
+		var err error
+		report, err = stockGetScanReport(ctx, stockScanCandidateMaxAge)
+		if err != nil {
+			logf("scan refresh failed: %v (previous report retained for diagnostics)", err)
 		}
 	}
+	now := at.stockClock()
+	entries := map[string]bool{}
+
 	var list []string
 	seen := map[string]bool{}
 	add := func(sym string) {
@@ -221,24 +227,35 @@ func (at *AutoTrader) stockCycleSymbols(ctx context.Context, sc *store.StockConf
 		for _, sym := range sc.Symbols {
 			if _, ok := stockLookupSymbol(ctx, sym); ok {
 				add(sym)
+				entries[sym] = true
 			}
 		}
+	}
+	if !sc.IsScanMode() {
+		return list, entries, report
 	}
 	nBase := len(list)
 	exclude := map[string]bool{}
 	for _, sym := range sc.ScanExclude {
 		exclude[sym] = true
 	}
-	for sym := range seen {
+	for sym := range entries {
 		exclude[sym] = true
 	}
 	var picks []string
 	rank := sc.EffectiveScanRank()
 	if report != nil {
+		if !report.AgeOK(now, stockScanCandidateMaxAge) {
+			logf("scan report expired (age %s); no new scan candidates", now.Sub(report.GeneratedAt).Round(time.Second))
+		}
+		for _, r := range report.Results {
+			logf("scan data %s source=%s data_through=%s usable=%t", r.Symbol, r.Source, r.DataThrough, report.AgeOK(now, stockScanCandidateMaxAge) && r.DataFresh(now))
+		}
+		usable := &stockengine.ScanReport{Results: report.FreshResults(now, stockScanCandidateMaxAge)}
 		want := sc.EffectiveScanTopN()
-		ranked := report.TopLong(len(report.Results), exclude)
+		ranked := usable.TopLong(len(usable.Results), exclude)
 		if rank == store.StockScanRankMomentum {
-			ranked = report.TopMomentum(len(report.Results), exclude)
+			ranked = usable.TopMomentum(len(usable.Results), exclude)
 		}
 		for _, r := range ranked {
 			if len(picks) == want {
@@ -247,6 +264,10 @@ func (at *AutoTrader) stockCycleSymbols(ctx context.Context, sc *store.StockConf
 			if _, ok := stockLookupSymbol(ctx, r.Symbol); !ok {
 				continue
 			}
+			entries[r.Symbol] = true
+			if seen[r.Symbol] {
+				continue
+			} // held qualifying names need no extra scan slot
 			add(r.Symbol)
 			if rank == store.StockScanRankMomentum {
 				picks = append(picks, fmt.Sprintf("%s(mom %+.1f%% %s)", r.Symbol, r.Momentum.Mom12_1Pct, r.Cycle.Phase))
@@ -261,7 +282,7 @@ func (at *AutoTrader) stockCycleSymbols(ctx context.Context, sc *store.StockConf
 		logf("scan top %d rank=%s: %s (report age %s)", sc.EffectiveScanTopN(), rank, strings.Join(picks, " "),
 			at.stockClock().Sub(report.GeneratedAt).Round(time.Second))
 	}
-	return list, report
+	return list, entries, report
 }
 
 // buildStockSnapshots fetches series (sequentially: Yahoo throttles) and the
@@ -336,6 +357,9 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 				logf("series %s %s: %v", sym, tf, err)
 			}
 			if s != nil && len(s.Bars) > 0 {
+				if tf == usstock.TF1d || tf == usstock.TF1w {
+					logf("series %s %s source=%s data_through=%s", sym, tf, s.Source, usstock.DataDate(s))
+				}
 				series[tf] = s // a short series is passed through: the snapshot marks MissingTF
 			}
 		}
@@ -344,7 +368,7 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 			logf("quote %s: %v", sym, err)
 			quote = nil
 		}
-		snap := stockengine.BuildSnapshot(sym, info.Underlying, series, quote, now)
+		snap := stockengine.BuildSnapshot(sym, info.Underlying, series, quote, at.stockClock())
 		byName[sym] = snap
 		daily[sym] = series[usstock.TF1d]
 		if snap.Price > 0 {
@@ -362,7 +386,7 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 	// (second pass so the SPY series is available as the relative-strength
 	// benchmark). A stale report (manual mode reads whatever is cached; a failed
 	// refresh keeps the previous one) must not feed hours-old phases.
-	if report != nil && now.Sub(report.GeneratedAt) > stockScanMaxAge {
+	if !report.AgeOK(now, stockScanMaxAge) {
 		report = nil
 	}
 	var spyBars []usstock.Bar
@@ -370,11 +394,14 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 		spyBars = s.Bars
 	}
 	for sym, snap := range byName {
-		if r, ok := report.Lookup(sym); ok {
+		if r, ok := report.Lookup(sym); ok && r.DataFresh(now) {
 			c, m := r.Cycle, r.Momentum
 			snap.Cycle, snap.Momentum = &c, &m
 		} else if s := daily[sym]; s != nil && len(s.Bars) > 0 {
-			c, m := stockengine.ClassifyCycle(s.Bars, spyBars), stockengine.ClassifyMomentum(s.Bars)
+			c, m := stockengine.ClassifyCycle(s.Bars, spyBars), stockengine.MomentumAssessment{}
+			if s.Source != usstock.SourceBStock || usstock.RegularDailyBars(s.Bars) {
+				m = stockengine.ClassifyMomentum(s.Bars)
+			}
 			snap.Cycle, snap.Momentum = &c, &m
 		}
 	}
@@ -385,10 +412,7 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 // table, or nil when there is no report or it is older than stockScanMaxAge
 // (the same freshness rule the Kell/momentum lines apply).
 func freshScanResults(report *stockengine.ScanReport, now time.Time) []stockengine.ScanResult {
-	if report == nil || now.Sub(report.GeneratedAt) > stockScanMaxAge {
-		return nil
-	}
-	return report.Results
+	return report.FreshResults(now, stockScanMaxAge)
 }
 
 // stockWeekRisk tracks the ET week's starting equity and latches the weekly
@@ -533,13 +557,12 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 
 	// Per-cycle config copy: scan mode swaps in this cycle's symbol list so the
 	// snapshots, the prompt and the validator agree; at.stock.cfg is not touched.
-	cc := sc
-	cycleSyms, report := at.stockCycleSymbols(ctx, sc, state, logf)
+	cycleSyms, entrySyms, report := at.stockCycleSelection(ctx, sc, state, logf)
+	cp := *sc
+	cp.Symbols = cycleSyms
+	cc := &cp
+	rec.CandidateCoins = append([]string(nil), cycleSyms...)
 	if sc.IsScanMode() {
-		cp := *sc
-		cp.Symbols = cycleSyms
-		cc = &cp
-		rec.CandidateCoins = append([]string(nil), cycleSyms...)
 		if len(cycleSyms) == 0 {
 			msg := "scan unavailable, no candidates"
 			if report != nil {
@@ -596,7 +619,7 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 	}
 	ectx := &stockengine.Context{Now: now, Session: session, Config: cc, Preset: preset,
 		Account:   stockengine.Account{Equity: state.Equity, Available: state.Available, Exposure: state.Exposure},
-		Positions: positions, Snapshots: snaps, Market: market, Paper: paper,
+		Positions: positions, EntrySymbols: entrySyms, Snapshots: snaps, Market: market, Paper: paper,
 		Universe: freshScanResults(report, now), Regime: regime}
 	result, derr := stockengine.Decide(ectx, at.mcpClient, at.stockLang())
 	if result != nil {
@@ -835,18 +858,34 @@ func (at *AutoTrader) notifyStockOutcome(paper bool, d stockengine.Decision, out
 // execStockEntry sizes and places an accepted open/add.
 func (at *AutoTrader) execStockEntry(ctx context.Context, sizing *stockengine.Context, d stockengine.Decision, snap *stockengine.SymbolSnapshot,
 	h *stockHolding, paper bool, now time.Time, logf func(string, ...interface{})) (*stockOutcome, float64, error) {
-	if snap == nil || snap.Price <= 0 {
-		return nil, 0, fmt.Errorf("DATA_INSUFFICIENT: no snapshot price")
+	info := stockSymbolInfo(ctx, d.Symbol)
+	// Round the executable prices before revalidating the stop band and risk.
+	d.StopLoss = floorStep(d.StopLoss, info.TickSize)
+	if d.EntryType == stockengine.EntryLimit {
+		d.LimitPrice = floorStep(d.LimitPrice, info.TickSize)
 	}
-	size, err := stockengine.SizeOrder(sizing, d)
+	// Same-account ownership is a local read, completed before the final quote.
+	if !paper {
+		if err := at.stockCheckEntryManager(d.Symbol); err != nil {
+			return nil, 0, err
+		}
+	}
+	fresh, current, err := at.stockEntryContext(ctx, sizing, d, snap)
+	if err != nil {
+		at.stockAlertEntryRejected(paper, d, err, at.stockClock())
+		return nil, 0, err
+	}
+	now = current.Now
+	snap = fresh
+	size, err := stockengine.SizeOrder(current, d)
 	if err != nil {
 		return nil, 0, fmt.Errorf("sizing: %w", err)
 	}
-	info := stockSymbolInfo(ctx, d.Symbol)
 	entry := snap.Price
 	if d.EntryType == stockengine.EntryLimit {
-		entry = floorStep(d.LimitPrice, info.TickSize)
+		entry = d.LimitPrice
 	}
+
 	qty := floorStep(size.Quantity, info.StepSize)
 	if qty <= 0 || qty < info.MinQty || qty*entry < minNotionalOf(info) {
 		return nil, 0, fmt.Errorf("MIN_NOTIONAL after lot rounding (qty %.6f x %.4f)", qty, entry)

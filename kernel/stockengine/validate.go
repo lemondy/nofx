@@ -85,8 +85,19 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 			}
 		}
 	}
-	if !known {
+	var p *Position
+	if ctx != nil {
+		p = positionFor(ctx, d.Symbol)
+	}
+	if !known && p == nil {
 		return "UNKNOWN_SYMBOL", ""
+	}
+	entryAllowed := known
+	if ctx != nil && ctx.EntrySymbols != nil {
+		entryAllowed = ctx.EntrySymbols[d.Symbol]
+	}
+	if (d.Action == ActionOpenLong || d.Action == ActionAddLong) && !entryAllowed {
+		return "EXIT_ONLY_SYMBOL", "Held symbol is managed for hold/reduce/close/adjust_stop only; new exposure is not authorized."
 	}
 	if seen[d.Symbol] {
 		return "DUPLICATE", ""
@@ -95,7 +106,6 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 	if !validAction(d.Action) {
 		return "UNKNOWN_ACTION", ""
 	}
-	p := positionFor(ctx, d.Symbol)
 	if d.Action == ActionOpenLong && p != nil {
 		return "ALREADY_HELD", "Use add_long for an existing position."
 	}
@@ -126,6 +136,12 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 				return "DATA_INSUFFICIENT", ""
 			}
 		}
+		for tf, cutoff := range s.DataThrough {
+			if (tf == usstock.TF1d || tf == preset.TrendTF || tf == preset.EntryTF) && usstock.CheckDataDate(tf, cutoff, ctx.Now) != nil {
+				return "DATA_STALE", ""
+			}
+		}
+
 		if s.Quote == nil || !s.Quote.RefFresh {
 			return "BSTOCK_REF_STALE", ""
 		}

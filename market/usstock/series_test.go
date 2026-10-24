@@ -39,11 +39,11 @@ func TestBStockShortYahooWholeAdjustedSeries(t *testing.T) {
 	now := et("2026-10-09 17:00")
 	spotTimes := make([]time.Time, 73)
 	for i := range spotTimes {
-		spotTimes[i] = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i)
+		spotTimes[i] = time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i-len(spotTimes)+1)
 	}
 	yahooTimes := make([]time.Time, 230)
 	for i := range yahooTimes {
-		yahooTimes[i] = et("2025-01-02 09:30").AddDate(0, 0, i)
+		yahooTimes[i] = et("2026-10-08 09:30").AddDate(0, 0, i-len(yahooTimes)+1)
 	}
 	spotCalls, yahooCalls := 0, 0
 	setupHTTP(t, now, func(r *http.Request) (*http.Response, error) {

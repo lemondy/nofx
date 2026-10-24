@@ -37,7 +37,7 @@ func TestScanSortingAndSelection(t *testing.T) {
 		}
 	}
 	now := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
-	report, err := Scan(context.Background(), universe, nil, fetch, now)
+	report, err := scanFreshFixture(context.Background(), universe, nil, fetch, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +118,11 @@ func TestScanCancellationReturnsSortedPartialReport(t *testing.T) {
 		}
 		return bars, usstock.SourceYahoo, nil
 	}
-	report, err := Scan(ctx, universe, nil, fetch, time.Now())
+	report, err := scanFreshFixture(ctx, universe, nil, fetch, scanFixtureNow)
 	if !errors.Is(err, context.Canceled) || calls != 3 || len(report.Results) != 2 || report.Results[0].Symbol != "STRONG" {
 		t.Fatalf("partial report=%+v err=%v calls=%d", report, err, calls)
 	}
-	report, err = Scan(ctx, universe, nil, fetch, time.Now())
+	report, err = scanFreshFixture(ctx, universe, nil, fetch, scanFixtureNow)
 	if !errors.Is(err, context.Canceled) || calls != 3 || len(report.Results) != 0 {
 		t.Fatalf("pre-canceled report=%+v err=%v calls=%d", report, err, calls)
 	}
@@ -130,13 +130,13 @@ func TestScanCancellationReturnsSortedPartialReport(t *testing.T) {
 
 func TestScanAcceptsUsableInsufficientSeries(t *testing.T) {
 	wrapped := fmt.Errorf("short history: %w", usstock.ErrInsufficientBars)
-	report, err := Scan(context.Background(), []usstock.SymbolInfo{{Symbol: "USABLE"}, {Symbol: "SHORT"}}, nil,
+	report, err := scanFreshFixture(context.Background(), []usstock.SymbolInfo{{Symbol: "USABLE"}, {Symbol: "SHORT"}}, nil,
 		func(ctx context.Context, symbol string) ([]usstock.Bar, string, error) {
 			if symbol == "SHORT" {
 				return cycleTestPop()[:59], usstock.SourceYahoo, wrapped
 			}
 			return cycleTestPop()[:60], usstock.SourceYahoo, wrapped
-		}, time.Now())
+		}, scanFixtureNow)
 	if err != nil || len(report.Results) != 1 || report.Results[0].Cycle.Bars != 60 || len(report.Skipped) != 1 {
 		t.Fatalf("report=%+v err=%v", report, err)
 	}
@@ -173,7 +173,7 @@ func setupScanTest(t *testing.T) *scanTestEnvironment {
 		if timeframe != usstock.TF1d || need != 260 || !allowYahoo {
 			return nil, fmt.Errorf("incorrect live fetch arguments: %s %d %v", timeframe, need, allowYahoo)
 		}
-		return &usstock.Series{Bars: cycleTestPop(), Source: usstock.SourceYahoo}, fmt.Errorf("short: %w", usstock.ErrInsufficientBars)
+		return &usstock.Series{Bars: scanFixtureBars(cycleTestPop(), scanNow()), Source: usstock.SourceYahoo}, fmt.Errorf("short: %w", usstock.ErrInsufficientBars)
 	}
 	t.Cleanup(func() {
 		scanCache.Lock()
@@ -332,7 +332,7 @@ func TestGetScanReportDataFailureKeepsOldReport(t *testing.T) {
 	defer cancel()
 	scanGetSeries = func(ctx context.Context, symbol, timeframe string, need int, allowYahoo bool) (*usstock.Series, error) {
 		cancel()
-		return &usstock.Series{Bars: cycleTestPop(), Source: usstock.SourceYahoo}, nil
+		return &usstock.Series{Bars: scanFixtureBars(cycleTestPop(), scanNow()), Source: usstock.SourceYahoo}, nil
 	}
 	got, err = GetScanReport(ctx, time.Hour)
 	if !errors.Is(err, context.Canceled) || got != old || CachedScanReport() != old {
@@ -409,9 +409,9 @@ func TestGetScanReportOptionalBenchmark(t *testing.T) {
 					if scenario == "fails" {
 						return nil, errors.New("benchmark unavailable")
 					}
-					return &usstock.Series{Bars: spy, Source: usstock.SourceYahoo}, fmt.Errorf("SPY short: %w", usstock.ErrInsufficientBars)
+					return &usstock.Series{Bars: scanFixtureBars(spy, scanNow()), Source: usstock.SourceYahoo}, fmt.Errorf("SPY short: %w", usstock.ErrInsufficientBars)
 				}
-				return &usstock.Series{Bars: stock, Source: usstock.SourceBStock}, fmt.Errorf("stock short: %w", usstock.ErrInsufficientBars)
+				return &usstock.Series{Bars: scanFixtureBars(stock, scanNow()), Source: usstock.SourceBStock}, fmt.Errorf("stock short: %w", usstock.ErrInsufficientBars)
 			}
 			report, err := GetScanReport(context.Background(), time.Hour)
 			if err != nil {
@@ -439,7 +439,7 @@ func TestScanFillsMomentum(t *testing.T) {
 		bars[i] = usstock.Bar{OpenTime: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i), Open: 100 + float64(i), High: 101 + float64(i), Low: 99 + float64(i), Close: 100 + float64(i), Volume: 1000}
 	}
 	fetch := func(context.Context, string) ([]usstock.Bar, string, error) { return bars, usstock.SourceBStock, nil }
-	report, err := Scan(context.Background(), universe, nil, fetch, time.Now())
+	report, err := scanFreshFixture(context.Background(), universe, nil, fetch, scanFixtureNow)
 	if err != nil || len(report.Results) != 1 {
 		t.Fatalf("report %+v err %v", report, err)
 	}
@@ -463,7 +463,7 @@ func TestScanKeepsRecentCloses(t *testing.T) {
 		}
 		return mkBars(260), usstock.SourceBStock, nil
 	}
-	report, err := Scan(context.Background(), universe, nil, fetch, time.Now())
+	report, err := scanFreshFixture(context.Background(), universe, nil, fetch, scanFixtureNow)
 	if err != nil || len(report.Results) != 2 {
 		t.Fatalf("report %+v err %v", report, err)
 	}
@@ -477,7 +477,7 @@ func TestScanKeepsRecentCloses(t *testing.T) {
 			t.Fatalf("%s: %d recent closes, want %d", r.Symbol, len(r.RecentCloses), want)
 		}
 		last := r.RecentCloses[len(r.RecentCloses)-1]
-		if last.Close != 100+float64(n-1) || last.Date != time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, n-1).Format("2006-01-02") {
+		if last.Close != 100+float64(n-1) || last.Date != usstock.LatestClosedTradingDay(scanFixtureNow.Add(-usstock.CloseDataGrace)).UTC().Format("2006-01-02") {
 			t.Fatalf("%s: last close %+v", r.Symbol, last)
 		}
 		first := r.RecentCloses[0]
@@ -548,4 +548,30 @@ func TestFetchScanBarsPrefersUnderlying(t *testing.T) {
 	if _, src, err := fetchScanBars(context.Background(), "AAPLBUSDT"); err != nil || src != usstock.SourceBStock || bstockCalls != 1 {
 		t.Fatalf("want bStock fallback: src=%s err=%v calls=%d", src, err, bstockCalls)
 	}
+}
+
+// General scan fixtures carry current, consecutive NYSE sessions; stale and
+// calendar-day inputs are exercised separately by review1024_test.go.
+var scanFixtureNow = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+
+func scanFixtureBars(bars []usstock.Bar, now time.Time) []usstock.Bar {
+	out := append([]usstock.Bar(nil), bars...)
+	day := usstock.LatestClosedTradingDay(now.Add(-usstock.CloseDataGrace))
+	for i := len(out) - 1; i >= 0; i-- {
+		open, _, ok := usstock.SessionBounds(day)
+		for !ok {
+			day = day.AddDate(0, 0, -1)
+			open, _, ok = usstock.SessionBounds(day)
+		}
+		out[i].OpenTime = open.UTC()
+		day = day.AddDate(0, 0, -1)
+	}
+	return out
+}
+func scanFreshFixture(ctx context.Context, universe []usstock.SymbolInfo, spy []usstock.Bar,
+	fetch func(context.Context, string) ([]usstock.Bar, string, error), now time.Time) (*ScanReport, error) {
+	return Scan(ctx, universe, scanFixtureBars(spy, now), func(ctx context.Context, sym string) ([]usstock.Bar, string, error) {
+		bars, source, err := fetch(ctx, sym)
+		return scanFixtureBars(bars, now), source, err
+	}, now)
 }

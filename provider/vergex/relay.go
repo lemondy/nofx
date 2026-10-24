@@ -1,9 +1,11 @@
 package vergex
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -27,8 +29,88 @@ var (
 )
 
 type relayEntry struct {
-	body    []byte
-	expires time.Time
+	body      []byte
+	fetchedAt time.Time
+	expires   time.Time
+}
+
+var relayNow = time.Now
+
+// validatePayload distinguishes a real (possibly empty) ranking from an
+// error object. JSON decoding alone accepts missing fields as empty slices.
+func validatePayload(path string, body []byte) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {
+		return fmt.Errorf("vergex %s: expected response object", path)
+	}
+	if _, ok := obj["error"]; ok || bytes.Equal(bytes.TrimSpace(obj["success"]), []byte("false")) {
+		return fmt.Errorf("vergex %s: upstream error payload", path)
+	}
+	array := func(m map[string]json.RawMessage, keys ...string) bool {
+		found := false
+		for _, key := range keys {
+			if v, ok := m[key]; ok {
+				v = bytes.TrimSpace(v)
+				if len(v) == 0 || v[0] != '[' {
+					return false
+				}
+				found = true
+			}
+		}
+		return found
+	}
+	u, err := url.Parse(path)
+	if err != nil {
+		return fmt.Errorf("vergex invalid path: %w", err)
+	}
+	valid := false
+	var shape any
+	switch u.Path {
+	case "/trending-category":
+		var category map[string]json.RawMessage
+		if raw, ok := obj["category"]; ok {
+			if json.Unmarshal(raw, &category) != nil || !array(category, "assets") {
+				return fmt.Errorf("vergex %s: invalid category", path)
+			}
+		}
+		valid = array(category, "assets") || array(obj, "tableRows")
+		if _, ok := obj["tableRows"]; ok && !array(obj, "tableRows") {
+			valid = false
+		}
+		shape = &trendingCategoryResponse{}
+	case "/trending-crypto":
+		valid = array(obj, "top", "low")
+		if u.Query().Get("tab") == "oi" {
+			shape = &oiRowsResponse{}
+		}
+	case "/api/v1/data-intelligence/flow/markets":
+		var data map[string]json.RawMessage
+		valid = json.Unmarshal(obj["data"], &data) == nil && array(data, "inflow", "outflow")
+		shape = &struct {
+			Data struct {
+				Inflow  []flowRow `json:"inflow"`
+				Outflow []flowRow `json:"outflow"`
+			} `json:"data"`
+		}{}
+	case "/trending-hl":
+		valid = array(obj, "rows")
+	}
+	if !valid {
+		return fmt.Errorf("vergex %s: missing or invalid ranking arrays", path)
+	}
+	if shape != nil {
+		if err := json.Unmarshal(body, shape); err != nil {
+			return fmt.Errorf("vergex %s: invalid ranking: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func feedRelayHTTP(path string, status int, body []byte) error {
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("vergex %s: HTTP %d", path, status)
+	}
+	return FeedRelay(path, body)
 }
 
 // canonicalRelayKey reduces pathWithQuery to endpoint + identity params so
@@ -50,54 +132,55 @@ func canonicalRelayKey(pathWithQuery string) string {
 
 // FeedRelay stores a vergex response body fetched by the app's browser for
 // pathWithQuery (e.g. "/trending-category?key=ai500&lang=en").
-func FeedRelay(pathWithQuery string, body []byte) {
-	if pathWithQuery == "" || len(body) == 0 || !json.Valid(body) {
-		return
+func FeedRelay(pathWithQuery string, body []byte) error {
+	if err := validatePayload(pathWithQuery, body); err != nil {
+		return err
+	}
+	// The AI500 key is shared across consumers. Only a full-range payload may
+	// populate it; a small browser request must not replace the full ranking.
+	u, _ := url.Parse(pathWithQuery)
+	if u.Path == "/trending-category" && u.Query().Get("key") == "ai500" {
+		if limit, err := strconv.Atoi(u.Query().Get("limit")); err == nil && limit > 0 && limit < maxLimit {
+			return fmt.Errorf("vergex AI500 relay requires full ranking (limit >= %d)", maxLimit)
+		}
 	}
 	stored := make([]byte, len(body))
 	copy(stored, body)
 
 	key := canonicalRelayKey(pathWithQuery)
 	relayMu.Lock()
-	relayCache[key] = relayEntry{body: stored, expires: time.Now().Add(relayTTL)}
+	now := relayNow()
+	relayCache[key] = relayEntry{body: stored, fetchedAt: now, expires: now.Add(relayTTL)}
 	// Opportunistic cleanup so the map doesn't grow unbounded.
 	if len(relayCache) > 64 {
-		now := time.Now()
 		for k, e := range relayCache {
-			if now.After(e.expires) {
+			if !now.Before(e.expires) {
 				delete(relayCache, k)
 			}
 		}
 	}
 	relayMu.Unlock()
+	return nil
 }
 
 // relayLookup returns a fresh relay-fed body for pathWithQuery (matched by
 // canonical key — see canonicalRelayKey).
 func relayLookup(pathWithQuery string) ([]byte, bool) {
+	entry, ok := relayLookupEntry(pathWithQuery)
+	return entry.body, ok
+}
+
+func relayLookupEntry(pathWithQuery string) (relayEntry, bool) {
 	key := canonicalRelayKey(pathWithQuery)
 	relayMu.Lock()
 	entry, ok := relayCache[key]
-	if ok && time.Now().After(entry.expires) {
+	if ok && !relayNow().Before(entry.expires) {
 		delete(relayCache, key)
 		ok = false
 	}
 	relayMu.Unlock()
 	if !ok {
-		return nil, false
+		return relayEntry{}, false
 	}
-	return entry.body, true
-}
-
-// relayLookupJSON is fetchJSON's relay fast path: decode a fresh relay-fed
-// body into out without touching the network.
-func relayLookupJSON(pathWithQuery string, out interface{}) (bool, error) {
-	body, ok := relayLookup(pathWithQuery)
-	if !ok {
-		return false, nil
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return true, fmt.Errorf("vergex JSON decode failed: %w", err)
-	}
-	return true, nil
+	return entry, true
 }

@@ -60,8 +60,9 @@ type SymbolSnapshot struct {
 	Underlying string            `json:"underlying"` // AAPL
 	Price      float64           `json:"price"`      // bStock last
 	Sources    map[string]string `json:"sources"`    // timeframe → usstock.SourceBStock | SourceYahoo
-	// Data sufficiency: timeframes whose series had fewer bars than needed.
-	MissingTF []string `json:"missing_tf,omitempty"`
+	// Timeframes with insufficient bars or stale daily/weekly dates.
+	MissingTF   []string          `json:"missing_tf,omitempty"`
+	DataThrough map[string]string `json:"data_through,omitempty"`
 
 	// Daily structure (1d series).
 	EMA20, EMA50, EMA200 float64 `json:"-"`
@@ -136,15 +137,17 @@ type Account struct {
 
 // Context is everything one decision cycle needs.
 type Context struct {
-	Now       time.Time
-	Session   usstock.Session
-	Config    *store.StockConfig
-	Preset    Preset
-	Account   Account
-	Positions []Position
-	Snapshots []*SymbolSnapshot // configured symbols, plus market context symbols
-	Market    []*SymbolSnapshot // SPYBUSDT / QQQBUSDT context (may overlap Snapshots)
-	Paper     bool
+	Now     time.Time
+	Session usstock.Session
+	Config  *store.StockConfig
+	Preset  Preset
+	Account Account
+	// EntrySymbols explicitly authorizes new exposure; nil uses Config.Symbols.
+	EntrySymbols map[string]bool
+	Positions    []Position
+	Snapshots    []*SymbolSnapshot // configured symbols, plus market context symbols
+	Market       []*SymbolSnapshot // SPYBUSDT / QQQBUSDT context (may overlap Snapshots)
+	Paper        bool
 	// Universe is the FRESH scan report's results (one per listed bStock pair)
 	// rendered as the prompt's universe table; empty = no table. It carries
 	// ScanResult rather than UniverseRow because the table also shows each

@@ -116,6 +116,14 @@ func (f *fakeSpot) GetPositions() ([]map[string]interface{}, error) {
 	}
 	return out, nil
 }
+func (f *fakeSpot) RawStockBalance(sym string) (float64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.positionsErr != nil {
+		return 0, f.positionsErr
+	}
+	return f.hold[sym], nil
+}
 func (f *fakeSpot) GetMarketPrice(string) (float64, error) { return f.price, nil }
 func (f *fakeSpot) FormatQuantity(_ string, q float64) (string, error) {
 	return fmt.Sprint(floorStep(q, 0.001)), nil
@@ -333,7 +341,7 @@ func newStockFixtureCfg(t *testing.T, paper bool, now time.Time, respond func(ca
 			Bars: stockTestBars(need, step, 120, drift)}, nil
 	}
 	stockGetQuote = func(_ context.Context, sym string) (*usstock.Quote, error) {
-		return &usstock.Quote{Symbol: sym, BStockPrice: fx.price, RefPrice: fx.price, RefTime: now.Add(-time.Minute), RefFresh: true, Session: usstock.SessionAt(now)}, nil
+		return &usstock.Quote{Symbol: sym, BStockPrice: fx.price, BStockTime: now, RefPrice: fx.price, RefTime: now.Add(-time.Minute), RefFresh: true, Session: usstock.SessionAt(now)}, nil
 	}
 	stockNotify = func(kind, title, msg string) { fx.alert = append(fx.alert, kind+"|"+msg) }
 
@@ -1366,7 +1374,7 @@ func TestStockProtectionPassReadFailuresStillAbort(t *testing.T) {
 // ---------------------------------------------------------------- scan mode
 
 func scanRes(sym, phase string, long bool, score float64) stockengine.ScanResult {
-	return stockengine.ScanResult{Symbol: sym, Underlying: strings.TrimSuffix(sym, "BUSDT"), Source: usstock.SourceBStock,
+	return stockengine.ScanResult{Symbol: sym, Underlying: strings.TrimSuffix(sym, "BUSDT"), Source: usstock.SourceBStock, DataThrough: "2026-10-13",
 		Cycle: stockengine.CycleAssessment{Phase: stockengine.CyclePhase(phase), LongSetup: long, Score: score, RS63Pct: 5, VolRatio: 1.1}}
 }
 

@@ -2,6 +2,7 @@ package usstock
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -24,16 +25,16 @@ func TestBStockDailyCacheRefreshesAcrossUTCBarClose(t *testing.T) {
 	dailyServer(t, loaded, &calls)
 	series, err := GetSeries(context.Background(), "AAPLBUSDT", TF1d, 3, false)
 	last := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
-	if err != nil || calls != 1 || !series.Bars[2].OpenTime.Equal(last) {
+	if !errors.Is(err, ErrStaleBars) || calls != 2 || !series.Bars[2].OpenTime.Equal(last) {
 		t.Fatalf("first load: %+v calls=%d err=%v", series, calls, err)
 	}
 	nowFunc = func() time.Time { return loaded.Add(5 * time.Minute) } // still inside the bar
-	if _, err = GetSeries(context.Background(), "AAPLBUSDT", TF1d, 3, false); err != nil || calls != 1 {
-		t.Fatalf("same bar must hit cache: calls=%d err=%v", calls, err)
+	if _, err = GetSeries(context.Background(), "AAPLBUSDT", TF1d, 3, false); !errors.Is(err, ErrStaleBars) || calls != 3 {
+		t.Fatalf("same bar is cached, but stale NYSE date must force a refresh: calls=%d err=%v", calls, err)
 	}
 	nowFunc = func() time.Time { return loaded.Add(15 * time.Minute) } // 00:05 UTC, bar closed, TTL 30m not over
 	series, err = GetSeries(context.Background(), "AAPLBUSDT", TF1d, 3, false)
-	if err != nil || calls != 2 || !series.Bars[2].OpenTime.Equal(last.AddDate(0, 0, 1)) {
+	if err != nil || calls != 4 || !series.Bars[2].OpenTime.Equal(last.AddDate(0, 0, 1)) {
 		t.Fatalf("expected refetch with the just-closed bar: %+v calls=%d err=%v", series, calls, err)
 	}
 }

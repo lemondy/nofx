@@ -147,14 +147,9 @@ func (at *AutoTrader) stockLiveQuantities(sym string) (owned, balance float64, e
 		return 0, 0, &stockProtectionReadError{err}
 	}
 	owned, _, _, _ = sumRows(rows)
-	poss, err := at.stockTrader.GetPositions()
+	balance, err = at.stockRawBalance(sym)
 	if err != nil {
 		return 0, 0, &stockProtectionReadError{err}
-	}
-	for _, p := range poss {
-		if p["symbol"] == sym {
-			balance += numberOf(p, "positionAmt", "position_amt", "quantity")
-		}
 	}
 	return owned, balance, nil
 }
@@ -288,19 +283,7 @@ func (at *AutoTrader) stockBuyFilled(ctx context.Context, sym string, executed, 
 func (at *AutoTrader) stockOpenLive(ctx context.Context, d stockengine.Decision, qty, entry float64, h *stockHolding, info usstock.SymbolInfo,
 	now time.Time, logf func(string, ...interface{})) (*stockOutcome, error) {
 	stop := floorStep(d.StopLoss, info.TickSize)
-	// Refuse before any order is sent when another trader of this account
-	// already manages the symbol: their protection and ours would contend for
-	// the same shared inventory.
-	others, oerr := at.stockOtherManagers(d.Symbol)
-	if oerr != nil {
-		return nil, fmt.Errorf("cannot verify that no other trader manages %s: %w", d.Symbol, oerr)
-	}
-	if len(others) > 0 {
-		msg := fmt.Sprintf("%s 已由同账户的其他美股交易员(%s)管理，拒绝开仓以免互相接管保护单", d.Symbol, strings.Join(others, ","))
-		logger.Warnf("⚠️ [%s] %s", at.name, msg)
-		stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股开仓被拒绝</b>\n<i>%s</i>", notify.Escape(msg)))
-		return nil, fmt.Errorf("%s", msg)
-	}
+
 	var res *types.SpotOrderResult
 	var err error
 	if d.EntryType == stockengine.EntryLimit {
@@ -397,3 +380,126 @@ func (at *AutoTrader) stockNotifyTrade(paper bool, title, sym string, out *stock
 }
 
 func joinCodes(c []string) string { return strings.Join(c, ",") }
+
+// The optional executor capability keeps the shared trader interface unchanged.
+// Missing raw inventory is an error: a filtered display is not safe evidence
+// for shrinking ownership or replacing a position's protection.
+func (at *AutoTrader) stockRawBalance(sym string) (float64, error) {
+	reader, ok := at.stockTrader.(interface{ RawStockBalance(string) (float64, error) })
+	if !ok {
+		return 0, fmt.Errorf("raw inventory unavailable for %s", sym)
+	}
+	balance, err := reader.RawStockBalance(sym)
+	if err == nil && (math.IsNaN(balance) || math.IsInf(balance, 0) || balance < 0) {
+		err = fmt.Errorf("invalid raw inventory for %s", sym)
+	}
+	return balance, err
+}
+
+func (at *AutoTrader) stockCheckEntryManager(sym string) error {
+	// Refuse before any order is sent when another trader of this account
+	// already manages the symbol: their protection and ours would contend for
+	// the same shared inventory.
+	others, oerr := at.stockOtherManagers(sym)
+	if oerr != nil {
+		return fmt.Errorf("cannot verify that no other trader manages %s: %w", sym, oerr)
+	}
+	if len(others) > 0 {
+		msg := fmt.Sprintf("%s 已由同账户的其他美股交易员(%s)管理，拒绝开仓以免互相接管保护单", sym, strings.Join(others, ","))
+		logger.Warnf("⚠️ [%s] %s", at.name, msg)
+		stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股开仓被拒绝</b>\n<i>%s</i>", notify.Escape(msg)))
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// stockEntryAlertEvery bounds repeated Telegram alerts for the same symbol and
+// the same pre-order rejection reason.
+const stockEntryAlertEvery = 30 * time.Minute
+
+// stockAlertEntryRejected tells the user (Telegram ALERT, live only) that a
+// live entry was abandoned by the final pre-order check — a stale bStock quote
+// (older than 30 s), an unavailable quote, or a failed re-validation with the
+// execution clock. Deduplicated per symbol+reason; a cancelled context is not
+// an alert-worthy rejection.
+func (at *AutoTrader) stockAlertEntryRejected(paper bool, d stockengine.Decision, cause error, now time.Time) {
+	if paper || cause == nil || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return
+	}
+	msg := cause.Error()
+	code := msg
+	if i := strings.IndexAny(msg, ": "); i > 0 {
+		code = msg[:i]
+	}
+	key := d.Symbol + "|" + code
+	if code == "ENTRY_RECHECK" {
+		if f := strings.Fields(msg); len(f) > 1 {
+			key += "|" + f[1] // the validation codes, so a new reason is not suppressed
+		}
+	}
+	if last, ok := at.stock.entryAlertAt[key]; ok && now.Sub(last) < stockEntryAlertEvery {
+		return
+	}
+	if at.stock.entryAlertAt == nil {
+		at.stock.entryAlertAt = map[string]time.Time{}
+	}
+	at.stock.entryAlertAt[key] = now
+	reason := "下单前复核未通过（时段、报价新鲜度、背离或止损带）"
+	switch code {
+	case "BSTOCK_PRICE_STALE":
+		reason = "bStock 报价超过 30 秒未更新，不能据此下单"
+	case "ENTRY_QUOTE_UNAVAILABLE":
+		reason = "下单前无法刷新 bStock 报价"
+	case "DATA_INSUFFICIENT":
+		reason = "缺少下单所需的行情数据"
+	}
+	logger.Warnf("⚠️ [%s] 美股入场被下单前复核放弃 %s %s: %s", at.name, d.Action, d.Symbol, msg)
+	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股入场已放弃（下单前复核未通过）</b>\n%s %s\n<i>%s</i>\n<code>%s</code>",
+		notify.Escape(d.Action), notify.Escape(d.Symbol), notify.Escape(reason), notify.Escape(msg)))
+}
+
+// stockEntryContext is the last network read before an entry is submitted.
+// It bypasses both quote caches, then validates with the execution clock and
+// sizes from that same final bStock price. Existing position exits do not use it.
+func (at *AutoTrader) stockEntryContext(ctx context.Context, sizing *stockengine.Context, d stockengine.Decision,
+	snap *stockengine.SymbolSnapshot) (*stockengine.SymbolSnapshot, *stockengine.Context, error) {
+	if sizing == nil || snap == nil {
+		return nil, nil, fmt.Errorf("DATA_INSUFFICIENT: no entry context")
+	}
+	quote, err := stockGetQuote(usstock.WithForceRefresh(ctx), d.Symbol)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ENTRY_QUOTE_UNAVAILABLE: %w", err)
+	}
+	now := at.stockClock()
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+	if quote == nil {
+		return nil, nil, fmt.Errorf("ENTRY_QUOTE_UNAVAILABLE: no quote")
+	}
+	q := usstock.RecheckQuote(quote, now)
+	age := now.Sub(q.BStockTime)
+	if q.BStockTime.IsZero() || age < 0 || age > 30*time.Second || q.BStockPrice <= 0 || math.IsNaN(q.BStockPrice) || math.IsInf(q.BStockPrice, 0) {
+		return nil, nil, fmt.Errorf("BSTOCK_PRICE_STALE: execution quote age %s", age)
+	}
+	current := *sizing
+	current.Now, current.Session = now, usstock.SessionAt(now)
+	fresh := *snap
+	fresh.Price, fresh.Quote = q.BStockPrice, &q
+	current.Snapshots = append([]*stockengine.SymbolSnapshot(nil), sizing.Snapshots...)
+	replaced := false
+	for i, s := range current.Snapshots {
+		if s != nil && s.Symbol == d.Symbol {
+			current.Snapshots[i] = &fresh
+			replaced = true
+		}
+	}
+	if !replaced {
+		current.Snapshots = append(current.Snapshots, &fresh)
+	}
+	v := stockengine.Validate(&current, []stockengine.Decision{d})[0]
+	if !v.Accepted {
+		return nil, nil, fmt.Errorf("ENTRY_RECHECK: %s %s", joinCodes(v.Codes), v.Note)
+	}
+	return &fresh, &current, nil
+}

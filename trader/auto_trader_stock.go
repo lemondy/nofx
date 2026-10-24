@@ -76,10 +76,13 @@ const (
 	stockSnapshotEvery     = 5 // equity snapshot every N protection ticks
 
 	// Scan mode: the 60s tick refreshes the cached scan once it is older than
-	// stockScanWarmAge (in the background); a decision cycle accepts a report up
-	// to stockScanMaxAge old before it waits for a live rescan.
+	// stockScanWarmAge (in the background). Candidate authorization has its own
+	// bounded lifetime; stockScanMaxAge bounds optional prompt annotations.
 	stockScanWarmAge = 20 * time.Minute
 	stockScanMaxAge  = 45 * time.Minute
+	// Candidate authorization expires at 2x the background refresh interval,
+	// capped below 90 minutes; a failed refresh never extends this deadline.
+	stockScanCandidateMaxAge = min(2*stockScanWarmAge, 90*time.Minute)
 )
 
 // stockSeriesNeeds: bars requested per timeframe (design §3.2).
@@ -126,6 +129,9 @@ type stockRuntime struct {
 	lastSlot         time.Time
 	// Paper-mode reminder clock for live shares left without protection.
 	unprotectedRemindAt time.Time
+	// Last Telegram alert per (symbol, reason) for a pre-order check rejection;
+	// only touched by the single loop goroutine.
+	entryAlertAt map[string]time.Time
 }
 
 func (r *stockRuntime) price(symbol string) float64 {

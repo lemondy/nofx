@@ -14,22 +14,22 @@ import (
 
 const (
 	hyperliquidInfoURL = "https://api.hyperliquid.xyz/info"
-	cacheDuration      = 24 * time.Hour // Cache for 24 hours
+	cacheDuration      = 5 * time.Minute // Bound cached listing/delisting status.
 )
 
 // CoinInfo represents basic coin information
 type CoinInfo struct {
-	Symbol   string  `json:"symbol"`
+	Symbol    string  `json:"symbol"`
 	Volume24h float64 `json:"volume_24h"` // 24h volume in USD
 }
 
 // CoinProvider provides Hyperliquid coin lists
 type CoinProvider struct {
-	mu            sync.RWMutex
-	allCoins      []CoinInfo
-	mainCoins     []CoinInfo
-	lastUpdated   time.Time
-	httpClient    *http.Client
+	mu          sync.RWMutex
+	allCoins    []CoinInfo
+	mainCoins   []CoinInfo
+	lastUpdated time.Time
+	httpClient  *http.Client
 }
 
 var (
@@ -48,11 +48,7 @@ func GetProvider() *CoinProvider {
 }
 
 // metaResponse represents the response from Hyperliquid meta endpoint
-type metaResponse struct {
-	Universe []struct {
-		Name string `json:"name"`
-	} `json:"universe"`
-}
+type metaResponse = Meta
 
 // assetCtx represents asset context with volume data
 type assetCtx struct {
@@ -63,8 +59,8 @@ type assetCtx struct {
 func (p *CoinProvider) fetchCoins(ctx context.Context) error {
 	// Request metaAndAssetCtxs to get both coin names and volume data
 	reqBody := []byte(`{"type": "metaAndAssetCtxs"}`)
-	
-	req, err := http.NewRequestWithContext(ctx, "POST", hyperliquidInfoURL, 
+
+	req, err := http.NewRequestWithContext(ctx, "POST", hyperliquidInfoURL,
 		bytes.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -96,16 +92,23 @@ func (p *CoinProvider) fetchCoins(ctx context.Context) error {
 	if err := json.Unmarshal(rawResp[0], &meta); err != nil {
 		return fmt.Errorf("failed to parse meta: %w", err)
 	}
+	if meta.Universe == nil {
+		return fmt.Errorf("Hyperliquid metadata missing universe")
+	}
 
 	// Parse asset contexts
 	var ctxs []assetCtx
 	if err := json.Unmarshal(rawResp[1], &ctxs); err != nil {
 		return fmt.Errorf("failed to parse asset contexts: %w", err)
 	}
+	rememberAssetMappings(hyperliquidInfoURL, meta.Universe)
 
 	// Build coin list with volume
 	var coins []CoinInfo
 	for i, u := range meta.Universe {
+		if u.IsDelisted {
+			continue
+		}
 		var vol float64
 		if i < len(ctxs) {
 			fmt.Sscanf(ctxs[i].DayNtlVlm, "%f", &vol)
@@ -134,7 +137,7 @@ func (p *CoinProvider) fetchCoins(ctx context.Context) error {
 	p.lastUpdated = time.Now()
 
 	logger.Infof("✅ Hyperliquid coin list updated: %d total coins, top 20 by volume cached", len(coins))
-	
+
 	return nil
 }
 
@@ -195,7 +198,7 @@ func GetAllCoinSymbols(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	symbols := make([]string, len(coins))
 	for i, c := range coins {
 		symbols[i] = c.Symbol
@@ -209,7 +212,7 @@ func GetMainCoinSymbols(ctx context.Context, limit int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	symbols := make([]string, len(coins))
 	for i, c := range coins {
 		symbols[i] = c.Symbol

@@ -196,7 +196,7 @@ func TestBalancePositionsAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p) != 1 || p[0]["side"] != "long" || p[0]["symbol"] != "AAPLBUSDT" {
+	if len(p) != 2 || p[1]["symbol"] != "DUSTBUSDT" || p[1]["dust"] != true || p[0]["side"] != "long" || p[0]["symbol"] != "AAPLBUSDT" {
 		t.Fatalf("positions: %#v", p)
 	}
 	near(t, p[0]["positionAmt"].(float64), 2)

@@ -77,6 +77,13 @@ func NewTestnetClient() *Client {
 func (c *Client) GetCandles(ctx context.Context, coin string, interval string, limit int) ([]Candle, error) {
 	// Format coin name for API (stock perps need xyz: prefix)
 	coin = FormatCoinForAPI(coin)
+	if !strings.HasPrefix(coin, "xyz:") {
+		asset, err := c.resolveCandleAsset(ctx, coin)
+		if err != nil {
+			return nil, err
+		}
+		coin = asset.Name
+	}
 
 	// Calculate time range based on interval and limit
 	now := time.Now()
@@ -219,6 +226,10 @@ func (c *Client) GetMeta(ctx context.Context) (*Meta, error) {
 	if err := json.Unmarshal(body, &meta); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
+	if meta.Universe == nil {
+		return nil, fmt.Errorf("Hyperliquid metadata missing universe")
+	}
+	rememberAssetMappings(c.apiURL, meta.Universe)
 
 	return &meta, nil
 }
@@ -233,6 +244,7 @@ type AssetInfo struct {
 	Name        string `json:"name"`
 	SzDecimals  int    `json:"szDecimals"`
 	MaxLeverage int    `json:"maxLeverage"`
+	IsDelisted  bool   `json:"isDelisted"`
 }
 
 // NormalizeCoin normalizes coin name for Hyperliquid API
