@@ -18,6 +18,12 @@ import sqlite3
 import sys
 import tempfile
 
+try:  # The nightly runtime dir only gets quant_audit.py via deploy.sh; never let the audit break the report.
+    from scripts.backtest.quant_audit import audit_returns
+except ImportError:
+    audit_returns = None
+from scripts.promotion.create_pair import main_repo_root
+
 
 UTC = timezone.utc
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +32,8 @@ CAVEAT = (
     "上线前仍需人工确认并保持小仓位/可回滚"
 )
 PNL_BASIS = "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）"
+AUDIT_MIN_WINDOW_PERIODS = 20
+AUDIT_BENCHMARK = "BTCUSDT 买入持有（UTC 日收盘，对数收益）"
 
 
 def as_utc(value: str | datetime) -> datetime:
@@ -174,6 +182,80 @@ def equity_statistics(snapshots: list[dict], started_at: datetime, as_of: dateti
         "period_return": finite(last[2] / first[2] - 1) if first and first[2] > 0 else None,
         "max_drawdown": max((d for d in drawdowns if d is not None), default=None),
         "forward_filled_days": filled, "daily_equity": curve,
+    }
+
+
+def completed_log_returns(stats: dict, as_of: datetime) -> dict[str, float]:
+    """Use existing daily returns, converting arithmetic to log only for completed UTC days."""
+    result = {}
+    for row in stats["daily_equity"]:
+        value = finite(row["return"])
+        if value is not None and value > -1 and as_utc(row["date"]) < midnight(as_of):
+            result[row["date"]] = math.log1p(value)
+    return result
+
+
+def load_btc_returns(as_of: datetime) -> tuple[dict[str, float], str | None]:
+    """Read the local factor cache; any missing/corrupt benchmark remains advisory only."""
+    path = "BTCUSDT.json"
+    try:
+        override = os.environ.get("FACTOR_MINING_DIR")
+        directory = Path(override) if override is not None else main_repo_root() / "data/factor_mining"
+        path = directory / "crypto/daily/BTCUSDT.json"
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("BTC 日线必须是非空数组")
+        closes = {}
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 5 or not isinstance(row[0], str):
+                raise ValueError("BTC 日线行必须包含 [date, open, high, low, close, ...]")
+            day = as_utc(row[0])
+            if row[0] != day.date().isoformat():
+                raise ValueError("BTC 日期必须为 YYYY-MM-DD")
+            close = finite(row[4])
+            if close is None or close <= 0 or day in closes:
+                raise ValueError("BTC 收盘价无效或日期重复")
+            closes[day] = close
+        days = sorted(day for day in closes if day < midnight(as_of))
+        returns = {iso(day): math.log(closes[day]) - math.log(closes[previous])
+                   for previous, day in zip(days, days[1:]) if day - previous == timedelta(days=1)}
+        if not returns:
+            raise ValueError("BTC 没有相邻的已完成 UTC 日收益")
+        return returns, None
+    except (OSError, ValueError, TypeError, OverflowError) as error:
+        return {}, f"BTC 基准不可用（{path}）：{error}"
+
+
+def pair_audit(candidate: dict, control: dict, as_of: datetime,
+               btc_returns: dict[str, float], btc_error: str | None) -> dict:
+    """Append-only reference audit, independent of promotion verdict/reasons."""
+    cand = completed_log_returns(candidate, as_of)
+    ctrl = completed_log_returns(control, as_of)
+
+    def aligned(system, benchmark):
+        if audit_returns is None:
+            return {"verdict": "UNAVAILABLE", "reason": "quant_audit 模块不可用（运行目录未同步 scripts/backtest/quant_audit.py）"}
+        days = sorted(system.keys() & benchmark.keys())
+        result = audit_returns([system[day] for day in days], [benchmark[day] for day in days],
+                               365, min_window_periods=AUDIT_MIN_WINDOW_PERIODS)
+        return {**result, "n_days": len(days)}
+
+    def vs_btc(system):
+        if btc_error or not system.keys() & btc_returns.keys():
+            return {"verdict": "UNAVAILABLE", "reason": btc_error or "与 BTC 基准没有公共的已完成 UTC 收益日期"}
+        if audit_returns is None:
+            return aligned(system, btc_returns)
+        return aligned(system, btc_returns)
+
+    cand_btc, ctrl_btc = vs_btc(cand), vs_btc(ctrl)
+    return {
+        "note": "信号层收益审计：仅供参考，不改变 verdict；样本不足时只给出样本数",
+        "min_window_periods": AUDIT_MIN_WINDOW_PERIODS,
+        "benchmark": AUDIT_BENCHMARK if any(result["verdict"] != "UNAVAILABLE"
+                                            for result in (cand_btc, ctrl_btc)) else None,
+        "candidate_vs_benchmark": cand_btc,
+        "control_vs_benchmark": ctrl_btc,
+        "candidate_vs_control": aligned(cand, ctrl),
     }
 
 
@@ -349,6 +431,7 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
               }}
     if not pairs:
         return report  # Empty configuration must work even without a database.
+    btc_returns, btc_error = load_btc_returns(as_of)
     with closing(open_readonly(db_path)) as connection:
         connection.execute("BEGIN")
         cache = {}
@@ -386,6 +469,7 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
                         warnings.append(f"{role}：{stats[field]} {label}")
                 if not stats["snapshot_count"]:
                     warnings.append(f"{role}：期间无有效权益快照")
+            item["audit"] = pair_audit(candidate, control, as_of, btc_returns, btc_error)
             report["pairs"].append(item)
     return json_safe(report)
 
@@ -444,6 +528,19 @@ def summary(report: dict) -> str:
                      f"SE={number(weekly['cluster_se'])}, CI95={weekly['ci95']}")
         for reason in item["reasons"] + item["warnings"]:
             lines.append(f"  - {reason}")
+        if "audit" in item:
+            audit = item["audit"]
+
+            def audit_label(key):
+                result = audit[key]
+                label = result["verdict"]
+                if label == "INSUFFICIENT_SAMPLE":
+                    label += f"({result['n_days']}/{result['required']}天)"
+                return label
+
+            lines.append(f"  审计: 候选 vs BTC {audit_label('candidate_vs_benchmark')} | "
+                         f"对照 vs BTC {audit_label('control_vs_benchmark')} | "
+                         f"候选 vs 对照 {audit_label('candidate_vs_control')}")
     lines.append(report["caveats"])
     return "\n".join(lines)
 

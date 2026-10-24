@@ -112,6 +112,16 @@ OHLC 无法确定 K 线内部事件顺序，混合 1m/5m 精度也不同。缓�
 
 Backtrader 参考：[订单执行](https://www.backtrader.com/docu/order-creation-execution/order-creation-execution/)、[OCO](https://www.backtrader.com/docu/order-creation-execution/oco/oco/)、[手续费](https://www.backtrader.com/docu/commission-schemes/commission-schemes/)、[滑点](https://www.backtrader.com/docu/slippage/slippage/)。
 
+## quant_audit 信号审计
+
+`python3 -m scripts.backtest.quant_audit` 用于信号层面的审计与基准对比，**不是下单模拟器**：不模拟杠杆、资金费率、止损或订单成交时序。`positions[i]` 表示第 i 根收盘决定的目标敞口，第 i+1 根收益才应用，并在生效 bar 扣除换向成本。涉及订单与盈亏的结论仍走上述 `scripts/backtest` 的 Backtrader 主流程。
+
+可复用入口包括 `audit_returns`（对齐对数收益的时间切分裁决）、`grid_around` / `sweep_plateau`（参数邻域平台判定），以及 `flag_lookahead_signal`（信号函数截断因果性检验）。`flag_lookahead` 仅是额外滞后一根后的 Sharpe 衰减启发式，不能代替因果性检验；截断检验未报警也只表示所选点未发现泄漏。NaN/inf 按对应日期成对过滤后保序切分；训练窗或保留窗少于 20 期时返回 `INSUFFICIENT_SAMPLE`，不输出收益指标。默认 60/40 切分采用整数截断，至少需要 48 期（28/20），40 期只有 24/16，仍不足。
+
+已知教训：BTC 2019–2026 日线的 200 日滞回规则，旧同 bar 口径曾显示 CAGR **+73.5%**、Sharpe **1.33**、MDD **32.7%**、`DATA_VALIDATED`；改为次日生效后为 **+41.1% / 0.83 / 52.5% / TRADE_OFF**。买入持有为 **+33.5% / 0.47 / 76.7%**。旧启发式因基线自身带前视而漏报，说明必须先修正收益时序再比较。
+
+promotion 报告附加审计仅比较已完成 UTC 日的权益对数收益，按日期与本地 BTC 日线基准内连接；默认基准来自主仓库 `data/factor_mining`，可用 `FACTOR_MINING_DIR` 覆盖。该审计不改变晋升裁决，短期实验会显示样本不足；基准缺失、损坏或没有共同日期时显示 `UNAVAILABLE`。
+
 ## 美股组合回测（stocks）
 
 完全离线读取 `<cache>/<SYMBOL>.json` 日线和 `<cache>/1h/<SYMBOL>.json` 小时线，不下载、不调用 LLM。依赖 Backtrader 1.9.78.123 和 Pandas 2.2.3（见 `requirements.txt`）。在仓库根目录运行：

@@ -24,6 +24,7 @@ done
 (
     echo "=== promotion report $(date '+%Y-%m-%d %H:%M:%S') ==="
     NOFX_DB="${NOFX_DB:-/Users/zhangyun/workspace/nofx/data/data.db}" \
+    FACTOR_MINING_DIR="$FM_ROOT" \
     PROMOTION_DIR="${PROMOTION_DIR:-/Users/zhangyun/workspace/nofx/data/promotion}" \
     "$AR_PYTHON" -m scripts.promotion.report || \
         echo "promotion report exited non-zero"
