@@ -420,11 +420,11 @@ describe('FundsPage', () => {
   it('renders the totals stat strip from totals', async () => {
     await renderPage()
     // 总权益 1743.10; 真实交易盈亏 80.70−13.20−2.86+1.32 = 65.96
-    // 剔除转账后收益率 5.71%; 手续费+资金费 13.20−2.86 = 10.34
+    // 剔除转账后收益率 5.71%; 净成本 手续费 13.20 − 资金费(−2.86) = 16.06
     expect(screen.getByText('1,743.10')).toBeInTheDocument()
     expect(screen.getByText('+65.96')).toBeInTheDocument()
     expect(screen.getByText('+5.71%')).toBeInTheDocument()
-    expect(screen.getByText('10.34')).toBeInTheDocument()
+    expect(screen.getByText('16.06')).toBeInTheDocument()
     expect(screen.getByText('+0.55')).toBeInTheDocument()
     // 净转入 +580.00 出现在总览卡片与每日明细合计行
     expect(screen.getAllByText('+580.00').length).toBeGreaterThan(0)
