@@ -766,6 +766,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			automationStage = "REDUCED_PRIOR_OR_EXTERNAL"
 		}
 
+		profitBypass := false
+		if managed {
+			profitBypass, _ = at.earlyCloseProfitBypass(symbol, side, entryPrice, markPrice)
+		}
 		positionInfos = append(positionInfos, kernel.PositionInfo{
 			Symbol:               symbol,
 			Side:                 side,
@@ -785,6 +789,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			Managed:              managed,
 			AutomationStage:      automationStage,
 			CumulativeReducedPct: cumulativeReducedPct,
+			EarlyCloseProfitOK:   profitBypass,
 		})
 	}
 

@@ -52,6 +52,9 @@ type PositionInfo struct {
 	// it does not repeat an already executed breakeven/trim action.
 	AutomationStage      string  `json:"automation_stage"`
 	CumulativeReducedPct float64 `json:"cumulative_reduced_pct"` // fraction of original entry quantity already closed, 0..100
+	// Computed by the trader against its opening-risk anchor for prompt
+	// compression only; execution rechecks profit against the current mark.
+	EarlyCloseProfitOK bool `json:"-"`
 }
 
 // AccountInfo account information

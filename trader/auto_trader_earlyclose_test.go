@@ -73,40 +73,148 @@ func TestEarlyCloseBlocksClose(t *testing.T) {
 	rising := &market.Data{Symbol: "VTHOUSDT", TimeframeData: map[string]*market.TimeframeSeriesData{
 		"1h": oneHKlines([]float64{100, 100.5, 101, 101.5, 102}),
 	}}
-	if blocked, reason := mk(time.Hour, 0, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100.75, rising); !blocked {
+	if blocked, reason := mk(time.Hour, 0, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100, 100.75, rising); !blocked {
 		t.Fatal("1h-held close without evidence must be blocked")
 	} else if reason == "" {
 		t.Fatal("blocked close must carry a reason")
 	}
 	// Held 1h, WITH ≥2 against-candles → allowed.
-	if blocked, _ := mk(time.Hour, 0, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100.75, data); blocked {
+	if blocked, _ := mk(time.Hour, 0, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100, 100.75, data); blocked {
 		t.Fatal("evidence path must allow")
 	}
 	// Held 5h (≥4h) → allowed regardless of evidence.
-	if blocked, _ := mk(5*time.Hour, 0, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100.75, data); blocked {
+	if blocked, _ := mk(5*time.Hour, 0, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100, 100.75, data); blocked {
 		t.Fatal("past-threshold close must be allowed")
 	}
 	// Mark at/below recorded stop → allowed (stopping out anyway).
-	if blocked, _ := mk(time.Hour, 0, 100.8).earlyCloseBlocksClose("VTHOUSDT", "long", 100.7, data); blocked {
+	if blocked, _ := mk(time.Hour, 0, 100.8).earlyCloseBlocksClose("VTHOUSDT", "long", 100, 100.7, data); blocked {
 		t.Fatal("stop-hit bypass must allow")
 	}
 	// Disabled (negative) → never blocks.
-	if blocked, _ := mk(time.Hour, -1, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100.75, data); blocked {
+	if blocked, _ := mk(time.Hour, -1, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100, 100.75, data); blocked {
 		t.Fatal("negative config must disable the gate")
 	}
 	// Custom threshold: 8h config, held 5h, no evidence → still blocked.
-	if blocked, _ := mk(5*time.Hour, 8, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100.75, rising); !blocked {
+	if blocked, _ := mk(5*time.Hour, 8, 0).earlyCloseBlocksClose("VTHOUSDT", "long", 100, 100.75, rising); !blocked {
 		t.Fatal("custom 8h threshold must block a 5h-held close")
 	}
 	// No hold-age data → fail-open.
 	at := &AutoTrader{name: "t"}
 	at.config = AutoTraderConfig{StrategyConfig: &store.StrategyConfig{}}
-	if blocked, _ := at.earlyCloseBlocksClose("OTHER", "long", 100, data); blocked {
+	if blocked, _ := at.earlyCloseBlocksClose("OTHER", "long", 100, 100, data); blocked {
 		t.Fatal("unknown hold age must fail open")
 	}
 	// kernel.EarlyCloseHours defaults: 0→4, negative→0 (disabled), custom kept.
 	if h := kernel.EarlyCloseHours(nil); h != 4 {
 		t.Fatalf("nil rc default must be 4, got %d", h)
+	}
+}
+
+// Exercise the shared close gate with both sides and full/partial exits. Use
+// price profit, not leveraged ROI, and keep 1h reversal evidence below two.
+func TestEarlyCloseProfitBypass(t *testing.T) {
+	cases := []struct {
+		name         string
+		profit       float64 // favorable price excursion from entry 100
+		initialRisk  float64
+		recordedRisk float64
+		held         time.Duration
+		earlyHours   int
+		evidence     int
+		unknownAge   bool
+		missingEntry bool
+		missingMark  bool
+		zeroRisk     bool
+		minHold      int
+		wantBlocked  bool
+	}{
+		{name: "at_half_R", profit: 1, initialRisk: 2},
+		{name: "above_half_R", profit: 1.24, initialRisk: 2, evidence: 1},
+		{name: "below_half_R", profit: 0.99, initialRisk: 2, wantBlocked: true},
+		{name: "breakeven", initialRisk: 2, wantBlocked: true},
+		{name: "loss", profit: -1, initialRisk: 2, wantBlocked: true},
+		{name: "opening_anchor_over_tightened_stop_and_pct", profit: 4.9, initialRisk: 10, recordedRisk: 1, wantBlocked: true},
+		{name: "recorded_stop_legacy_anchor", profit: 1, recordedRisk: 2},
+		{name: "legacy_anchor_below_half_R", profit: 0.99, recordedRisk: 2, wantBlocked: true},
+		{name: "no_anchor_at_pct", profit: 1.5},
+		{name: "no_anchor_above_pct", profit: 2},
+		{name: "no_anchor_below_pct", profit: 1.49, wantBlocked: true},
+		{name: "no_anchor_loss", profit: -1, wantBlocked: true},
+		{name: "zero_risk_anchor", profit: 2, zeroRisk: true, wantBlocked: true},
+		{name: "missing_entry", profit: 2, missingEntry: true, wantBlocked: true},
+		{name: "missing_mark", profit: 2, missingMark: true, wantBlocked: true},
+		{name: "at_default_hours", profit: -1, held: 4 * time.Hour},
+		{name: "past_default_hours", profit: -1, held: 5 * time.Hour},
+		{name: "custom_hours_still_locked", profit: -1, held: 5 * time.Hour, earlyHours: 8, wantBlocked: true},
+		{name: "at_custom_hours", profit: -1, held: 8 * time.Hour, earlyHours: 8},
+		{name: "disabled", profit: -1, earlyHours: -1},
+		{name: "unknown_age", profit: -1, unknownAge: true},
+		{name: "two_reversal_candles", profit: -1, evidence: 2},
+		{name: "at_recorded_stop", profit: -2, recordedRisk: 2},
+		{name: "beyond_recorded_stop", profit: -3, recordedRisk: 2},
+		{name: "profit_still_subject_to_min_hold", profit: 1, initialRisk: 2, held: 5 * time.Minute, minHold: 10, wantBlocked: true},
+	}
+	for _, side := range []string{"long", "short"} {
+		for _, prefix := range []string{"close_", "partial_close_"} {
+			for _, tc := range cases {
+				t.Run(prefix+side+"/"+tc.name, func(t *testing.T) {
+					const symbol = "VTHOUSDT"
+					at := riskTestTrader(store.RiskControlConfig{EarlyCloseMinHours: tc.earlyHours, MinHoldMinutes: tc.minHold})
+					at.positionInitialStopLoss = make(map[string]float64)
+					held := tc.held
+					if held == 0 {
+						held = time.Hour
+					}
+					if !tc.unknownAge {
+						at.positionFirstSeenTime[symbol+"_"+side] = time.Now().Add(-held).UnixMilli()
+					}
+					direction := 1.0
+					if side == "short" {
+						direction = -1
+					}
+					if tc.initialRisk > 0 {
+						at.SetInitialStopLoss(symbol, side, 100-direction*tc.initialRisk)
+					}
+					if tc.zeroRisk {
+						at.SetInitialStopLoss(symbol, side, 100)
+					}
+					if tc.recordedRisk > 0 {
+						at.SetRecordedStopLoss(symbol, side, 100-direction*tc.recordedRisk)
+					}
+					pos := kernel.PositionInfo{Symbol: symbol, Side: side, EntryPrice: 100,
+						MarkPrice: 100 + direction*tc.profit, Managed: true, Quantity: 1, Leverage: 50}
+					if tc.missingEntry {
+						pos.EntryPrice = 0
+					}
+					if tc.missingMark {
+						pos.MarkPrice = 0
+					}
+					// Three closed candles plus the forming bar. Reverse only the
+					// requested trailing closed candles; prices stay independent of PnL.
+					tf := oneHKlines([]float64{100, 100 + direction, 100 + 2*direction, 100 + 3*direction})
+					for i := 2; i > 2-tc.evidence; i-- {
+						tf.Klines[i].Close = tf.Klines[i].Open - direction
+					}
+					ctx := &kernel.Context{
+						Positions: []kernel.PositionInfo{pos},
+						MarketDataMap: map[string]*market.Data{symbol: {
+							Symbol: symbol, TimeframeData: map[string]*market.TimeframeSeriesData{"1h": tf},
+						}},
+					}
+					if got := oneHAgainstCandles(ctx.MarketDataMap[symbol], side); got != tc.evidence {
+						t.Fatalf("fixture has %d against-direction candles, want %d", got, tc.evidence)
+					}
+					action := prefix + side
+					got := at.applyHardRiskGates([]kernel.Decision{{Symbol: symbol, Action: action}}, ctx)
+					if blocked := len(got) == 0; blocked != tc.wantBlocked {
+						t.Fatalf("%s profit %.2f: blocked = %v, want %v", action, tc.profit, blocked, tc.wantBlocked)
+					}
+					if len(got) == 1 && (got[0].Symbol != symbol || got[0].Action != action) {
+						t.Fatalf("allowed decision changed: %+v", got)
+					}
+				})
+			}
+		}
 	}
 }
 
