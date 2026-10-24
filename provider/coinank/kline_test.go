@@ -57,3 +57,27 @@ func TestC2AuthenticatedKlineRejectsShortRows(t *testing.T) {
 		t.Fatalf("invalid response accepted: %v %v", rows, err)
 	}
 }
+
+// The vendor returns the still-forming last candle with end time 0 and count 0;
+// that is a normal response and must not be rejected (found against live data).
+func TestParseKlineRowsAllowsFormingLastCandle(t *testing.T) {
+	rows := [][]float64{
+		{1000, 1999, 1, 2, 3, 0.5, 10, 20, 7},
+		{2000, 2999, 2, 3, 4, 1.5, 11, 21, 8},
+		{3000, 0, 3, 3, 3, 3, 0, 0, 0},
+	}
+	got, err := ParseKlineRows(rows)
+	if err != nil || len(got) != 3 || got[2].EndTime != 0 || got[2].StartTime != 3000 {
+		t.Fatalf("forming candle rejected or mangled: %+v err=%v", got, err)
+	}
+	for name, bad := range map[string][][]float64{
+		"end before start": {{3000, 2000, 1, 1, 1, 1, 1, 1, 1}},
+		"negative end":     {{3000, -1, 1, 1, 1, 1, 1, 1, 1}},
+		"start not rising": {{2000, 2999, 1, 1, 1, 1, 1, 1, 1}, {2000, 3999, 1, 1, 1, 1, 1, 1, 1}},
+		"end not rising":   {{2000, 2999, 1, 1, 1, 1, 1, 1, 1}, {3000, 2500, 1, 1, 1, 1, 1, 1, 1}},
+	} {
+		if _, err := ParseKlineRows(bad); err == nil {
+			t.Errorf("%s must still be rejected", name)
+		}
+	}
+}

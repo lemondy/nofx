@@ -58,12 +58,16 @@ func ParseKlineRows(rows [][]float64) ([]KlineResult, error) {
 			}
 		}
 		// Guard the float-to-int conversion as well as the series ordering.
-		if k[0] < 0 || k[1] < k[0] || k[0] >= float64(math.MaxInt64) || k[1] >= float64(math.MaxInt64) {
+		// The vendor reports the still-forming last candle with end time 0 (and
+		// count 0) — a real, normal response — so a zero end time is allowed;
+		// any other end time must not precede the start.
+		if k[0] < 0 || k[1] < 0 || (k[1] != 0 && k[1] < k[0]) || k[0] >= float64(math.MaxInt64) || k[1] >= float64(math.MaxInt64) {
 			return nil, fmt.Errorf("%w: row %d has invalid timestamps", ErrInvalidKlineData, i)
 		}
 		klines[i].StartTime = int64(k[0] + 0.001)
 		klines[i].EndTime = int64(k[1] + 0.001)
-		if i > 0 && (klines[i].StartTime <= klines[i-1].StartTime || klines[i].EndTime <= klines[i-1].EndTime) {
+		if i > 0 && (klines[i].StartTime <= klines[i-1].StartTime ||
+			(klines[i].EndTime != 0 && klines[i-1].EndTime != 0 && klines[i].EndTime <= klines[i-1].EndTime)) {
 			return nil, fmt.Errorf("%w: row %d timestamps are not increasing", ErrInvalidKlineData, i)
 		}
 		klines[i].Open = k[2]
