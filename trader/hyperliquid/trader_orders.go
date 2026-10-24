@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"nofx/logger"
+	"nofx/market"
 	"nofx/security"
 	"nofx/trader/types"
 	"strconv"
@@ -17,14 +18,15 @@ import (
 
 // OpenLong opens a long position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return nil, err
+	}
 	var placement map[string]interface{}
 	// First cancel all pending orders for this coin
 	if err := t.CancelAllOrders(symbol); err != nil {
 		logger.Infof("  ⚠ Failed to cancel old pending orders: %v", err)
 	}
-
-	// Hyperliquid symbol format
-	coin := convertSymbolToHyperliquid(symbol)
 
 	// Check if this is an xyz dex asset
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -92,14 +94,15 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 
 // OpenShort opens a short position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return nil, err
+	}
 	var placement map[string]interface{}
 	// First cancel all pending orders for this coin
 	if err := t.CancelAllOrders(symbol); err != nil {
 		logger.Infof("  ⚠ Failed to cancel old pending orders: %v", err)
 	}
-
-	// Hyperliquid symbol format
-	coin := convertSymbolToHyperliquid(symbol)
 
 	// Check if this is an xyz dex asset
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -167,9 +170,12 @@ func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage 
 
 // CloseLong closes a long position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return nil, err
+	}
 	var placement map[string]interface{}
 	// Hyperliquid symbol format
-	coin := convertSymbolToHyperliquid(symbol)
 	isXyz := strings.HasPrefix(coin, "xyz:")
 
 	// If quantity is 0, get current position quantity
@@ -187,7 +193,7 @@ func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[stri
 
 		for _, pos := range positions {
 			posSymbol := pos["symbol"].(string)
-			if (posSymbol == symbol || posSymbol == searchSymbol) && pos["side"] == "long" {
+			if (market.Normalize(posSymbol) == market.Normalize(symbol) || posSymbol == searchSymbol) && pos["side"] == "long" {
 				quantity = pos["positionAmt"].(float64)
 				break
 			}
@@ -257,9 +263,12 @@ func (t *HyperliquidTrader) CloseLong(symbol string, quantity float64) (map[stri
 
 // CloseShort closes a short position (supports both crypto and xyz dex)
 func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return nil, err
+	}
 	var placement map[string]interface{}
 	// Hyperliquid symbol format
-	coin := convertSymbolToHyperliquid(symbol)
 	isXyz := strings.HasPrefix(coin, "xyz:")
 
 	// If quantity is 0, get current position quantity
@@ -277,7 +286,7 @@ func (t *HyperliquidTrader) CloseShort(symbol string, quantity float64) (map[str
 
 		for _, pos := range positions {
 			posSymbol := pos["symbol"].(string)
-			if (posSymbol == symbol || posSymbol == searchSymbol) && pos["side"] == "short" {
+			if (market.Normalize(posSymbol) == market.Normalize(symbol) || posSymbol == searchSymbol) && pos["side"] == "short" {
 				quantity = pos["positionAmt"].(float64)
 				break
 			}
@@ -363,7 +372,10 @@ func (t *HyperliquidTrader) CancelTakeProfitOrders(symbol string) error {
 
 // CancelAllOrders cancels all pending orders for this coin
 func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return err
+	}
 
 	// Check if this is an xyz dex asset
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -395,7 +407,10 @@ func (t *HyperliquidTrader) CancelAllOrders(symbol string) error {
 
 // CancelStopOrders cancels take profit/stop loss orders for this coin (used to adjust TP/SL positions)
 func (t *HyperliquidTrader) CancelStopOrders(symbol string) error {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return err
+	}
 
 	// Check if this is an xyz dex asset
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -888,7 +903,10 @@ func (t *HyperliquidTrader) placeXyzTriggerOrder(coin string, isBuy bool, size f
 
 // SetStopLoss sets stop loss order
 func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return err
+	}
 
 	isBuy := positionSide == "SHORT" // Short position stop loss = buy, long position stop loss = sell
 
@@ -936,7 +954,10 @@ func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quan
 
 // SetTakeProfit sets take profit order
 func (t *HyperliquidTrader) SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return err
+	}
 
 	isBuy := positionSide == "SHORT" // Short position take profit = buy, long position take profit = sell
 
@@ -985,7 +1006,10 @@ func (t *HyperliquidTrader) SetTakeProfit(symbol string, positionSide string, qu
 // PlaceLimitOrder places a limit order for grid trading
 // Implements GridTrader interface
 func (t *HyperliquidTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.LimitOrderResult, error) {
-	coin := convertSymbolToHyperliquid(req.Symbol)
+	coin, err := t.resolveCoin(req.Symbol)
+	if err != nil {
+		return nil, err
+	}
 
 	// Set leverage if specified and not xyz dex
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -1052,7 +1076,10 @@ func (t *HyperliquidTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*type
 // CancelOrder cancels a specific order by ID
 // Implements GridTrader interface
 func (t *HyperliquidTrader) CancelOrder(symbol, orderID string) error {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return err
+	}
 
 	// Parse order ID
 	oid, err := strconv.ParseInt(orderID, 10, 64)

@@ -2,6 +2,7 @@ package vergex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -132,18 +133,23 @@ func (s *relaySession) fetchAll() error {
 	for _, endpoint := range headlessEndpoints() {
 		p := s.page.Timeout(fetchTimeout)
 		res, err := p.Eval(
-			`(u) => fetch(u, {headers: {accept: 'application/json'}}).then(r => r.text())`,
+			`async (u) => { const r = await fetch(u, {headers: {accept: 'application/json'}}); return JSON.stringify({status: r.status, body: await r.text()}); }`,
 			"https://vergex.trade"+endpoint,
 		)
 		p.CancelTimeout()
 		if err != nil {
 			return fmt.Errorf("eval %s: %w", endpoint, err)
 		}
-		body := strings.TrimSpace(res.Value.Str())
-		if len(body) == 0 || body[0] != '{' {
-			return fmt.Errorf("%s: non-JSON response (challenge page?)", endpoint)
+		var response struct {
+			Status int    `json:"status"`
+			Body   string `json:"body"`
 		}
-		FeedRelay(endpoint, []byte(body))
+		if err := json.Unmarshal([]byte(res.Value.Str()), &response); err != nil {
+			return fmt.Errorf("%s: invalid browser response: %w", endpoint, err)
+		}
+		if err := feedRelayHTTP(endpoint, response.Status, []byte(response.Body)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

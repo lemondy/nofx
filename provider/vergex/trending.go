@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"nofx/market"
 	"strings"
 	"time"
 )
@@ -41,30 +42,44 @@ func NewClient() *Client {
 // browser-relayed payloads (see relay.go) are served without a network
 // request, since direct backend requests are challenged by Cloudflare.
 func (c *Client) fetchJSON(pathWithQuery string, out any) error {
-	served, err := relayLookupJSON(pathWithQuery, out)
-	if served || err != nil {
-		return err
+	_, _, err := c.fetchJSONWithAge(pathWithQuery, out)
+	return err
+}
+
+func (c *Client) fetchJSONWithAge(pathWithQuery string, out any) (time.Time, time.Time, error) {
+	if entry, ok := relayLookupEntry(pathWithQuery); ok {
+		if err := validatePayload(pathWithQuery, entry.body); err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+		if err := json.Unmarshal(entry.body, out); err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+		return entry.fetchedAt, entry.expires, nil
 	}
 
+	fetchedAt := time.Now()
 	resp, err := c.http.Get(c.baseURL + pathWithQuery)
 	if err != nil {
-		return fmt.Errorf("vergex request failed: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("vergex request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("vergex returned status %d for %s", resp.StatusCode, pathWithQuery)
+		return time.Time{}, time.Time{}, fmt.Errorf("vergex returned status %d for %s", resp.StatusCode, pathWithQuery)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return fmt.Errorf("vergex read body failed: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("vergex read body failed: %w", err)
+	}
+	if err := validatePayload(pathWithQuery, body); err != nil {
+		return time.Time{}, time.Time{}, err
 	}
 
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("vergex JSON decode failed: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("vergex JSON decode failed: %w", err)
 	}
-	return nil
+	return fetchedAt, fetchedAt.Add(relayTTL), nil
 }
 
 // AI500Asset is one featured AI500 entry from /trending-category.
@@ -90,13 +105,34 @@ type trendingCategoryResponse struct {
 // score first. This is the same featured list shown on the data page's
 // "AI500 Picks" card.
 func (c *Client) GetAI500Symbols(limit int) ([]string, error) {
+	snapshot, err := c.GetAI500Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = maxLimit
+	}
+	return truncateSlice(snapshot.Symbols, limit), nil
+}
+
+// AI500Snapshot carries the complete ranking and the original source lifetime.
+// Reading it from a cache must never restart that lifetime.
+type AI500Snapshot struct {
+	Symbols   []string
+	FetchedAt time.Time
+	ExpiresAt time.Time
+}
+
+func (c *Client) GetAI500Snapshot() (AI500Snapshot, error) {
 	q := url.Values{}
 	q.Set("lang", "en")
 	q.Set("key", "ai500")
+	q.Set("limit", fmt.Sprint(maxLimit))
 
 	var resp trendingCategoryResponse
-	if err := c.fetchJSON("/trending-category?"+q.Encode(), &resp); err != nil {
-		return nil, err
+	fetchedAt, expiresAt, err := c.fetchJSONWithAge("/trending-category?"+q.Encode(), &resp)
+	if err != nil {
+		return AI500Snapshot{}, err
 	}
 
 	type scored struct {
@@ -123,11 +159,8 @@ func (c *Client) GetAI500Symbols(limit int) ([]string, error) {
 		}
 		seen[s] = true
 		symbols = append(symbols, s)
-		if len(symbols) >= limit {
-			break
-		}
 	}
-	return symbols, nil
+	return AI500Snapshot{Symbols: symbols, FetchedAt: fetchedAt, ExpiresAt: expiresAt}, nil
 }
 
 // oiRow is one row of /trending-crypto?tab=oi (both top and low lists).
@@ -201,10 +234,7 @@ func tradableSymbol(symbol string) string {
 			return ""
 		}
 	}
-	if !strings.HasSuffix(s, "USDT") {
-		s += "USDT"
-	}
-	return s
+	return market.Normalize(s)
 }
 
 // NormalizeSymbol normalizes a coin symbol to XXXUSDT format.
@@ -213,8 +243,5 @@ func NormalizeSymbol(symbol string) string {
 	if s == "" {
 		return ""
 	}
-	if !strings.HasSuffix(s, "USDT") {
-		s += "USDT"
-	}
-	return s
+	return market.Normalize(s)
 }

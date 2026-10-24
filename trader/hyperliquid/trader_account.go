@@ -270,7 +270,10 @@ func (t *HyperliquidTrader) getXYZDexBalance() (accountValue float64, unrealized
 
 // GetMarketPrice gets market price (supports both crypto and xyz dex assets)
 func (t *HyperliquidTrader) GetMarketPrice(symbol string) (float64, error) {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return 0, err
+	}
 
 	// Check if this is an xyz dex asset
 	if strings.HasPrefix(coin, "xyz:") {
@@ -356,6 +359,10 @@ func (t *HyperliquidTrader) getXyzMarketPrice(coin string) (float64, error) {
 
 // Query the order itself; absence from open orders is not a fill receipt.
 func (t *HyperliquidTrader) GetOrderStatus(symbol, orderID string) (map[string]interface{}, error) {
+	coin, resolveErr := t.resolveCoin(symbol)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
 	oid, err := strconv.ParseInt(orderID, 10, 64)
 	if err != nil {
 		return nil, err
@@ -368,7 +375,7 @@ func (t *HyperliquidTrader) GetOrderStatus(symbol, orderID string) (map[string]i
 		return nil, fmt.Errorf("order %s status unknown", orderID)
 	}
 	order := result.Order.Order
-	if order.Coin != convertSymbolToHyperliquid(symbol) {
+	if order.Coin != coin {
 		return nil, fmt.Errorf("order symbol mismatch")
 	}
 	fills, err := t.exchange.Info().UserFillsByTime(t.ctx, t.walletAddr, order.Timestamp, nil, nil)
@@ -541,6 +548,9 @@ func (t *HyperliquidTrader) GetTrades(startTime time.Time, limit int) ([]types.T
 
 // GetOpenOrders gets all open/pending orders for a symbol
 func (t *HyperliquidTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) {
+	if _, err := t.resolveCoin(symbol); err != nil {
+		return nil, err
+	}
 	orders, err := t.exchange.Info().FrontendOpenOrders(t.ctx, t.walletAddr)
 	if err != nil {
 		return nil, fmt.Errorf("open protection orders unknown: %w", err)
@@ -552,7 +562,7 @@ func normalizeFrontendOrders(symbol string, orders []hl.FrontendOpenOrder) ([]ty
 	coin := convertSymbolToHyperliquid(symbol)
 	var result []types.OpenOrder
 	for _, order := range orders {
-		if order.Coin != coin {
+		if convertSymbolToHyperliquid(order.Coin) != coin {
 			continue
 		}
 		side := "BUY"
@@ -578,7 +588,10 @@ func normalizeFrontendOrders(symbol string, orders []hl.FrontendOpenOrder) ([]ty
 // GetOrderBook gets the order book for a symbol
 // Implements GridTrader interface
 func (t *HyperliquidTrader) GetOrderBook(symbol string, depth int) (bids, asks [][]float64, err error) {
-	coin := convertSymbolToHyperliquid(symbol)
+	coin, err := t.resolveCoin(symbol)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	l2Book, err := t.exchange.Info().L2Snapshot(t.ctx, coin)
 	if err != nil {

@@ -864,9 +864,6 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 			out = append(out, sig)
 		}
 	}
-	if len(out) == 0 {
-		return nil, time.Time{}, fmt.Errorf("short scan produced no analyzable symbols")
-	}
 	// Merge the slow-top universe FIRST (grinding tops near their 90d high
 	// with 4h bearish divergence — invisible to a 24h-gainer screen), then
 	// apply the BTC regime haircut to the merged board: the slow-top entries
@@ -878,6 +875,9 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 	// universe is exempt from (user audit 2026-09-17 — the exemption used to
 	// die silently on exactly this collision).
 	out = mergeShortScans(out, slowTopSnapshot())
+	if len(out) == 0 {
+		return nil, time.Time{}, fmt.Errorf("short scan produced no analyzable symbols")
+	}
 	// BTC macro gate: in a strong BTC uptrend every altcoin short carries
 	// systematic squeeze risk — one global haircut instead of manual vetting.
 	// Mirror regimes pass through at 1.0, labelled for context only (the old

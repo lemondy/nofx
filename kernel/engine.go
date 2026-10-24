@@ -1016,6 +1016,10 @@ func (e *StrategyEngine) filterExcludedCoins(candidates []CandidateCoin) []Candi
 	// coin source passes through.
 	filtered0 := make([]CandidateCoin, 0, len(candidates))
 	for _, c := range candidates {
+		if strings.TrimSpace(c.Symbol) == "" {
+			continue
+		}
+		c.Symbol = market.Normalize(c.Symbol)
 		if strings.Contains(strings.ToUpper(c.Symbol), ":") {
 			logger.Infof("🚫 Excluded XYZ (tokenized stock/commodity) symbol: %s", c.Symbol)
 			continue
@@ -1073,15 +1077,13 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction, minGrade string
 		limit = 5
 	}
 	scheduler := breakout.DefaultScheduler()
-	// Over-fetch 3× so the quality floor can decline weak rows and still
-	// fill the configured slot count from the rest of the ranking.
-	fetch := limit * 3
-	symbols, age := scheduler.TopSymbolsWithDirectionAge(fetch, direction)
+	// Read the complete snapshot; quality filtering must precede truncation.
+	symbols, age := scheduler.TopSymbolsWithDirectionAge(0, direction)
 	// 2026-10-03 review P2: distinguish "empty board" from "direction has no
 	// match on a FRESH board" — the old condition re-ran a full synchronous
 	// scan every cycle just to confirm the direction filter still matches
 	// nothing. Refresh only on staleness or a genuinely empty board.
-	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(fetch, "")
+	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(0, "")
 	directionEmpty := len(anyCount) == 0
 	if directionEmpty || age > piggyDashMaxAge {
 		// review 2026-10-07 S9: only a FRESH board may take this early return;
@@ -1096,7 +1098,7 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction, minGrade string
 			logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")
 		}
 		scheduler.RefreshNow(60 * time.Second)
-		symbols, age = scheduler.TopSymbolsWithDirectionAge(fetch, direction)
+		symbols, age = scheduler.TopSymbolsWithDirectionAge(0, direction)
 	}
 	if len(symbols) == 0 {
 		return nil, fmt.Errorf("piggy-dash scan produced no signals (Binance data unavailable)")
@@ -1134,7 +1136,7 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction, minGrade string
 	var candidates []CandidateCoin
 	for _, row := range picked {
 		candidates = append(candidates, CandidateCoin{
-			Symbol:           row.Symbol,
+			Symbol:           market.Normalize(row.Symbol),
 			Sources:          []string{"piggy_dash"},
 			ScannerDirection: row.Direction,
 		})
@@ -1350,7 +1352,7 @@ func shortEvidenceAtMs(sig breakout.ShortSignal, scanAt time.Time) int64 {
 // shortSignalToCandidate converts a scanner ShortSignal into a CandidateCoin.
 func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) CandidateCoin {
 	c := CandidateCoin{
-		Symbol:           sig.Symbol,
+		Symbol:           market.Normalize(sig.Symbol),
 		Sources:          []string{"short_scan"},
 		ScannerDirection: "short",
 		ShortScore:       sig.Score,
@@ -1431,13 +1433,14 @@ var ai500LastGood struct {
 	mu      sync.Mutex
 	symbols []string
 	at      time.Time
+	expires time.Time
 }
 
 // Test seams for getAI500Coins: the vergex fetch and the clock.
 var ai500Now = time.Now
 
-var ai500Fetch = func(e *StrategyEngine, limit int) ([]string, error) {
-	return e.vergexClient.GetAI500Symbols(limit)
+var ai500Fetch = func(e *StrategyEngine) (vergex.AI500Snapshot, error) {
+	return e.vergexClient.GetAI500Snapshot()
 }
 
 // getAI500Coins returns AI500 picks from vergex trending — the same source as
@@ -1448,7 +1451,8 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 		limit = 30
 	}
 
-	symbols, err := ai500Fetch(e, limit)
+	snapshot, err := ai500Fetch(e)
+	symbols := snapshot.Symbols
 	if err != nil {
 		// 2026-10-09: transient vergex 403 dropped the AI500 source for a whole
 		// cycle — reuse the last-good list while it is younger than the TTL.
@@ -1461,9 +1465,12 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 	} else {
 		// An empty success must not wipe a usable last-good list.
 		if len(symbols) > 0 {
-			ai500Remember(symbols)
+			ai500Remember(snapshot)
 		}
 		logger.Infof("📊 AI500 (vergex) returned %d coins (limit %d)", len(symbols), limit)
+	}
+	if len(symbols) > limit {
+		symbols = symbols[:limit]
 	}
 
 	var candidates []CandidateCoin
@@ -1476,12 +1483,17 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 	return candidates, nil
 }
 
-// ai500Remember stores a copy of a successful AI500 list and the time it arrived.
-func ai500Remember(symbols []string) {
-	cp := append([]string(nil), symbols...)
+// ai500Remember preserves source age and caps fallback at the earlier deadline.
+func ai500Remember(snapshot vergex.AI500Snapshot) {
+	cp := append([]string(nil), snapshot.Symbols...)
+	expires := snapshot.FetchedAt.Add(ai500FallbackTTL)
+	if snapshot.ExpiresAt.Before(expires) {
+		expires = snapshot.ExpiresAt
+	}
 	ai500LastGood.mu.Lock()
 	ai500LastGood.symbols = cp
-	ai500LastGood.at = ai500Now()
+	ai500LastGood.at = snapshot.FetchedAt
+	ai500LastGood.expires = expires
 	ai500LastGood.mu.Unlock()
 }
 
@@ -1494,7 +1506,7 @@ func ai500LastGoodSymbols(limit int) (symbols []string, age time.Duration, ok bo
 		return nil, 0, false
 	}
 	age = ai500Now().Sub(ai500LastGood.at)
-	if age >= ai500FallbackTTL {
+	if age < 0 || !ai500Now().Before(ai500LastGood.expires) {
 		return nil, 0, false
 	}
 	n := len(ai500LastGood.symbols)
@@ -1562,8 +1574,7 @@ func (e *StrategyEngine) getHyperAllCoins() ([]CandidateCoin, error) {
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
-		// Add USDT suffix for compatibility
-		normalizedSymbol := market.Normalize(symbol + "USDT")
+		normalizedSymbol := market.Normalize(symbol)
 		candidates = append(candidates, CandidateCoin{
 			Symbol:  normalizedSymbol,
 			Sources: []string{"hyper_all"},
@@ -1587,8 +1598,7 @@ func (e *StrategyEngine) getHyperMainCoins(limit int) ([]CandidateCoin, error) {
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
-		// Add USDT suffix for compatibility
-		normalizedSymbol := market.Normalize(symbol + "USDT")
+		normalizedSymbol := market.Normalize(symbol)
 		candidates = append(candidates, CandidateCoin{
 			Symbol:  normalizedSymbol,
 			Sources: []string{"hyper_main"},

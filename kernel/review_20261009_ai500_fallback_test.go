@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"errors"
+	"nofx/provider/vergex"
 	"testing"
 	"time"
 )
@@ -22,7 +23,9 @@ func setupAI500Fallback(t *testing.T) *time.Time {
 	origFetch, origNow := ai500Fetch, ai500Now
 	ai500LastGood.mu.Lock()
 	origSymbols, origAt := ai500LastGood.symbols, ai500LastGood.at
+	origExpires := ai500LastGood.expires
 	ai500LastGood.symbols, ai500LastGood.at = nil, time.Time{}
+	ai500LastGood.expires = time.Time{}
 	ai500LastGood.mu.Unlock()
 
 	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
@@ -31,6 +34,7 @@ func setupAI500Fallback(t *testing.T) *time.Time {
 		ai500Fetch, ai500Now = origFetch, origNow
 		ai500LastGood.mu.Lock()
 		ai500LastGood.symbols, ai500LastGood.at = origSymbols, origAt
+		ai500LastGood.expires = origExpires
 		ai500LastGood.mu.Unlock()
 	})
 	return &now
@@ -38,8 +42,8 @@ func setupAI500Fallback(t *testing.T) *time.Time {
 
 // scriptAI500Fetch makes the next vergex fetch return symbols and err.
 func scriptAI500Fetch(symbols []string, err error) {
-	ai500Fetch = func(_ *StrategyEngine, _ int) ([]string, error) {
-		return symbols, err
+	ai500Fetch = func(_ *StrategyEngine) (vergex.AI500Snapshot, error) {
+		return vergex.AI500Snapshot{Symbols: symbols, FetchedAt: ai500Now(), ExpiresAt: ai500Now().Add(ai500FallbackTTL)}, err
 	}
 }
 
