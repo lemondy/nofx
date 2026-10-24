@@ -56,3 +56,45 @@ describe('research menu in the top nav', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/)
   })
 })
+
+describe('funds tab in the top nav', () => {
+  it('places 资金 after 看板 and navigates to /funds on click', () => {
+    const onPageChange = vi.fn()
+    render(
+      <MemoryRouter>
+        <HeaderBar language="zh" isLoggedIn onPageChange={onPageChange} />
+        <Location />
+      </MemoryRouter>
+    )
+    const names = screen.getAllByRole('button').map((b) => b.textContent)
+    const dashboard = names.indexOf('看板')
+    expect(dashboard).toBeGreaterThan(-1)
+    expect(names[dashboard + 1]).toBe('资金')
+
+    fireEvent.click(screen.getByRole('button', { name: '资金' }))
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/funds$/)
+    expect(onPageChange).toHaveBeenCalledWith('funds')
+  })
+
+  it('labels the funds tab as Funds in English', () => {
+    render(
+      <MemoryRouter>
+        <HeaderBar language="en" isLoggedIn />
+      </MemoryRouter>
+    )
+    expect(screen.getByRole('button', { name: 'Funds' })).toBeInTheDocument()
+  })
+
+  it('requires login before opening the funds page', () => {
+    const onLoginRequired = vi.fn()
+    render(
+      <MemoryRouter>
+        <HeaderBar language="zh" onLoginRequired={onLoginRequired} />
+        <Location />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByRole('button', { name: '资金' }))
+    expect(onLoginRequired).toHaveBeenCalledWith('资金')
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/)
+  })
+})

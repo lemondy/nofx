@@ -36,6 +36,9 @@ const DataPage = lazy(() =>
   import('./pages/DataPage').then((m) => ({ default: m.DataPage }))
 )
 const ResearchHubPage = lazy(() => import('./pages/ResearchHubPage'))
+const FundsPage = lazy(() =>
+  import('./pages/FundsPage').then((m) => ({ default: m.default }))
+)
 const ReviewPage = lazy(() =>
   import('./pages/ReviewPage').then((m) => ({ default: m.ReviewPage }))
 )
@@ -66,6 +69,7 @@ type Page =
   | 'data'
   | 'review'
   | 'research'
+  | 'funds'
   | 'login'
   | 'register'
 
@@ -93,6 +97,7 @@ function App() {
     if (path === '/data' || hash === 'data') return 'data'
     if (path === '/review' || hash === 'review') return 'review'
     if (path === '/research') return 'research'
+    if (path === '/funds') return 'funds'
     if (path === '/dashboard' || hash === 'trader' || hash === 'details')
       return 'trader'
     return 'competition' // 默认为竞赛页面
@@ -114,6 +119,7 @@ function App() {
       data: '/data',
       review: '/review',
       research: '/research',
+      funds: '/funds',
       traders: '/traders',
       trader: '/dashboard',
       strategy: '/strategy',
@@ -191,6 +197,10 @@ function App() {
         setCurrentPage('data')
       } else if (path === '/review' || hash === 'review') {
         setCurrentPage('review')
+      } else if (path === '/research') {
+        setCurrentPage('research')
+      } else if (path === '/funds') {
+        setCurrentPage('funds')
       } else if (
         path === '/dashboard' ||
         hash === 'trader' ||
@@ -521,6 +531,42 @@ function App() {
         />
         <main className="pt-[52px]">
           <ReviewPage language={language} />
+        </main>
+        <LoginRequiredOverlay
+          isOpen={loginOverlayOpen}
+          onClose={() => setLoginOverlayOpen(false)}
+          featureName={loginOverlayFeature}
+        />
+      </div>
+    )
+  }
+  // Funds page (资金总览) - requires authentication
+  if (route === '/funds') {
+    if ((!user || !token) && !hasPersistedAuth) {
+      return <Redirect to="/login" />
+    }
+    const fundsPageNavigate = (page: Page) => {
+      navigateToPage(page)
+    }
+    return (
+      <div
+        className="min-h-screen"
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
+      >
+        <HeaderBar
+          isLoggedIn={!!user}
+          currentPage="funds"
+          language={language}
+          onLanguageChange={setLanguage}
+          user={user}
+          onLogout={logout}
+          onLoginRequired={handleLoginRequired}
+          onPageChange={fundsPageNavigate}
+        />
+        <main className="pt-[52px]">
+          <Suspense fallback={null}>
+            <FundsPage language={language} />
+          </Suspense>
         </main>
         <LoginRequiredOverlay
           isOpen={loginOverlayOpen}
