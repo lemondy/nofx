@@ -129,6 +129,9 @@ type stockRuntime struct {
 	lastSlot         time.Time
 	// Paper-mode reminder clock for live shares left without protection.
 	unprotectedRemindAt time.Time
+	// Last Telegram alert per (symbol, reason) for a pre-order check rejection;
+	// only touched by the single loop goroutine.
+	entryAlertAt map[string]time.Time
 }
 
 func (r *stockRuntime) price(symbol string) float64 {

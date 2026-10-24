@@ -872,6 +872,7 @@ func (at *AutoTrader) execStockEntry(ctx context.Context, sizing *stockengine.Co
 	}
 	fresh, current, err := at.stockEntryContext(ctx, sizing, d, snap)
 	if err != nil {
+		at.stockAlertEntryRejected(paper, d, err, at.stockClock())
 		return nil, 0, err
 	}
 	now = current.Now

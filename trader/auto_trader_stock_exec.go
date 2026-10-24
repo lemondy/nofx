@@ -413,6 +413,51 @@ func (at *AutoTrader) stockCheckEntryManager(sym string) error {
 	return nil
 }
 
+// stockEntryAlertEvery bounds repeated Telegram alerts for the same symbol and
+// the same pre-order rejection reason.
+const stockEntryAlertEvery = 30 * time.Minute
+
+// stockAlertEntryRejected tells the user (Telegram ALERT, live only) that a
+// live entry was abandoned by the final pre-order check — a stale bStock quote
+// (older than 30 s), an unavailable quote, or a failed re-validation with the
+// execution clock. Deduplicated per symbol+reason; a cancelled context is not
+// an alert-worthy rejection.
+func (at *AutoTrader) stockAlertEntryRejected(paper bool, d stockengine.Decision, cause error, now time.Time) {
+	if paper || cause == nil || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return
+	}
+	msg := cause.Error()
+	code := msg
+	if i := strings.IndexAny(msg, ": "); i > 0 {
+		code = msg[:i]
+	}
+	key := d.Symbol + "|" + code
+	if code == "ENTRY_RECHECK" {
+		if f := strings.Fields(msg); len(f) > 1 {
+			key += "|" + f[1] // the validation codes, so a new reason is not suppressed
+		}
+	}
+	if last, ok := at.stock.entryAlertAt[key]; ok && now.Sub(last) < stockEntryAlertEvery {
+		return
+	}
+	if at.stock.entryAlertAt == nil {
+		at.stock.entryAlertAt = map[string]time.Time{}
+	}
+	at.stock.entryAlertAt[key] = now
+	reason := "下单前复核未通过（时段、报价新鲜度、背离或止损带）"
+	switch code {
+	case "BSTOCK_PRICE_STALE":
+		reason = "bStock 报价超过 30 秒未更新，不能据此下单"
+	case "ENTRY_QUOTE_UNAVAILABLE":
+		reason = "下单前无法刷新 bStock 报价"
+	case "DATA_INSUFFICIENT":
+		reason = "缺少下单所需的行情数据"
+	}
+	logger.Warnf("⚠️ [%s] 美股入场被下单前复核放弃 %s %s: %s", at.name, d.Action, d.Symbol, msg)
+	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股入场已放弃（下单前复核未通过）</b>\n%s %s\n<i>%s</i>\n<code>%s</code>",
+		notify.Escape(d.Action), notify.Escape(d.Symbol), notify.Escape(reason), notify.Escape(msg)))
+}
+
 // stockEntryContext is the last network read before an entry is submitted.
 // It bypasses both quote caches, then validates with the execution clock and
 // sizes from that same final bStock price. Existing position exits do not use it.
