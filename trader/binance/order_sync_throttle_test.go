@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"nofx/store"
 )
 
 // Request-weight budget tests for the periodic order sync: traders sharing an
@@ -269,6 +271,96 @@ func TestPeriodicSyncRetriesFailedSymbolWithoutProbe(t *testing.T) {
 	mu.Unlock()
 	if n != 2 {
 		t.Fatalf("recovered symbol re-queried, userTrades calls=%d", n)
+	}
+}
+
+// A delisted symbol (-1121 Invalid symbol) must not enter the pending retry
+// loop: pending carry-over, held DB rows (never successfully queried → the
+// unchanged-skip never applies) and the recent-fill window would re-add it on
+// EVERY run — 2026-10-24 review P1-1: AAPLBUSDT/LLYBUSDT burned 32k
+// userTrades calls over 10 days. Quarantine skips it entirely; expiry
+// re-probes exactly once (relist case) before re-quarantining.
+func TestOrderSyncQuarantinesInvalidSymbol(t *testing.T) {
+	st := batch2SyncStore(t)
+	ex := t.Name()
+	// The DB still holds an OPEN AAPLBUSDT row from before the delisting —
+	// GetOpenSymbolsByExchange re-adds it to every probe run's discovery.
+	if err := st.Position().CreateOpenPosition(&store.TraderPosition{
+		TraderID: "t", ExchangeID: ex, Symbol: "AAPLBUSDT", Side: "LONG",
+		Quantity: 1, EntryPrice: 100, Status: "OPEN", Source: "sync",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	utAAPL := 0
+	base := batch2SyncTransport(nil)
+	tr := batch1FuturesTrader(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/fapi/v2/positionRisk":
+			return batch1Response(r, http.StatusOK, posJSON("XUSDT", "1")), nil
+		case "/fapi/v1/userTrades":
+			if r.URL.Query().Get("symbol") == "AAPLBUSDT" {
+				mu.Lock()
+				utAAPL++
+				mu.Unlock()
+				return batch1Response(r, http.StatusBadRequest, `{"code":-1121,"msg":"Invalid symbol."}`), nil
+			}
+		}
+		return base(r)
+	})
+
+	// Run 1 (first run is a probe run): AAPL is discovered via the held DB
+	// row and queried once — the -1121 quarantines it instead of pending it.
+	if err := tr.syncOrders("t", ex, "binance", st, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := utAAPL; n != 1 {
+		t.Fatalf("run 1 must query AAPL exactly once, got %d", n)
+	}
+
+	// Idle runs AND a fresh probe run must skip the quarantined symbol.
+	for i := 0; i < 2; i++ {
+		tr.InvalidateAccountCache()
+		if err := tr.syncOrders("t", ex, "binance", st, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binanceSyncStateMutex.Lock()
+	orderSyncAcctLocked("t", ex).lastProbe = time.Now().Add(-orderSyncProbeEvery - time.Second)
+	binanceSyncStateMutex.Unlock()
+	tr.InvalidateAccountCache()
+	if err := tr.syncOrders("t", ex, "binance", st, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := utAAPL; n != 1 {
+		t.Fatalf("quarantined symbol must not be re-queried, got %d calls", n)
+	}
+
+	// Quarantine expiry (relist check): exactly one re-probe, which fails
+	// again and re-quarantines into the future.
+	binanceSyncStateMutex.Lock()
+	a := orderSyncAcctLocked("t", ex)
+	a.quarantine["AAPLBUSDT"] = time.Now().Add(-time.Second)
+	a.lastProbe = time.Now().Add(-orderSyncProbeEvery - time.Second)
+	binanceSyncStateMutex.Unlock()
+	tr.InvalidateAccountCache()
+	if err := tr.syncOrders("t", ex, "binance", st, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := utAAPL; n != 2 {
+		t.Fatalf("expiry must re-probe exactly once, got %d calls", n)
+	}
+	binanceSyncStateMutex.Lock()
+	a = orderSyncAcctLocked("t", ex)
+	until, q := a.quarantine["AAPLBUSDT"]
+	pending := a.pending["AAPLBUSDT"]
+	binanceSyncStateMutex.Unlock()
+	if !q || time.Now().After(until) {
+		t.Fatalf("AAPL must be re-quarantined into the future: present=%v until=%v", q, until)
+	}
+	if pending {
+		t.Fatal("an invalid symbol must never sit in pending")
 	}
 }
 
