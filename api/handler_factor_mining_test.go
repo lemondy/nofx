@@ -81,6 +81,8 @@ func TestFactorMiningOverviewComplete(t *testing.T) {
 	for name, data := range files {
 		writeFactorMiningTestFile(t, dir, name, data)
 	}
+	files["crypto/zoo.json"] = `{"factors":[{"expr":"Mean($close,5)","new_metric":0.1234567890123456789}],"factors_total":1,"factors_returned":1}`
+	files["us/zoo.json"] = `{"factors":[],"schema_version":42,"factors_total":0,"factors_returned":0}`
 	body := factorMiningTestGet(t, factorMiningTestRouter(), "/api/factor-mining/overview")
 	assertFactorMiningJSON(t, body["status"], files["status.json"])
 	for _, group := range []string{"zoo", "ensemble"} {
@@ -125,6 +127,194 @@ func TestFactorMiningOverviewCorruptFiles(t *testing.T) {
 	assertFactorMiningJSON(t, body["ensemble"], `{"crypto":null,"us":{"intact":true}}`)
 	if count := strings.Count(logs.String(), "Invalid JSON in"); count != 4 {
 		t.Fatalf("want one warning per corrupt file, got %d: %s", count, logs.String())
+	}
+}
+
+func TestFactorMiningZooSizeLimits(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FACTOR_MINING_DIR", dir)
+	// A valid zoo above the legacy limit must reach both markets in overview.
+	large := `{"market":"test","factors":[{"id":"large","status":"candidate","ic_monthly":[["` + strings.Repeat("x", factorMiningMaxFileSize) + `",0.1]]}]}`
+	for _, market := range []string{"crypto", "us"} {
+		writeFactorMiningTestFile(t, dir, market+"/zoo.json", large)
+	}
+	body := factorMiningTestGet(t, factorMiningTestRouter(), "/api/factor-mining/overview")
+	assertFactorMiningJSON(t, body["zoo"], `{"crypto":{"market":"test","factors":[{"id":"large","status":"candidate"}],"factors_total":1,"factors_returned":1},"us":{"market":"test","factors":[{"id":"large","status":"candidate"}],"factors_total":1,"factors_returned":1}}`)
+	path := filepath.Join(factorMiningDir(), "crypto", "zoo.json")
+	// A sparse file exercises the 128 MiB guard without allocating that payload.
+	if err := os.Truncate(path, factorMiningMaxZooFileSize+1); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFactorMiningZoo(path); got != nil {
+		t.Fatal("zoo above 128 MiB should return nil")
+	}
+}
+
+func TestFactorMiningZooTrimming(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FACTOR_MINING_DIR", dir)
+	factors := make([]map[string]any, 0)
+	want := make(map[string]bool)
+	full := make(map[string]bool)
+	add := func(id, status string, horizon int, val, train, forward any, keep, complete bool) {
+		factors = append(factors, map[string]any{
+			"id": id, "status": status, "horizon": horizon,
+			"val": val, "train": train, "forward": forward,
+			"ic_monthly": []any{[]any{"2026-01", 0.1}},
+			"future":     json.RawMessage(`{"large_id":9007199254740993}`),
+		})
+		if keep {
+			want[id] = true
+		}
+		full[id] = complete
+	}
+	// Neither accepted nor nonempty forward entries consume the per-group cap.
+	for i := 0; i < 160; i++ {
+		add(fmt.Sprintf("accepted-%03d", i), "accepted", 1, nil, nil, nil, true, true)
+		add(fmt.Sprintf("forward-%03d", i), "rejected", 1, nil, nil, map[string]any{"verdict": "pending"}, true, true)
+	}
+	add("forward-curve", "candidate", 1, nil, nil, map[string]any{"curve": []any{}}, true, true)
+	// Equal scores straddle the cut: ascending IDs must win even in reverse input.
+	for _, horizon := range []int{1, 3, 7} {
+		for _, status := range []string{"candidate", "redundant", "rejected"} {
+			for i := 169; i >= 0; i-- {
+				var forward any
+				if i%2 == 0 {
+					forward = map[string]any{} // Empty forward is not exempt.
+				}
+				add(fmt.Sprintf("h%d-%s-%03d", horizon, status, i), status, horizon,
+					map[string]any{"t": -5}, map[string]any{"t": 1000 - i}, forward, i < 150, false)
+			}
+		}
+	}
+	// Verify descending scores, train fallback, null t, and missing scores last.
+	for i := 0; i < 148; i++ {
+		add(fmt.Sprintf("ranked-%03d", i), "candidate", 10, map[string]any{"t": 100 + i}, nil, nil, true, false)
+	}
+	add("z-train", "candidate", 10, nil, map[string]any{"t": -10}, nil, true, false)
+	add("a-val", "candidate", 10, map[string]any{"t": -20}, map[string]any{"t": 1000}, nil, false, false)
+	add("null-val-t", "candidate", 10, map[string]any{"t": nil}, map[string]any{"t": -5}, nil, true, false)
+	add("a-missing", "candidate", 10, nil, nil, nil, false, false)
+	// An under-cap group keeps every entry and still strips monthly history.
+	add("fallback-null", "rejected", 20, nil, nil, nil, true, false)
+	add("fallback-train", "rejected", 20, map[string]any{"t": nil}, map[string]any{"t": 0}, nil, true, false)
+	zoo := map[string]any{
+		"market": "crypto", "generated_at": "2026-10-24",
+		"split":    map[string]any{"holdout_sealed": true},
+		"horizons": map[string]any{"1": map[string]any{"trials": 9000, "accepted": 160}},
+		"future":   json.RawMessage(`{"large_id":9007199254740993}`),
+		"factors":  factors,
+	}
+	data, err := json.Marshal(zoo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", string(data))
+	path := filepath.Join(factorMiningDir(), "crypto", "zoo.json")
+	got := readFactorMiningZoo(path)
+	var result struct {
+		Factors         []map[string]json.RawMessage `json:"factors"`
+		FactorsTotal    int                          `json:"factors_total"`
+		FactorsReturned int                          `json:"factors_returned"`
+	}
+	if err := json.Unmarshal(got, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.FactorsTotal != len(factors) || result.FactorsReturned != len(want) || len(result.Factors) != len(want) {
+		t.Fatalf("counts: total=%d returned=%d len=%d, want total=%d returned=%d", result.FactorsTotal, result.FactorsReturned, len(result.Factors), len(factors), len(want))
+	}
+	next := 0
+	for _, factor := range result.Factors {
+		var id string
+		if err := json.Unmarshal(factor["id"], &id); err != nil {
+			t.Fatal(err)
+		}
+		for next < len(factors) && !want[factors[next]["id"].(string)] {
+			next++
+		}
+		if next == len(factors) || id != factors[next]["id"] {
+			t.Fatalf("unexpected factor/order: %s at %d", id, next)
+		}
+		original := factors[next]
+		next++
+		if !full[id] {
+			delete(original, "ic_monthly")
+		}
+		expected, err := json.Marshal(original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := json.Marshal(factor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFactorMiningJSON(t, actual, string(expected))
+	}
+	var returned map[string]json.RawMessage
+	if err := json.Unmarshal(got, &returned); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"market", "generated_at", "split", "horizons", "future"} {
+		expected, err := json.Marshal(zoo[key])
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFactorMiningJSON(t, returned[key], string(expected))
+	}
+	for i := 0; i < 5; i++ {
+		again, err := trimFactorMiningZoo(data)
+		if err != nil || !bytes.Equal(got, again) {
+			t.Fatalf("trimming is not deterministic: %v", err)
+		}
+	}
+	unchanged, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, unchanged) {
+		t.Fatalf("source file changed: %v", err)
+	}
+}
+
+func TestFactorMiningZooCacheInvalidation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FACTOR_MINING_DIR", dir)
+	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", `{"market":"crypto","factors":[]}`)
+	path := filepath.Join(factorMiningDir(), "crypto", "zoo.json")
+	first := readFactorMiningZoo(path)
+	cached := readFactorMiningZoo(path)
+	if len(first) == 0 || &first[0] != &cached[0] {
+		t.Fatal("unchanged zoo did not reuse cached JSON")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same size, different mtime must invalidate.
+	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", `{"market":"edited","factors":[]}`)
+	changedTime := info.ModTime().Add(time.Second)
+	if err := os.Chtimes(path, changedTime, changedTime); err != nil {
+		t.Fatal(err)
+	}
+	second := readFactorMiningZoo(path)
+	assertFactorMiningJSON(t, second, `{"market":"edited","factors":[],"factors_total":0,"factors_returned":0}`)
+	// Same mtime, different size must also invalidate.
+	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", `{"market":"larger update","factors":[]}`)
+	if err := os.Chtimes(path, changedTime, changedTime); err != nil {
+		t.Fatal(err)
+	}
+	assertFactorMiningJSON(t, readFactorMiningZoo(path), `{"market":"larger update","factors":[],"factors_total":0,"factors_returned":0}`)
+	// Corrupt or missing files cannot serve stale cached responses.
+	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", `{"factors":`)
+	if got := readFactorMiningZoo(path); got != nil {
+		t.Fatalf("invalid JSON returned %s, want nil", got)
+	}
+	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", `{"factors":[]}`)
+	if readFactorMiningZoo(path) == nil {
+		t.Fatal("corrected JSON was not loaded")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFactorMiningZoo(path); got != nil {
+		t.Fatal("missing zoo should return nil")
 	}
 }
 
@@ -208,11 +398,12 @@ func TestFactorMiningFileSizeLimit(t *testing.T) {
 	// The oversized payload is valid JSON, so only the size check can reject it.
 	oversized := `"` + strings.Repeat("x", factorMiningMaxFileSize-1) + `"`
 	writeFactorMiningTestFile(t, dir, "status.json", oversized)
-	writeFactorMiningTestFile(t, dir, "crypto/zoo.json", oversized)
+	writeFactorMiningTestFile(t, dir, "crypto/ensemble.json", oversized)
 	writeFactorMiningTestFile(t, dir, "runs.jsonl", oversized)
 	body := factorMiningTestGet(t, r, "/api/factor-mining/overview")
 	assertFactorMiningJSON(t, body["status"], `null`)
 	assertFactorMiningJSON(t, body["zoo"], `{"crypto":null,"us":null}`)
+	assertFactorMiningJSON(t, body["ensemble"], `{"crypto":null,"us":null}`)
 	body = factorMiningTestGet(t, r, "/api/factor-mining/runs")
 	assertFactorMiningJSON(t, body["runs"], `[]`)
 	// Exactly 8 MiB is allowed.

@@ -1,5 +1,5 @@
 // 因子挖掘接口数据契约，见 docs/research/factor-mining-design.md「落盘文件」。
-// 后端直接透传 data/factor_mining/ 下的 JSON，任何字段都可能缺失或为 null。
+// 后端读取 data/factor_mining/ 下的 JSON，zoo 因子经精简后返回；字段可能缺失或为 null。
 
 export type FactorMarket = 'crypto' | 'us'
 
@@ -81,6 +81,8 @@ export interface FactorZoo {
   } | null
   horizons?: Record<string, HorizonSummary | null> | null
   factors?: FactorEntry[] | null
+  factors_total?: number | null
+  factors_returned?: number | null
 }
 
 export interface EnsembleMetrics {

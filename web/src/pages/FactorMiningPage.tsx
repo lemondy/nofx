@@ -338,6 +338,21 @@ export default function FactorMiningPage({ language }: { language: string }) {
         )}
       </Card>
 
+      {isNum(zoo?.factors_total) &&
+        isNum(zoo?.factors_returned) &&
+        zoo.factors_total > zoo.factors_returned && (
+          <p
+            data-testid="factor-trim-notice"
+            className="mb-2 text-xs text-fg-3"
+          >
+            {L(
+              `为控制体积，仅展示 accepted、有前向数据的因子及各周期/状态按 val t（缺失时用 train t）排名前 150 条（共 ${fmtInt(zoo.factors_total)} 条，返回 ${fmtInt(zoo.factors_returned)} 条）。`,
+              `To limit response size, showing all accepted factors, factors with forward data, and the top 150 per horizon/status by val t (falling back to train t): ${fmtInt(zoo.factors_total)} total, ${fmtInt(zoo.factors_returned)} returned.`,
+              language
+            )}
+          </p>
+        )}
+
       {zoo === null || horizonKeys.length === 0 ? (
         <Card className="mb-4">
           <CardHeader title={L('因子榜单', 'Factor leaderboard', language)} />
