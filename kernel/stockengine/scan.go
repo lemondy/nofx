@@ -45,11 +45,12 @@ type DatedClose struct {
 }
 
 type ScanResult struct {
-	Symbol     string             `json:"symbol"`
-	Underlying string             `json:"underlying"`
-	Source     string             `json:"source"`
-	Cycle      CycleAssessment    `json:"cycle"`
-	Momentum   MomentumAssessment `json:"momentum"`
+	Symbol      string             `json:"symbol"`
+	Underlying  string             `json:"underlying"`
+	Source      string             `json:"source"`
+	DataThrough string             `json:"data_through"`
+	Cycle       CycleAssessment    `json:"cycle"`
+	Momentum    MomentumAssessment `json:"momentum"`
 	// Universe is the row of the prompt's universe table (zero Price when the
 	// symbol had too few bars for one).
 	Universe UniverseRow `json:"universe"`
@@ -62,6 +63,7 @@ type ScanReport struct {
 	GeneratedAt time.Time         `json:"generated_at"`
 	Results     []ScanResult      `json:"results"`
 	Skipped     map[string]string `json:"skipped,omitempty"`
+	DataThrough map[string]string `json:"data_through"`
 }
 
 // TopLong returns up to n results with Cycle.LongSetup, in report order,
@@ -129,7 +131,7 @@ func (r *ScanReport) Lookup(symbol string) (ScanResult, bool) {
 // failures are recorded in Skipped and do not stop the remaining universe.
 func Scan(ctx context.Context, universe []usstock.SymbolInfo, spyBars []usstock.Bar,
 	fetch func(ctx context.Context, symbol string) ([]usstock.Bar, string, error), now time.Time) (*ScanReport, error) {
-	report := &ScanReport{GeneratedAt: now, Results: make([]ScanResult, 0, len(universe)), Skipped: make(map[string]string)}
+	report := &ScanReport{GeneratedAt: now, Results: make([]ScanResult, 0, len(universe)), Skipped: make(map[string]string), DataThrough: make(map[string]string)}
 	defer func() { sortScanResults(report.Results) }()
 	for _, info := range universe {
 		if err := ctx.Err(); err != nil {
@@ -139,7 +141,10 @@ func Scan(ctx context.Context, universe []usstock.SymbolInfo, spyBars []usstock.
 		if cancelErr := ctx.Err(); cancelErr != nil {
 			return report, cancelErr
 		}
-		if err != nil && !(errors.Is(err, usstock.ErrInsufficientBars) && len(bars) >= cycleMinBars) {
+		cutoff := usstock.DataDate(&usstock.Series{Timeframe: usstock.TF1d, Source: source, Bars: bars})
+		report.DataThrough[info.Symbol] = cutoff
+		logger.Infof("🔭 scan %s source=%s data_through=%s required=%s", info.Symbol, source, cutoff, usstock.RequiredDataDate(usstock.TF1d, now))
+		if err != nil && !(errors.Is(err, usstock.ErrInsufficientBars) && !errors.Is(err, usstock.ErrStaleBars) && len(bars) >= cycleMinBars) {
 			report.Skipped[info.Symbol] = err.Error()
 			continue
 		}
@@ -147,12 +152,22 @@ func Scan(ctx context.Context, universe []usstock.SymbolInfo, spyBars []usstock.
 			report.Skipped[info.Symbol] = fmt.Sprintf("insufficient daily bars: have %d, need at least %d", len(bars), cycleMinBars)
 			continue
 		}
+		if stale := usstock.CheckDataDate(usstock.TF1d, cutoff, now); stale != nil {
+			report.Skipped[info.Symbol] = stale.Error()
+			logger.Warnf("🔭 scan %s skipped: %v", info.Symbol, stale)
+			continue
+		}
+		if source == usstock.SourceBStock && !usstock.RegularDailyBars(bars) {
+			report.Skipped[info.Symbol] = "momentum unavailable: bStock daily bars are not consecutive NYSE regular sessions (night/non-trading-day candles)"
+			logger.Warnf("🔭 scan %s data_through=%s skipped: %s", info.Symbol, cutoff, report.Skipped[info.Symbol])
+			continue
+		}
 		row, ok := BuildUniverseRow(info.Symbol, info.Underlying, bars)
 		if !ok {
 			row = UniverseRow{Symbol: info.Symbol, Underlying: info.Underlying, DaysToEarnings: -1}
 		}
 		report.Results = append(report.Results, ScanResult{
-			Symbol: info.Symbol, Underlying: info.Underlying, Source: source,
+			Symbol: info.Symbol, Underlying: info.Underlying, Source: source, DataThrough: cutoff,
 			Cycle: ClassifyCycle(bars, spyBars), Momentum: ClassifyMomentum(bars),
 			Universe: row, RecentCloses: recentCloses(bars),
 		})
@@ -200,7 +215,15 @@ var scanCache struct {
 }
 
 func scanFresh(report *ScanReport, maxAge time.Duration) bool {
-	return report != nil && maxAge > 0 && scanNow().Sub(report.GeneratedAt) < maxAge
+	if !report.AgeOK(scanNow(), maxAge) {
+		return false
+	}
+	for _, r := range report.Results {
+		if !r.DataFresh(scanNow()) {
+			return false
+		}
+	}
+	return true
 }
 
 // GetScanReport returns the cached report if younger than maxAge; otherwise
@@ -351,7 +374,7 @@ func enrichFundamentals(ctx context.Context, report *ScanReport) {
 // data the IC study validated on) and falls back to the bStock series.
 func fetchScanBars(ctx context.Context, symbol string) ([]usstock.Bar, string, error) {
 	series, err := scanGetUnderlying(ctx, symbol, usstock.TF1d, scanDailyBars)
-	if series == nil || len(series.Bars) < cycleMinBars {
+	if series == nil || len(series.Bars) < cycleMinBars || errors.Is(err, usstock.ErrStaleBars) {
 		series, err = scanGetSeries(ctx, symbol, usstock.TF1d, scanDailyBars, true)
 	}
 	if series == nil {
@@ -360,8 +383,29 @@ func fetchScanBars(ctx context.Context, symbol string) ([]usstock.Bar, string, e
 		}
 		return nil, "", err
 	}
-	if errors.Is(err, usstock.ErrInsufficientBars) && len(series.Bars) >= cycleMinBars {
+	if errors.Is(err, usstock.ErrInsufficientBars) && !errors.Is(err, usstock.ErrStaleBars) && len(series.Bars) >= cycleMinBars {
 		err = nil
 	}
 	return series.Bars, series.Source, err
+}
+
+// AgeOK is independent of data freshness: a freshly generated report can still
+// contain stale source bars. Future-dated reports cannot authorize candidates.
+func (r *ScanReport) AgeOK(now time.Time, maxAge time.Duration) bool {
+	return r != nil && maxAge > 0 && !r.GeneratedAt.After(now) && now.Sub(r.GeneratedAt) < maxAge
+}
+func (r ScanResult) DataFresh(now time.Time) bool {
+	return usstock.CheckDataDate(usstock.TF1d, r.DataThrough, now) == nil
+}
+func (r *ScanReport) FreshResults(now time.Time, maxAge time.Duration) []ScanResult {
+	if !r.AgeOK(now, maxAge) {
+		return nil
+	}
+	out := make([]ScanResult, 0, len(r.Results))
+	for _, result := range r.Results {
+		if result.DataFresh(now) {
+			out = append(out, result)
+		}
+	}
+	return out
 }

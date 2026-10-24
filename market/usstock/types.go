@@ -77,6 +77,7 @@ const (
 // Quote compares the bStock price with the underlying's reference price.
 type Quote struct {
 	Symbol        string    `json:"symbol"`
+	BStockTime    time.Time `json:"bstock_time"` // start of the bStock price request
 	BStockPrice   float64   `json:"bstock_price"`
 	RefPrice      float64   `json:"ref_price"`      // Yahoo last (regular, or pre/post when in those sessions)
 	RefTime       time.Time `json:"ref_time"`       // timestamp of RefPrice

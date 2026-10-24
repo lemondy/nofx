@@ -10,6 +10,8 @@ import (
 )
 
 type yahooResult struct {
+	requestedAt time.Time // request start, also preserved on cache hits
+
 	Meta struct {
 		RegularMarketPrice float64 `json:"regularMarketPrice"`
 		RegularMarketTime  int64   `json:"regularMarketTime"`
@@ -56,14 +58,16 @@ func yahooChart(ctx context.Context, ticker, interval, chartRange string, prePos
 	}
 	defer func() { <-yahooGate }()
 	key := ticker + "/" + interval + "/" + chartRange + "/" + strconv.FormatBool(prePost)
-	if entry, ok := yahooCache[key]; ok && nowFunc().Sub(entry.loaded) < ttl && cacheStillFinal(interval, entry.loaded, nowFunc()) {
+	if entry, ok := yahooCache[key]; ok && !forceRefresh(ctx) && nowFunc().Sub(entry.loaded) < ttl && cacheStillFinal(interval, entry.loaded, nowFunc()) {
 		return entry.result, nil
 	}
 	q := url.Values{"interval": {interval}, "range": {chartRange}, "includePrePost": {strconv.FormatBool(prePost)}, "events": {"div,split"}}
 	var lastErr error
+	crossedRetried := false
 	for _, host := range []string{yahooBaseURL, yahooFallbackBaseURL} {
 		for attempt := 0; attempt < 3; attempt++ {
 			var response yahooResponse
+			requestedAt := nowFunc()
 			err := fetchJSON(ctx, host, "/v8/finance/chart/"+url.PathEscape(ticker), q, true, &response)
 			if err == nil {
 				if response.Chart.Error != nil {
@@ -72,7 +76,18 @@ func yahooChart(ctx context.Context, ticker, interval, chartRange string, prePos
 					err = fmt.Errorf("Yahoo chart has %d results", len(response.Chart.Result))
 				} else {
 					result := response.Chart.Result[0]
-					yahooCache[key] = yahooCacheEntry{result, nowFunc()}
+					// A response sampled before a close cannot become final in transit.
+					// Retry once at the new clock; never publish the crossing response.
+					if (interval == "1d" || interval == "1wk" || interval == "60m" || interval == "15m") && !cacheStillFinal(interval, requestedAt, nowFunc()) {
+						if !crossedRetried {
+							crossedRetried = true
+							attempt-- // the crossing refresh is separate from HTTP retries
+							continue
+						}
+						return yahooResult{}, fmt.Errorf("Yahoo %s request crossed bar close repeatedly", ticker)
+					}
+					result.requestedAt = requestedAt
+					yahooCache[key] = yahooCacheEntry{result, requestedAt}
 					return result, nil
 				}
 			}
@@ -107,20 +122,13 @@ func yahooChart(ctx context.Context, ticker, interval, chartRange string, prePos
 //   - 1wk: the last regular-session close of the load week
 //   - intraday (15m/60m): the end of the load-time bar (anchored at the open)
 //
-// Loads outside regular hours / on non-trading days saw no forming regular bar
-// and stay valid until the TTL.
+// Daily/weekly entries also expire at a subsequent session/week close.
 func cacheStillFinal(interval string, loaded, now time.Time) bool {
 	switch interval {
 	case "1d":
-		_, close, ok := SessionBounds(loaded)
-		return !(ok && loaded.Before(close) && !now.Before(close))
+		return !CrossedClose(loaded, now)
 	case "1wk":
-		local := loaded.In(newYork)
-		monday := etTime(local, 0, 0).AddDate(0, 0, -((int(local.Weekday()) + 6) % 7))
-		// Friday 16:00 ET; a holiday-shortened week only refreshes slightly
-		// later than strictly needed, never earlier.
-		weekEnd := etTime(monday.AddDate(0, 0, 4), 16, 0)
-		return !(loaded.Before(weekEnd) && !now.Before(weekEnd))
+		return !latestWeekClose(now).After(latestWeekClose(loaded))
 	default:
 		dur := 15 * time.Minute
 		if interval == "60m" {
@@ -192,7 +200,7 @@ func yahooBars(ctx context.Context, ticker, timeframe string, need int) ([]Bar, 
 		return nil, err
 	}
 	bars := parseYahooBars(result, timeframe == TF1d || timeframe == TF1w)
-	now := nowFunc()
+	now := result.requestedAt
 	if timeframe == TF4h {
 		return aggregate4h(bars, now), nil
 	}
@@ -206,10 +214,7 @@ func yahooBars(ctx context.Context, ticker, timeframe string, need int) ([]Bar, 
 				continue
 			}
 		case TF1w:
-			local := now.In(newYork)
-			days := (int(local.Weekday()) + 6) % 7
-			monday := etTime(local, 0, 0).AddDate(0, 0, -days)
-			if !bar.OpenTime.Before(monday) {
+			if weekClose(bar.OpenTime).After(now) {
 				continue
 			}
 		default:

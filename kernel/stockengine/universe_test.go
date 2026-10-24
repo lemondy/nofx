@@ -146,8 +146,8 @@ func TestFormatPriceAndVolume(t *testing.T) {
 
 func TestScanFillsUniverseRow(t *testing.T) {
 	bars := universeTestBars(260, func(i int) float64 { return 100 + float64(i)*0.1 })
-	report, err := Scan(context.Background(), []usstock.SymbolInfo{{Symbol: "QQQBUSDT", Underlying: "QQQ"}}, nil,
-		func(context.Context, string) ([]usstock.Bar, string, error) { return bars, usstock.SourceBStock, nil }, time.Now())
+	report, err := scanFreshFixture(context.Background(), []usstock.SymbolInfo{{Symbol: "QQQBUSDT", Underlying: "QQQ"}}, nil,
+		func(context.Context, string) ([]usstock.Bar, string, error) { return bars, usstock.SourceBStock, nil }, scanFixtureNow)
 	if err != nil || len(report.Results) != 1 {
 		t.Fatalf("report=%+v err=%v", report, err)
 	}
@@ -161,7 +161,7 @@ func TestLiveScanEnrichesFundamentalsBestEffort(t *testing.T) {
 	env := setupScanTest(t)
 	env.universe = []usstock.SymbolInfo{{Symbol: "AAPLBUSDT", Underlying: "AAPL"}, {Symbol: "ZZZBUSDT", Underlying: "ZZZ"}, {Symbol: "SPYBUSDT", Underlying: "SPY"}}
 	scanGetSeries = func(ctx context.Context, symbol, timeframe string, need int, allowYahoo bool) (*usstock.Series, error) {
-		return &usstock.Series{Bars: universeTestBars(260, func(i int) float64 { return 100 + float64(i)*0.1 }), Source: usstock.SourceBStock}, nil
+		return &usstock.Series{Bars: scanFixtureBars(universeTestBars(260, func(i int) float64 { return 100 + float64(i)*0.1 }), scanNow()), Source: usstock.SourceBStock}, nil
 	}
 	old := scanGetFundamentals
 	t.Cleanup(func() { scanGetFundamentals = old })
@@ -197,7 +197,7 @@ func TestLiveScanFundamentalsBudgetStopsEnrichment(t *testing.T) {
 	env := setupScanTest(t)
 	env.universe = []usstock.SymbolInfo{{Symbol: "ABUSDT", Underlying: "A"}, {Symbol: "BBUSDT", Underlying: "B"}, {Symbol: "CBUSDT", Underlying: "C"}}
 	scanGetSeries = func(ctx context.Context, symbol, timeframe string, need int, allowYahoo bool) (*usstock.Series, error) {
-		return &usstock.Series{Bars: universeTestBars(260, func(i int) float64 { return 100 + float64(i)*0.1 }), Source: usstock.SourceBStock}, nil
+		return &usstock.Series{Bars: scanFixtureBars(universeTestBars(260, func(i int) float64 { return 100 + float64(i)*0.1 }), scanNow()), Source: usstock.SourceBStock}, nil
 	}
 	oldBudget, oldFn := scanFundamentalsBudget, scanGetFundamentals
 	t.Cleanup(func() { scanFundamentalsBudget, scanGetFundamentals = oldBudget, oldFn })

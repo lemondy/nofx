@@ -115,7 +115,7 @@ func TestYahooFormingBarRules(t *testing.T) {
 		{"daily at close", TF1d, "2026-10-09 16:00", []time.Time{et("2026-10-08 09:30"), et("2026-10-09 09:30")}, 2},
 		{"half day before close", TF1d, "2026-11-27 12:59", []time.Time{et("2026-11-25 09:30"), et("2026-11-27 09:30")}, 1},
 		{"half day at close", TF1d, "2026-11-27 13:00", []time.Time{et("2026-11-25 09:30"), et("2026-11-27 09:30")}, 2},
-		{"current week", TF1w, "2026-10-09 17:00", []time.Time{et("2026-09-28 09:30"), et("2026-10-05 09:30")}, 1},
+		{"current week settled", TF1w, "2026-10-09 17:00", []time.Time{et("2026-09-28 09:30"), et("2026-10-05 09:30")}, 2},
 		{"weekly Monday DST", TF1w, "2026-11-02 04:00", []time.Time{et("2026-10-26 09:30"), et("2026-11-02 09:30")}, 1},
 		{"hourly forming", TF1h, "2026-10-09 11:00", []time.Time{et("2026-10-09 09:30"), et("2026-10-09 10:30")}, 1},
 		{"hourly closing partial", TF1h, "2026-10-09 16:00", []time.Time{et("2026-10-09 14:30"), et("2026-10-09 15:30")}, 2},

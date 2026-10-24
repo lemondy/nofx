@@ -30,11 +30,12 @@ func GetQuote(ctx context.Context, symbol string) (*Quote, error) {
 	defer quoteCache.Unlock()
 	now := nowFunc()
 	session := SessionAt(now)
-	if entry, ok := quoteCache.entries[symbol]; ok && now.Sub(entry.loaded) < 30*time.Second && entry.quote.Session == session {
+	if entry, ok := quoteCache.entries[symbol]; ok && !forceRefresh(ctx) && now.Sub(entry.loaded) < 30*time.Second && entry.quote.Session == session {
 		quote := entry.quote
 		setFresh(&quote, now)
 		return &quote, nil
 	}
+	bstockTime := now
 	var ticker struct {
 		Price string `json:"price"`
 	}
@@ -56,7 +57,7 @@ func GetQuote(ctx context.Context, symbol string) (*Quote, error) {
 	now = nowFunc()
 	session = SessionAt(now)
 	prePost = session == SessionPre || session == SessionAfter
-	quote := Quote{Symbol: symbol, BStockPrice: price, Session: session, RefPrice: result.Meta.RegularMarketPrice}
+	quote := Quote{Symbol: symbol, BStockPrice: price, BStockTime: bstockTime, Session: session, RefPrice: result.Meta.RegularMarketPrice}
 	if result.Meta.RegularMarketTime > 0 {
 		quote.RefTime = time.Unix(result.Meta.RegularMarketTime, 0).UTC()
 	}
@@ -84,4 +85,16 @@ func GetQuote(ctx context.Context, symbol string) (*Quote, error) {
 func setFresh(quote *Quote, now time.Time) {
 	age := now.Sub(quote.RefTime)
 	quote.RefFresh = quote.Session != SessionClosed && quote.RefPrice > 0 && !quote.RefTime.IsZero() && age >= 0 && age <= 15*time.Minute && !quote.RefTime.Before(sessionStart(now, quote.Session))
+}
+
+// RecheckQuote evaluates a sampled quote at the caller's execution clock.
+// Ref freshness is never carried across an NYSE session boundary.
+func RecheckQuote(q *Quote, now time.Time) Quote {
+	copy := *q
+	copy.Session = SessionAt(now)
+	setFresh(&copy, now)
+	if copy.RefPrice > 0 {
+		copy.DivergencePct = (copy.BStockPrice - copy.RefPrice) / copy.RefPrice * 100
+	}
+	return copy
 }

@@ -19,9 +19,10 @@ var promptCandleCounts = map[string]int{usstock.TF1w: promptCandles1w, usstock.T
 // preset parameter: TrendEntry uses supplied 1h bars, or daily bars when 1h is
 // absent (position callers should supply daily/weekly series). MissingTF remains
 // independent of that choice; Validate gates the resolved preset's timeframes.
-// now is injected for API consistency; freshness comes from the supplied quote.
+// Daily/weekly dates are checked at now; stale periods block entries through
+// MissingTF while remaining available for existing-position management.
 func BuildSnapshot(symbol, underlying string, series map[string]*usstock.Series, quote *usstock.Quote, now time.Time) *SymbolSnapshot {
-	s := &SymbolSnapshot{Symbol: symbol, Underlying: underlying, Sources: make(map[string]string), Quote: quote,
+	s := &SymbolSnapshot{Symbol: symbol, Underlying: underlying, Sources: make(map[string]string), DataThrough: make(map[string]string), Quote: quote,
 		TrendDaily: "unknown", TrendWeekly: "unknown", TrendEntry: "unknown"}
 	needs := map[string]int{usstock.TF15m: 60, usstock.TF1h: 60, usstock.TF4h: 60, usstock.TF1d: 200, usstock.TF1w: 30}
 	for _, tf := range []string{usstock.TF15m, usstock.TF1h, usstock.TF4h, usstock.TF1d, usstock.TF1w} {
@@ -29,7 +30,12 @@ func BuildSnapshot(symbol, underlying string, series map[string]*usstock.Series,
 		if data != nil {
 			s.Sources[tf] = data.Source
 		}
-		if data == nil || len(data.Bars) < needs[tf] {
+		stale := false
+		if data != nil && (tf == usstock.TF1d || tf == usstock.TF1w) {
+			s.DataThrough[tf] = usstock.DataDate(data)
+			stale = usstock.CheckDataDate(tf, s.DataThrough[tf], now) != nil
+		}
+		if data == nil || len(data.Bars) < needs[tf] || stale {
 			s.MissingTF = append(s.MissingTF, tf)
 		}
 		if s.Price == 0 && data != nil && len(data.Bars) > 0 {
