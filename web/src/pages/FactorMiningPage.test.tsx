@@ -294,6 +294,51 @@ describe('FactorMiningPage', () => {
     )
   })
 
+  it.each([
+    [
+      'zh',
+      '为控制体积，仅展示 accepted、有前向数据的因子及各周期/状态按 val t（缺失时用 train t）排名前 150 条（共 5,000 条，返回 800 条）。',
+      '美股',
+    ],
+    [
+      'en',
+      'To limit response size, showing all accepted factors, factors with forward data, and the top 150 per horizon/status by val t (falling back to train t): 5,000 total, 800 returned.',
+      'US stocks',
+    ],
+  ])(
+    'shows the trimming notice in %s only when factors were omitted',
+    async (language, notice, usLabel) => {
+      const overview = {
+        ...OVERVIEW,
+        zoo: {
+          crypto: {
+            ...OVERVIEW.zoo.crypto,
+            factors_total: 5000,
+            factors_returned: 800,
+          },
+          us: {
+            ...OVERVIEW.zoo.us,
+            factors_total: 0,
+            factors_returned: 0,
+          },
+        },
+      }
+      mockFetch(overview, RUNS)
+      const { rerender } = render(<FactorMiningPage language={language} />)
+      expect(await screen.findByTestId('factor-trim-notice')).toHaveTextContent(
+        notice
+      )
+      fireEvent.click(screen.getByRole('button', { name: usLabel }))
+      expect(screen.queryByTestId('factor-trim-notice')).not.toBeInTheDocument()
+
+      // Older responses without counters also remain compatible.
+      mockFetch(OVERVIEW, RUNS)
+      rerender(<FactorMiningPage key="legacy" language={language} />)
+      await screen.findByText(/crypto · mutation/)
+      expect(screen.queryByTestId('factor-trim-notice')).not.toBeInTheDocument()
+    }
+  )
+
   describe('forward test', () => {
     const fwBase = {
       accepted_at: '2026-10-01',
