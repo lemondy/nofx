@@ -1,0 +1,402 @@
+[
+  {
+    "seed": 100,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25305,
+    "sufficient": 8286,
+    "sufficient_edge": 1716,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 864,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 852,
+      "H4_med_flat": 486,
+      "H5_channel_break": 792,
+      "H5_decay_flag": 792,
+      "H5_location_flag": 792,
+      "H5_rr_flag": 792
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T12:57:22.254283+00:00"
+  },
+  {
+    "seed": 101,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25452,
+    "sufficient": 8346,
+    "sufficient_edge": 1674,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 846,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 828,
+      "H4_med_flat": 540,
+      "H5_channel_break": 804,
+      "H5_decay_flag": 804,
+      "H5_location_flag": 804,
+      "H5_rr_flag": 804
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T12:58:57.243241+00:00"
+  },
+  {
+    "seed": 102,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25347,
+    "sufficient": 8430,
+    "sufficient_edge": 1716,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 864,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 852,
+      "H4_med_flat": 486,
+      "H5_channel_break": 828,
+      "H5_decay_flag": 828,
+      "H5_location_flag": 828,
+      "H5_rr_flag": 828
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:00:31.673601+00:00"
+  },
+  {
+    "seed": 103,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25365,
+    "sufficient": 8340,
+    "sufficient_edge": 1692,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 846,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 846,
+      "H4_med_flat": 396,
+      "H5_channel_break": 834,
+      "H5_decay_flag": 834,
+      "H5_location_flag": 834,
+      "H5_rr_flag": 834
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:02:06.570471+00:00"
+  },
+  {
+    "seed": 104,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25272,
+    "sufficient": 8238,
+    "sufficient_edge": 1668,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 828,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 840,
+      "H4_med_flat": 486,
+      "H5_channel_break": 792,
+      "H5_decay_flag": 792,
+      "H5_location_flag": 792,
+      "H5_rr_flag": 792
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:03:40.325892+00:00"
+  },
+  {
+    "seed": 105,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25395,
+    "sufficient": 8172,
+    "sufficient_edge": 1692,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 828,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 864,
+      "H4_med_flat": 540,
+      "H5_channel_break": 756,
+      "H5_decay_flag": 756,
+      "H5_location_flag": 756,
+      "H5_rr_flag": 756
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:05:14.551770+00:00"
+  },
+  {
+    "seed": 106,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25308,
+    "sufficient": 8154,
+    "sufficient_edge": 1680,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 828,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 852,
+      "H4_med_flat": 486,
+      "H5_channel_break": 768,
+      "H5_decay_flag": 768,
+      "H5_location_flag": 768,
+      "H5_rr_flag": 768
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:06:48.359036+00:00"
+  },
+  {
+    "seed": 107,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25833,
+    "sufficient": 8472,
+    "sufficient_edge": 1698,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 846,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 852,
+      "H4_med_flat": 522,
+      "H5_channel_break": 834,
+      "H5_decay_flag": 834,
+      "H5_location_flag": 834,
+      "H5_rr_flag": 834
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:08:22.398238+00:00"
+  },
+  {
+    "seed": 108,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25422,
+    "sufficient": 8082,
+    "sufficient_edge": 1686,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 858,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 828,
+      "H4_med_flat": 432,
+      "H5_channel_break": 762,
+      "H5_decay_flag": 762,
+      "H5_location_flag": 762,
+      "H5_rr_flag": 762
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:09:56.950986+00:00"
+  },
+  {
+    "seed": 109,
+    "planted": false,
+    "tests": 21384,
+    "train_fdr": 0,
+    "confirmed": 0,
+    "panel": {
+      "1h": {
+        "assets": 50,
+        "bars": 15000
+      },
+      "1d": {
+        "assets": 100,
+        "bars": 2500
+      }
+    },
+    "pattern_rows": 25272,
+    "sufficient": 8352,
+    "sufficient_edge": 1698,
+    "predictive_fdr": 0,
+    "sufficient_by_test": {
+      "H1_med_steep": 972,
+      "H2_edge": 828,
+      "H2_med_low": 972,
+      "H2_med_steep": 972,
+      "H3_no_edge": 870,
+      "H4_med_flat": 522,
+      "H5_channel_break": 804,
+      "H5_decay_flag": 804,
+      "H5_location_flag": 804,
+      "H5_rr_flag": 804
+    },
+    "fdr_by_test": {},
+    "confirmed_by_test": {},
+    "planted_edge_keys": [],
+    "code_sha256": "288a50ff6bd001222d0d8968dc4633a0d72288f78ed43d88a677e075fe3408d2",
+    "protocol_sha256": "d2cfbfd998d27705ebad3548d9a0f71b09838e1f4b7a1e484a64ad6df52314e8",
+    "scale_sha256": "1b77048e229c327f2492b19bc7d0e8702b36a4597e9b12286f29e18a906fc608",
+    "completed_utc": "2026-10-24T13:11:32.765681+00:00"
+  }
+]
