@@ -149,6 +149,9 @@ func (at *AutoTrader) safeCheckPositionDrawdown() {
 			logger.Errorf("❌ Drawdown monitoring: recovered from panic: %v", r)
 		}
 	}()
+	// The only recovery probe site: the existing minute tick gives the 1m/2m
+	// backoff meaning without adding a goroutine or using the 30s order pass.
+	at.probeAuthRecovery()
 	at.checkPositionDrawdown()
 }
 
