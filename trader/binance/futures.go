@@ -89,6 +89,10 @@ type FuturesTrader struct {
 	// Cache validity period (15 seconds)
 	cacheDuration time.Duration
 
+	// Injectable clock for rule/config TTLs and six-hour v3 reconciliation.
+	// Account/position snapshot TTL and invalidation retain their existing clock.
+	nowFn func() time.Time
+
 	// Background order-sync lifecycle. Exchange credentials are immutable on
 	// the SDK client, so a config reload must stop the old sync loop before the
 	// old FuturesTrader is discarded; otherwise it keeps calling Binance every
@@ -97,6 +101,13 @@ type FuturesTrader struct {
 	orderSyncStop   chan struct{}
 	orderSyncDone   chan struct{}
 	syncAuthAlerted atomic.Bool
+}
+
+func (t *FuturesTrader) now() time.Time {
+	if t.nowFn != nil {
+		return t.nowFn()
+	}
+	return time.Now()
 }
 
 // binanceHTTPTimeout bounds every Binance REST call (review 2026-10-07 B1-4).

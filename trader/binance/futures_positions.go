@@ -37,9 +37,12 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	// Cache expired or doesn't exist, call API
 	logger.Infof("🔄 Cache expired, calling Binance API to get position information...")
-	positions, err := t.client.NewGetPositionRiskService().Do(context.Background())
+	positions, err := t.fetchPositions()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get positions: %w", WrapAuthError("GetPositions", err))
+		err = fmt.Errorf("failed to get positions: %w", WrapAuthError("GetPositions", err))
+		if positions == nil {
+			return nil, err
+		}
 	}
 
 	var result []map[string]interface{}
@@ -67,6 +70,12 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 		}
 
 		result = append(result, posMap)
+	}
+
+	// Keep a successful v2 fallback available while propagating v3 auth/IP
+	// errors. Do not cache away the error that the auth probe must observe.
+	if err != nil {
+		return result, err
 	}
 
 	// Update cache
@@ -103,6 +112,10 @@ func (t *FuturesTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 		MarginType(marginType).
 		Do(context.Background())
 
+	if err == nil {
+		t.invalidateSymbolConfig(symbol)
+	}
+
 	marginModeStr := "Cross Margin"
 	if !isCrossMargin {
 		marginModeStr = "Isolated Margin"
@@ -123,6 +136,7 @@ func (t *FuturesTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 			if !strings.EqualFold(config.MarginType, string(marginType)) {
 				return fmt.Errorf("%s margin mode is %s, expected %s", symbol, config.MarginType, marginType)
 			}
+			t.invalidateSymbolConfig(symbol)
 			logger.Infof("  ✓ %s margin mode verified as %s", symbol, marginModeStr)
 			return nil
 		}
@@ -161,12 +175,14 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 	if err != nil {
 		// If error message contains "No need to change", leverage is already the target value
 		if contains(err.Error(), "No need to change") {
+			t.invalidateSymbolConfig(symbol)
 			logger.Infof("  ✓ %s leverage is already %dx", symbol, leverage)
 			return nil
 		}
 		return fmt.Errorf("failed to set leverage: %w", err)
 	}
 
+	t.invalidateSymbolConfig(symbol)
 	logger.Infof("  ✓ %s leverage changed to %dx", symbol, leverage)
 
 	// Wait 5 seconds after changing leverage (to avoid cooldown period errors)
@@ -258,41 +274,35 @@ type symbolOrderRules struct {
 }
 
 func (t *FuturesTrader) getSymbolOrderRules(symbol string) (symbolOrderRules, error) {
-	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	s, err := t.cachedSymbolRules(symbol)
 	if err != nil {
 		return symbolOrderRules{}, fmt.Errorf("failed to get trading rules: %w", err)
 	}
-	for _, s := range exchangeInfo.Symbols {
-		if s.Symbol != symbol {
-			continue
-		}
-		rules := symbolOrderRules{MinNotional: 10}
-		for _, filter := range s.Filters {
-			filterType, _ := filter["filterType"].(string)
-			switch filterType {
-			case "LOT_SIZE":
-				rules.StepSizeText, _ = filter["stepSize"].(string)
-				rules.StepSize, _ = strconv.ParseFloat(rules.StepSizeText, 64)
-				if v, ok := filter["minQty"].(string); ok {
-					rules.MinQty, _ = strconv.ParseFloat(v, 64)
-				}
-				if v, ok := filter["maxQty"].(string); ok {
-					rules.MaxQty, _ = strconv.ParseFloat(v, 64)
-				}
-			case "MIN_NOTIONAL", "NOTIONAL":
-				if v, ok := filter["notional"].(string); ok {
-					if parsed, parseErr := strconv.ParseFloat(v, 64); parseErr == nil && parsed > 0 {
-						rules.MinNotional = parsed
-					}
+	rules := symbolOrderRules{MinNotional: 10}
+	for _, filter := range s.Filters {
+		filterType, _ := filter["filterType"].(string)
+		switch filterType {
+		case "LOT_SIZE":
+			rules.StepSizeText, _ = filter["stepSize"].(string)
+			rules.StepSize, _ = strconv.ParseFloat(rules.StepSizeText, 64)
+			if v, ok := filter["minQty"].(string); ok {
+				rules.MinQty, _ = strconv.ParseFloat(v, 64)
+			}
+			if v, ok := filter["maxQty"].(string); ok {
+				rules.MaxQty, _ = strconv.ParseFloat(v, 64)
+			}
+		case "MIN_NOTIONAL", "NOTIONAL":
+			if v, ok := filter["notional"].(string); ok {
+				if parsed, parseErr := strconv.ParseFloat(v, 64); parseErr == nil && parsed > 0 {
+					rules.MinNotional = parsed
 				}
 			}
 		}
-		if rules.StepSize <= 0 || rules.StepSizeText == "" {
-			return symbolOrderRules{}, fmt.Errorf("%s LOT_SIZE trading rule is missing", symbol)
-		}
-		return rules, nil
 	}
-	return symbolOrderRules{}, fmt.Errorf("%s trading rules not found", symbol)
+	if rules.StepSize <= 0 || rules.StepSizeText == "" {
+		return symbolOrderRules{}, fmt.Errorf("%s LOT_SIZE trading rule is missing", symbol)
+	}
+	return rules, nil
 }
 
 func formatQuantityWithRules(symbol string, quantity float64, rules symbolOrderRules) (string, error) {
@@ -317,45 +327,30 @@ func formatQuantityWithRules(symbol string, quantity float64, rules symbolOrderR
 
 // GetSymbolPricePrecision gets the price precision for a trading pair
 func (t *FuturesTrader) GetSymbolPricePrecision(symbol string) (int, error) {
-	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	s, err := t.cachedSymbolRules(symbol)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get trading rules: %w", err)
 	}
-
-	for _, s := range exchangeInfo.Symbols {
-		if s.Symbol == symbol {
-			// Get precision from PRICE_FILTER filter
-			for _, filter := range s.Filters {
-				if filter["filterType"] == "PRICE_FILTER" {
-					tickSize := filter["tickSize"].(string)
-					precision := calculatePrecision(tickSize)
-					return precision, nil
-				}
-			}
+	for _, filter := range s.Filters {
+		if filter["filterType"] == "PRICE_FILTER" {
+			tickSize, _ := filter["tickSize"].(string)
+			return calculatePrecision(tickSize), nil
 		}
 	}
-
-	// Default to 2 decimal places for price
 	return 2, nil
 }
 
-// symbolTickSize returns the raw PRICE_FILTER.tickSize string for a symbol
-// ("" when absent). The RAW string matters: quantizeToTick needs the tick's
-// own decimal count, and the tick VALUE may be a non-power-of-ten (0.025)
-// that decimal-place rounding alone cannot quantize to (round-4 review
-// R4-15).
+// symbolTickSize returns the raw PRICE_FILTER.tickSize string, preserving the
+// tick's decimal count and non-power-of-ten grids used by quantizeToTick.
 func (t *FuturesTrader) symbolTickSize(symbol string) (string, error) {
-	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	s, err := t.cachedSymbolRules(symbol)
 	if err != nil {
 		return "", fmt.Errorf("failed to get trading rules: %w", err)
 	}
-	for _, s := range exchangeInfo.Symbols {
-		if s.Symbol == symbol {
-			for _, filter := range s.Filters {
-				if filter["filterType"] == "PRICE_FILTER" {
-					return filter["tickSize"].(string), nil
-				}
-			}
+	for _, filter := range s.Filters {
+		if filter["filterType"] == "PRICE_FILTER" {
+			tickSize, _ := filter["tickSize"].(string)
+			return tickSize, nil
 		}
 	}
 	return "", nil

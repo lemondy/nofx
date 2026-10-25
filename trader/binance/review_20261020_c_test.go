@@ -67,7 +67,7 @@ func TestReview1020FullCloseKeepsProtectionWhileRemainderOpen(t *testing.T) {
 					}
 				}))
 				client := futures.NewClient("key", "secret")
-				client.BaseURL, client.HTTPClient = "http://binance.test", hc
+				client.BaseURL, client.HTTPClient = futuresTestURL(), hc
 				ft := &FuturesTrader{client: client}
 				var err error
 				if side == "long" {
@@ -157,7 +157,7 @@ func TestReview1020SyncCleanupIgnoresProtectionPlacedAfterSnapshot(t *testing.T)
 		}
 	}))
 	client := futures.NewClient("key", "secret")
-	client.BaseURL, client.HTTPClient = "http://binance.test", hc
+	client.BaseURL, client.HTTPClient = futuresTestURL(), hc
 	ft := &FuturesTrader{
 		client: client, cacheDuration: time.Hour, positionsCacheTime: time.Now(),
 		// Pre-warmed cache: the only positionRisk REST read is the FRESH one.

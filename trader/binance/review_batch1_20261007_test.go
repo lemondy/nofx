@@ -28,7 +28,15 @@ func batch1Response(r *http.Request, status int, body string) *http.Response {
 
 func batch1FuturesTrader(transport batch1Transport) *FuturesTrader {
 	client := futures.NewClient("batch1-key", "batch1-secret")
-	client.HTTPClient = &http.Client{Transport: transport}
+	client.BaseURL = futuresTestURL()
+	// These legacy fixtures test v2 cache locking. Explicitly reject the new
+	// validation probe without counting it as a snapshot fetch.
+	client.HTTPClient = &http.Client{Transport: batch1Transport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/fapi/v3/positionRisk" || r.URL.Path == "/fapi/v3/account" {
+			return batch1Response(r, http.StatusNotFound, `{"code":-1000,"msg":"v2-only fixture"}`), nil
+		}
+		return transport(r)
+	})}
 	return &FuturesTrader{client: client, cacheDuration: time.Hour}
 }
 

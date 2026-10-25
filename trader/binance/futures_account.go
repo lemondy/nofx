@@ -42,10 +42,13 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 
 	// Cache expired or doesn't exist, call API
 	logger.Infof("🔄 Cache expired, calling Binance API to get account balance...")
-	account, err := t.client.NewGetAccountService().Do(context.Background())
+	account, err := t.fetchAccount()
 	if err != nil {
 		logger.Infof("❌ Binance API call failed: %v", err)
-		return nil, fmt.Errorf("failed to get account info: %w", WrapAuthError("GetBalance", err))
+		err = fmt.Errorf("failed to get account info: %w", WrapAuthError("GetBalance", err))
+		if account == nil {
+			return nil, err
+		}
 	}
 
 	result := make(map[string]interface{})
@@ -61,6 +64,11 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	// ignored floating PnL while the account-drawdown breaker and the prompt
 	// used wallet+unrealized (QUANT_REVIEW_2026-09-22 D1, P0).
 	result["totalEquity"] = wallet + unrealized
+
+	// Return v2 fallback data alongside an observable v3 auth/IP error.
+	if err != nil {
+		return result, err
+	}
 
 	logger.Infof("✓ Binance API returned: total balance=%s, available=%s, unrealized PnL=%s",
 		account.TotalWalletBalance,
