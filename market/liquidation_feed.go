@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"nofx/logger"
+	"nofx/netmeter"
 )
 
 // ============================================================================
@@ -115,8 +116,10 @@ func (e errLiq) Error() string { return string(e) }
 func liqConsumeOnce() error {
 	// This host reaches Binance through the local proxy (same as every REST
 	// call — SafeHTTPClient's ProxyFromEnvironment); the default gorilla
-	// dialer ignores the environment, so wire it explicitly.
-	dialer := &websocket.Dialer{Proxy: proxyFromEnv, HandshakeTimeout: 15 * time.Second}
+	// dialer ignores the environment, so wire it explicitly. NetDialContext
+	// feeds the settings-page traffic monitor (gorilla dials the proxy itself
+	// through it, so tunneled TLS bytes are captured at wire level).
+	dialer := &websocket.Dialer{Proxy: proxyFromEnv, NetDialContext: netmeter.NetDialContext, HandshakeTimeout: 15 * time.Second}
 	conn, _, err := dialer.Dial(liqFeedURL, nil)
 	if err != nil {
 		return err

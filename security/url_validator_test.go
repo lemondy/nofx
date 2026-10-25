@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"nofx/netmeter"
 )
 
 // The schemeless proxy form ("127.0.0.1:7890") must land on the exemption
@@ -38,7 +40,7 @@ func TestEnvProxyHostsSchemedAndBogus(t *testing.T) {
 func TestSafeHTTPClientExemptsSchemelessProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "127.0.0.1:7890")
 	client := SafeHTTPClient(5 * time.Second)
-	tr, ok := client.Transport.(*http.Transport)
+	tr, ok := netmeter.Unwrap(client.Transport).(*http.Transport)
 	if !ok || tr.DialContext == nil {
 		t.Fatal("unexpected transport")
 	}
@@ -50,7 +52,7 @@ func TestSafeHTTPClientExemptsSchemelessProxy(t *testing.T) {
 func TestSafeClientValidatesProxyDestinationAndRedirect(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
 	c := SafeHTTPClient(time.Second)
-	tr := c.Transport.(*http.Transport)
+	tr := netmeter.Unwrap(c.Transport).(*http.Transport)
 	for _, raw := range []string{"http://127.0.0.1/private", "http://169.254.169.254/latest/meta-data/", "http://[::1]/"} {
 		req, err := http.NewRequest(http.MethodGet, raw, nil)
 		if err != nil {

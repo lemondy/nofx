@@ -43,3 +43,31 @@ export const systemApi = {
     return result.data!
   },
 }
+
+export interface NetTrafficHost {
+  host: string
+  requests: number
+  up: number
+  down: number
+}
+
+export interface NetTraffic {
+  since: string
+  since_unix: number
+  requests: number
+  http_up: number
+  http_down: number
+  ws_up: number
+  ws_down: number
+  hosts: NetTrafficHost[]
+}
+
+export const netTrafficApi = {
+  async getNetTraffic(): Promise<NetTraffic> {
+    const result = await httpClient.request<NetTraffic>(
+      `${API_BASE}/net-traffic`
+    )
+    if (!result.success) throw new Error('Failed to fetch net traffic')
+    return result.data!
+  },
+}
