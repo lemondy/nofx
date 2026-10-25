@@ -10,16 +10,17 @@ import (
 	"nofx/trader/types"
 )
 
-func (t *BStockTrader) place(svc *binance.CreateOrderService) (*types.SpotOrderResult, error) {
-	return t.placeWithID(svc, clientID())
+func (t *BStockTrader) place(symbol string, svc *binance.CreateOrderService) (*types.SpotOrderResult, error) {
+	return t.placeWithID(symbol, svc, clientID())
 }
 
 // placeWithID is place with an explicit client order ID (protection legs carry
 // their owner's tag).
-func (t *BStockTrader) placeWithID(svc *binance.CreateOrderService, cid string) (*types.SpotOrderResult, error) {
+func (t *BStockTrader) placeWithID(symbol string, svc *binance.CreateOrderService, cid string) (*types.SpotOrderResult, error) {
 	o, err := svc.NewClientOrderID(cid).NewOrderRespType(binance.NewOrderRespTypeFULL).Do(context.Background())
 	t.invalidate() // Even a timeout may have executed at the exchange.
 	if err != nil {
+		t.noteFilterFailure(symbol, err)
 		return nil, wrap("place spot order", err)
 	}
 	result := &types.SpotOrderResult{Symbol: o.Symbol, OrderID: id(o.OrderID), ClientOrderID: o.ClientOrderID, Side: string(o.Side), Type: string(o.Type), Status: string(o.Status), Price: number(o.Price), OrigQty: number(o.OrigQuantity), ExecutedQty: number(o.ExecutedQuantity), QuoteQty: number(o.CummulativeQuoteQuantity)}
@@ -66,7 +67,7 @@ func (t *BStockTrader) BuyMarketNotional(symbol string, quoteUSDT float64) (*typ
 	if err = notional(s, quoteUSDT, true); err != nil {
 		return nil, err
 	}
-	return t.place(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeMarket).QuoteOrderQty(value(quoteUSDT)))
+	return t.place(symbol, t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeMarket).QuoteOrderQty(value(quoteUSDT)))
 }
 
 func (t *BStockTrader) BuyLimit(symbol string, qty, p float64) (*types.SpotOrderResult, error) {
@@ -87,7 +88,7 @@ func (t *BStockTrader) BuyLimit(symbol string, qty, p float64) (*types.SpotOrder
 	if err = notional(s, qty*p, false); err != nil {
 		return nil, err
 	}
-	return t.place(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).Price(value(p)))
+	return t.place(symbol, t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).Price(value(p)))
 }
 
 func (t *BStockTrader) OpenLong(symbol string, qty float64, leverage int) (map[string]interface{}, error) {
@@ -111,7 +112,7 @@ func (t *BStockTrader) OpenLong(symbol string, qty float64, leverage int) (map[s
 	if err = notional(s, qty*p, true); err != nil {
 		return nil, err
 	}
-	o, err := t.place(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeMarket).Quantity(value(qty)))
+	o, err := t.place(symbol, t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeMarket).Quantity(value(qty)))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +157,7 @@ func (t *BStockTrader) SellMarket(symbol string, qty float64) (*types.SpotOrderR
 	if err = notional(s, qty*p, true); err != nil {
 		return nil, err
 	}
-	return t.place(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeMarket).Quantity(value(qty)))
+	return t.place(symbol, t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeMarket).Quantity(value(qty)))
 }
 
 func (t *BStockTrader) openOrders(symbol string) ([]*binance.Order, error) {

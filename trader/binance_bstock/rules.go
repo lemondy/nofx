@@ -198,5 +198,8 @@ func (t *BStockTrader) Preflight(symbol string) error {
 		return fmt.Errorf("Preflight filter failure: %w", err)
 	}
 	err = t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeBuy).Type(binance.OrderTypeLimit).TimeInForce(binance.TimeInForceTypeGTC).Price(value(p)).Quantity(value(q)).NewClientOrderID(clientID()).Test(context.Background())
+	if err != nil {
+		t.noteFilterFailure(symbol, err)
+	}
 	return wrap("Preflight", err)
 }
