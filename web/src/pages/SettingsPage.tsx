@@ -24,6 +24,7 @@ import {
 import { ExchangeConfigModal } from '../components/trader/ExchangeConfigModal'
 import { TelegramConfigModal } from '../components/trader/TelegramConfigModal'
 import { ModelConfigModal } from '../components/trader/ModelConfigModal'
+import { NetworkTrafficCard } from '../components/common/NetworkTrafficCard'
 import type { Exchange, AIModel, PaperConfig } from '../types'
 import { Badge, Button, Card, Input, Tabs } from '../components/ui'
 
@@ -461,6 +462,8 @@ export function SettingsPage() {
                     </button>
                   </div>
                 </div>
+
+                <NetworkTrafficCard language={language} />
 
                 <div className="border-t border-line pt-4">
                   <h3 className="mb-3 text-sm font-semibold text-fg">

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"nofx/logger"
+	"nofx/netmeter"
 )
 
 // Priority decides how a request behaves under load.
@@ -191,7 +192,9 @@ func InCooldown() (time.Time, bool) { return defaultMeter.InCooldown() }
 // Wrap returns a RoundTripper that meters/guards futures traffic through m.
 func (m *Meter) Wrap(base http.RoundTripper, prio Priority) http.RoundTripper {
 	if base == nil {
-		base = http.DefaultTransport
+		// nil = the process default transport, which also carries the global
+		// payload-traffic counter for the settings-page monitor.
+		base = netmeter.Wrap(http.DefaultTransport)
 	}
 	if t, ok := base.(*transport); ok && t.m == m {
 		base = t.base

@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"nofx/netmeter"
 )
 
 // Private/Reserved IP ranges that should be blocked to prevent SSRF
@@ -272,8 +274,10 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 	}
 
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
+		Timeout: timeout,
+		// netmeter counts payload bytes per host for the settings-page traffic
+		// monitor (unwraps itself, so stacking with other wrappers is safe).
+		Transport: netmeter.Wrap(transport),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
