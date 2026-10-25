@@ -3,6 +3,7 @@ package binance_bstock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,14 +13,16 @@ import (
 	"time"
 
 	binance "github.com/adshao/go-binance/v2"
+	"github.com/adshao/go-binance/v2/common"
 	"golang.org/x/sync/singleflight"
 	"nofx/logger"
 )
 
 const (
-	spotRulesTTL         = 24 * time.Hour
-	spotRulesStaleGrace  = 7 * 24 * time.Hour
-	spotRulesNegativeTTL = 10 * time.Minute
+	spotRulesTTL                = 24 * time.Hour
+	spotRulesStaleGrace         = 7 * 24 * time.Hour
+	spotRulesNegativeTTL        = 10 * time.Minute
+	spotRulesInvalidateInterval = 10 * time.Minute
 	// After a failed full refresh keep serving the stale table without touching
 	// the network again for this long: the refresh holds the entry lock for up to
 	// the HTTP timeout, so retrying on every rule() call would stall order paths.
@@ -42,6 +45,7 @@ type negativeRule struct {
 }
 
 type spotRulesEntry struct {
+	baseURL    string
 	mu         sync.Mutex
 	flight     singleflight.Group
 	rules      map[string]binance.Symbol
@@ -51,6 +55,10 @@ type spotRulesEntry struct {
 	// lastRefreshFail is the time of the last failed full refresh served from
 	// stale rules; zero after any successful refresh.
 	lastRefreshFail time.Time
+	// Separate from mu so the throttle check and invalidate can be serialized
+	// together while invalidate takes the rules/disk snapshot lock.
+	filterMu      sync.Mutex
+	invalidatedAt map[string]time.Time
 }
 
 type spotRulesDisk struct {
@@ -65,10 +73,37 @@ func sharedRulesFor(baseURL string) *spotRulesEntry {
 	defer sharedSpotRules.Unlock()
 	entry := sharedSpotRules.entries[baseURL]
 	if entry == nil {
-		entry = &spotRulesEntry{negative: make(map[string]negativeRule)}
+		entry = &spotRulesEntry{baseURL: baseURL, negative: make(map[string]negativeRule), invalidatedAt: make(map[string]time.Time)}
 		sharedSpotRules.entries[baseURL] = entry
 	}
 	return entry
+}
+
+// invalidate leaves the table age intact: the next miss uses lookup's
+// single-symbol request, without expiring the full table.
+func (e *spotRulesEntry) invalidate(symbol string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.rules, symbol)
+	delete(e.negative, symbol)
+	e.writeDisk(e.baseURL)
+}
+
+func (t *BStockTrader) noteFilterFailure(symbol string, err error) {
+	var api *common.APIError
+	if !errors.As(err, &api) || api.Code != -1013 {
+		return
+	}
+	e := sharedRulesFor(t.client.BaseURL)
+	e.filterMu.Lock()
+	defer e.filterMu.Unlock()
+	now := t.now()
+	if at, ok := e.invalidatedAt[symbol]; ok && now.Sub(at) < spotRulesInvalidateInterval {
+		return
+	}
+	e.invalidatedAt[symbol] = now
+	e.invalidate(symbol)
+	logger.Warnf("bStock rules cache invalidated for %s after filter failure: %v", symbol, err)
 }
 
 func isBStockRule(s binance.Symbol) bool {

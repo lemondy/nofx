@@ -242,7 +242,7 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 	}
 	p := &types.ProtectionOrders{Symbol: symbol, Quantity: qty, StopPrice: stop, StopLimitPrice: stopLimit, TakeProfit: tp}
 	if tp == 0 {
-		o, e := t.placeWithID(t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeStopLossLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).StopPrice(value(stop)).Price(value(stopLimit)), t.protectionID("sl"))
+		o, e := t.placeWithID(symbol, t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeStopLossLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).StopPrice(value(stop)).Price(value(stopLimit)), t.protectionID("sl"))
 		if e != nil {
 			return nil, fmt.Errorf("protection canceled; replacement stop failed: %w", e)
 		}
@@ -263,6 +263,7 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 	err = t.signed(http.MethodPost, "/api/v3/orderList/oco", params, &result)
 	t.invalidate()
 	if err != nil {
+		t.noteFilterFailure(symbol, err)
 		return nil, fmt.Errorf("protection canceled; replacement OCO failed: %w", err)
 	}
 	for _, o := range append(result.Orders, result.Reports...) {
@@ -361,6 +362,7 @@ func (t *BStockTrader) loneTP(symbol string, qty, tp float64) error {
 	o, err := t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeLimitMaker).Quantity(value(qty)).Price(value(tp)).NewClientOrderID(t.protectionID("tp")).Do(context.Background())
 	t.invalidate()
 	if err != nil {
+		t.noteFilterFailure(symbol, err)
 		return fmt.Errorf("protection canceled; replacement take-profit failed: %w", wrap("place take-profit", err))
 	}
 	if o.OrderID <= 0 {
