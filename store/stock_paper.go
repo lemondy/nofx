@@ -253,8 +253,18 @@ func (s *StockPaperStore) UpsertPending(p *StockPendingEntry) error {
 // therefore neither lose the watermark nor book the same fill twice. fill
 // carries the quantity/price/fee increment and the row template used when no
 // owned row exists yet. booked=false means the watermark already covered this
-// fill (idempotent replay): nothing was changed.
+// fill (idempotent replay): nothing was changed. A transient SQLITE_BUSY from
+// an aligned crypto-cycle write burst is retried once.
 func (s *StockPaperStore) BookEntryFill(fill *TraderPosition, pending *StockPendingEntry, intent bool) (booked bool, err error) {
+	err = retryOnceOnBusy(func() error {
+		var e error
+		booked, e = s.bookEntryFillOnce(fill, pending, intent)
+		return e
+	})
+	return booked, err
+}
+
+func (s *StockPaperStore) bookEntryFillOnce(fill *TraderPosition, pending *StockPendingEntry, intent bool) (booked bool, err error) {
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if pending != nil {
 			var cur StockPendingEntry
