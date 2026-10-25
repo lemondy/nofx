@@ -42,8 +42,9 @@ func TestRoundTripCountsKnownLengthBodies(t *testing.T) {
 	if reqs-beforeReqs != 1 {
 		t.Fatalf("requests counted = %d, want 1", reqs-beforeReqs)
 	}
-	if got := up - beforeUp; got != int64(len(reqBody)) {
-		t.Fatalf("up = %d, want %d", got, len(reqBody))
+	// up = request line ("/x") + body
+	if want := int64(len("/x") + len(reqBody)); up-beforeUp != want {
+		t.Fatalf("up = %d, want %d", up-beforeUp, want)
 	}
 	if got := down - beforeDown; got != int64(len(respBody)) {
 		t.Fatalf("down = %d, want %d", got, len(respBody))
@@ -77,8 +78,8 @@ func TestRoundTripCountsUnknownLengthBodies(t *testing.T) {
 	resp.Body.Close()
 
 	_, up, down := totals()
-	if got := up - beforeUp; got != 700 {
-		t.Fatalf("up = %d, want 700", got)
+	if want := int64(700 + len("/y")); up-beforeUp != want {
+		t.Fatalf("up = %d, want %d", up-beforeUp, want)
 	}
 	if got := down - beforeDown; got != int64(len(respBody)) {
 		t.Fatalf("down = %d, want %d (chunked must be counted as read)", got, len(respBody))

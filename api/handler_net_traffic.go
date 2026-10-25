@@ -9,9 +9,9 @@ import (
 )
 
 // handleNetTraffic serves the process-lifetime network usage monitor shown on
-// the settings page: cumulative HTTP payload bytes per host (request +
-// response bodies; header/TLS overhead excluded) plus wire bytes for raw
-// websocket feed connections. In-memory only — resets on restart.
+// the settings page: cumulative HTTP payload bytes per host (request line +
+// bodies; header/TLS overhead excluded) plus wire bytes for raw websocket
+// feed connections. In-memory only — resets on restart.
 // GET /api/net-traffic
 func (s *Server) handleNetTraffic(c *gin.Context) {
 	if c.GetString("user_id") == "" {

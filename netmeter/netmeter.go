@@ -1,8 +1,8 @@
 // Package netmeter counts the process's outbound network usage for the
-// settings-page traffic monitor: cumulative HTTP payload bytes (request +
-// response bodies) per host since process start, plus wire-level bytes for
-// raw connections (websocket feeds) where per-host attribution at the HTTP
-// layer does not exist.
+// settings-page traffic monitor: cumulative HTTP payload bytes (request line
+// path+query, request bodies and response bodies) per host since process
+// start, plus wire-level bytes for raw connections (websocket feeds) where
+// per-host attribution at the HTTP layer does not exist.
 //
 // Counting is deliberately at the RoundTripper layer, not the socket layer:
 // behind the local proxy a socket dial only ever targets 127.0.0.1:7890, so
@@ -134,6 +134,11 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	h := hostFor(req.URL.Host)
 	h.requests.Add(1)
 	totalReqs.Add(1)
+
+	// Request-line payload: path + query string. Exchange APIs carry whole
+	// signed argument sets in GET queries — body-only counting would report
+	// upload as ~zero for this app's traffic profile.
+	addUp(h, int64(len(req.URL.RequestURI())))
 
 	if req.Body != nil {
 		if req.ContentLength > 0 {
