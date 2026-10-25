@@ -216,8 +216,8 @@ export function NetworkTrafficCard({ language }: { language: string }) {
 
       <p className="mt-2 text-[11px] leading-relaxed text-fg-3">
         {zh
-          ? '口径：HTTP 上行为请求行+请求体、下行为响应体（不含 TLS 与头部开销，实际代理流量略高）；WebSocket 为含加密帧的线路字节。路径已归一化（去查询串，数字/ID/符号折叠）；超出 200 个路径的并入 (other)。'
-          : 'HTTP up = request line + body, down = response body (TLS & header overhead excluded — actual proxy usage is slightly higher); WebSocket numbers are wire bytes including encryption. Paths are normalized (query strings removed; numbers, IDs and symbols folded); paths beyond 200 are grouped into (other).'}
+          ? '口径：HTTP 上行为请求行+请求体、下行为解压前的响应体字节（gzip 按压缩后大小统计，不含 TLS 与头部开销，实际代理流量略高）；WebSocket 为含加密帧的线路字节。路径已归一化（去查询串，数字/ID/符号折叠）；超出 200 个路径的并入 (other)。'
+          : 'HTTP up = request line + body, down = response body before decompression (gzip counted at compressed size; TLS & header overhead excluded — actual proxy usage is slightly higher); WebSocket numbers are wire bytes including encryption. Paths are normalized (query strings removed; numbers, IDs and symbols folded); paths beyond 200 are grouped into (other).'}
         {updatedAt > 0 && ` ${zh ? '每 5 秒刷新' : 'Refreshed every 5s'}.`}
       </p>
     </div>
