@@ -365,7 +365,11 @@ export interface RiskControlConfig {
   min_quote_volume_24h_millions?: number
   thin_oi_full_size_millions?: number
   thin_oi_min_size_factor?: number
+  vol_spike_5m_mult?: number // default 8
+  vol_spike_15m_mult?: number // default 6
   vol_spike_mult?: number
+  vol_spike_holdoff_minutes?: number // omitted = 30; explicit <=0 = off
+  oi_surge_15m_pct?: number // default 8
   oi_surge_1h_pct?: number
   fast_window_minutes?: number
   fast_adverse_atr_mult?: number

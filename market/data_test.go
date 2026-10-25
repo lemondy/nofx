@@ -765,3 +765,25 @@ func TestExecutionTimeframeDataHas15m(t *testing.T) {
 		t.Fatalf("last 15m bucket malformed: %+v", last)
 	}
 }
+
+// Regression: fetchCount is floored at 200, but configured display counts
+// (60-120) used to discard the history before rolling risk could read it.
+func TestFetchedShortHistoryAvailableForRollingRisk(t *testing.T) {
+	klines := generateTestKlines(200)
+	for _, tf := range []string{"5m", "15m", "1h"} {
+		series := fetchedTimeframeSeries(klines, tf, 60)
+		want := 200
+		if tf == "1h" {
+			want = 60
+		}
+		if len(series.Klines) != want || len(series.MidPrices) != want || len(series.Volume) != want {
+			t.Fatalf("%s history truncated or unaligned: %d/%d/%d", tf, len(series.Klines), len(series.MidPrices), len(series.Volume))
+		}
+		if series.Klines[want-1].Time != klines[199].OpenTime || series.Klines[want-1].High != klines[199].High {
+			t.Fatal("forming tail lost")
+		}
+	}
+	if series := fetchedTimeframeSeries(klines[:100], "5m", 60); len(series.Klines) != 100 {
+		t.Fatal("upstream shortfall must not fabricate bars")
+	}
+}

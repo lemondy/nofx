@@ -111,7 +111,7 @@ func TestThinSpreadUnavailablePolicy(t *testing.T) {
 	}
 }
 func TestVolatileCodesAbsoluteForEveryOpen(t *testing.T) {
-	for _, code := range []string{"THIN_VOLUME_10_LT_30", "VOL_SPIKE_1H_4_GT_3", "OI_SURGE_31_GT_30"} {
+	for _, code := range []string{"THIN_VOLUME_1_LT_5", "VOL_SPIKE_5M_9_GT_8", "VOL_SPIKE_15M_7_GT_6", "VOL_SPIKE_1H_6_GT_5", "OI_SURGE_15M_9_GT_8", "OI_SURGE_1H_16_GT_15", "OI_SURGE_31_GT_30", "VOL_HOLDOFF_30m"} {
 		at := riskTestTrader(store.RiskControlConfig{})
 		at.cycleGateStates = map[string]*kernel.GateState{"XUSDT": {LongFailed: []string{code}, ShortFailed: []string{code}, LongMarketException: true, ShortMarketException: true}}
 		ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, CandidateCoins: []kernel.CandidateCoin{{Symbol: "XUSDT"}}}
@@ -144,14 +144,27 @@ func TestPendingFreshVolatilityBan(t *testing.T) {
 	at := riskTestTrader(store.RiskControlConfig{})
 	at.config.StrategyConfig = fix7Config()
 	at.btcTrendClosesFn = func(int) []float64 { return nil }
-	data := fix7StrategyData(at.recheckConfiguredTimeframes("XUSDT"), true)
-	bars := data.TimeframeData["1h"].Klines
-	bars[len(bars)-1].High = bars[len(bars)-1].Open * 2
+	data := fix7StrategyData(at.recheckConfiguredTimeframes("VOLPENDINGUSDT"), true)
 	data.SampledAt = time.Now()
+	// A short-window event must cancel resting orders even while hourly
+	// bars are quiet. Include the forming 5m tail, as the live fetch does.
+	bars := make([]market.KlineBar, 200)
+	for i := range bars {
+		bars[i] = market.KlineBar{Time: data.SampledAt.Truncate(5 * time.Minute).Add(time.Duration(i-199) * 5 * time.Minute).UnixMilli(), Open: 100, High: 101, Low: 99, Close: 100, Volume: 100}
+	}
+	bars[199].High = 119
+	data.TimeframeData["5m"] = &market.TimeframeSeriesData{Timeframe: "5m", Klines: bars}
 	at.recheckDataFn = func(string) (*market.Data, error) { return data, nil }
 	for _, side := range []string{"long", "short"} {
-		if why := at.pendingDirectionBlocked(&pendingEntry{Symbol: "XUSDT", Side: side, Price: 100}); !strings.Contains(why, "VOL_SPIKE_1H_") {
+		if why := at.pendingDirectionBlocked(&pendingEntry{Symbol: "VOLPENDINGUSDT", Side: side, Price: 100}); !strings.Contains(why, "VOL_SPIKE_5M_") {
 			t.Fatalf("pending %s failed to cancel: %s", side, why)
 		}
 	}
+	bars[199].High = 101
+	for _, side := range []string{"long", "short"} {
+		if why := at.pendingDirectionBlocked(&pendingEntry{Symbol: "VOLPENDINGUSDT", Side: side, Price: 100}); !strings.Contains(why, "VOL_HOLDOFF_30m") {
+			t.Fatalf("pending %s bypassed observed holdoff: %s", side, why)
+		}
+	}
+
 }

@@ -6,9 +6,15 @@ import "math"
 // A 2× hourly ATR move inside five minutes is exceptional; the 3% fallback
 // avoids reacting to sub-percent noise when the volatility feed is unavailable.
 const (
-	DefaultMinQuoteVolume24hMillions  = 30.0
-	DefaultVolSpikeMult               = 4.0
-	DefaultOISurge1hPct               = 30.0
+	// 2026-10-25 replay: turnover filters dead markets, not manipulation;
+	// 30M excluded real candidates (MYX/PIEVERSE/SAGA: ~2.9/3.2/7.8M).
+	DefaultMinQuoteVolume24hMillions  = 5.0
+	DefaultVolSpike5mMult             = 8.0
+	DefaultVolSpike15mMult            = 6.0
+	DefaultVolSpikeMult               = 5.0
+	DefaultVolSpikeHoldoffMinutes     = 30.0
+	DefaultOISurge15mPct              = 8.0
+	DefaultOISurge1hPct               = 15.0
 	DefaultFastWindowMinutes          = 5.0
 	DefaultFastAdverseATRMult         = 2.0
 	DefaultFastFavorableATRMult       = 2.0
@@ -34,6 +40,24 @@ func (r RiskControlConfig) EffectiveThinOIMinSizeFactor() float64 {
 }
 func (r RiskControlConfig) EffectiveVolSpikeMult() float64 {
 	return volatileKnob(r.VolSpikeMult, DefaultVolSpikeMult)
+}
+func (r RiskControlConfig) EffectiveVolSpike5mMult() float64 {
+	return volatileKnob(r.VolSpike5mMult, DefaultVolSpike5mMult)
+}
+func (r RiskControlConfig) EffectiveVolSpike15mMult() float64 {
+	return volatileKnob(r.VolSpike15mMult, DefaultVolSpike15mMult)
+}
+
+// Unlike threshold knobs, an explicit zero disables hold-off. A pointer
+// distinguishes it from an omitted field in strategies saved before this gate.
+func (r RiskControlConfig) EffectiveVolSpikeHoldoffMinutes() float64 {
+	if r.VolSpikeHoldoffMinutes == nil || math.IsNaN(*r.VolSpikeHoldoffMinutes) || math.IsInf(*r.VolSpikeHoldoffMinutes, 0) {
+		return DefaultVolSpikeHoldoffMinutes
+	}
+	return math.Max(0, *r.VolSpikeHoldoffMinutes)
+}
+func (r RiskControlConfig) EffectiveOISurge15mPct() float64 {
+	return volatileKnob(r.OISurge15mPct, DefaultOISurge15mPct)
 }
 func (r RiskControlConfig) EffectiveOISurge1hPct() float64 {
 	return volatileKnob(r.OISurge1hPct, DefaultOISurge1hPct)

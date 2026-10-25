@@ -87,30 +87,45 @@ func CachedOpenInterestMillions(symbol string) (float64, bool) {
 	return v, v >= 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
-// CachedOIChange1hPct measures contract OI, avoiding price-driven notional
-// inflation. A reference must be 60-70m old and the newest sample <=3m old.
-// Cold start / gaps fail open until a genuine hour of observations exists.
-func CachedOIChange1hPct(symbol string) (float64, bool) {
+// CachedOIChangePct measures signed contract OI change (the gate takes its
+// absolute value), avoiding price-driven notional inflation. Use the closest
+// sample at/before NOW-window, not latest.at-window: cache age must not shift
+// the requested window. References may precede the target by max(35% W, 5m),
+// latest must be <=6m old. Cold start, stale samples and gaps fail open.
+func CachedOIChangePct(symbol string, window time.Duration) (float64, bool) {
 	oiDataMu.Lock()
 	defer oiDataMu.Unlock()
+	if window <= 0 {
+		return 0, false
+	}
 	ring := oiSamples[Normalize(symbol)]
 	if ring == nil || len(ring.samples) < 2 {
 		return 0, false
 	}
 	now := oiNow()
 	last := ring.newest(0)
-	if age := now.Sub(last.at); age < 0 || age > oiDataTTL {
+	if age := now.Sub(last.at); age < 0 || age > 6*time.Minute {
 		return 0, false
 	}
-	target := last.at.Add(-time.Hour)
+	target := now.Add(-window)
+	tolerance := max(time.Duration(float64(window)*.35), 5*time.Minute)
 	for offset := 1; offset < len(ring.samples); offset++ {
 		ref := ring.newest(offset)
 		if !ref.at.After(target) {
-			if target.Sub(ref.at) > 10*time.Minute || !finitePositive(ref.value) {
+			if target.Sub(ref.at) > tolerance || !finitePositive(ref.value) {
 				return 0, false
 			}
-			return (last.value/ref.value - 1) * 100, true
+			v := (last.value/ref.value - 1) * 100
+			return v, !math.IsNaN(v) && !math.IsInf(v, 0)
 		}
 	}
 	return 0, false
+}
+
+func CachedOIChange15mPct(symbol string) (float64, bool) {
+	return CachedOIChangePct(symbol, 15*time.Minute)
+}
+
+func CachedOIChange1hPct(symbol string) (float64, bool) {
+	return CachedOIChangePct(symbol, time.Hour)
 }

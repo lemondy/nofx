@@ -396,8 +396,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 			primaryKlines = klines
 		}
 
-		// Calculate series data for this timeframe (use count from config)
-		seriesData := calculateTimeframeSeries(klines, tf, count)
+		seriesData := fetchedTimeframeSeries(klines, tf, count)
 		timeframeData[tf] = seriesData
 	}
 

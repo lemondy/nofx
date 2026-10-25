@@ -2563,7 +2563,8 @@ func absoluteBanCode(code string) bool {
 	return strings.HasPrefix(code, "DATA_STALE_") || strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
 		strings.HasPrefix(code, "EMA20_STRETCH_") || strings.HasPrefix(code, "BTC_WEAK_LONG_") ||
 		strings.HasPrefix(code, "WIDE_STOP_") || strings.HasPrefix(code, "THIN_VOLUME_") ||
-		strings.HasPrefix(code, "VOL_SPIKE_1H_") || strings.HasPrefix(code, "OI_SURGE_")
+		strings.HasPrefix(code, "VOL_SPIKE_") || strings.HasPrefix(code, "OI_SURGE_") ||
+		strings.HasPrefix(code, "VOL_HOLDOFF_")
 }
 
 // limitEntryBlockCode is shared by direct limit opens and market-to-limit

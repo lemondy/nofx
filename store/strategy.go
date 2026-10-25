@@ -723,21 +723,26 @@ type RiskControlConfig struct {
 	// Unit: percent. 0 = default 6; negative = off. (CODE ENFORCED)
 	ChaseMaxMove4hPct float64 `json:"chase_max_move4h_pct"`
 	// Thin/volatile crypto controls: zero = safe default, negative = off.
-	// 30M turnover = 2× the 15M default candidate OI floor: require daily
-	// turnover to cover that inventory twice, rather than accepting a static pool.
+	// 2026-10-25 replay: 5M filters dead markets; 30M cuts many genuine
+	// candidates, while pump-day turnover rises and cannot prevent manipulation.
 	MinQuoteVolume24hMillions float64 `json:"min_quote_volume_24h_millions"`
 	// Full size at 5× candidate OI floor; minimum discount factor defaults to .3.
 	ThinOIFullSizeMillions float64 `json:"thin_oi_full_size_millions"`
 	ThinOIMinSizeFactor    float64 `json:"thin_oi_min_size_factor"`
-	// 3× the preceding 24 hourly median ranges filters exceptional moves,
-	// while allowing normal hourly noise. OI surge is absolute, both directions.
-	VolSpikeMult               float64 `json:"vol_spike_mult"`
-	OISurge1hPct               float64 `json:"oi_surge_1h_pct"`
-	FastWindowMinutes          float64 `json:"fast_window_minutes"`
-	FastAdverseATRMult         float64 `json:"fast_adverse_atr_mult"`
-	FastFavorableATRMult       float64 `json:"fast_favorable_atr_mult"`
-	FastAdverseReduceFrac      float64 `json:"fast_adverse_reduce_frac"`
-	FastAdverseCooldownMinutes float64 `json:"fast_adverse_cooldown_minutes"`
+	// Rolling 5m/15m/60m ranges vs non-overlapping historical medians.
+	// 0 = defaults 8/6/5, negative disables that window. OI is absolute.
+	VolSpike5mMult  float64 `json:"vol_spike_5m_mult"`
+	VolSpike15mMult float64 `json:"vol_spike_15m_mult"`
+	VolSpikeMult    float64 `json:"vol_spike_mult"`
+	// Omitted = 30 minutes; explicit zero/negative = off (process-local state).
+	VolSpikeHoldoffMinutes     *float64 `json:"vol_spike_holdoff_minutes,omitempty"`
+	OISurge15mPct              float64  `json:"oi_surge_15m_pct"`
+	OISurge1hPct               float64  `json:"oi_surge_1h_pct"`
+	FastWindowMinutes          float64  `json:"fast_window_minutes"`
+	FastAdverseATRMult         float64  `json:"fast_adverse_atr_mult"`
+	FastFavorableATRMult       float64  `json:"fast_favorable_atr_mult"`
+	FastAdverseReduceFrac      float64  `json:"fast_adverse_reduce_frac"`
+	FastAdverseCooldownMinutes float64  `json:"fast_adverse_cooldown_minutes"`
 	// Fixed price-change fallback (not ROE), when the 1h ATR is unavailable.
 	FastFallbackPct float64 `json:"fast_fallback_pct"`
 	// MARK_PRICE below 3× candidate OI floor; negative disables this feature.

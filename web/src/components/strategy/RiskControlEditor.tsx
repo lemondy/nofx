@@ -8,7 +8,7 @@ const volatileRiskFields = [
     'min_quote_volume_24h_millions',
     '24h 最低成交额（百万美元）',
     'Min 24h turnover (M USD)',
-    '30',
+    '5',
   ],
   [
     'thin_oi_full_size_millions',
@@ -22,12 +22,36 @@ const volatileRiskFields = [
     'Minimum thin-coin size factor',
     '0.3',
   ],
-  ['vol_spike_mult', '小时振幅异常倍数', 'Hourly range spike multiple', '4'],
+  [
+    'vol_spike_5m_mult',
+    '5m 滚动振幅异常倍数',
+    '5m rolling range multiple',
+    '8',
+  ],
+  [
+    'vol_spike_15m_mult',
+    '15m 滚动振幅异常倍数',
+    '15m rolling range multiple',
+    '6',
+  ],
+  ['vol_spike_mult', '60m 滚动振幅异常倍数', '60m rolling range multiple', '5'],
+  [
+    'vol_spike_holdoff_minutes',
+    '价格/OI 异常后禁入（分钟）',
+    'Price/OI anomaly hold-off (minutes)',
+    '30',
+  ],
+  [
+    'oi_surge_15m_pct',
+    '15m OI 剧变绝对值（%）',
+    'Absolute 15m OI change (%)',
+    '8',
+  ],
   [
     'oi_surge_1h_pct',
     '1h OI 剧变绝对值（%）',
     'Absolute 1h OI change (%)',
-    '30',
+    '15',
   ],
   [
     'fast_window_minutes',
@@ -302,17 +326,28 @@ export function RiskControlEditor({
                 {language.startsWith('zh') ? zh : en}
               </label>
               <p className="text-xs mb-2 text-fg-3">
-                {language.startsWith('zh')
-                  ? `0 = 默认 ${defaultValue}；负数 = 禁用`
-                  : `0 = default ${defaultValue}; negative = disabled`}
+                {key === 'vol_spike_holdoff_minutes'
+                  ? language.startsWith('zh')
+                    ? `留空 = 默认 ${defaultValue}；0 或负数 = 禁用`
+                    : `Empty = default ${defaultValue}; zero or negative = disabled`
+                  : language.startsWith('zh')
+                    ? `0 = 默认 ${defaultValue}；负数 = 禁用`
+                    : `0 = default ${defaultValue}; negative = disabled`}
               </p>
               <Input
                 type="number"
-                value={config[key] ?? 0}
+                value={
+                  config[key] ?? (key === 'vol_spike_holdoff_minutes' ? '' : 0)
+                }
+                placeholder={defaultValue}
                 onChange={(e) =>
                   updateField(
                     key,
-                    e.target.value === '' ? 0 : Number(e.target.value)
+                    e.target.value === ''
+                      ? key === 'vol_spike_holdoff_minutes'
+                        ? undefined
+                        : 0
+                      : Number(e.target.value)
                   )
                 }
                 disabled={disabled}

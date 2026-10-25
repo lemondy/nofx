@@ -13,11 +13,14 @@ func TestVolatileRiskDefaultsAndDisable(t *testing.T) {
 		get   func(RiskControlConfig) float64
 		def   float64
 	}{
-		{"MinQuoteVolume24hMillions", RiskControlConfig.EffectiveMinQuoteVolume24hMillions, 30},
+		{"MinQuoteVolume24hMillions", RiskControlConfig.EffectiveMinQuoteVolume24hMillions, 5},
 		{"ThinOIFullSizeMillions", func(r RiskControlConfig) float64 { return r.EffectiveThinOIFullSizeMillions(15) }, 75},
 		{"ThinOIMinSizeFactor", RiskControlConfig.EffectiveThinOIMinSizeFactor, .3},
-		{"VolSpikeMult", RiskControlConfig.EffectiveVolSpikeMult, 4},
-		{"OISurge1hPct", RiskControlConfig.EffectiveOISurge1hPct, 30},
+		{"VolSpike5mMult", RiskControlConfig.EffectiveVolSpike5mMult, 8},
+		{"VolSpike15mMult", RiskControlConfig.EffectiveVolSpike15mMult, 6},
+		{"VolSpikeMult", RiskControlConfig.EffectiveVolSpikeMult, 5},
+		{"OISurge15mPct", RiskControlConfig.EffectiveOISurge15mPct, 8},
+		{"OISurge1hPct", RiskControlConfig.EffectiveOISurge1hPct, 15},
 		{"FastWindowMinutes", RiskControlConfig.EffectiveFastWindowMinutes, 5},
 		{"FastAdverseATRMult", RiskControlConfig.EffectiveFastAdverseATRMult, 2},
 		{"FastFavorableATRMult", RiskControlConfig.EffectiveFastFavorableATRMult, 2},
@@ -64,5 +67,37 @@ func TestVolatileRiskDefaultsAndDisable(t *testing.T) {
 	var copy RiskControlConfig
 	if err := json.Unmarshal(b, &copy); err != nil || copy.EffectiveSpreadGateFailClosedThin() {
 		t.Fatal("explicit false lost in JSON")
+	}
+}
+
+func TestVolatileHoldoffOptionalDefaultAndJSON(t *testing.T) {
+	if got := (RiskControlConfig{}).EffectiveVolSpikeHoldoffMinutes(); got != 30 {
+		t.Fatal("omitted default", got)
+	}
+	for _, v := range []float64{0, -1, 15, math.NaN(), math.Inf(1)} {
+		r := RiskControlConfig{VolSpikeHoldoffMinutes: &v}
+		want := math.Max(0, v)
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			want = 30
+		}
+		if got := r.EffectiveVolSpikeHoldoffMinutes(); got != want {
+			t.Fatal(v, got, want)
+		}
+	}
+	for _, raw := range []string{`{}`, `{"vol_spike_holdoff_minutes":null}`, `{"vol_spike_holdoff_minutes":0}`, `{"vol_spike_holdoff_minutes":-1}`, `{"vol_spike_holdoff_minutes":15}`} {
+		var r, copy RiskControlConfig
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(b, &copy); err != nil {
+			t.Fatal(err)
+		}
+		if copy.EffectiveVolSpikeHoldoffMinutes() != r.EffectiveVolSpikeHoldoffMinutes() || (r.VolSpikeHoldoffMinutes == nil) != (copy.VolSpikeHoldoffMinutes == nil) {
+			t.Fatal("holdoff zero/omitted lost", raw, string(b))
+		}
 	}
 }

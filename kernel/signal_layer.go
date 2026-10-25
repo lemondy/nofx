@@ -573,15 +573,17 @@ type BiasBlock struct {
 }
 
 // SignalOptions carries the evaluation moment, the strategy's primary
-// timeframe, and the quant layer's true 1h OI change. All indicator features
+// timeframe, and sampled 15m/1h OI changes. All indicator features
 // are self-computed from closed bars — no display toggles involved.
 type SignalOptions struct {
 	EntryRoundTripCostBps float64   // disclosed cost estimate; raw research callers may pass zero
 	Now                   time.Time // zero falls back to time.Now()
 	PrimaryTF             string
-	EnableLiquiditySweep  bool // opt-in experimental evidence; default false
-	EnableFactorEnsemble  bool // opt-in experimental evidence; default false
-	OI1hPct               *float64
+	EnableLiquiditySweep  bool     // opt-in experimental evidence; default false
+	EnableFactorEnsemble  bool     // opt-in experimental evidence; default false
+	OI15mPct              *float64 // sampled contract OI, nil = unavailable
+	OI1hPct               *float64 // sampled contract OI, nil = unavailable
+	QuantOI1hPct          *float64 // existing quant context; never bypasses sampled risk freshness
 	// CurrentPrice is the live ticker price used as the support/resistance
 	// anchor (which pivot levels count as above/below). Zero falls back to
 	// data.CurrentPrice, then to each timeframe's last closed close.
@@ -688,9 +690,15 @@ type SignalOptions struct {
 	EntryRSI1hMax             float64 // RSI1H_EXHAUSTED: long RSI1h >= X / short RSI1h <= 100-X
 	ChaseMaxMove4hPct         float64 // CHASE_MOVE4H: 4h move > X% in trade direction
 	MinQuoteVolume24hMillions float64
+	VolSpike5mMult            float64
+	VolSpike15mMult           float64
 	VolSpikeMult              float64
+	VolSpikeHoldoffMinutes    float64
+	OISurge15mPct             float64
 	OISurge1hPct              float64
-	VolSpike1hRatio           *float64 // computed from raw hourly bars; nil = insufficient history
+	VolSpike5mRatio           *float64 // raw rolling bars, including the forming tail
+	VolSpike15mRatio          *float64
+	VolSpike1hRatio           *float64 // rolling 60m; legacy hourly only as last resort
 	// BTCFilterLong: altcoin longs need coin 24h return ≥ BTC's and BTC 4h
 	// closes not declining; failure emits BTC_WEAK_LONG.
 	BTCFilterLong bool
@@ -768,7 +776,14 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		MaxPct:   opt.LimitEntryOffsetMaxPct,
 	}
 
-	opt.VolSpike1hRatio = hourlyRangeSpike(data)
+	// Existing closed-bar features keep their snapshot clock. New entry gates
+	// use the caller's evaluation clock so an old snapshot cannot pass freshness.
+	if opt.Now.IsZero() {
+		opt.Now = time.Now()
+	}
+	if !volatileExempt(symbol) && (opt.VolSpike5mMult > 0 || opt.VolSpike15mMult > 0 || opt.VolSpikeMult > 0) {
+		opt.VolSpike5mRatio, opt.VolSpike15mRatio, opt.VolSpike1hRatio = volatilityRangeSpikes(data, opt.Now)
+	}
 
 	sig := &SymbolSignal{
 		rrCostBps:        opt.EntryRoundTripCostBps,
@@ -867,7 +882,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		f := data.FundingRate
 		d.FundingRate = &f
 	}
-	if opt.OI1hPct != nil {
+	if opt.QuantOI1hPct != nil {
+		d.OIChange1hPct = opt.QuantOI1hPct
+	} else if opt.OI1hPct != nil {
 		d.OIChange1hPct = opt.OI1hPct
 	}
 	if opt.Quant != nil {
