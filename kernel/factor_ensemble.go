@@ -14,6 +14,7 @@ import (
 
 	"nofx/logger"
 	"nofx/market"
+	"nofx/telegram/notify"
 )
 
 // FactorEnsembleRef is opt-in research evidence only. No gate, score,
@@ -182,6 +183,69 @@ func (c *factorEnsembleFileCache) warnLocked(path string, err error) {
 	}
 }
 
+const (
+	// factorEnsembleMaxAgeDays is the (unchanged) discard threshold: an as_of
+	// older than this many UTC days is dropped. Age == factorEnsembleWarnAgeDays
+	// up to the threshold is "expiring".
+	factorEnsembleMaxAgeDays  = 3
+	factorEnsembleWarnAgeDays = 2
+	factorEnsembleLogEvery    = time.Hour
+	factorEnsembleNotifyEvery = 12 * time.Hour
+)
+
+// factorEnsembleStaleNotify delivers the staleness alert; tests replace it.
+// It is a var, not a direct call, so the default Telegram path stays optional.
+var factorEnsembleStaleNotify = func(asOf string, ageDays int, expired bool) {
+	state, effect := "即将过期", "即将失去"
+	if expired {
+		state, effect = "已过期", "已失去"
+	}
+	notify.Notify("ALERT", "因子 ensemble", fmt.Sprintf(
+		"<b>⚠️ live_scores %s</b>\nas_of <code>%s</code>，已 %d 天未更新。\n影响：因子 ensemble 实验候选组%s该字段(factor_ensemble)。\n排查：data/factor_mining/nightly.log；Binance 代理 127.0.0.1:7890 是否可用。",
+		state, notify.Escape(asOf), ageDays, effect))
+}
+
+// factorEnsembleStaleState rate-limits the stale-snapshot log and alert. It is
+// independent of factorEnsembleFileCache.lastWarn so a file-parse warning and a
+// staleness warning never suppress each other. Index 0 = expiring, 1 = expired.
+var factorEnsembleStaleState struct {
+	mu         sync.Mutex
+	lastLog    [2]time.Time
+	lastNotify [2]time.Time
+}
+
+// warnFactorEnsembleStale logs (hourly) and alerts (every 12h) once per state
+// when the snapshot is about to expire or already discarded. now is the caller's
+// clock so tests can drive the budgets.
+func warnFactorEnsembleStale(asOf string, ageDays int, now time.Time) {
+	expired := ageDays > factorEnsembleMaxAgeDays
+	idx := 0
+	if expired {
+		idx = 1
+	}
+	st := &factorEnsembleStaleState
+	st.mu.Lock()
+	doLog := st.lastLog[idx].IsZero() || now.Sub(st.lastLog[idx]) >= factorEnsembleLogEvery
+	if doLog {
+		st.lastLog[idx] = now
+	}
+	doNotify := st.lastNotify[idx].IsZero() || now.Sub(st.lastNotify[idx]) >= factorEnsembleNotifyEvery
+	if doNotify {
+		st.lastNotify[idx] = now
+	}
+	st.mu.Unlock()
+	if doLog {
+		if expired {
+			logger.Warnf("[factor-ensemble] factor ensemble evidence unavailable: live_scores as_of %s is %d days old (> %d), dropped; check data/factor_mining/nightly.log and the Binance proxy", asOf, ageDays, factorEnsembleMaxAgeDays)
+		} else {
+			logger.Warnf("[factor-ensemble] factor ensemble evidence expiring: live_scores as_of %s is %d days old (dropped after %d); check data/factor_mining/nightly.log and the Binance proxy", asOf, ageDays, factorEnsembleMaxAgeDays)
+		}
+	}
+	if doNotify && factorEnsembleStaleNotify != nil {
+		factorEnsembleStaleNotify(asOf, ageDays, expired)
+	}
+}
+
 func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef {
 	if data == nil {
 		return nil
@@ -193,7 +257,10 @@ func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef 
 	// Recheck age even on cache hits: an unchanged file expires at UTC midnight.
 	utc := now.UTC()
 	today := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
-	if scores.asOfDate.Before(today.AddDate(0, 0, -3)) {
+	if ageDays := int(today.Sub(scores.asOfDate).Hours() / 24); ageDays >= factorEnsembleWarnAgeDays {
+		warnFactorEnsembleStale(scores.AsOf, ageDays, now)
+	}
+	if scores.asOfDate.Before(today.AddDate(0, 0, -factorEnsembleMaxAgeDays)) {
 		return nil
 	}
 	// Scope is per symbol. Prefer the core everywhere if a malformed snapshot
