@@ -31,6 +31,21 @@ func DB() *gorm.DB {
 // non-blocking; NORMAL sync in WAL is crash-safe for app restarts; a small
 // pool lets reads run in parallel (SQLite still serializes writers, and
 // busy_timeout covers the contention window).
+//
+// 2026-10-25 (us-stock 保护单对账 "database is locked"): crypto cycles are
+// aligned to 5-minute boundaries, so their decision-row commits arrive in
+// bursts; a deferred SELECT-then-UPDATE transaction (GORM's default BEGIN)
+// either queued past busy_timeout or hit BUSY_SNAPSHOT — a stale-snapshot
+// upgrade that busy_timeout does NOT retry, failing instantly. Note the
+// dialect silently drops clause.Locking("UPDATE") ("SQLite3 does not support
+// row-level locking"), so nothing reserves the writer up front. _txlock=
+// immediate makes every BEGIN take the write lock before the first read, so
+// busy_timeout actually governs and BUSY_SNAPSHOT cannot occur. All
+// db.Transaction blocks in this codebase are short pure-SQL blocks (audited
+// 2026-10-25: no network calls inside any of them), so taking the writer at
+// BEGIN adds no lock-hold of its own; busy_timeout is raised to 15s to cover
+// the aligned burst, and replay-safe store writes retry once on busy
+// (retryOnceOnBusy).
 func InitGorm(dbPath string) (*gorm.DB, error) {
 	// Per-connection pragmas ride the DSN so EVERY pooled connection gets
 	// them (pool >1 makes the old one-shot db.Exec pragmas insufficient —
@@ -50,7 +65,7 @@ func InitGorm(dbPath string) (*gorm.DB, error) {
 	if strings.Contains(dsn, "?") {
 		sep = "&"
 	}
-	dsn = dsn + sep + "_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000"
+	dsn = dsn + sep + "_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=15000&_txlock=immediate"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 		// Use UTC for all auto-generated timestamps (autoCreateTime, autoUpdateTime)
