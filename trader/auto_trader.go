@@ -225,6 +225,8 @@ type AutoTrader struct {
 	openTPMu              sync.RWMutex
 	closeIntents          map[string]closeIntent // program close intents for exit classification (symbol|side → why)
 	closeIntentsMu        sync.Mutex
+	exitReplayRetries     map[int64]exitReplayRetry // per-row transient replay failures; guarded by exitReplayMu
+	exitReplayMu          sync.Mutex
 	positionExitMode      map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
 
 	// us_stock (design 2026-10-09): live spot executor (nil in paper mode),
