@@ -1,8 +1,9 @@
 // Package netmeter counts the process's outbound network usage for the
-// settings-page traffic monitor: cumulative HTTP payload bytes (request line
-// path+query, request bodies and response bodies) per host and normalized path
-// since process start, plus wire-level bytes for raw connections (websocket
-// feeds) where per-host attribution at the HTTP layer does not exist.
+// settings-page traffic monitor: cumulative HTTP bytes (request line path+query,
+// request bodies and response bodies as transferred, before gzip decompression)
+// per host and normalized path since process start, plus wire-level bytes for
+// raw connections (websocket feeds) where per-host attribution at the HTTP layer
+// does not exist.
 //
 // Counting is deliberately at the RoundTripper layer, not the socket layer:
 // behind the local proxy a socket dial only ever targets 127.0.0.1:7890, so
@@ -14,6 +15,7 @@
 package netmeter
 
 import (
+	"compress/gzip"
 	"context"
 	"io"
 	"net"
@@ -30,7 +32,7 @@ var startedAt = time.Now()
 type hostStats struct {
 	requests atomic.Int64
 	up       atomic.Int64 // request payload bytes
-	down     atomic.Int64 // response payload bytes
+	down     atomic.Int64 // response body bytes before gzip decompression
 }
 
 var (
@@ -122,8 +124,8 @@ func Unwrap(rt http.RoundTripper) http.RoundTripper {
 	}
 }
 
-// countingReadCloser tallies bytes as the consumer reads them; used when the
-// length is unknown ahead of time (chunked bodies).
+// countingReadCloser tallies bytes as the consumer reads them; used for raw
+// gzip bodies and when the length is unknown ahead of time (chunked bodies).
 type countingReadCloser struct {
 	io.ReadCloser
 	onRead func(int64)
@@ -137,7 +139,63 @@ func (c *countingReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// gzipReadCloser initializes the decoder on the first Read, like net/http.
+// The underlying body is counted before decompression and is never read in full
+// up front, so flushed gzip streams remain readable as their data arrives.
+type gzipReadCloser struct {
+	body   io.ReadCloser
+	mu     sync.Mutex // protects the decoder, including Close concurrent with Read
+	zr     *gzip.Reader
+	zerr   error // sticky gzip header error
+	closed atomic.Bool
+}
+
+func (g *gzipReadCloser) Read(p []byte) (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed.Load() {
+		return 0, http.ErrBodyReadAfterClose
+	}
+	if g.zr == nil {
+		if g.zerr == nil {
+			g.zr, g.zerr = gzip.NewReader(g.body)
+		}
+		if g.zerr != nil {
+			return 0, g.zerr
+		}
+	}
+	return g.zr.Read(p)
+}
+
+func (g *gzipReadCloser) Close() error {
+	g.closed.Store(true)
+	// Close the body first to unblock a pending Read before taking the lock.
+	err := g.body.Close()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.zr != nil {
+		// The decoder may repeat an earlier Read error from Close. Keep
+		// net/http's Close semantics, which return the body Close error.
+		g.zr.Close()
+	}
+	return err
+}
+
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Neither our Accept-Encoding header nor an upload-counting body wrapper
+	// may mutate the caller's request.
+	req = req.Clone(req.Context())
+	requestedGzip := req.Header.Get("Accept-Encoding") == "" &&
+		req.Header.Get("Range") == "" && req.Method != http.MethodHead
+	if requestedGzip {
+		if req.Header == nil {
+			req.Header = make(http.Header)
+		}
+		// Owning this header prevents the base Transport's transparent
+		// decompression, letting us count compressed body bytes instead.
+		req.Header.Set("Accept-Encoding", "gzip")
+	}
+
 	host := normalizeHost(req.URL.Host)
 	h := hostFor(host)
 	p := paths.forPath(host, normalizePath(req.URL.EscapedPath()))
@@ -166,7 +224,14 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 	if resp.Body != nil {
-		if resp.ContentLength > 0 {
+		if requestedGzip && strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+			body := &countingReadCloser{ReadCloser: resp.Body, onRead: func(n int64) { addDown(h, p, n) }}
+			resp.Body = &gzipReadCloser{body: body}
+			resp.Header.Del("Content-Encoding")
+			resp.Header.Del("Content-Length")
+			resp.ContentLength = -1
+			resp.Uncompressed = true
+		} else if resp.ContentLength > 0 {
 			addDown(h, p, resp.ContentLength)
 		} else {
 			resp.Body = &countingReadCloser{ReadCloser: resp.Body, onRead: func(n int64) { addDown(h, p, n) }}
@@ -223,7 +288,7 @@ type SnapshotData struct {
 	Since    time.Time `json:"since"`
 	Requests int64     `json:"requests"`
 	HTTPUp   int64     `json:"http_up"`   // payload bytes, header/TLS excluded
-	HTTPDown int64     `json:"http_down"` // payload bytes, header/TLS excluded
+	HTTPDown int64     `json:"http_down"` // response body bytes before gzip decompression, header/TLS excluded
 	WsUp     int64     `json:"ws_up"`     // raw-conn wire bytes (feeds)
 	WsDown   int64     `json:"ws_down"`   // raw-conn wire bytes (feeds)
 }
