@@ -60,6 +60,13 @@ export interface NetTraffic {
   ws_up: number
   ws_down: number
   hosts: NetTrafficHost[]
+  paths?: {
+    host: string
+    path: string
+    requests: number
+    up: number
+    down: number
+  }[]
 }
 
 export const netTrafficApi = {
