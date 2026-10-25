@@ -124,8 +124,9 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 		out.AccountBreakerActive = out.AccountDrawdownCap > 0 && out.AccountDrawdownPct >= out.AccountDrawdownCap
 	}
 	at.runtimeMu.RLock()
-	out.ReduceOnly = at.safeMode || at.authBlocked
+	out.ReduceOnly = at.safeMode
 	at.runtimeMu.RUnlock()
+	out.ReduceOnly = out.ReduceOnly || at.isAuthBlocked()
 	out.ProtectionFault = at.protectionFaultReason()
 
 	out.LossStreakBans = []LossStreakBan{}

@@ -71,11 +71,13 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	}
 
 	// 0.5 Binance auth/IP rejection: configuration problem, not transient —
-	// pause all trading (including AI calls) until the operator fixes it.
-	if at.authBlocked {
-		logger.Errorf("🚨 [%s] Auth/IP blocked: %s — skipping cycle #%d. Add the logged egress IP to the Binance API key whitelist and restart the trader.",
-			at.name, at.authBlockedReason, at.callCount)
-		record.ErrorMessage = fmt.Sprintf("Auth/IP blocked: %s", at.authBlockedReason)
+	// pause all trading (including AI calls) until recovery is probed OK (the
+	// minute monitor probes read-only; no restart needed). Order maintenance and
+	// the protection watchdog above keep running exactly as before.
+	if blocked, reason := at.authBlockStatus(); blocked {
+		logger.Errorf("🚨 [%s] Auth/IP blocked: %s — skipping cycle #%d. Fix the egress IP/API key whitelist; recovery is probed automatically, no restart needed.",
+			at.name, reason, at.callCount)
+		record.ErrorMessage = fmt.Sprintf("Auth/IP blocked: %s", reason)
 		at.saveDecision(record)
 		return nil
 	}
@@ -381,6 +383,10 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 			logger.Infof("⏹ Trader stopped during decision execution, aborting remaining decisions")
 			break
 		}
+		if at.isAuthBlocked() {
+			logger.Warnf("🚨 [%s] Auth/IP blocked during execution, aborting remaining decisions", at.name)
+			break
+		}
 
 		actionRecord := store.DecisionAction{
 			Action:     d.Action,
@@ -423,10 +429,8 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 			}
 			// A Binance auth/IP rejection during order execution pauses the
 			// trader immediately — retrying orders with a rejected key is noise.
-			if binance.IsAuthOrIPError(err) && !at.authBlocked {
-				at.authBlocked = true
-				at.authBlockedReason = err.Error()
-				notify.Notify("ALERT", at.name, "<b>🚨 Binance 认证/IP 校验失败，交易已暂停</b>\n请把日志中的出口 IP 加入 API Key 白名单后重启交易器。")
+			if binance.IsAuthOrIPError(err) {
+				at.markAuthBlocked(err)
 			}
 			actionRecord.Error = err.Error()
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s failed: %v", d.Symbol, d.Action, err))
@@ -564,10 +568,8 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	// 1. Get account information
 	balance, err := at.trader.GetBalance()
 	if err != nil {
-		if binance.IsAuthOrIPError(err) && !at.authBlocked {
-			at.authBlocked = true
-			at.authBlockedReason = err.Error()
-			notify.Notify("ALERT", at.name, "<b>🚨 Binance 认证/IP 校验失败，交易已暂停</b>\n请把日志中的出口 IP 加入 API Key 白名单后重启交易器。")
+		if binance.IsAuthOrIPError(err) {
+			at.markAuthBlocked(err)
 		}
 		return nil, fmt.Errorf("failed to get account balance: %w", err)
 	}
@@ -599,10 +601,8 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 	// 2. Get position information
 	positions, err := at.trader.GetPositions()
 	if err != nil {
-		if binance.IsAuthOrIPError(err) && !at.authBlocked {
-			at.authBlocked = true
-			at.authBlockedReason = err.Error()
-			notify.Notify("ALERT", at.name, "<b>🚨 Binance 认证/IP 校验失败，交易已暂停</b>\n请把日志中的出口 IP 加入 API Key 白名单后重启交易器。")
+		if binance.IsAuthOrIPError(err) {
+			at.markAuthBlocked(err)
 		}
 		return nil, fmt.Errorf("failed to get positions: %w", err)
 	}

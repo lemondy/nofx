@@ -39,9 +39,9 @@ func (at *AutoTrader) pendingAccountHaltReason() string {
 			return "account drawdown breaker active"
 		}
 		peer.runtimeMu.RLock()
-		reduceOnly := peer.safeMode || peer.authBlocked
+		reduceOnly := peer.safeMode
 		peer.runtimeMu.RUnlock()
-		if reduceOnly {
+		if reduceOnly || peer.isAuthBlocked() {
 			return "account strategy is in reduce-only mode"
 		}
 	}

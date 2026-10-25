@@ -212,8 +212,6 @@ type AutoTrader struct {
 	consecutiveAIFailures int                         // Consecutive AI call failures
 	safeMode              bool                        // Safe mode: no new positions, protect existing ones
 	safeModeReason        string                      // Why safe mode was activated
-	authBlocked           bool                        // Binance auth/IP rejection (-2015/-2014): trading paused until operator fixes config
-	authBlockedReason     string                      // Why auth blocking was activated
 	gateNotify            map[string]*gateNotifyState // hard-gate push dedup (symbol → streak)
 	gateNotifyMu          sync.Mutex
 	pendingEntries        map[string]*pendingEntry // limit-entry state machine (symbol|side → order)
@@ -228,6 +226,20 @@ type AutoTrader struct {
 	exitReplayRetries     map[int64]exitReplayRetry // per-row transient replay failures; guarded by exitReplayMu
 	exitReplayMu          sync.Mutex
 	positionExitMode      map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
+
+	// Binance auth/IP recovery state is guarded together by authMu.
+	authMu             sync.Mutex
+	authBlocked        bool
+	authBlockedReason  string
+	authBlockedSince   time.Time
+	authNextProbeAt    time.Time
+	authProbeCount     int
+	authLastAlertAt    time.Time
+	authLastProbeError string
+	authProbeInFlight  bool
+	authGeneration     uint64
+	authNow            func() time.Time // nil = time.Now; set before starting (tests)
+	authAlertInterval  time.Duration    // zero = authBlockedAlertInterval; tests may override
 
 	// us_stock (design 2026-10-09): live spot executor (nil in paper mode),
 	// injectable scheduler clock (nil = time.Now) and run state.
