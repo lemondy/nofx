@@ -722,6 +722,29 @@ type RiskControlConfig struct {
 	// trade direction -> next-4h -3.1%.
 	// Unit: percent. 0 = default 6; negative = off. (CODE ENFORCED)
 	ChaseMaxMove4hPct float64 `json:"chase_max_move4h_pct"`
+	// Thin/volatile crypto controls: zero = safe default, negative = off.
+	// 30M turnover = 2× the 15M default candidate OI floor: require daily
+	// turnover to cover that inventory twice, rather than accepting a static pool.
+	MinQuoteVolume24hMillions float64 `json:"min_quote_volume_24h_millions"`
+	// Full size at 5× candidate OI floor; minimum discount factor defaults to .3.
+	ThinOIFullSizeMillions float64 `json:"thin_oi_full_size_millions"`
+	ThinOIMinSizeFactor    float64 `json:"thin_oi_min_size_factor"`
+	// 3× the preceding 24 hourly median ranges filters exceptional moves,
+	// while allowing normal hourly noise. OI surge is absolute, both directions.
+	VolSpikeMult               float64 `json:"vol_spike_mult"`
+	OISurge1hPct               float64 `json:"oi_surge_1h_pct"`
+	FastWindowMinutes          float64 `json:"fast_window_minutes"`
+	FastAdverseATRMult         float64 `json:"fast_adverse_atr_mult"`
+	FastFavorableATRMult       float64 `json:"fast_favorable_atr_mult"`
+	FastAdverseReduceFrac      float64 `json:"fast_adverse_reduce_frac"`
+	FastAdverseCooldownMinutes float64 `json:"fast_adverse_cooldown_minutes"`
+	// Fixed price-change fallback (not ROE), when the 1h ATR is unavailable.
+	FastFallbackPct float64 `json:"fast_fallback_pct"`
+	// MARK_PRICE below 3× candidate OI floor; negative disables this feature.
+	ThinOIMarkStopMillions float64 `json:"thin_oi_mark_stop_millions"`
+	// nil/true = reject thin/unknown-altcoin opens when spread cannot be read.
+	SpreadGateFailClosedThin *bool `json:"spread_gate_fail_closed_thin,omitempty"`
+
 	// BTCFilterLong: nil/true = altcoin longs need coin 24h return ≥ BTC's
 	// and BTC 4h closes not declining (BTC_WEAK_LONG).
 	BTCFilterLong *bool `json:"btc_filter_long,omitempty"`

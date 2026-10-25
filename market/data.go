@@ -242,6 +242,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 
 	// Get OI data
 	oiData, oiOK := fetchOIDataOrZero(symbol)
+	cacheOIPrice(symbol, currentPrice)
 
 	// Get Funding Rate + measured settlement interval + settled history
 	fundingRate, fundingErr := getFundingRate(symbol)
@@ -474,6 +475,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 
 	// Get OI data
 	oiData, oiOK := fetchOIDataOrZero(symbol)
+	cacheOIPrice(symbol, currentPrice)
 
 	// Get Funding Rate + measured settlement interval + settled history
 	fundingRate, fundingErr := getFundingRate(symbol)
@@ -629,6 +631,7 @@ var (
 
 // getOpenInterestData retrieves OI data (cached oiDataTTL; failures are never cached).
 func getOpenInterestData(symbol string) (*OIData, error) {
+	symbol = Normalize(symbol)
 	oiDataMu.Lock()
 	if e, ok := oiDataCache[symbol]; ok && oiNow().Sub(e.at) < oiDataTTL {
 		cp := *e.data
@@ -646,6 +649,7 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 	}
 	cp := *d
 	oiDataCache[symbol] = oiDataEntry{data: &cp, at: oiNow()}
+	recordOISampleLocked(symbol, oiNow(), cp.Latest)
 	oiDataMu.Unlock()
 	return d, nil
 }

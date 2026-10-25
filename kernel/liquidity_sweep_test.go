@@ -389,8 +389,8 @@ func TestLiquiditySweepPromptOptIn(t *testing.T) {
 		limit    bool
 		baseline string
 	}{
-		{false, "caaa7d3670c69c40871f8b817480145a867f32ff4d12bf5c182792291887f78c"},
-		{true, "57768d1bf8a4c180331ea6b75fd9afda43057b05ef3741f8d663aedce79973b3"},
+		{false, "381171419a32e8fe4bc56bac9b4364c2112dc60abb2d7a8b1effee5ec4b544b4"},
+		{true, "14a7e33e93de26a11161036aca06a155701d7f551134ea76f261f28302471206"},
 	} {
 		cfg := &store.StrategyConfig{Language: "zh"}
 		cfg.RiskControl.LimitEntryEnabled = tc.limit
@@ -399,7 +399,7 @@ func TestLiquiditySweepPromptOptIn(t *testing.T) {
 			t.Fatal("disabled prompt contains liquidity_sweep")
 		}
 		if got := fmt.Sprintf("%x", sha256.Sum256([]byte(disabled))); got != tc.baseline {
-			t.Fatalf("disabled prompt differs from pre-feature bytes: limit=%v sha256=%s", tc.limit, got)
+			t.Fatalf("disabled prompt differs from baseline (including volatile-risk codes): limit=%v sha256=%s", tc.limit, got)
 		}
 		cfg.Indicators.EnableLiquiditySweep = true
 		enabled := NewStrategyEngine(cfg).BuildSystemPrompt(100, "")

@@ -839,3 +839,19 @@ func binanceBTC4hCloses(limit int) []float64 {
 	}
 	return out
 }
+
+// CachedQuoteVolume24hUSD is for execution/pending rechecks. It NEVER
+// initiates another REST request; missing or >5m snapshots fail open.
+func CachedQuoteVolume24hUSD(symbol string) float64 {
+	tickersMu.Lock()
+	defer tickersMu.Unlock()
+	if time.Since(tickersFetched) > rankingCacheTTL {
+		return 0
+	}
+	for _, t := range tickersCache {
+		if t.Symbol == market.Normalize(symbol) {
+			return t.QuoteVolume
+		}
+	}
+	return 0
+}

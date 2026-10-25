@@ -3,6 +3,76 @@ import { Shield, AlertTriangle } from 'lucide-react'
 import type { RiskControlConfig } from '../../types'
 import { riskControl, ts } from '../../i18n/strategy-translations'
 
+const volatileRiskFields = [
+  [
+    'min_quote_volume_24h_millions',
+    '24h 最低成交额（百万美元）',
+    'Min 24h turnover (M USD)',
+    '30',
+  ],
+  [
+    'thin_oi_full_size_millions',
+    '满仓 OI 门槛（百万美元）',
+    'Full-size OI (M USD)',
+    '5 × min OI',
+  ],
+  [
+    'thin_oi_min_size_factor',
+    '薄币最小仓位系数',
+    'Minimum thin-coin size factor',
+    '0.3',
+  ],
+  ['vol_spike_mult', '小时振幅异常倍数', 'Hourly range spike multiple', '3'],
+  [
+    'oi_surge_1h_pct',
+    '1h OI 剧变绝对值（%）',
+    'Absolute 1h OI change (%)',
+    '30',
+  ],
+  [
+    'fast_window_minutes',
+    '快速保护窗口（分钟）',
+    'Fast protection window (minutes)',
+    '5',
+  ],
+  [
+    'fast_adverse_atr_mult',
+    '快速逆向波动 ATR 倍数',
+    'Fast adverse ATR multiple',
+    '2',
+  ],
+  [
+    'fast_favorable_atr_mult',
+    '快速顺向波动 ATR 倍数',
+    'Fast favorable ATR multiple',
+    '2',
+  ],
+  [
+    'fast_adverse_reduce_frac',
+    '快速减仓比例（0–0.75）',
+    'Fast reduction fraction (0–0.75)',
+    '0.5',
+  ],
+  [
+    'fast_adverse_cooldown_minutes',
+    '快速减仓冷却（分钟）',
+    'Fast reduction cooldown (minutes)',
+    '30',
+  ],
+  [
+    'fast_fallback_pct',
+    'ATR 缺失时价格波动阈值（%）',
+    'Price move fallback without ATR (%)',
+    '3',
+  ],
+  [
+    'thin_oi_mark_stop_millions',
+    '标记价止损 OI 门槛（百万美元）',
+    'Mark-price stop OI threshold (M USD)',
+    '3 × min OI',
+  ],
+] as const
+
 interface RiskControlEditorProps {
   config: RiskControlConfig
   onChange: (config: RiskControlConfig) => void
@@ -221,6 +291,51 @@ export function RiskControlEditor({
             <p className="text-xs mt-2 font-medium text-up">
               {`当前生效: ${(config.chase_max_move4h_pct ?? 0) === 0 ? 6 : (config.chase_max_move4h_pct ?? 0) < 0 ? '禁用' : config.chase_max_move4h_pct}%`}
             </p>
+          </div>
+
+          {volatileRiskFields.map(([key, zh, en, defaultValue]) => (
+            <div
+              key={key}
+              className="p-3 rounded-lg bg-surface-2 border border-line"
+            >
+              <label className="block text-[13px] mb-1 text-fg-2">
+                {language.startsWith('zh') ? zh : en}
+              </label>
+              <p className="text-xs mb-2 text-fg-3">
+                {language.startsWith('zh')
+                  ? `0 = 默认 ${defaultValue}；负数 = 禁用`
+                  : `0 = default ${defaultValue}; negative = disabled`}
+              </p>
+              <Input
+                type="number"
+                value={config[key] ?? 0}
+                onChange={(e) =>
+                  updateField(
+                    key,
+                    e.target.value === '' ? 0 : Number(e.target.value)
+                  )
+                }
+                disabled={disabled}
+                min={-1}
+                step="any"
+                className="w-32 px-3 bg-surface-2 border border-line text-fg num text-right"
+              />
+            </div>
+          ))}
+          <div className="p-3 rounded-lg bg-surface-2 border border-line">
+            <label className="flex items-center gap-2 text-[13px] text-fg-2">
+              <input
+                type="checkbox"
+                checked={config.spread_gate_fail_closed_thin ?? true}
+                onChange={(e) =>
+                  updateField('spread_gate_fail_closed_thin', e.target.checked)
+                }
+                disabled={disabled}
+              />
+              {language.startsWith('zh')
+                ? '薄币盘口缺失时拒绝开仓（默认开启）'
+                : 'Block thin-coin opens when the order book is unavailable (default on)'}
+            </label>
           </div>
 
           <div className="p-3 rounded-lg bg-surface-2 border border-line">

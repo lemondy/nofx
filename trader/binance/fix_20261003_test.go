@@ -13,8 +13,9 @@ import (
 )
 
 func TestRejectedStopReplacementRestoresOriginalExactID(t *testing.T) {
-	for _, visible := range []bool{true, false} {
-		t.Run(strconv.FormatBool(visible), func(t *testing.T) {
+	for _, tc := range []struct{ visible, thin bool }{{true, false}, {false, false}, {true, true}, {false, true}} {
+		visible := tc.visible
+		t.Run(strconv.FormatBool(visible)+"_thin_"+strconv.FormatBool(tc.thin), func(t *testing.T) {
 			posts := 0
 			cancelled := []string{}
 			oldLive := true
@@ -39,6 +40,14 @@ func TestRejectedStopReplacementRestoresOriginalExactID(t *testing.T) {
 						oldLive = false
 						_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": "200"})
 						return
+					}
+					_ = r.ParseForm()
+					wantWorkingType := "CONTRACT_PRICE"
+					if tc.thin {
+						wantWorkingType = "MARK_PRICE"
+					}
+					if got := r.Form.Get("workingType"); got != wantWorkingType {
+						t.Errorf("retry/restore workingType=%s want %s", got, wantWorkingType)
 					}
 					posts++
 					if posts <= 2 {
@@ -65,6 +74,7 @@ func TestRejectedStopReplacementRestoresOriginalExactID(t *testing.T) {
 			client.BaseURL = srv.URL
 			client.HTTPClient = srv.Client()
 			trader := &FuturesTrader{client: client}
+			trader.oiValueFn = func(string) (float64, bool) { return 10, tc.thin }
 			err := trader.SetStopLoss("XUSDT", "LONG", 1, 99)
 			if err == nil || posts != 3 || len(cancelled) != 1 || cancelled[0] != "1" {
 				t.Fatalf("replacement err=%v posts=%d canceled=%v", err, posts, cancelled)

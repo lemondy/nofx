@@ -683,10 +683,14 @@ type SignalOptions struct {
 	// entry_rsi1h_max / chase_max_move4h_pct, resolved by the Effective*
 	// accessors). All <=0 = that check disabled. Measured from the gate's
 	// entry price; bstock symbols exempt; missing data fails open.
-	ChaseMaxEMA20_1hPct   float64 // CHASE_EMA20_1H: entry > X% beyond 1h EMA20 in trade direction
-	CounterMaxEMA20_1hPct float64 // COUNTER_EMA20_1H: entry > X% on the wrong side of 1h EMA20
-	EntryRSI1hMax         float64 // RSI1H_EXHAUSTED: long RSI1h >= X / short RSI1h <= 100-X
-	ChaseMaxMove4hPct     float64 // CHASE_MOVE4H: 4h move > X% in trade direction
+	ChaseMaxEMA20_1hPct       float64 // CHASE_EMA20_1H: entry > X% beyond 1h EMA20 in trade direction
+	CounterMaxEMA20_1hPct     float64 // COUNTER_EMA20_1H: entry > X% on the wrong side of 1h EMA20
+	EntryRSI1hMax             float64 // RSI1H_EXHAUSTED: long RSI1h >= X / short RSI1h <= 100-X
+	ChaseMaxMove4hPct         float64 // CHASE_MOVE4H: 4h move > X% in trade direction
+	MinQuoteVolume24hMillions float64
+	VolSpikeMult              float64
+	OISurge1hPct              float64
+	VolSpike1hRatio           *float64 // computed from raw hourly bars; nil = insufficient history
 	// BTCFilterLong: altcoin longs need coin 24h return ≥ BTC's and BTC 4h
 	// closes not declining; failure emits BTC_WEAK_LONG.
 	BTCFilterLong bool
@@ -763,6 +767,8 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		MinPct:   opt.LimitEntryOffsetMinPct,
 		MaxPct:   opt.LimitEntryOffsetMaxPct,
 	}
+
+	opt.VolSpike1hRatio = hourlyRangeSpike(data)
 
 	sig := &SymbolSignal{
 		rrCostBps:        opt.EntryRoundTripCostBps,
@@ -1889,6 +1895,7 @@ func negativeEdgeAligned(sig *SymbolSignal, isLong bool) bool {
 // METHODOLOGY stop (stop_plan), data sufficiency, min-size dead zone,
 // loss-streak ban, stock weekend. allowed = nothing failed.
 func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
+	volatileCodes := volatileEntryCodes(sig.Symbol, opt)
 	suppressAnchorsAgainstRegimeLine(sig, opt.EntryTimingGate)
 	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
 	bstockDailyReady := true
@@ -1999,6 +2006,9 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			if d := ema20Stretch4hPct(sig); d > opt.LongMaxEMA20DistPct {
 				add(fmt.Sprintf("EMA20_STRETCH_%.1f_GT_%.0f", d, opt.LongMaxEMA20DistPct))
 			}
+		}
+		for _, code := range volatileCodes {
+			add(code)
 		}
 		for _, code := range antiChaseCodes(sig, g.EntryPrice, isLong, opt) {
 			add(code)

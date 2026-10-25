@@ -414,13 +414,22 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			logger.Infof("📊 Drawdown monitoring: %s %s | Profit: %.2f%% | Peak: %.2f%% | Drawdown: %.2f%%",
 				symbol, side, currentPnLPct, peakPnLPct, drawdownPct)
 		}
+		if !protectClose {
+			fastMark := markPrice
+			if r := at.realtimeState(); r != nil && r.marks != nil {
+				if v, age, ok := r.marks.MarkPrice(symbol); ok && age >= 0 && age <= 10*time.Second && v > 0 {
+					fastMark = v
+				}
+			}
+			at.processFastMove(pos, fastMark, at.cachedFastATR(symbol), time.Now())
+		}
 	}
 }
 
 // ensureBreakevenBeforeAutomatedTrim serializes mixed-unit profit tiers: an
 // ROE-percent trim may fire before an R tier, but it may never reduce the
 // position while the remainder still carries loss-side stop risk.
-func (at *AutoTrader) ensureBreakevenBeforeAutomatedTrim(symbol, side string, entryPrice, markPrice float64) error {
+func (at *AutoTrader) ensureBreakevenBeforeAutomatedTrim(symbol, side string, entryPrice, markPrice float64, snapshotQty ...float64) error {
 	if entryPrice <= 0 || markPrice <= 0 {
 		return fmt.Errorf("entry/mark unavailable")
 	}
@@ -431,7 +440,7 @@ func (at *AutoTrader) ensureBreakevenBeforeAutomatedTrim(symbol, side string, en
 	if (side == "long" && markPrice <= entryPrice) || (side == "short" && markPrice >= entryPrice) {
 		return fmt.Errorf("position is not profitable at mark %.6g", markPrice)
 	}
-	if err := at.moveStopExchange(symbol, side, entryPrice); err != nil {
+	if err := at.moveStopExchange(symbol, side, entryPrice, snapshotQty...); err != nil {
 		return err
 	}
 	at.SetRecordedStopLoss(symbol, side, entryPrice)
@@ -509,6 +518,9 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 	delete(at.r1TrimDone, posKey)
 	delete(at.partialTrimmed, posKey)
 	at.tpTrimMutex.Unlock()
+	at.fastMovesMu.Lock()
+	delete(at.fastMoves, posKey)
+	at.fastMovesMu.Unlock()
 	// The TP-runner flag shares the same lifecycle: without this delete a
 	// re-opened symbol_side inherits "runner done" — the fixed TP would
 	// never convert to the trend-run again and the watchdog would refuse to
@@ -939,7 +951,8 @@ func atrPercentFromSeries(tf *market.TimeframeSeriesData) float64 {
 // clampSizeToRisk caps the position value at equity × RiskPerTradePct% ÷
 // stop-distance% — sizing derives from the stop, never the other way round
 // (framework: 单笔风险金额固定,止损越远仓位越小). Returns the capped size.
-func (at *AutoTrader) clampSizeToRisk(decision *kernel.Decision, sizeUSD, equity, livePrice float64) float64 {
+func (at *AutoTrader) clampSizeToRisk(decision *kernel.Decision, sizeUSD, equity, livePrice float64) (result float64) {
+	defer func() { result = at.discountThinOISize(decision.Symbol, result) }()
 	riskPct := at.config.StrategyConfig.RiskControl.EffectiveRiskPerTradePct()
 	if equity <= 0 || livePrice <= 0 || decision.StopLoss <= 0 || sizeUSD <= 0 {
 		return sizeUSD
@@ -965,14 +978,14 @@ func (at *AutoTrader) clampSizeToRisk(decision *kernel.Decision, sizeUSD, equity
 
 // topOfBookSpreadPct returns the order-book spread as a percent of mid:
 // (bestAsk − bestBid) / ((bestAsk+bestBid)/2) × 100. 0 on malformed input —
-// the spread gate fails open, never blocks on unusable data.
+// the caller chooses fail-open/closed on unusable data.
 func topOfBookSpreadPct(bids, asks [][]float64) float64 {
-	if len(bids) == 0 || len(asks) == 0 {
+	if len(bids) == 0 || len(asks) == 0 || len(bids[0]) == 0 || len(asks[0]) == 0 {
 		return 0
 	}
 	bid, ask := bids[0][0], asks[0][0]
-	if bid <= 0 || ask <= 0 || ask < bid {
-		return 0 // crossed/garbage book — treat as unusable, fail-open
+	if bid <= 0 || ask <= 0 || ask < bid || math.IsNaN(bid) || math.IsNaN(ask) || math.IsInf(bid, 0) || math.IsInf(ask, 0) {
+		return 0 // crossed/garbage book — caller applies its missing-book policy
 	}
 	mid := (ask + bid) / 2
 	return (ask - bid) / mid * 100
@@ -983,7 +996,7 @@ func topOfBookSpreadPct(bids, asks [][]float64) float64 {
 // the original spec): a wide spread eats the limit-order edge and directly
 // taxes market fills on thin candidates. Threshold from
 // risk_control.max_spread_pct (0 = 0.5% default, negative = disabled).
-// Fail-open: no book interface or unusable book never blocks.
+// Unknown books fail closed for thin/unknown altcoins by default.
 func (at *AutoTrader) spreadBlocksOpen(symbol string) (bool, string) {
 	if at.config.StrategyConfig == nil {
 		return false, ""
@@ -992,22 +1005,28 @@ func (at *AutoTrader) spreadBlocksOpen(symbol string) (bool, string) {
 	if threshold <= 0 {
 		return false, "" // disabled
 	}
+	// bstock is exempt from the new missing-book policy, but retains
+	// the pre-existing wide-spread check when a usable book is available.
+	missingBook := func(why string) (bool, string) {
+		if at.config.StrategyConfig.RiskControl.EffectiveSpreadGateFailClosedThin() && at.thinForSpread(symbol) {
+			return true, "spread gate: thin/unknown-liquidity coin — " + why + " (fail-closed)"
+		}
+		logger.Infof("[RISK CONTROL] %s spread unavailable (%s) — fail-open", symbol, why)
+		return false, ""
+	}
 	book, ok := at.trader.(interface {
 		GetOrderBook(symbol string, depth int) (bids, asks [][]float64, err error)
 	})
 	if !ok {
-		return false, ""
+		return missingBook("adapter has no GetOrderBook interface")
 	}
 	bids, asks, err := book.GetOrderBook(symbol, 5)
 	if err != nil {
-		// Fail-open, but never silently: an unmeasurable book means the gate
-		// is blind for this symbol this cycle (audit 09-13 #5).
-		logger.Infof("⚠️ [RISK CONTROL] spread gate: order book unavailable for %s (%v) — gate skipped for this cycle", symbol, err)
-		return false, ""
+		return missingBook(fmt.Sprintf("order book request failed: %v", err))
 	}
 	spread := topOfBookSpreadPct(bids, asks)
 	if spread <= 0 {
-		return false, "" // fail-open
+		return missingBook("order book unusable or zero spread")
 	}
 	if spread <= threshold {
 		return false, ""
@@ -1407,15 +1426,19 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 // (user 2026-09-12: 分批止盈/减仓). Guards: cumulative partial ≤75% per
 // position (the rest must run or exit via close_*); close gates (min-hold /
 // early-close / breakout-hold) apply in applyHardRiskGates before this runs.
-func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction, side string) error {
+func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction, side string, snapshot ...map[string]interface{}) error {
 	// Hands-off rule (user directive 2026-09-25): manual positions are never
 	// partially closed by the program.
 	if decision.Symbol != "" && !at.isAIManaged(decision.Symbol, side) {
 		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — partial_close rejected", decision.Symbol)
 	}
-	positions, err := at.trader.GetPositions()
-	if err != nil {
-		return err
+	positions := snapshot
+	if len(positions) == 0 {
+		var err error
+		positions, err = at.trader.GetPositions()
+		if err != nil {
+			return err
+		}
 	}
 	var qty, markPrice float64
 	for _, pos := range positions {
@@ -1444,6 +1467,13 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *kernel.Decision, a
 		at.partialTrimmed = make(map[string]float64)
 	}
 	already := at.partialTrimmed[posKey]
+	// Fast protection can follow an R/ROE trim before fill sync reaches the
+	// database. Include those successful one-shot markers in the fallback.
+	if at.r1TrimDone[posKey] {
+		already = math.Max(already, .5)
+	} else if at.tpTrimDone[posKey] {
+		already = math.Max(already, 1.0/3)
+	}
 	at.tpTrimMutex.Unlock()
 	// EntryQuantity persists across restarts and includes every reduction
 	// source (R-lock, ROE ladder, structure TP, and AI partial close). It is
@@ -2532,7 +2562,8 @@ func absoluteBanCode(code string) bool {
 	// resting entries priced off the dead feed.
 	return strings.HasPrefix(code, "DATA_STALE_") || strings.HasPrefix(code, "NEG_EDGE_") || strings.HasPrefix(code, "CONSENSUS_OPPOSED_") ||
 		strings.HasPrefix(code, "EMA20_STRETCH_") || strings.HasPrefix(code, "BTC_WEAK_LONG_") ||
-		strings.HasPrefix(code, "WIDE_STOP_")
+		strings.HasPrefix(code, "WIDE_STOP_") || strings.HasPrefix(code, "THIN_VOLUME_") ||
+		strings.HasPrefix(code, "VOL_SPIKE_1H_") || strings.HasPrefix(code, "OI_SURGE_")
 }
 
 // limitEntryBlockCode is shared by direct limit opens and market-to-limit

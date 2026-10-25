@@ -145,6 +145,8 @@ func (m *entryMock) SetMarginMode(string, bool) error { return nil }
 func entryTestTrader(data *market.Data) (*AutoTrader, *entryMock) {
 	m := &entryMock{audit05Mock: audit05Mock{mark: 100}}
 	at := riskTestTrader(store.RiskControlConfig{MinRiskRewardRatio: 1})
+	// Isolate the stale-feed gate; spread availability is tested separately.
+	at.oiValueFn = func(string) (float64, bool) { return 100, true }
 	at.trader = m
 	at.pendingEntries = map[string]*pendingEntry{}
 	at.marketDataFn = func(string) (*market.Data, error) { return data, nil }

@@ -180,6 +180,10 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		// Passing the series through as-is lets ComputeSymbolSignals apply
 		// exactly those semantics; nil reaches the kernel safely.
 		btc := at.btcTrendClosesForRecheck()
+		var oi1h *float64
+		if v, ok := market.CachedOIChange1hPct(pe.Symbol); ok {
+			oi1h = &v
+		}
 		sig, err := kernel.ComputeSymbolSignals(pe.Symbol, md, kernel.SignalOptions{
 			Now: time.Now(), PrimaryTF: primaryTF, CurrentPrice: md.CurrentPrice,
 			EntryTimingGate: rc.EntryTimingGate, PumpGuard4hPct: kernel.PumpGuard4h(&rc),
@@ -187,6 +191,9 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 			LongMaxEMA20DistPct: rc.EffectiveLongMaxEMA20DistPct(), LongPullbackEntry: rc.EffectiveLongPullbackEntry(),
 			ChaseMaxEMA20_1hPct: rc.EffectiveChaseMaxEMA20_1hPct(), CounterMaxEMA20_1hPct: rc.EffectiveCounterMaxEMA20_1hPct(),
 			EntryRSI1hMax: rc.EffectiveEntryRSI1hMax(), ChaseMaxMove4hPct: rc.EffectiveChaseMaxMove4hPct(),
+			MinQuoteVolume24hMillions: rc.EffectiveMinQuoteVolume24hMillions(),
+			QuoteVolume24hUsd:         kernel.CachedQuoteVolume24hUSD(pe.Symbol),
+			VolSpikeMult:              rc.EffectiveVolSpikeMult(), OISurge1hPct: rc.EffectiveOISurge1hPct(), OI1hPct: oi1h,
 			ConfiguredTimeframes: at.recheckConfiguredTimeframes(pe.Symbol),
 		})
 		if err != nil || sig == nil || sig.HardGate == nil {
