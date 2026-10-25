@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"nofx/market/pubcache"
 	"nofx/security"
 	"time"
 )
@@ -53,7 +54,9 @@ func (c *CoinankClient) Get(ctx context.Context, path string, paramsMap map[stri
 	if err != nil {
 		return "", err
 	}
-	request.Header.Add("apikey", c.Apikey)
+	if c.Apikey != "" {
+		request.Header.Add("apikey", c.Apikey)
+	}
 	resp, err := client.Do(request)
 	if err != nil {
 		return "", err
@@ -92,5 +95,6 @@ func (c *CoinankClient) Post(ctx context.Context, path string, data any) (string
 }
 
 var client = &http.Client{
-	Timeout: 30 * time.Second,
+	Timeout:   30 * time.Second,
+	Transport: pubcache.Wrap(nil),
 }

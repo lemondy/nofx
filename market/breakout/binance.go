@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"nofx/market/bnweight"
+	"nofx/market/pubcache"
 	"nofx/security"
 )
 
@@ -28,7 +29,7 @@ var binanceHTTP = newScannerHTTP()
 
 func newScannerHTTP() *http.Client {
 	c := security.SafeHTTPClient(15 * time.Second)
-	c.Transport = bnweight.Wrap(c.Transport, bnweight.Low)
+	c.Transport = pubcache.Wrap(bnweight.Wrap(c.Transport, bnweight.Low))
 	return c
 }
 

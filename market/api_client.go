@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"nofx/hook"
 	"nofx/market/bnweight"
+	"nofx/market/pubcache"
 	"nofx/security"
 	"strconv"
 	"time"
@@ -35,7 +36,7 @@ func NewAPIClient() *APIClient {
 	// (Normal priority: trader market data). Copy so a hook-supplied shared
 	// client is never mutated; its transport (proxy etc.) is preserved.
 	metered := *client
-	metered.Transport = bnweight.Wrap(client.Transport, bnweight.Normal)
+	metered.Transport = pubcache.Wrap(bnweight.Wrap(client.Transport, bnweight.Normal))
 
 	return &APIClient{
 		client: &metered,

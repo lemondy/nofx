@@ -12,6 +12,7 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/market/bnweight"
+	"nofx/market/pubcache"
 	"nofx/provider/nofxos"
 	"nofx/provider/openbb"
 	"nofx/security"
@@ -73,7 +74,7 @@ func binanceGet(ctx context.Context, path string, out interface{}) error {
 		return err
 	}
 	client := security.SafeHTTPClient(15 * time.Second)
-	client.Transport = bnweight.Wrap(client.Transport, bnweight.Normal)
+	client.Transport = pubcache.Wrap(bnweight.Wrap(client.Transport, bnweight.Normal))
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

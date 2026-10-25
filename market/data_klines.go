@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"nofx/logger"
+	"nofx/market/pubcache"
 	"nofx/provider/coinank/coinank_api"
 	"nofx/provider/coinank/coinank_enum"
 	"nofx/provider/hyperliquid"
@@ -76,7 +77,10 @@ func getKlinesFromCoinAnk(symbol, interval, exchange string, limit int) ([]Kline
 
 	// Call CoinAnk free/open API (no authentication required)
 	ctx := context.Background()
-	ts := time.Now().UnixMilli()
+	// Stable latest-data cursor within each 15s window. Explicit historical
+	// CoinAnk queries keep their exact timestamps; keys still include all query
+	// parameters. The cursor is at most 15s behind the sampling clock.
+	ts := time.Now().Truncate(pubcache.KlineTTL).UnixMilli()
 	// Use "To" side to search backward from current time (get historical klines)
 	coinankKlines, err := coinank_api.Kline(ctx, symbol, coinankExchange, ts, coinank_enum.To, limit, coinankInterval)
 	if err != nil || len(coinankKlines) == 0 {
