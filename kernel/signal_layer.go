@@ -573,15 +573,17 @@ type BiasBlock struct {
 }
 
 // SignalOptions carries the evaluation moment, the strategy's primary
-// timeframe, and the quant layer's true 1h OI change. All indicator features
+// timeframe, and sampled 15m/1h OI changes. All indicator features
 // are self-computed from closed bars — no display toggles involved.
 type SignalOptions struct {
 	EntryRoundTripCostBps float64   // disclosed cost estimate; raw research callers may pass zero
 	Now                   time.Time // zero falls back to time.Now()
 	PrimaryTF             string
-	EnableLiquiditySweep  bool // opt-in experimental evidence; default false
-	EnableFactorEnsemble  bool // opt-in experimental evidence; default false
-	OI1hPct               *float64
+	EnableLiquiditySweep  bool     // opt-in experimental evidence; default false
+	EnableFactorEnsemble  bool     // opt-in experimental evidence; default false
+	OI15mPct              *float64 // sampled contract OI, nil = unavailable
+	OI1hPct               *float64 // sampled contract OI, nil = unavailable
+	QuantOI1hPct          *float64 // existing quant context; never bypasses sampled risk freshness
 	// CurrentPrice is the live ticker price used as the support/resistance
 	// anchor (which pivot levels count as above/below). Zero falls back to
 	// data.CurrentPrice, then to each timeframe's last closed close.
@@ -683,10 +685,20 @@ type SignalOptions struct {
 	// entry_rsi1h_max / chase_max_move4h_pct, resolved by the Effective*
 	// accessors). All <=0 = that check disabled. Measured from the gate's
 	// entry price; bstock symbols exempt; missing data fails open.
-	ChaseMaxEMA20_1hPct   float64 // CHASE_EMA20_1H: entry > X% beyond 1h EMA20 in trade direction
-	CounterMaxEMA20_1hPct float64 // COUNTER_EMA20_1H: entry > X% on the wrong side of 1h EMA20
-	EntryRSI1hMax         float64 // RSI1H_EXHAUSTED: long RSI1h >= X / short RSI1h <= 100-X
-	ChaseMaxMove4hPct     float64 // CHASE_MOVE4H: 4h move > X% in trade direction
+	ChaseMaxEMA20_1hPct       float64 // CHASE_EMA20_1H: entry > X% beyond 1h EMA20 in trade direction
+	CounterMaxEMA20_1hPct     float64 // COUNTER_EMA20_1H: entry > X% on the wrong side of 1h EMA20
+	EntryRSI1hMax             float64 // RSI1H_EXHAUSTED: long RSI1h >= X / short RSI1h <= 100-X
+	ChaseMaxMove4hPct         float64 // CHASE_MOVE4H: 4h move > X% in trade direction
+	MinQuoteVolume24hMillions float64
+	VolSpike5mMult            float64
+	VolSpike15mMult           float64
+	VolSpikeMult              float64
+	VolSpikeHoldoffMinutes    float64
+	OISurge15mPct             float64
+	OISurge1hPct              float64
+	VolSpike5mRatio           *float64 // raw rolling bars, including the forming tail
+	VolSpike15mRatio          *float64
+	VolSpike1hRatio           *float64 // rolling 60m; legacy hourly only as last resort
 	// BTCFilterLong: altcoin longs need coin 24h return ≥ BTC's and BTC 4h
 	// closes not declining; failure emits BTC_WEAK_LONG.
 	BTCFilterLong bool
@@ -762,6 +774,15 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		ATRMult:  opt.LimitEntryOffsetATRMult,
 		MinPct:   opt.LimitEntryOffsetMinPct,
 		MaxPct:   opt.LimitEntryOffsetMaxPct,
+	}
+
+	// Existing closed-bar features keep their snapshot clock. New entry gates
+	// use the caller's evaluation clock so an old snapshot cannot pass freshness.
+	if opt.Now.IsZero() {
+		opt.Now = time.Now()
+	}
+	if !volatileExempt(symbol) && (opt.VolSpike5mMult > 0 || opt.VolSpike15mMult > 0 || opt.VolSpikeMult > 0) {
+		opt.VolSpike5mRatio, opt.VolSpike15mRatio, opt.VolSpike1hRatio = volatilityRangeSpikes(data, opt.Now)
 	}
 
 	sig := &SymbolSignal{
@@ -861,7 +882,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		f := data.FundingRate
 		d.FundingRate = &f
 	}
-	if opt.OI1hPct != nil {
+	if opt.QuantOI1hPct != nil {
+		d.OIChange1hPct = opt.QuantOI1hPct
+	} else if opt.OI1hPct != nil {
 		d.OIChange1hPct = opt.OI1hPct
 	}
 	if opt.Quant != nil {
@@ -1889,6 +1912,7 @@ func negativeEdgeAligned(sig *SymbolSignal, isLong bool) bool {
 // METHODOLOGY stop (stop_plan), data sufficiency, min-size dead zone,
 // loss-streak ban, stock weekend. allowed = nothing failed.
 func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
+	volatileCodes := volatileEntryCodes(sig.Symbol, opt)
 	suppressAnchorsAgainstRegimeLine(sig, opt.EntryTimingGate)
 	floorPct := stopFloorPct(sig, opt.SLMinATRMult)
 	bstockDailyReady := true
@@ -1999,6 +2023,9 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			if d := ema20Stretch4hPct(sig); d > opt.LongMaxEMA20DistPct {
 				add(fmt.Sprintf("EMA20_STRETCH_%.1f_GT_%.0f", d, opt.LongMaxEMA20DistPct))
 			}
+		}
+		for _, code := range volatileCodes {
+			add(code)
 		}
 		for _, code := range antiChaseCodes(sig, g.EntryPrice, isLong, opt) {
 			add(code)

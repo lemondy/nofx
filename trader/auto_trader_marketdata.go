@@ -10,7 +10,8 @@ import (
 // orders, then combines it with exchange-specific candles. If the quote is
 // unavailable, the caller must skip the trading operation rather than use a
 // stale candle close or another venue's price.
-func (at *AutoTrader) getMarketData(symbol string) (*market.Data, error) {
+func (at *AutoTrader) getMarketData(symbol string) (data *market.Data, err error) {
+	defer func() { at.cacheFastATR(symbol, data) }()
 	// Test seam (same pattern as recheckDataFn): nil = live path.
 	if at.marketDataFn != nil {
 		return at.marketDataFn(symbol)

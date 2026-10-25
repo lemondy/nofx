@@ -361,6 +361,24 @@ export interface RiskControlConfig {
   entry_rsi1h_max?: number
   // 防追高门：最近 4h 顺交易方向涨跌超过 N% 拒绝开仓；0 = 默认 6，负数 = 禁用
   chase_max_move4h_pct?: number
+  // Thin/volatile coin controls: 0 = default, negative = off.
+  min_quote_volume_24h_millions?: number
+  thin_oi_full_size_millions?: number
+  thin_oi_min_size_factor?: number
+  vol_spike_5m_mult?: number // default 8
+  vol_spike_15m_mult?: number // default 6
+  vol_spike_mult?: number
+  vol_spike_holdoff_minutes?: number // omitted = 30; explicit <=0 = off
+  oi_surge_15m_pct?: number // default 8
+  oi_surge_1h_pct?: number
+  fast_window_minutes?: number
+  fast_adverse_atr_mult?: number
+  fast_favorable_atr_mult?: number
+  fast_adverse_reduce_frac?: number
+  fast_adverse_cooldown_minutes?: number
+  fast_fallback_pct?: number
+  thin_oi_mark_stop_millions?: number
+  spread_gate_fail_closed_thin?: boolean // default true; unknown thin-coin book blocks opens
   // TP ladder on leveraged PnL%: at ≥ this the program trims 1/3 (0 = default 10, negative = off) (CODE ENFORCED)
   tp_trim_profit_pct?: number
   // At ≥ this PnL% the program closes the rest (0 = default 25, negative = off) (CODE ENFORCED)

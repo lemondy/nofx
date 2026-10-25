@@ -149,6 +149,17 @@ func getKlinesFromHyperliquid(symbol, interval string, limit int) ([]Kline, erro
 }
 
 // calculateTimeframeSeries calculates series data for a single timeframe
+// Keep the already-fetched short history for rolling volatility gates.
+// Strategies retain only 60-120 display bars otherwise, below the 144-sample
+// 5m minimum. No extra REST fetch is needed. 200 bars give 177 non-overlapping
+// 60m baseline samples (>=12h); the full 288-sample baseline needs 311 bars.
+func fetchedTimeframeSeries(klines []Kline, timeframe string, count int) *TimeframeSeriesData {
+	if (timeframe == "5m" || timeframe == "15m") && count < 200 {
+		count = 200
+	}
+	return calculateTimeframeSeries(klines, timeframe, count)
+}
+
 func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *TimeframeSeriesData {
 	if count <= 0 {
 		count = 10 // default

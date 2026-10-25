@@ -70,7 +70,9 @@ func getBrOrderIDFor(tag string) string {
 
 // FuturesTrader Binance futures trader
 type FuturesTrader struct {
-	client *futures.Client
+	client              *futures.Client
+	thinOIStopThreshold atomic.Uint64                // float64 bits; 0 uses 3× default candidate floor
+	oiValueFn           func(string) (float64, bool) // tests; nil uses cache only
 
 	// displayName is the human-readable label (trader name · model) used in
 	// Telegram notifications.

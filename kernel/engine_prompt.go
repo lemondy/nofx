@@ -1691,11 +1691,18 @@ func (e *StrategyEngine) computeCoinSignalForSide(data *market.Data, quantData *
 		LongPullbackEntry:   e.config.RiskControl.EffectiveLongPullbackEntry(),
 		LongMaxEMA20DistPct: e.config.RiskControl.EffectiveLongMaxEMA20DistPct(),
 		// Anti-chase symmetric gates (Opus analysis 2026-10-11, 273 live trades).
-		ChaseMaxEMA20_1hPct:   e.config.RiskControl.EffectiveChaseMaxEMA20_1hPct(),
-		CounterMaxEMA20_1hPct: e.config.RiskControl.EffectiveCounterMaxEMA20_1hPct(),
-		EntryRSI1hMax:         e.config.RiskControl.EffectiveEntryRSI1hMax(),
-		ChaseMaxMove4hPct:     e.config.RiskControl.EffectiveChaseMaxMove4hPct(),
-		BTCFilterLong:         e.config.RiskControl.EffectiveBTCFilterLong(),
+		ChaseMaxEMA20_1hPct:       e.config.RiskControl.EffectiveChaseMaxEMA20_1hPct(),
+		CounterMaxEMA20_1hPct:     e.config.RiskControl.EffectiveCounterMaxEMA20_1hPct(),
+		EntryRSI1hMax:             e.config.RiskControl.EffectiveEntryRSI1hMax(),
+		ChaseMaxMove4hPct:         e.config.RiskControl.EffectiveChaseMaxMove4hPct(),
+		MinQuoteVolume24hMillions: e.config.RiskControl.EffectiveMinQuoteVolume24hMillions(),
+		VolSpike5mMult:            e.config.RiskControl.EffectiveVolSpike5mMult(),
+		VolSpike15mMult:           e.config.RiskControl.EffectiveVolSpike15mMult(),
+		VolSpikeMult:              e.config.RiskControl.EffectiveVolSpikeMult(),
+		VolSpikeHoldoffMinutes:    e.config.RiskControl.EffectiveVolSpikeHoldoffMinutes(),
+		OISurge15mPct:             e.config.RiskControl.EffectiveOISurge15mPct(),
+		OISurge1hPct:              e.config.RiskControl.EffectiveOISurge1hPct(),
+		BTCFilterLong:             e.config.RiskControl.EffectiveBTCFilterLong(),
 		// Short-side mirrors (2026-10-04 batch-2): the BTC strong-bull hard
 		// pause is OPT-IN (the scan-side ×0.85 haircut off the same shared
 		// classifier stays the default treatment); the top-confirmation gate
@@ -1822,10 +1829,18 @@ func (e *StrategyEngine) computeCoinSignalForSide(data *market.Data, quantData *
 			}
 			if d1h, ok := oi.Delta["1h"]; ok && d1h != nil {
 				v := d1h.OIDeltaPercent
-				opt.OI1hPct = &v
+				opt.QuantOI1hPct = &v
 				break
 			}
 		}
+	}
+	// Risk gates require the same timestamp-validated local samples in prompt
+	// and pending rechecks. Quant 1h context stays available to existing signals.
+	if v, ok := market.CachedOIChange15mPct(data.Symbol); ok {
+		opt.OI15mPct = &v
+	}
+	if v, ok := market.CachedOIChange1hPct(data.Symbol); ok {
+		opt.OI1hPct = &v
 	}
 	// exit_rule_triggered is direction-aware (2026-10-09 ONUSDT): thread the
 	// held position's side into the signal so the rule evaluates the matching

@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"nofx/logger"
+	"nofx/market"
+	"nofx/store"
 	"nofx/trader/types"
 	"strconv"
 	"strings"
@@ -1207,9 +1209,39 @@ func (t *FuturesTrader) GetOpenOrders(symbol string) ([]types.OpenOrder, error) 
 	return result, nil
 }
 
+// SetThinOIStopThreshold receives strategy config on adapter creation. -1
+// stores an explicit disable; a zero-value adapter uses the safe default.
+func (t *FuturesTrader) SetThinOIStopThreshold(millions float64) {
+	if millions <= 0 {
+		millions = -1
+	}
+	t.thinOIStopThreshold.Store(math.Float64bits(millions))
+}
+func (t *FuturesTrader) stopWorkingType(symbol string) futures.WorkingType {
+	threshold := math.Float64frombits(t.thinOIStopThreshold.Load())
+	if threshold == 0 {
+		threshold = 3 * store.DefaultMinOIValueMillions
+	}
+	if threshold < 0 || market.IsBStockSymbol(symbol) {
+		return futures.WorkingTypeContractPrice
+	}
+	read := t.oiValueFn
+	if read == nil {
+		read = market.CachedOpenInterestMillions
+	}
+	oi, ok := read(symbol)
+	// MARK_PRICE resists isolated trade wicks, but can trigger later in a gap.
+	// Missing/stale OI keeps the old contract trigger, without a new REST call.
+	if ok && oi >= 0 && oi < threshold {
+		return futures.WorkingTypeMarkPrice
+	}
+	return futures.WorkingTypeContractPrice
+}
+
 // SetStopLoss sets stop-loss order using new Algo Order API
 // Binance has migrated stop orders to Algo Order system (error -4120 STOP_ORDER_SWITCH_ALGO)
 func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+	workingType := t.stopWorkingType(symbol)
 	var side futures.SideType
 	var posSide futures.PositionSideType
 
@@ -1239,7 +1271,7 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		PositionSide(posSide).
 		Type(futures.AlgoOrderTypeStopMarket).
 		TriggerPrice(priceStr).
-		WorkingType(futures.WorkingTypeContractPrice).
+		WorkingType(workingType).
 		ClosePosition(true).
 		ClientAlgoId(getBrOrderID()).
 		Do(context.Background())
@@ -1277,13 +1309,13 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 			PositionSide(posSide).
 			Type(futures.AlgoOrderTypeStopMarket).
 			TriggerPrice(priceStr).
-			WorkingType(futures.WorkingTypeContractPrice).
+			WorkingType(workingType).
 			ClosePosition(true).
 			ClientAlgoId(getBrOrderID()).
 			Do(context.Background()); err2 != nil {
 			t.noteFilterFailure(symbol, err2)
 			for _, old := range originals {
-				_, restoreErr := t.client.NewCreateAlgoOrderService().Symbol(symbol).Side(side).PositionSide(posSide).Type(futures.AlgoOrderTypeStopMarket).TriggerPrice(strconv.FormatFloat(old.StopPrice, 'f', -1, 64)).WorkingType(futures.WorkingTypeContractPrice).ClosePosition(true).ClientAlgoId(getBrOrderID()).Do(context.Background())
+				_, restoreErr := t.client.NewCreateAlgoOrderService().Symbol(symbol).Side(side).PositionSide(posSide).Type(futures.AlgoOrderTypeStopMarket).TriggerPrice(strconv.FormatFloat(old.StopPrice, 'f', -1, 64)).WorkingType(workingType).ClosePosition(true).ClientAlgoId(getBrOrderID()).Do(context.Background())
 				if restoreErr != nil {
 					t.noteFilterFailure(symbol, restoreErr)
 					return fmt.Errorf("replacement rejected (%v), original stop restore failed: %w", err2, restoreErr)

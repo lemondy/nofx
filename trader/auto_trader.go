@@ -152,6 +152,10 @@ type AutoTrader struct {
 	// btcTrendClosesFn, when set (tests), replaces the BTC 4h closes fetch;
 	// nil = live kernel.BTC4hTrendCloses.
 	btcTrendClosesFn func(limit int) []float64
+	oiValueFn        func(string) (float64, bool) // tests; nil reads market cache only
+	fastMovesMu      sync.Mutex                   // state/cache only; actions use executionMutex
+	fastMoves        map[string]*fastMoveState
+	fastATR          map[string]fastATRValue
 	// marketDataFn, when set (tests), replaces the generic execution-quote
 	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
 	marketDataFn               func(symbol string) (*market.Data, error)
@@ -508,6 +512,9 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	// Create strategy engine (must have strategy config)
 	if config.StrategyConfig == nil {
 		return nil, fmt.Errorf("[%s] strategy not configured", config.Name)
+	}
+	if provider, ok := trader.(interface{ SetThinOIStopThreshold(float64) }); ok {
+		provider.SetThinOIStopThreshold(config.StrategyConfig.RiskControl.EffectiveThinOIMarkStopMillions(config.StrategyConfig.CoinSource.EffectiveMinOIMillions()))
 	}
 	strategyEngine := kernel.NewStrategyEngine(config.StrategyConfig)
 	logger.Infof("✓ [%s] Using strategy engine (strategy configuration loaded)", config.Name)

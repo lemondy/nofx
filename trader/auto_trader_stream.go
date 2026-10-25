@@ -386,12 +386,30 @@ func (at *AutoTrader) fastProfitPass(r *realtimeProtection, now time.Time) {
 		if !ok || age < 0 || age > 10*time.Second || mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
 			continue
 		}
+		at.tpTrimMutex.Lock()
+		r1Before := at.r1TrimDone[key]
+		at.tpTrimMutex.Unlock()
 		if at.processRProfitRules(p.pos, mark) {
 			side, _ := p.pos["side"].(string)
 			if at.GetRecordedStopLoss(symbol, side) == 0 {
 				delete(r.positions, key)
 			}
 			continue
+		}
+		at.tpTrimMutex.Lock()
+		r1JustTrimmed := !r1Before && at.r1TrimDone[key]
+		at.tpTrimMutex.Unlock()
+		if r1JustTrimmed {
+			// The R lock just reduced 50%. Do not give the new fast rule
+			// its pre-trim snapshot or stack another trim in the same pass.
+			qty, _ := p.pos["positionAmt"].(float64)
+			p.pos["positionAmt"] = qty * .5
+			r.positions[key] = realtimePosition{p.pos, now}
+		}
+		if !r1JustTrimmed && at.processFastMove(p.pos, mark, at.cachedFastATR(symbol), now) {
+			// Publish the reduced snapshot before the next fast tick. Older
+			// cached/account snapshots cannot resurrect the pre-trim quantity.
+			r.positions[key] = realtimePosition{p.pos, now}
 		}
 		at.processTrailingForPosition(p.pos, mark, r.atr[symbol])
 	}
