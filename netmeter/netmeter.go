@@ -1,8 +1,8 @@
 // Package netmeter counts the process's outbound network usage for the
 // settings-page traffic monitor: cumulative HTTP payload bytes (request line
-// path+query, request bodies and response bodies) per host since process
-// start, plus wire-level bytes for raw connections (websocket feeds) where
-// per-host attribution at the HTTP layer does not exist.
+// path+query, request bodies and response bodies) per host and normalized path
+// since process start, plus wire-level bytes for raw connections (websocket
+// feeds) where per-host attribution at the HTTP layer does not exist.
 //
 // Counting is deliberately at the RoundTripper layer, not the socket layer:
 // behind the local proxy a socket dial only ever targets 127.0.0.1:7890, so
@@ -38,6 +38,7 @@ var (
 	totalReqs atomic.Int64
 	totalUp   atomic.Int64
 	totalDown atomic.Int64
+	paths     pathMeter
 
 	// Wire bytes for raw connections (websocket feeds). Includes TLS and
 	// framing overhead, so they are reported separately from HTTP payload
@@ -46,11 +47,15 @@ var (
 	wsDown atomic.Int64
 )
 
-func hostFor(hostPort string) *hostStats {
+func normalizeHost(hostPort string) string {
 	host := strings.ToLower(hostPort)
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
+	return host
+}
+
+func hostFor(host string) *hostStats {
 	if v, ok := hosts.Load(host); ok {
 		return v.(*hostStats)
 	}
@@ -58,19 +63,21 @@ func hostFor(hostPort string) *hostStats {
 	return v.(*hostStats)
 }
 
-func addUp(h *hostStats, n int64) {
+func addUp(h, p *hostStats, n int64) {
 	if n <= 0 {
 		return
 	}
 	h.up.Add(n)
+	p.up.Add(n)
 	totalUp.Add(n)
 }
 
-func addDown(h *hostStats, n int64) {
+func addDown(h, p *hostStats, n int64) {
 	if n <= 0 {
 		return
 	}
 	h.down.Add(n)
+	p.down.Add(n)
 	totalDown.Add(n)
 }
 
@@ -131,23 +138,26 @@ func (c *countingReadCloser) Read(p []byte) (int, error) {
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	h := hostFor(req.URL.Host)
+	host := normalizeHost(req.URL.Host)
+	h := hostFor(host)
+	p := paths.forPath(host, normalizePath(req.URL.EscapedPath()))
 	h.requests.Add(1)
+	p.requests.Add(1)
 	totalReqs.Add(1)
 
 	// Request-line payload: path + query string. Exchange APIs carry whole
 	// signed argument sets in GET queries — body-only counting would report
 	// upload as ~zero for this app's traffic profile.
-	addUp(h, int64(len(req.URL.RequestURI())))
+	addUp(h, p, int64(len(req.URL.RequestURI())))
 
 	if req.Body != nil {
 		if req.ContentLength > 0 {
-			addUp(h, req.ContentLength)
+			addUp(h, p, req.ContentLength)
 		} else {
 			// Length unknown (net/http leaves ContentLength at 0 for streamed
 			// bodies, not -1): count as the transport reads it. A truly empty
 			// body simply contributes 0.
-			req.Body = &countingReadCloser{ReadCloser: req.Body, onRead: func(n int64) { addUp(h, n) }}
+			req.Body = &countingReadCloser{ReadCloser: req.Body, onRead: func(n int64) { addUp(h, p, n) }}
 		}
 	}
 
@@ -157,9 +167,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if resp.Body != nil {
 		if resp.ContentLength > 0 {
-			addDown(h, resp.ContentLength)
+			addDown(h, p, resp.ContentLength)
 		} else {
-			resp.Body = &countingReadCloser{ReadCloser: resp.Body, onRead: func(n int64) { addDown(h, n) }}
+			resp.Body = &countingReadCloser{ReadCloser: resp.Body, onRead: func(n int64) { addDown(h, p, n) }}
 		}
 	}
 	return resp, nil

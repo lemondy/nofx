@@ -20,13 +20,14 @@ func (s *Server) handleNetTraffic(c *gin.Context) {
 	}
 	totals, hosts := netmeter.Snapshot()
 	c.JSON(http.StatusOK, gin.H{
-		"since":       totals.Since.UTC().Format("2006-01-02T15:04:05Z"),
-		"since_unix":  totals.Since.Unix(),
-		"requests":    totals.Requests,
-		"http_up":     totals.HTTPUp,
-		"http_down":   totals.HTTPDown,
-		"ws_up":       totals.WsUp,
-		"ws_down":     totals.WsDown,
-		"hosts":       hosts,
+		"since":      totals.Since.UTC().Format("2006-01-02T15:04:05Z"),
+		"since_unix": totals.Since.Unix(),
+		"requests":   totals.Requests,
+		"http_up":    totals.HTTPUp,
+		"http_down":  totals.HTTPDown,
+		"ws_up":      totals.WsUp,
+		"ws_down":    totals.WsDown,
+		"hosts":      hosts,
+		"paths":      netmeter.SnapshotPaths(30),
 	})
 }
