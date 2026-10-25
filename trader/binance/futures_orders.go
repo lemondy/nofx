@@ -109,6 +109,7 @@ func (t *FuturesTrader) submitEntryOrder(service *futures.CreateOrderService, tr
 	if submitErr == nil {
 		return order, false, nil
 	}
+	t.noteFilterFailure(symbol, submitErr)
 	var apiErr *common.APIError
 	if !transport.serverError.Load() && errors.As(submitErr, &apiErr) && apiErr.Code < 0 && apiErr.Code != -1007 && apiErr.Code != -1001 {
 		return nil, false, submitErr
@@ -339,6 +340,7 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 		Do(context.Background())
 
 	if err != nil {
+		t.noteFilterFailure(symbol, err)
 		return nil, fmt.Errorf("failed to close long position: %w", WrapAuthError("CloseLong "+symbol, err))
 	}
 
@@ -414,6 +416,7 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 		Do(context.Background())
 
 	if err != nil {
+		t.noteFilterFailure(symbol, err)
 		return nil, fmt.Errorf("failed to close short position: %w", WrapAuthError("CloseShort "+symbol, err))
 	}
 
@@ -991,6 +994,7 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 	var order *futures.CreateOrderResponse
 	if req.ReduceOnly {
 		order, err = orderService.Do(context.Background())
+		t.noteFilterFailure(req.Symbol, err)
 	} else {
 		order, _, err = t.submitEntryOrder(orderService, transport, req.Symbol, clientOrderID)
 	}
@@ -1240,6 +1244,7 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		ClientAlgoId(getBrOrderID()).
 		Do(context.Background())
 
+	t.noteFilterFailure(symbol, err)
 	if err != nil && isStaleProtectiveOrder(err) {
 		// -4130: an open GTE+closePosition algo in this direction already
 		// exists (MUBARAKUSDT 09-29: the watchdog's naked-position fallback
@@ -1276,9 +1281,11 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 			ClosePosition(true).
 			ClientAlgoId(getBrOrderID()).
 			Do(context.Background()); err2 != nil {
+			t.noteFilterFailure(symbol, err2)
 			for _, old := range originals {
 				_, restoreErr := t.client.NewCreateAlgoOrderService().Symbol(symbol).Side(side).PositionSide(posSide).Type(futures.AlgoOrderTypeStopMarket).TriggerPrice(strconv.FormatFloat(old.StopPrice, 'f', -1, 64)).WorkingType(futures.WorkingTypeContractPrice).ClosePosition(true).ClientAlgoId(getBrOrderID()).Do(context.Background())
 				if restoreErr != nil {
+					t.noteFilterFailure(symbol, restoreErr)
 					return fmt.Errorf("replacement rejected (%v), original stop restore failed: %w", err2, restoreErr)
 				}
 				restored, verifyErr := t.GetOpenOrders(symbol)
@@ -1371,12 +1378,14 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 	// cancel-and-replace. review 2026-10-11: reuse the first request's shape
 	// so a quantity-limited TP cannot silently become a full-position close.
 	// Only the client ID changes; quantity/closePosition and side stay intact.
+	t.noteFilterFailure(symbol, err)
 	if err != nil && isStaleProtectiveOrder(err) {
 		if cerr := t.CancelTakeProfitOrdersForSide(symbol, string(posSide)); cerr != nil {
 			return fmt.Errorf("failed to set take-profit: stale algo leg replacement failed at cancel: %w", cerr)
 		}
 		if _, err2 := algo.ClientAlgoId(getBrOrderID()).
 			Do(context.Background()); err2 != nil {
+			t.noteFilterFailure(symbol, err2)
 			return fmt.Errorf("failed to set take-profit: stale algo leg cancelled but re-place failed: %w", err2)
 		}
 		logger.Infof("  ♻️ Take-profit replaced: stale -4130 leg cancelled, new trigger %.4f (Algo Order, original close shape)", takeProfitPrice)

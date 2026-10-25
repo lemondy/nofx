@@ -78,7 +78,7 @@ func IsAuthOrIPError(err error) bool {
 // callers can detect it with errors.Is. Non-auth errors pass through
 // untouched.
 func WrapAuthError(source string, err error) error {
-	if err == nil || !IsAuthOrIPError(err) {
+	if err == nil || errors.Is(err, ErrAuthOrIP) || !IsAuthOrIPError(err) {
 		return err
 	}
 	LogAuthError(source, err)

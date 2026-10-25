@@ -31,6 +31,9 @@ func reviewKInstantRecovery(t *testing.T) {
 // socket, so these httptest fixtures also work in network-restricted sandboxes.
 func reviewKHTTPClient(handler http.Handler) *http.Client {
 	return &http.Client{Transport: batch1Transport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/fapi/v3/positionRisk" || r.URL.Path == "/fapi/v3/account" {
+			return batch1Response(r, http.StatusNotFound, `{"code":-1000,"msg":"v2-only fixture"}`), nil
+		}
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
 		return w.Result(), nil
@@ -69,7 +72,7 @@ func reviewKEntryTrader(t *testing.T, post, lookup http.HandlerFunc) *FuturesTra
 		}
 	}))
 	client := futures.NewClient("key", "secret")
-	client.BaseURL = "http://binance.test"
+	client.BaseURL = futuresTestURL()
 	client.HTTPClient = hc
 	return &FuturesTrader{client: client, cacheDuration: time.Minute}
 }
@@ -336,7 +339,7 @@ func TestReviewKSyncCleansOnlyProgramProtectionOnFreshFlatSide(t *testing.T) {
 				}
 			}))
 			client := futures.NewClient("key", "secret")
-			client.BaseURL, client.HTTPClient = "http://binance.test", hc
+			client.BaseURL, client.HTTPClient = futuresTestURL(), hc
 			ft := &FuturesTrader{
 				client: client, cacheDuration: time.Hour, positionsCacheTime: time.Now(),
 				// Deliberately stale: missing XUSDT despite its live SHORT (or reopened LONG).
