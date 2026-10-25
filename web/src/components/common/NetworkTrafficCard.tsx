@@ -28,7 +28,7 @@ function formatUptime(sinceUnix: number): string {
 }
 
 // 运行期累计网络流量监控（设置页 Account 标签）：进程启动以来的 HTTP 载荷
-// 字节（按主机分列）+ WebSocket 线路字节。进程重启后清零。
+// 字节（按主机、归一化路径分列）+ WebSocket 线路字节。进程重启后清零。
 export function NetworkTrafficCard({ language }: { language: string }) {
   const zh = language === 'zh'
   const [data, setData] = useState<NetTraffic | null>(null)
@@ -64,6 +64,7 @@ export function NetworkTrafficCard({ language }: { language: string }) {
   const httpDown = data?.http_down ?? 0
   const wsBytes = (data?.ws_up ?? 0) + (data?.ws_down ?? 0)
   const hosts = data?.hosts ?? []
+  const paths = data?.paths ?? []
 
   const stats: { label: string; value: string; sub?: string }[] = [
     {
@@ -85,7 +86,7 @@ export function NetworkTrafficCard({ language }: { language: string }) {
   ]
 
   return (
-    <div className="border-t border-line pt-4">
+    <div className="min-w-0 max-w-full border-t border-line pt-4">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold text-fg">
@@ -151,10 +152,72 @@ export function NetworkTrafficCard({ language }: { language: string }) {
         </div>
       )}
 
+      {paths.length > 0 && (
+        <div className="mt-3 max-w-full overflow-x-auto rounded-md border border-line">
+          <table className="w-full min-w-[640px] table-fixed text-xs">
+            <caption className="border-b border-line bg-surface-2 px-3 py-1.5 text-left text-xs font-medium text-fg">
+              {zh ? 'Top 路径' : 'Top Paths'}
+            </caption>
+            <thead className="border-b border-line bg-surface-2 text-[11px] font-medium text-fg-3">
+              <tr>
+                <th
+                  scope="col"
+                  className="w-[40%] px-3 py-1.5 text-left font-medium"
+                >
+                  {zh ? '主机+路径' : 'Host + path'}
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                  {zh ? '请求数' : 'Reqs'}
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                  {zh ? '上行' : 'Up'}
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                  {zh ? '下行' : 'Down'}
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                  {zh ? '平均每次下行' : 'Avg down / req'}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {paths.slice(0, 15).map((p) => (
+                <tr
+                  key={`${p.host}${p.path}`}
+                  className="border-b border-line bg-bg last:border-b-0"
+                >
+                  <td className="px-3 py-1.5 text-fg">
+                    <span
+                      className="block truncate"
+                      title={`${p.host}${p.path}`}
+                    >
+                      {p.host}
+                      {p.path}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-fg-3">
+                    {p.requests.toLocaleString()}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-fg-3">
+                    {formatBytes(p.up)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-fg-2">
+                    {formatBytes(p.down)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-fg-2">
+                    {formatBytes(p.requests > 0 ? p.down / p.requests : 0)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <p className="mt-2 text-[11px] leading-relaxed text-fg-3">
         {zh
-          ? '口径：HTTP 上行为请求行+请求体、下行为响应体（不含 TLS 与头部开销，实际代理流量略高）；WebSocket 为含加密帧的线路字节。'
-          : 'HTTP up = request line + body, down = response body (TLS & header overhead excluded — actual proxy usage is slightly higher); WebSocket numbers are wire bytes including encryption.'}
+          ? '口径：HTTP 上行为请求行+请求体、下行为响应体（不含 TLS 与头部开销，实际代理流量略高）；WebSocket 为含加密帧的线路字节。路径已归一化（去查询串，数字/ID/符号折叠）；超出 200 个路径的并入 (other)。'
+          : 'HTTP up = request line + body, down = response body (TLS & header overhead excluded — actual proxy usage is slightly higher); WebSocket numbers are wire bytes including encryption. Paths are normalized (query strings removed; numbers, IDs and symbols folded); paths beyond 200 are grouped into (other).'}
         {updatedAt > 0 && ` ${zh ? '每 5 秒刷新' : 'Refreshed every 5s'}.`}
       </p>
     </div>
