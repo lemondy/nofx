@@ -3,6 +3,7 @@ package usstock
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -13,6 +14,9 @@ func TestLiveSmoke(t *testing.T) {
 	if os.Getenv("USSTOCK_LIVE") != "1" {
 		t.Skip("set USSTOCK_LIVE=1 to enable public endpoint smoke test")
 	}
+	oldPath := SymbolsCachePath
+	SymbolsCachePath = filepath.Join(t.TempDir(), "symbols.json")
+	t.Cleanup(func() { SymbolsCachePath = oldPath })
 	resetCaches()
 	t.Cleanup(resetCaches)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

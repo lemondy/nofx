@@ -39,9 +39,6 @@ type BStockTrader struct {
 	// Serialize order/protection mutations, including cancel-and-replace sequences.
 	execMu        sync.Mutex
 	mu            sync.Mutex
-	rulesMu       sync.Mutex
-	rules         map[string]binance.Symbol
-	rulesTime     time.Time
 	balance       map[string]interface{}
 	balanceTime   time.Time
 	positions     []map[string]interface{}

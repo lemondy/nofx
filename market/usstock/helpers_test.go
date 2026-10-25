@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ func resetCaches() {
 	symbolCache.Lock()
 	symbolCache.symbols = nil
 	symbolCache.loaded = time.Time{}
+	symbolCache.diskLoaded = false
 	symbolCache.Unlock()
 	bstockCache.Lock()
 	bstockCache.entries = make(map[string]barCacheEntry)
@@ -53,6 +55,8 @@ func setupHTTP(t *testing.T, now time.Time, handler roundTripFunc) {
 	t.Helper()
 	oldClient, oldNow, oldRetry := httpClient, nowFunc, retryBaseDelay
 	oldSpot, oldFutures, oldYahoo, oldFallback := spotBaseURL, futuresBaseURL, yahooBaseURL, yahooFallbackBaseURL
+	oldPath := SymbolsCachePath
+	SymbolsCachePath = filepath.Join(t.TempDir(), "cache", "symbols.json")
 	resetCaches()
 	nowFunc = func() time.Time { return now }
 	retryBaseDelay = 0
@@ -74,6 +78,7 @@ func setupHTTP(t *testing.T, now time.Time, handler roundTripFunc) {
 		resetCaches()
 		httpClient, nowFunc, retryBaseDelay = oldClient, oldNow, oldRetry
 		spotBaseURL, futuresBaseURL, yahooBaseURL, yahooFallbackBaseURL = oldSpot, oldFutures, oldYahoo, oldFallback
+		SymbolsCachePath = oldPath
 	})
 }
 func et(date string) time.Time {

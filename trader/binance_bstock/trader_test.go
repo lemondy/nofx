@@ -44,6 +44,7 @@ func stockRule() binance.Symbol {
 
 func fixture(t *testing.T) (*BStockTrader, *fakeTransport, *time.Time) {
 	t.Helper()
+	setupRulesCache(t)
 	clock := time.Unix(1700000000, 0)
 	f := &fakeTransport{t: t, symbols: []binance.Symbol{stockRule()}, balances: []binance.Balance{{Asset: "USDT", Free: "100", Locked: "20"}, {Asset: "AAPLB", Free: "10", Locked: "0"}}}
 	tr := NewBStockTrader("test-key", "test-secret")
@@ -288,7 +289,7 @@ func TestQuoteMarketAllowedAndMarketLotSize(t *testing.T) {
 	_, err := tr.BuyMarketNotional("AAPLBUSDT", 20)
 	requireError(t, err, "not allowed")
 	f.symbols[0].Filters = append(f.symbols[0].Filters, map[string]interface{}{"filterType": "MARKET_LOT_SIZE", "stepSize": "0.01", "minQty": "0.1", "maxQty": "1"})
-	tr.rules = nil
+	clearRulesCache(t)
 	_, err = tr.OpenLong("AAPLBUSDT", 1.1, 1)
 	requireError(t, err, "MARKET_LOT_SIZE")
 	_, err = tr.OpenLong("AAPLBUSDT", 0.129, 1)
@@ -370,7 +371,7 @@ func TestPreflightIntersectsPriceFilters(t *testing.T) {
 	if r.params.Get("price") != "92.5" {
 		t.Fatal(r.params)
 	}
-	tr.rules = nil
+	clearRulesCache(t)
 	f.symbols[0].Filters[4]["multiplierDown"] = "1.000001"
 	f.symbols[0].Filters[4]["multiplierUp"] = "1.000002"
 	requireError(t, tr.Preflight("AAPLBUSDT"), "no tick price")

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
-	"time"
 
 	binance "github.com/adshao/go-binance/v2"
 	"github.com/shopspring/decimal"
@@ -14,23 +12,7 @@ import (
 // The executor deliberately uses only spot exchangeInfo. The strategy layer
 // owns equity-universe classification; here a candidate is {base ending B}USDT.
 func (t *BStockTrader) symbols() (map[string]binance.Symbol, error) {
-	t.rulesMu.Lock()
-	defer t.rulesMu.Unlock()
-	if t.rules != nil && t.now().Sub(t.rulesTime) < 10*time.Minute {
-		return t.rules, nil
-	}
-	info, err := t.client.NewExchangeInfoService().Do(context.Background())
-	if err != nil {
-		return nil, wrap("exchangeInfo", err)
-	}
-	rules := make(map[string]binance.Symbol)
-	for _, s := range info.Symbols {
-		if s.Status == "TRADING" && s.QuoteAsset == "USDT" && strings.HasSuffix(s.BaseAsset, "B") && s.Symbol == s.BaseAsset+"USDT" {
-			rules[s.Symbol] = s
-		}
-	}
-	t.rules, t.rulesTime = rules, t.now()
-	return rules, nil
+	return sharedRulesFor(t.client.BaseURL).symbols(t)
 }
 
 func (t *BStockTrader) rule(symbol string) (binance.Symbol, error) {
@@ -39,7 +21,13 @@ func (t *BStockTrader) rule(symbol string) (binance.Symbol, error) {
 		return binance.Symbol{}, err
 	}
 	s, ok := rules[symbol]
-	if !ok || !s.IsSpotTradingAllowed {
+	if !ok {
+		s, err = sharedRulesFor(t.client.BaseURL).lookup(t, symbol)
+		if err != nil {
+			return binance.Symbol{}, err
+		}
+	}
+	if !s.IsSpotTradingAllowed {
 		return s, fmt.Errorf("symbol not tradable on spot bStock: %s", symbol)
 	}
 	return s, nil

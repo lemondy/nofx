@@ -12,8 +12,9 @@ import (
 
 var symbolCache struct {
 	sync.Mutex
-	symbols []SymbolInfo
-	loaded  time.Time
+	symbols    []SymbolInfo
+	loaded     time.Time
+	diskLoaded bool
 }
 
 type exchangeInfo struct {
@@ -38,6 +39,10 @@ type exchangeInfo struct {
 func ListSymbols(ctx context.Context) ([]SymbolInfo, error) {
 	symbolCache.Lock()
 	defer symbolCache.Unlock()
+	if !symbolCache.diskLoaded {
+		symbolCache.diskLoaded = true
+		readSymbolsDisk()
+	}
 	if symbolCache.symbols != nil && nowFunc().Sub(symbolCache.loaded) < 24*time.Hour {
 		return append([]SymbolInfo(nil), symbolCache.symbols...), nil
 	}
@@ -49,6 +54,7 @@ func ListSymbols(ctx context.Context) ([]SymbolInfo, error) {
 		return nil, err
 	}
 	symbolCache.symbols, symbolCache.loaded = symbols, nowFunc()
+	writeSymbolsDisk()
 	return append([]SymbolInfo(nil), symbols...), nil
 }
 
