@@ -22,6 +22,7 @@ func TestRenderedPromptTokenEstimateCountsActualContent(t *testing.T) {
 }
 
 func TestPromptBudgetFallbackRemovesRawKlines(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	cfg := store.StrategyConfig{Language: "zh"}
 	// Keep the monotone rendering fixture eligible under the anti-chase caps.
 	cfg.RiskControl.CounterMaxEMA20_1hPct = -1

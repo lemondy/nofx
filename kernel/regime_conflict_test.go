@@ -132,6 +132,7 @@ func TestRegimeSkipSynthesizesWaitWithoutLLM(t *testing.T) {
 }
 
 func TestRegimeSkipKeepsCallForAllowedDirection(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	cfg := &store.StrategyConfig{}
 	// This test needs an allowed direction; the monotone fixture otherwise
 	// hits the unrelated RSI exhaustion and counter-trend distance caps.

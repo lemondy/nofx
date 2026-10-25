@@ -48,6 +48,7 @@ func TestBlockedCandidateCompressesToOneLine(t *testing.T) {
 }
 
 func TestAllowedCandidateKeepsFullJSON(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	cfg := &store.StrategyConfig{}
 	// The monotone fixture has RSI=100 and a distant live-price anchor;
 	// keep this rendering test independent of the anti-chase caps.
