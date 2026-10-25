@@ -107,7 +107,7 @@ func bodyCacheGet(key string) ([]byte, bool) {
 	if !ok || !now.Before(e.expires) {
 		return nil, false
 	}
-	return e.body, true
+	return append([]byte(nil), e.body...), true
 }
 
 func bodyCachePut(key string, body []byte, ttl time.Duration) {
@@ -118,7 +118,7 @@ func bodyCachePut(key string, body []byte, ttl time.Duration) {
 	respCacheMu.Lock()
 	defer respCacheMu.Unlock()
 	sweepLocked(now)
-	bodyCache[key] = bodyCacheEntry{body: body, expires: now.Add(ttl)}
+	bodyCache[key] = bodyCacheEntry{body: append([]byte(nil), body...), expires: now.Add(ttl)}
 }
 
 // sweepLocked bounds memory: drop expired entries once the maps grow large,

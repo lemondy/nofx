@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"nofx/market/pubcache"
 	"nofx/provider/coinank"
 	"nofx/provider/coinank/coinank_enum"
 	"nofx/security"
@@ -63,5 +64,6 @@ func get(ctx context.Context, path string, paramsMap map[string]string) (string,
 }
 
 var client = &http.Client{
-	Timeout: 30 * time.Second,
+	Timeout:   30 * time.Second,
+	Transport: pubcache.Wrap(nil),
 }
