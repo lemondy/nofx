@@ -22,7 +22,7 @@ const volatileRiskFields = [
     'Minimum thin-coin size factor',
     '0.3',
   ],
-  ['vol_spike_mult', '小时振幅异常倍数', 'Hourly range spike multiple', '3'],
+  ['vol_spike_mult', '小时振幅异常倍数', 'Hourly range spike multiple', '4'],
   [
     'oi_surge_1h_pct',
     '1h OI 剧变绝对值（%）',

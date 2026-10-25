@@ -7,7 +7,7 @@ import "math"
 // avoids reacting to sub-percent noise when the volatility feed is unavailable.
 const (
 	DefaultMinQuoteVolume24hMillions  = 30.0
-	DefaultVolSpikeMult               = 3.0
+	DefaultVolSpikeMult               = 4.0
 	DefaultOISurge1hPct               = 30.0
 	DefaultFastWindowMinutes          = 5.0
 	DefaultFastAdverseATRMult         = 2.0

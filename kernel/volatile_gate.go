@@ -72,7 +72,10 @@ func volatileEntryCodes(symbol string, opt SignalOptions) []string {
 			codes = append(codes, fmt.Sprintf("THIN_VOLUME_%.2f_LT_%.2f", v, opt.MinQuoteVolume24hMillions))
 		}
 	}
-	if opt.VolSpikeMult > 0 {
+	// BTC/ETH exempt: 1h range spikes of 3x the median fire ~4% of hours on
+	// BTC with only ~1% follow-through (2026-10 replay), so the gate would
+	// block majors for no gain. It targets thin, manipulable altcoins.
+	if opt.VolSpikeMult > 0 && symbol != "BTCUSDT" && symbol != "ETHUSDT" {
 		if opt.VolSpike1hRatio == nil {
 			logger.Infof("[RISK CONTROL] %s hourly range history unknown — volatility spike gate fail-open", symbol)
 		} else if v := *opt.VolSpike1hRatio; v > opt.VolSpikeMult {

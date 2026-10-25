@@ -48,6 +48,16 @@ func TestVolatileGateBoundariesMissingAndExemption(t *testing.T) {
 	if got := volatileEntryCodes("BTCUSDT", SignalOptions{MinQuoteVolume24hMillions: 30, QuoteVolume24hUsd: 1}); len(got) != 0 {
 		t.Fatal("BTC turnover exemption", got)
 	}
+	spike := 9.0
+	for _, sym := range []string{"BTCUSDT", "ETHUSDT"} {
+		got := volatileEntryCodes(sym, SignalOptions{VolSpikeMult: 4, VolSpike1hRatio: &spike})
+		if len(got) != 0 {
+			t.Fatal(sym, "must be exempt from VOL_SPIKE_1H", got)
+		}
+	}
+	if got := volatileEntryCodes("IRYSUSDT", SignalOptions{VolSpikeMult: 4, VolSpike1hRatio: &spike}); len(got) != 1 {
+		t.Fatal("altcoin must still hit VOL_SPIKE_1H", got)
+	}
 	opt.QuoteVolume24hUsd = 0
 	opt.VolSpike1hRatio = nil
 	opt.OI1hPct = nil

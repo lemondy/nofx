@@ -16,7 +16,7 @@ func TestVolatileRiskDefaultsAndDisable(t *testing.T) {
 		{"MinQuoteVolume24hMillions", RiskControlConfig.EffectiveMinQuoteVolume24hMillions, 30},
 		{"ThinOIFullSizeMillions", func(r RiskControlConfig) float64 { return r.EffectiveThinOIFullSizeMillions(15) }, 75},
 		{"ThinOIMinSizeFactor", RiskControlConfig.EffectiveThinOIMinSizeFactor, .3},
-		{"VolSpikeMult", RiskControlConfig.EffectiveVolSpikeMult, 3},
+		{"VolSpikeMult", RiskControlConfig.EffectiveVolSpikeMult, 4},
 		{"OISurge1hPct", RiskControlConfig.EffectiveOISurge1hPct, 30},
 		{"FastWindowMinutes", RiskControlConfig.EffectiveFastWindowMinutes, 5},
 		{"FastAdverseATRMult", RiskControlConfig.EffectiveFastAdverseATRMult, 2},

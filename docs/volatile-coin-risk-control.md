@@ -11,7 +11,7 @@
 | `min_quote_volume_24h_millions` | 30（3000 万美元） | 现有候选池默认 OI 下限为 1500 万美元；要求日成交额至少覆盖其两倍，是保守的工程初值。BTC/ETH、bstock 豁免。 |
 | `thin_oi_full_size_millions` | `5 × EffectiveMinOIMillions()`，通常 75 | 在候选 OI 底线之上留出流动性余量才使用满仓尺寸。 |
 | `thin_oi_min_size_factor` | 0.3 | 折扣为 `clamp(OI / 满仓门槛, 0.3, 1)`；系数最多为 1，负数关闭折扣。BTC/ETH、bstock 豁免。 |
-| `vol_spike_mult` | 3 | 最新 1h 的 `(high-low)/open` 相对之前 24 根小时振幅中位数超过 3 倍时禁入；包括形成中的最新小时，不等收盘才响应。bstock 豁免。 |
+| `vol_spike_mult` | 4 | 最新 1h 的 `(high-low)/open` 相对之前 24 根小时振幅中位数超过 4 倍时禁入；包括形成中的最新小时，不等收盘才响应。bstock、BTC/ETH 豁免（2026-10 回放：阈值 3 在 BTC 上约 4% 的小时触发但后续仅约 1% 波动；阈值 4 下 IRYS 触发后 4h 中位波动 9.1%）。 |
 | `oi_surge_1h_pct` | 30% | OI 上涨或下降超过 30% 都禁入；使用合约数量变化，避免币价本身上涨导致名义金额假性增长。bstock 豁免。 |
 | `fast_window_minutes` | 5 分钟 | 短窗口识别突发异常；最高 120 分钟，负数关闭整项快速保护。 |
 | `fast_adverse_atr_mult` | 2 | 五分钟内逆向移动至少 2 倍闭合 1h ATR%，高于常规短周期噪声。负数仅关闭逆向分支。 |
