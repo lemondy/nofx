@@ -24,6 +24,9 @@ func TestRenderedPromptTokenEstimateCountsActualContent(t *testing.T) {
 func TestPromptBudgetFallbackRemovesRawKlines(t *testing.T) {
 	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
 	cfg := store.StrategyConfig{Language: "zh"}
+	// Keep the monotone rendering fixture eligible under the anti-chase caps.
+	cfg.RiskControl.CounterMaxEMA20_1hPct = -1
+	cfg.RiskControl.EntryRSI1hMax = -1
 	cfg.Indicators.EnableRawKlines = true
 	cfg.Indicators.Klines.SelectedTimeframes = []string{"15m", "1h", "4h"}
 	cfg.Indicators.Klines.PrimaryCount = 20
@@ -106,7 +109,7 @@ func TestExecutionPromptOmitsUntrustedNews(t *testing.T) {
 }
 
 func TestStrategyHealthIsLanguageIndependent(t *testing.T) {
-	stats := &TradingStats{TotalTrades: 10, WinRate: 30, ProfitFactor: 0.8, AvgWin: 1, AvgLoss: 1, WindowDays: 30}
+	stats := &TradingStats{TotalTrades: 20, WinRate: 30, ProfitFactor: 0.8, AvgWin: 1, AvgLoss: 1, WindowDays: 30}
 	ctx := &Context{TradingStats: stats, MarketDataMap: map[string]*market.Data{}}
 	for _, lang := range []string{"zh", "en"} {
 		cfg := store.GetDefaultStrategyConfig(lang)

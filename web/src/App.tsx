@@ -27,26 +27,21 @@ const CompetitionPage = lazy(() =>
 const LandingPage = lazy(() =>
   import('./pages/LandingPage').then((m) => ({ default: m.LandingPage }))
 )
-const FAQPage = lazy(() =>
-  import('./pages/FAQPage').then((m) => ({ default: m.FAQPage }))
-)
 const StrategyStudioPage = lazy(() =>
   import('./pages/StrategyStudioPage').then((m) => ({
     default: m.StrategyStudioPage,
   }))
 )
-const StrategyMarketPage = lazy(() =>
-  import('./pages/StrategyMarketPage').then((m) => ({
-    default: m.StrategyMarketPage,
-  }))
-)
 const DataPage = lazy(() =>
   import('./pages/DataPage').then((m) => ({ default: m.DataPage }))
+)
+const ResearchHubPage = lazy(() => import('./pages/ResearchHubPage'))
+const FundsPage = lazy(() =>
+  import('./pages/FundsPage').then((m) => ({ default: m.default }))
 )
 const ReviewPage = lazy(() =>
   import('./pages/ReviewPage').then((m) => ({ default: m.ReviewPage }))
 )
-const SystemQualityPage = lazy(() => import('./pages/SystemQualityPage'))
 import { LoginRequiredOverlay } from './components/auth/LoginRequiredOverlay'
 import HeaderBar from './components/common/HeaderBar'
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext'
@@ -71,11 +66,10 @@ type Page =
   | 'traders'
   | 'trader'
   | 'strategy'
-  | 'strategy-market'
   | 'data'
   | 'review'
-  | 'system-quality'
-  | 'faq'
+  | 'research'
+  | 'funds'
   | 'login'
   | 'register'
 
@@ -100,12 +94,10 @@ function App() {
     if (path === '/welcome') return 'traders'
     if (path === '/traders' || hash === 'traders') return 'traders'
     if (path === '/strategy' || hash === 'strategy') return 'strategy'
-    if (path === '/strategy-market' || hash === 'strategy-market')
-      return 'strategy-market'
     if (path === '/data' || hash === 'data') return 'data'
     if (path === '/review' || hash === 'review') return 'review'
-    if (path === '/system-quality' || hash === 'system-quality')
-      return 'system-quality'
+    if (path === '/research') return 'research'
+    if (path === '/funds') return 'funds'
     if (path === '/dashboard' || hash === 'trader' || hash === 'details')
       return 'trader'
     return 'competition' // 默认为竞赛页面
@@ -124,14 +116,13 @@ function App() {
   const navigateToPage = (page: Page) => {
     const pathMap: Record<Page, string> = {
       competition: '/competition',
-      'strategy-market': '/strategy-market',
       data: '/data',
       review: '/review',
-      'system-quality': '/system-quality',
+      research: '/research',
+      funds: '/funds',
       traders: '/traders',
       trader: '/dashboard',
       strategy: '/strategy',
-      faq: '/faq',
       login: '/login',
       register: '/register',
     }
@@ -202,12 +193,14 @@ function App() {
         setCurrentPage('traders')
       } else if (path === '/strategy' || hash === 'strategy') {
         setCurrentPage('strategy')
-      } else if (path === '/strategy-market' || hash === 'strategy-market') {
-        setCurrentPage('strategy-market')
       } else if (path === '/data' || hash === 'data') {
         setCurrentPage('data')
       } else if (path === '/review' || hash === 'review') {
         setCurrentPage('review')
+      } else if (path === '/research') {
+        setCurrentPage('research')
+      } else if (path === '/funds') {
+        setCurrentPage('funds')
       } else if (
         path === '/dashboard' ||
         hash === 'trader' ||
@@ -423,7 +416,7 @@ function App() {
     return (
       <div
         className="min-h-screen flex items-center justify-center"
-        style={{ background: '#F2EFE6' }}
+        style={{ background: 'var(--bg)' }}
       >
         <div className="text-center">
           <img
@@ -431,7 +424,7 @@ function App() {
             alt="NoFx Logo"
             className="w-16 h-16 mx-auto mb-4 animate-pulse"
           />
-          <p style={{ color: '#1E1E1A' }}>{t('loading', language)}</p>
+          <p style={{ color: 'var(--fg)' }}>{t('loading', language)}</p>
         </div>
       </div>
     )
@@ -457,31 +450,6 @@ function App() {
     // Beginner claw402 onboarding was removed; land on the traders page.
     return <Redirect to="/traders" />
   }
-  if (route === '/faq') {
-    return (
-      <div
-        className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
-      >
-        <HeaderBar
-          isLoggedIn={!!user}
-          currentPage="faq"
-          language={language}
-          onLanguageChange={setLanguage}
-          user={user}
-          onLogout={logout}
-          onLoginRequired={handleLoginRequired}
-          onPageChange={navigateToPage}
-        />
-        <FAQPage />
-        <LoginRequiredOverlay
-          isOpen={loginOverlayOpen}
-          onClose={() => setLoginOverlayOpen(false)}
-          featureName={loginOverlayFeature}
-        />
-      </div>
-    )
-  }
   if (route === '/reset-password') {
     return <ResetPasswordPage />
   }
@@ -492,7 +460,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -515,7 +483,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -527,7 +495,7 @@ function App() {
           onLoginRequired={handleLoginRequired}
           onPageChange={dataPageNavigate}
         />
-        <main className="pt-16">
+        <main className="pt-[52px]">
           <DataPage />
         </main>
         <LoginRequiredOverlay
@@ -549,7 +517,7 @@ function App() {
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
@@ -561,7 +529,7 @@ function App() {
           onLoginRequired={handleLoginRequired}
           onPageChange={reviewPageNavigate}
         />
-        <main className="pt-16">
+        <main className="pt-[52px]">
           <ReviewPage language={language} />
         </main>
         <LoginRequiredOverlay
@@ -572,28 +540,33 @@ function App() {
       </div>
     )
   }
-  // System quality page (系统质量) - requires authentication
-  if (route === '/system-quality') {
+  // Funds page (资金总览) - requires authentication
+  if (route === '/funds') {
     if ((!user || !token) && !hasPersistedAuth) {
       return <Redirect to="/login" />
+    }
+    const fundsPageNavigate = (page: Page) => {
+      navigateToPage(page)
     }
     return (
       <div
         className="min-h-screen"
-        style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
       >
         <HeaderBar
           isLoggedIn={!!user}
-          currentPage="system-quality"
+          currentPage="funds"
           language={language}
           onLanguageChange={setLanguage}
           user={user}
           onLogout={logout}
           onLoginRequired={handleLoginRequired}
-          onPageChange={navigateToPage}
+          onPageChange={fundsPageNavigate}
         />
-        <main className="pt-16">
-          <SystemQualityPage language={language} />
+        <main className="pt-[52px]">
+          <Suspense fallback={null}>
+            <FundsPage language={language} />
+          </Suspense>
         </main>
         <LoginRequiredOverlay
           isOpen={loginOverlayOpen}
@@ -603,7 +576,48 @@ function App() {
       </div>
     )
   }
-  // Show landing page for root route
+  // 系统质量并入系统设置页；因子挖掘 / 晋升报告 / 研究记录合并为顶部「研究」菜单
+  const legacyRedirects: Record<string, string> = {
+    '/system-quality': '/settings#quality',
+    '/factor-mining': '/research#factor-mining',
+    '/paper-promotion': '/research#paper-promotion',
+    '/research-log': '/research#research-log',
+  }
+  if (legacyRedirects[route]) {
+    return <Redirect to={legacyRedirects[route]} />
+  }
+  if (route === '/research') {
+    if ((!user || !token) && !hasPersistedAuth) {
+      return <Redirect to="/login" />
+    }
+    return (
+      <div
+        className="min-h-screen"
+        style={{ background: 'var(--bg)', color: 'var(--fg)' }}
+      >
+        <HeaderBar
+          isLoggedIn={!!user}
+          currentPage="research"
+          language={language}
+          onLanguageChange={setLanguage}
+          user={user}
+          onLogout={logout}
+          onLoginRequired={handleLoginRequired}
+          onPageChange={navigateToPage}
+        />
+        <main className="pt-[52px]">
+          <Suspense fallback={null}>
+            <ResearchHubPage language={language} />
+          </Suspense>
+        </main>
+        <LoginRequiredOverlay
+          isOpen={loginOverlayOpen}
+          onClose={() => setLoginOverlayOpen(false)}
+          featureName={loginOverlayFeature}
+        />
+      </div>
+    )
+  }
   if (route === '/' || route === '') {
     return <LandingPage />
   }
@@ -616,7 +630,7 @@ function App() {
   return (
     <div
       className="min-h-screen"
-      style={{ background: '#F2EFE6', color: '#1E1E1A' }}
+      style={{ background: 'var(--bg)', color: 'var(--fg)' }}
     >
       <HeaderBar
         isLoggedIn={!!user}
@@ -630,7 +644,7 @@ function App() {
       />
 
       {/* Main Content with Page Transitions */}
-      <main className="min-h-screen pt-16">
+      <main className="min-h-screen pt-[52px]">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentPage}
@@ -643,8 +657,6 @@ function App() {
               <CompetitionPage />
             ) : currentPage === 'data' ? (
               <DataPage />
-            ) : currentPage === 'strategy-market' ? (
-              <StrategyMarketPage />
             ) : currentPage === 'traders' ? (
               <AITradersPage
                 onTraderSelect={(traderId) => {
@@ -714,11 +726,14 @@ function App() {
       {/* Footer */}
       <footer
         className="mt-16"
-        style={{ borderTop: '1px solid #C0B9A2', background: '#EDE9DC' }}
+        style={{
+          borderTop: '1px solid var(--line)',
+          background: 'var(--surface-hover)',
+        }}
       >
         <div
           className="max-w-[1920px] mx-auto px-6 py-6 text-center text-sm"
-          style={{ color: '#8A8A7C' }}
+          style={{ color: 'var(--fg-3)' }}
         >
           <p>{t('footerTitle', language)}</p>
           <p className="mt-1">{t('footerWarning', language)}</p>
@@ -730,19 +745,19 @@ function App() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#6E6E60',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg-3)',
+                border: '1px solid var(--line)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#C0B9A2'
-                e.currentTarget.style.color = '#1E1E1A'
-                e.currentTarget.style.borderColor = '#B8912A'
+                e.currentTarget.style.background = 'var(--line)'
+                e.currentTarget.style.color = 'var(--fg)'
+                e.currentTarget.style.borderColor = 'var(--brand)'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#E9E4D6'
-                e.currentTarget.style.color = '#6E6E60'
-                e.currentTarget.style.borderColor = '#C0B9A2'
+                e.currentTarget.style.background = 'var(--surface-hover)'
+                e.currentTarget.style.color = 'var(--fg-3)'
+                e.currentTarget.style.borderColor = 'var(--line)'
               }}
             >
               <svg
@@ -762,19 +777,19 @@ function App() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#6E6E60',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg-3)',
+                border: '1px solid var(--line)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#C0B9A2'
-                e.currentTarget.style.color = '#1E1E1A'
+                e.currentTarget.style.background = 'var(--line)'
+                e.currentTarget.style.color = 'var(--fg)'
                 e.currentTarget.style.borderColor = '#1DA1F2'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#E9E4D6'
-                e.currentTarget.style.color = '#6E6E60'
-                e.currentTarget.style.borderColor = '#C0B9A2'
+                e.currentTarget.style.background = 'var(--surface-hover)'
+                e.currentTarget.style.color = 'var(--fg-3)'
+                e.currentTarget.style.borderColor = 'var(--line)'
               }}
             >
               <svg
@@ -794,19 +809,19 @@ function App() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold transition-all hover:scale-105"
               style={{
-                background: '#E9E4D6',
-                color: '#6E6E60',
-                border: '1px solid #C0B9A2',
+                background: 'var(--surface-hover)',
+                color: 'var(--fg-3)',
+                border: '1px solid var(--line)',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#C0B9A2'
-                e.currentTarget.style.color = '#1E1E1A'
+                e.currentTarget.style.background = 'var(--line)'
+                e.currentTarget.style.color = 'var(--fg)'
                 e.currentTarget.style.borderColor = '#0088cc'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#E9E4D6'
-                e.currentTarget.style.color = '#6E6E60'
-                e.currentTarget.style.borderColor = '#C0B9A2'
+                e.currentTarget.style.background = 'var(--surface-hover)'
+                e.currentTarget.style.color = 'var(--fg-3)'
+                e.currentTarget.style.borderColor = 'var(--line)'
               }}
             >
               <svg

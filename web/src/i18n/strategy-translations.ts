@@ -141,6 +141,19 @@ export const coinSource = {
     en: 'Breakdown only',
     es: 'Solo caída',
   },
+  piggyDashMinGrade: {
+    zh: '最低信号等级',
+    en: 'Minimum signal grade',
+    es: 'Grado mínimo de señal',
+  },
+  piggyDashMinGradeDesc: {
+    zh: '低于此等级的突破信号不进入候选池。回测：weak 胜率 31.9%、24h 均值 −0.73%；medium 48.2%、+1.30%；strong 88.9%、+2.22%。默认 medium',
+    en: 'Breakout signals below this grade stay out of the candidate pool. Backtest: weak 31.9% win, 24h mean −0.73%; medium 48.2%, +1.30%; strong 88.9%, +2.22%. Default medium',
+    es: 'Las señales de ruptura por debajo de este grado no entran en el pool de candidatas. Backtest: weak 31.9% aciertos, media 24h −0.73%; medium 48.2%, +1.30%; strong 88.9%, +2.22%. Por defecto medium',
+  },
+  gradeWeak: { zh: '弱', en: 'weak', es: 'débil' },
+  gradeMedium: { zh: '中', en: 'medium', es: 'medio' },
+  gradeStrong: { zh: '强', en: 'strong', es: 'fuerte' },
   piggyDashNote: {
     zh: '取突破/跌破监测引擎（每5分钟刷新）打分最高的币种',
     en: 'Takes the top-scored coins from the breakout engine (refreshed every 5 min)',
@@ -194,6 +207,26 @@ export const coinSource = {
     zh: '记录近 N 天每日涨幅 Top20 并合并去重进做空扫描宇宙，捕捉已从 24h 榜淡出的冲高回落币种；负数 = 关闭',
     en: "Records each day's Top-20 gainers for N days and merges (deduped) into the short-scan universe — catches pumps that already fell off the 24h board; negative = off",
     es: 'Registra el Top-20 diario de alzas por N días y lo fusiona en el universo de cortos; negativo = desactivado',
+  },
+  shortScanMinScore: {
+    zh: '入池最低分',
+    en: 'Minimum Pool Score',
+    es: 'Puntuación Mínima',
+  },
+  shortScanMinScoreUnit: {
+    zh: '分（0-100）',
+    en: 'pts (0-100)',
+    es: 'pts (0-100)',
+  },
+  shortScanMinScoreDefault: {
+    zh: '0 = 使用默认 55 分',
+    en: '0 = default 55',
+    es: '0 = 55 por defecto',
+  },
+  shortScanMinScoreDesc: {
+    zh: '做空评分低于此值的币不进入候选池。调低会放进更多但更弱的做空候选（复盘显示 40-55 分平均为负收益）；保存后下一周期生效',
+    en: 'Coins with a short score below this stay out of the pool. Lower admits more but weaker short setups (journal: 40-55 averaged a negative return); applies from the next cycle after saving',
+    es: 'Las monedas con puntuación inferior no entran en el pool. Bajarla admite más candidatos pero más débiles; se aplica en el siguiente ciclo tras guardar',
   },
   shortScanHistoryMax: {
     zh: '历史涨幅池每轮上限（个）',
@@ -546,6 +579,51 @@ export const riskControl = {
     en: 'Coins with 4h trend-window return ≥ N% need a CONFIRMED pullback for longs (15m back above EMA20 + higher swing low), else longs are blocked (EXTENDED_PUMP_UNCONFIRMED); 0 = default 20, negative = disabled',
     es: 'Monedas con retorno 4h ≥ N% requieren retroceso confirmado para largos; 0 = 20 por defecto, negativo = desactivado',
   },
+  antiChaseTitle: {
+    zh: '防追高 / 逆势入场门',
+    en: 'Anti-chase entry gates',
+    es: 'Filtros anti-persecución',
+  },
+  chaseMaxEma20Pct: {
+    zh: '防追高:1h EMA20 顺向偏离上限(%)',
+    en: 'Anti-Chase: Max 1h EMA20 Distance in Trade Direction (%)',
+    es: 'Antipersecución: Distancia Máx. EMA20 1h (%)',
+  },
+  chaseMaxEma20PctDesc: {
+    zh: '入场价顺交易方向偏离 1h EMA20 超过 N% 时拒绝开仓(追高,做多和做空都生效);0 = 默认 6,负数 = 禁用。不适用于美股代币',
+    en: 'Blocks entries more than N% beyond the 1h EMA20 in the trade direction (chasing; applies to both long and short); 0 = default 6, negative = disabled. Not applied to US-equity tokens',
+    es: 'Bloquea entradas a más de N% del EMA20 1h en la dirección de la operación (perseguir; aplica a largos y cortos); 0 = 6 por defecto, negativo = desactivado. No aplica a tokens de acciones de EE. UU.',
+  },
+  counterMaxEma20Pct: {
+    zh: '逆势入场门:1h EMA20 反向偏离上限(%)',
+    en: 'Counter-Trend Gate: Max Wrong-Side 1h EMA20 Distance (%)',
+    es: 'Filtro Contratendencia: Distancia Máx. EMA20 1h (%)',
+  },
+  counterMaxEma20PctDesc: {
+    zh: '入场价在 1h EMA20 错误一侧超过 N% 时拒绝开仓(防接飞刀 / 防逆势做空暴涨币,做多和做空都生效);0 = 默认 3,负数 = 禁用。不适用于美股代币',
+    en: 'Blocks entries more than N% on the wrong side of the 1h EMA20 (catching a knife / fading a pump; applies to both long and short); 0 = default 3, negative = disabled. Not applied to US-equity tokens',
+    es: 'Bloquea entradas a más de N% en el lado incorrecto del EMA20 1h (atrapar un cuchillo; aplica a largos y cortos); 0 = 3 por defecto, negativo = desactivado. No aplica a tokens de acciones de EE. UU.',
+  },
+  entryRsi1hMax: {
+    zh: 'RSI 极端门:1h RSI 上限',
+    en: 'RSI Exhaustion Gate: Max 1h RSI',
+    es: 'Filtro RSI Extremo: RSI 1h Máximo',
+  },
+  entryRsi1hMaxDesc: {
+    zh: '1h RSI ≥ N 拒绝做多,1h RSI ≤ 100−N 拒绝做空(防极端超买/超卖入场,做多和做空都生效);0 = 默认 78,负数 = 禁用。不适用于美股代币',
+    en: 'Longs blocked when 1h RSI ≥ N, shorts blocked when 1h RSI ≤ 100−N (overheated momentum; applies to both long and short); 0 = default 78, negative = disabled. Not applied to US-equity tokens',
+    es: 'Largos bloqueados con RSI 1h ≥ N, cortos con RSI 1h ≤ 100−N (momento sobrecalentado; aplica a largos y cortos); 0 = 78 por defecto, negativo = desactivado. No aplica a tokens de acciones de EE. UU.',
+  },
+  chaseMaxMove4hPct: {
+    zh: '防追高:4h 顺方向涨跌上限(%)',
+    en: 'Anti-Chase: Max 4h Directional Move (%)',
+    es: 'Antipersecución: Movimiento Máx. 4h (%)',
+  },
+  chaseMaxMove4hPctDesc: {
+    zh: '最近 4h 顺交易方向涨跌超过 N% 时拒绝开仓(防追大阳线/大阴线,做多和做空都生效);0 = 默认 6,负数 = 禁用。不适用于美股代币',
+    en: 'Blocks entries after a move of more than N% over the last 4h in the trade direction (applies to both long and short); 0 = default 6, negative = disabled. Not applied to US-equity tokens',
+    es: 'Bloquea entradas tras un movimiento de más de N% en 4h en la dirección de la operación (aplica a largos y cortos); 0 = 6 por defecto, negativo = desactivado. No aplica a tokens de acciones de EE. UU.',
+  },
   tpTrimProfitPct: {
     zh: '止盈阶梯:减仓 1/3 触发浮盈(%)',
     en: 'TP Ladder: Trim-1/3 PnL (%)',
@@ -600,6 +678,16 @@ export const riskControl = {
     zh: '止盈触发单只平这一比例的仓位,剩余由 2×ATR 移动止损接管奔趋势(捕捉冲破止盈位后的延续);0 = 默认 0.5,负数 = 全平(旧行为);移动止损关闭时自动退化为全平',
     en: 'The TP algo closes only this fraction; the remainder rides as a trend-runner under the 2×ATR trailing stop (captures continuation past the TP level); 0 = default 0.5, negative = full close (legacy); collapses to full close when trailing is off',
     es: 'El TP cierra solo esta fracción; el resto corre con el trailing 2×ATR; 0 = 0.5, negativo = cierre total',
+  },
+  tpMaxR: {
+    zh: '止盈上限（R）',
+    en: 'Take-profit cap (R)',
+    es: 'Límite de toma de ganancias (R)',
+  },
+  tpMaxRDesc: {
+    zh: '计划止盈超过「入场价 ± N × 初始风险」时按此截断。回测：2R 上限每笔 +0.024R，前后两段均为正。0 = 不设上限',
+    en: 'A planned take-profit beyond "entry ± N × initial risk" is capped there. Backtest: a 2R cap adds +0.024R per trade, positive in both halves. 0 = no cap',
+    es: 'Una toma de ganancias planificada más allá de "entrada ± N × riesgo inicial" se limita ahí. Backtest: un límite de 2R suma +0.024R por operación, positivo en ambas mitades. 0 = sin límite',
   },
   minRRZeroHint: {
     zh: '0 = 禁用 RR 门(rr_scan 与执行端 checkRR 同步跳过)',
@@ -1042,6 +1130,328 @@ export const chartTabs = {
 }
 
 // ============================================================================
+// US STOCK (BINANCE bStock) CONFIG TRANSLATIONS
+// ============================================================================
+export const stockConfig = {
+  symbolsSection: { zh: '选股', en: 'Symbols', id: 'Saham' },
+  symbols: {
+    zh: '交易标的（币安 bStock 现货）',
+    en: 'Symbols (Binance bStock spot)',
+    id: 'Simbol (bStock spot Binance)',
+  },
+  symbolsDesc: {
+    zh: '只做多，使用现货 USDT 余额',
+    en: 'Long-only, uses the spot USDT balance',
+    id: 'Hanya long, memakai saldo USDT spot',
+  },
+  symbolSearch: {
+    zh: '搜索代码，如 AAPL',
+    en: 'Search ticker, e.g. AAPL',
+    id: 'Cari ticker, mis. AAPL',
+  },
+  symbolsLoading: {
+    zh: '加载标的列表…',
+    en: 'Loading symbols…',
+    id: 'Memuat simbol…',
+  },
+  symbolsFallback: {
+    zh: '标的列表暂不可用，请手动输入（逗号分隔，如 AAPLBUSDT, NVDABUSDT）',
+    en: 'Symbol list unavailable — enter manually (comma separated, e.g. AAPLBUSDT, NVDABUSDT)',
+    id: 'Daftar simbol tidak tersedia — isi manual (pisahkan koma, mis. AAPLBUSDT, NVDABUSDT)',
+  },
+  symbolsFallbackPlaceholder: {
+    zh: 'AAPLBUSDT, NVDABUSDT',
+    en: 'AAPLBUSDT, NVDABUSDT',
+    id: 'AAPLBUSDT, NVDABUSDT',
+  },
+  symbolsSelected: { zh: '已选', en: 'Selected', id: 'Dipilih' },
+  symbolsNoMatch: {
+    zh: '无匹配标的',
+    en: 'No matching symbols',
+    id: 'Tidak ada simbol yang cocok',
+  },
+  symbolsEmptyWarn: {
+    zh: '至少选择 1 只标的才能保存',
+    en: 'Select at least one symbol before saving',
+    id: 'Pilih minimal satu simbol sebelum menyimpan',
+  },
+  symbolSource: { zh: '选股方式', en: 'Symbol source', id: 'Sumber simbol' },
+  sourceManual: {
+    zh: '手动选择',
+    en: 'Manual',
+    id: 'Pilih manual',
+  },
+  sourceScan: {
+    zh: '自动扫描',
+    en: 'Auto scan',
+    id: 'Pindai otomatis',
+  },
+  sourceHybrid: {
+    zh: '自动 + 手动',
+    en: 'Auto + manual',
+    id: 'Otomatis + manual',
+  },
+  sourceManualDesc: {
+    zh: '只交易下面手动选择的股票。',
+    en: 'Trade only the stocks selected below.',
+    id: 'Hanya perdagangkan saham yang dipilih di bawah.',
+  },
+  sourceScanDesc: {
+    zh: '每 30 分钟扫描币安 bStock 上全部美股，按 Oliver Kell 价格行为周期识别阶段并打分，把得分最高的 N 只多头机会交给大模型判断。',
+    en: "Every 30 minutes all US-stock bStock pairs are scanned, classified by Oliver Kell's cycle of price action and scored; the top N long setups are handed to the AI.",
+    id: 'Setiap 30 menit semua saham AS di bStock Binance dipindai, diklasifikasikan menurut siklus aksi harga Oliver Kell, lalu diberi skor; N setup long teratas diberikan ke AI.',
+  },
+  sourceHybridDesc: {
+    zh: '手动选择的股票每轮都交给大模型，另外再加上扫描得分最高的 N 只多头机会（不占用手动股票的名额）。',
+    en: "Manually selected stocks are handed to the AI every round, plus the top N long setups from the scan (manual names don't consume Top-N slots).",
+    id: 'Saham pilihan manual diberikan ke AI setiap putaran, ditambah N setup long teratas dari pemindaian (tidak memakan jatah Top N).',
+  },
+  sourceHeldNote: {
+    zh: '已持仓的股票始终保留在决策列表中。',
+    en: 'Stocks you already hold always stay in the decision list.',
+    id: 'Saham yang sudah dipegang selalu tetap di daftar keputusan.',
+  },
+  scanTopN: {
+    zh: 'Top N（交给大模型）',
+    en: 'Top N (fed to the AI)',
+    id: 'Top N (diberikan ke AI)',
+  },
+  scanTopNDesc: {
+    zh: '每次决策把得分最高的前 N 只多头机会交给大模型（1–50，默认 10）',
+    en: 'Feed the highest-scoring N long setups per decision (1–50, default 10)',
+    id: 'Berikan N setup long dengan skor tertinggi per keputusan (1–50, default 10)',
+  },
+  symbolsHybridDesc: {
+    zh: '每轮都会交给大模型；扫描 Top N 在此之外另取。',
+    en: 'Fed to the AI every round; the scan Top N is picked in addition.',
+    id: 'Diberikan ke AI setiap putaran; Top N pemindaian diambil di luar daftar ini.',
+  },
+  symbolsIgnoredNote: {
+    zh: '自动扫描模式不使用手动列表（已保存的 {n} 只不会交给大模型）；需要同时使用请切换到「自动 + 手动」。',
+    en: 'Auto scan ignores the manual list (the {n} saved symbols are not fed to the AI); switch to Auto + manual to use both.',
+    id: 'Mode pindai otomatis tidak memakai daftar manual ({n} simbol tersimpan tidak diberikan ke AI); pilih Otomatis + manual untuk memakai keduanya.',
+  },
+  symbolsHybridEmptyWarn: {
+    zh: '自动 + 手动模式至少选择 1 只手动股票',
+    en: 'Auto + manual mode needs at least one manual symbol',
+    id: 'Mode otomatis + manual butuh minimal satu simbol manual',
+  },
+  scanExclude: { zh: '排除', en: 'Exclude', id: 'Kecualikan' },
+  scanExcludeDesc: {
+    zh: '列出的标的永远不会被扫描选中',
+    en: 'Listed pairs are never picked by the scanner',
+    id: 'Simbol berikut tidak akan dipilih oleh pemindai',
+  },
+  scanExcludePlaceholder: {
+    zh: '逗号分隔，如 SOXSBUSDT',
+    en: 'Comma separated, e.g. SOXSBUSDT',
+    id: 'Pisahkan koma, mis. SOXSBUSDT',
+  },
+  scanRank: { zh: '排名方式', en: 'Ranking', id: 'Metode peringkat' },
+  scanRankKell: {
+    zh: '价格周期（Kell）',
+    en: 'Price cycle (Kell)',
+    id: 'Siklus harga (Kell)',
+  },
+  scanRankKellDesc: {
+    zh: '按 Kell 价格周期的多头机会打分排序。',
+    en: "Rank by the long-setup score of Kell's cycle of price action.",
+    id: 'Urutkan menurut skor setup long dari siklus aksi harga Kell.',
+  },
+  scanRankMomentum: {
+    zh: '趋势动量',
+    en: 'Trend momentum',
+    id: 'Momentum tren',
+  },
+  scanRankMomentumDesc: {
+    zh: '只选站上 200 日均线的股票，按 12-1 动量（过去 12 个月涨幅，剔除最近 1 个月）排序。回测 IC +0.049，五年均为正。',
+    en: 'Only stocks above the 200-day SMA, ranked by 12-1 momentum (past 12 months excluding the most recent one). Backtest IC +0.049, positive in each of five years.',
+    id: 'Hanya saham di atas SMA 200 hari, diurutkan menurut momentum 12-1 (12 bulan terakhir tanpa bulan terbaru). IC backtest +0.049, positif di kelima tahun.',
+  },
+  scanPreview: {
+    zh: '扫描预览',
+    en: 'Scan preview',
+    id: 'Pratinjau pindaian',
+  },
+  scanRefresh: { zh: '刷新', en: 'Refresh', id: 'Segarkan' },
+  scanScanning: { zh: '扫描中…', en: 'Scanning…', id: 'Memindai…' },
+  scanGeneratedAt: {
+    zh: '生成时间',
+    en: 'Generated at',
+    id: 'Dibuat pada',
+  },
+  scanError: {
+    zh: '扫描结果加载失败',
+    en: 'Failed to load scan results',
+    id: 'Gagal memuat hasil pindaian',
+  },
+  scanNoResults: {
+    zh: '暂无扫描结果',
+    en: 'No scan results yet',
+    id: 'Belum ada hasil pindaian',
+  },
+  scanColRank: { zh: '#', en: '#', id: '#' },
+  scanColSymbol: { zh: '标的', en: 'Symbol', id: 'Simbol' },
+  scanColPhase: { zh: '阶段', en: 'Phase', id: 'Fase' },
+  scanColScore: { zh: '得分', en: 'Score', id: 'Skor' },
+  scanColRs63: { zh: 'RS63', en: 'RS63', id: 'RS63' },
+  scanColMom: { zh: '12-1 动量', en: '12-1 mom', id: 'Mom 12-1' },
+  scanColVol: { zh: '量比', en: 'Vol', id: 'Vol' },
+  scanColFeed: { zh: '入选', en: 'Fed', id: 'Masuk' },
+  scanAboveSma200: { zh: '200日线上', en: '>SMA200', id: '>SMA200' },
+  scanExcludedTag: { zh: '已排除', en: 'Excluded', id: 'Dikecualikan' },
+  scanManualTag: { zh: '手动', en: 'Manual', id: 'Manual' },
+  scanFeedTip: {
+    zh: '将交给大模型判断',
+    en: 'Fed to the AI',
+    id: 'Diberikan ke AI',
+  },
+  phaseReversalExtension: {
+    zh: '反转延伸',
+    en: 'Reversal Extension',
+    id: 'Perpanjangan Pembalikan',
+  },
+  phaseWedgePop: { zh: '楔形突破', en: 'Wedge Pop', id: 'Wedge Pop' },
+  phaseEmaCrossback: {
+    zh: '均线回踩',
+    en: 'EMA Crossback',
+    id: 'Crossback EMA',
+  },
+  phaseBaseNBreak: {
+    zh: '平台突破',
+    en: "Base n' Break",
+    id: "Base n' Break",
+  },
+  phaseBaseForming: {
+    zh: '平台构筑中',
+    en: 'Base forming',
+    id: 'Membentuk base',
+  },
+  phaseUptrend: { zh: '上升趋势', en: 'Uptrend', id: 'Tren naik' },
+  phaseExhaustionExtension: {
+    zh: '衰竭延伸',
+    en: 'Exhaustion Extension',
+    id: 'Perpanjangan Kelelahan',
+  },
+  phaseWedgeDrop: { zh: '楔形下跌', en: 'Wedge Drop', id: 'Wedge Drop' },
+  phaseDowntrend: { zh: '下跌趋势', en: 'Downtrend', id: 'Tren turun' },
+  phaseNeutral: { zh: '无明确形态', en: 'Neutral', id: 'Netral' },
+  phaseInsufficientData: {
+    zh: '数据不足',
+    en: 'Insufficient data',
+    id: 'Data kurang',
+  },
+  presetSection: { zh: '持仓周期', en: 'Holding Style', id: 'Gaya Holding' },
+  presetSwing: {
+    zh: '波段（默认）',
+    en: 'Swing (default)',
+    id: 'Swing (default)',
+  },
+  presetSwingDesc: {
+    zh: '数天–数周；日线趋势 + 1 小时入场；决策时点 9:45 / 12:30 / 15:30（美东）',
+    en: 'Days to weeks; 1d trend + 1h entry; decisions at 9:45 / 12:30 / 15:30 ET',
+    id: 'Hari hingga minggu; tren 1d + entry 1h; keputusan 9:45 / 12:30 / 15:30 ET',
+  },
+  presetPosition: { zh: '长线', en: 'Position', id: 'Posisi' },
+  presetPositionDesc: {
+    zh: '数周–数月；周线趋势 + 日线入场；每个交易日 15:30（美东）决策一次',
+    en: 'Weeks to months; 1w trend + 1d entry; one decision at 15:30 ET',
+    id: 'Minggu hingga bulan; tren 1w + entry 1d; satu keputusan pada 15:30 ET',
+  },
+  sessionsSection: { zh: '开仓时段', en: 'Entry Sessions', id: 'Sesi Entry' },
+  sessionRegular: {
+    zh: '常规时段（美东 9:30–16:00）',
+    en: 'Regular (9:30–16:00 ET)',
+    id: 'Reguler (9:30–16:00 ET)',
+  },
+  sessionPreMarket: {
+    zh: '盘前（4:00–9:30）',
+    en: 'Pre-market (4:00–9:30 ET)',
+    id: 'Pra-pasar (4:00–9:30 ET)',
+  },
+  sessionAfterHours: {
+    zh: '盘后（16:00–20:00）',
+    en: 'After-hours (16:00–20:00 ET)',
+    id: 'Setelah jam pasar (16:00–20:00 ET)',
+  },
+  sessionsNote: {
+    zh: '平仓与止损在任何时段都会执行；周末与美股休市日不开仓',
+    en: 'Exits and stops run in every session; no new positions on weekends and US market holidays',
+    id: 'Exit dan stop berjalan di semua sesi; tidak ada posisi baru pada akhir pekan dan hari libur pasar AS',
+  },
+  sessionsNoneWarn: {
+    zh: '至少需要启用一个时段',
+    en: 'Enable at least one session',
+    id: 'Aktifkan minimal satu sesi',
+  },
+  dataSection: { zh: '数据', en: 'Data', id: 'Data' },
+  yahooFallback: {
+    zh: 'K 线不足时使用 Yahoo 正股数据',
+    en: 'Use Yahoo underlying-stock data when klines are insufficient',
+    id: 'Gunakan data saham Yahoo saat kline tidak cukup',
+  },
+  yahooFallbackDesc: {
+    zh: 'bStock 日线/周线上市时间短，不足的周期整条改用正股数据（不拼接）',
+    en: 'bStock daily/weekly history is short; a short timeframe switches wholesale to the underlying (never stitched)',
+    id: 'Riwayat harian/mingguan bStock pendek; timeframe yang kurang beralih penuh ke saham dasar (tanpa digabung)',
+  },
+  maxDivergence: {
+    zh: '最大价差 %（bStock 与正股）',
+    en: 'Max divergence % (bStock vs underlying)',
+    id: 'Selisih maks % (bStock vs saham dasar)',
+  },
+  maxDivergenceDesc: {
+    zh: '超过则不开仓；留空=默认，负数=关闭检查',
+    en: 'Block opens beyond this; empty = default, negative = check disabled',
+    id: 'Blokir entry jika melebihi; kosong = default, negatif = nonaktif',
+  },
+  riskSection: { zh: '风控', en: 'Risk', id: 'Risiko' },
+  maxPositionPct: {
+    zh: '单票最大仓位 %（权益）',
+    en: 'Max position % (equity)',
+    id: 'Posisi maks % (ekuitas)',
+  },
+  maxTotalExposurePct: {
+    zh: '总持仓上限 %（权益）',
+    en: 'Max total exposure % (equity)',
+    id: 'Eksposur total maks % (ekuitas)',
+  },
+  maxPositions: { zh: '最多持仓数', en: 'Max positions', id: 'Posisi maks' },
+  riskPerTradePct: {
+    zh: '单笔风险 %（止损亏损/权益）',
+    en: 'Risk per trade % (loss at stop / equity)',
+    id: 'Risiko per trade % (rugi di stop / ekuitas)',
+  },
+  stopAtrMin: {
+    zh: '止损距离下限（×ATR 日线）',
+    en: 'Stop distance min (×ATR 1d)',
+    id: 'Jarak stop min (×ATR 1d)',
+  },
+  stopAtrMax: {
+    zh: '止损距离上限（×ATR 日线）',
+    en: 'Stop distance max (×ATR 1d)',
+    id: 'Jarak stop maks (×ATR 1d)',
+  },
+  defaultHint: { zh: '默认', en: 'default', id: 'default' },
+  paperSection: { zh: '运行模式', en: 'Run Mode', id: 'Mode Jalan' },
+  paperTrading: {
+    zh: '仅模拟（不下单）',
+    en: 'Paper only (no orders)',
+    id: 'Hanya simulasi (tanpa order)',
+  },
+  paperTradingDesc: {
+    zh: '完整跑数据、决策与风控，但不下单，只记录本应下的单；建议先观察几天',
+    en: 'Runs data, decisions and risk checks but places no orders; recommended for the first few days',
+    id: 'Menjalankan data, keputusan dan cek risiko tanpa order; disarankan untuk beberapa hari pertama',
+  },
+  liveWarning: {
+    zh: '实盘模式：将在币安现货账户真实下单（需开通现货交易权限）。',
+    en: 'LIVE mode: real orders will be placed on the Binance spot account (spot trading permission required).',
+    id: 'Mode LIVE: order nyata akan dikirim ke akun spot Binance (perlu izin spot trading).',
+  },
+}
+
+// ============================================================================
 // HELPER FUNCTION
 // ============================================================================
 
@@ -1060,6 +1470,7 @@ export const zhStrategy = {
   ...Object.fromEntries(Object.entries(coinSource).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(Object.entries(gridConfig).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(Object.entries(gridRisk).map(([k, v]) => [k, v.zh])),
+  ...Object.fromEntries(Object.entries(stockConfig).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(Object.entries(riskControl).map(([k, v]) => [k, v.zh])),
   ...Object.fromEntries(
     Object.entries(promptSections).map(([k, v]) => [k, v.zh])
@@ -1075,6 +1486,7 @@ export const enStrategy = {
   ...Object.fromEntries(Object.entries(coinSource).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(Object.entries(gridConfig).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(Object.entries(gridRisk).map(([k, v]) => [k, v.en])),
+  ...Object.fromEntries(Object.entries(stockConfig).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(Object.entries(riskControl).map(([k, v]) => [k, v.en])),
   ...Object.fromEntries(
     Object.entries(promptSections).map(([k, v]) => [k, v.en])

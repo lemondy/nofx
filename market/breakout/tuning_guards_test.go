@@ -3,10 +3,10 @@ package breakout
 import (
 	"errors"
 	"os"
-	"time"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Pins for the 2026-09-26 tuning-review fixes.
@@ -33,7 +33,7 @@ func TestShortWeightsInertWhenDisabled(t *testing.T) {
 	}
 }
 
-// P0-2: a starved run (fewer signals than btMinSample) must surface
+// P0-2: a starved run (fewer independent trades than btMinSample) must surface
 // ErrStarved so the scheduler backs off — never report success on 0 signals.
 func TestTuneFromBacktestStarvedIsError(t *testing.T) {
 	if !errors.Is(ErrStarved, ErrStarved) {
@@ -46,6 +46,22 @@ func TestTuneFromBacktestStarvedIsError(t *testing.T) {
 	msg := "backtest starved: insufficient signals"
 	if !strings.Contains(ErrStarved.Error(), "starved") {
 		t.Fatalf("sentinel message drifted: %s", msg)
+	}
+}
+
+func TestTuneWalkForwardOverlappingSignalsAreStarved(t *testing.T) {
+	before := GetParams()
+	var signals []BTSignal
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < btMinSample; i++ {
+		signals = append(signals, BTSignal{Time: start.Add(time.Duration(i) * 15 * time.Minute), Symbol: "X", Score: 90, Ret24h: 3})
+	}
+	changes, verified, _, trainN, testN, candidate := proposeWalkForward(signals)
+	if len(changes) != 0 || len(verified) != 0 || candidate != nil || trainN != 0 || testN != 0 {
+		t.Fatalf("overlapping labels bypassed starvation: changes=%v verified=%v split=%d/%d candidate=%v", changes, verified, trainN, testN, candidate)
+	}
+	if GetParams().StrongThreshold != before.StrongThreshold || GetParams().MediumThreshold != before.MediumThreshold {
+		t.Fatal("starved research run changed live parameters")
 	}
 }
 
@@ -76,7 +92,7 @@ func TestSliceClosedFiltersUnclosedBars(t *testing.T) {
 		}
 		return out
 	}
-	k1h := mk(10)                      // bars 00:00..09:00, each closing +1h
+	k1h := mk(10)                                          // bars 00:00..09:00, each closing +1h
 	sigAt := base.Add(5 * time.Hour).Add(15 * time.Minute) // 05:15 — bar@05:00 closes 06:00 (future)
 
 	got := sliceClosed(k1h, sigAt, time.Hour)

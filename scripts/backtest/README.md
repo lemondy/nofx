@@ -1,0 +1,174 @@
+# scripts/backtest — Backtrader 回测适配
+
+当前系统有回测/研究能力，但此前没有引入第三方回测平台：
+
+| 入口 | 能力与定位 |
+|---|---|
+| `scripts/backtest entry / exit` | 现已使用 **Backtrader 1.9.78.123**；原生 `Cerebro`、`BackBroker`、Market/Limit/Stop、OCO、手续费、滑点和账户盈亏 |
+| `scripts/backtest stocks` | 离线美股多资产共享资金组合；每策略独立 Cerebro，原生 broker/订单/手续费/分析器 |
+| `scripts/backtest ml-dataset` | 两套出场策略的收益标签均通过同一个 Backtrader 适配器生成 |
+| `scripts/backtest ml-eval` | 信号特征的统计检验，不执行订单；拒绝未标记为 Backtrader 的旧标签 |
+| `market/breakout/backtest.go`，`GET /api/breakout/params` | 突破信号的 1h/4h/24h 前瞻收益研究，`evaluation_scope=signal_forward_returns_research_only`；没有订单、账户或 SL/TP 模拟，不属于交易执行回测 |
+| `GET /api/entry-quality-stats` | 实盘决策质量与已发生交易结果的聚合，不是历史回测执行入口 |
+
+选择 [Backtrader](https://github.com/mementum/backtrader) 是因为现有信号提取、缓存和 ML 工具都是 Python，能直接复用数据。Backtrader 免费开源，采用 GPL-3.0 许可证；不需要平台注册或付费服务。项目只实现数据和策略适配，**不再维护自写撮合、仓位账务或盈亏模拟器**，缺少依赖时明确退出，不回退到旧逻辑。
+
+`entry` / `exit` 用于独立信号的出场/入场规则研究，每笔等权归一到初始风险 R；`stocks` 是多资产、共享资金的股票组合回测。均不模拟合约保证金，没有新增 Web 回测页面。
+
+## 安装与执行
+
+在仓库根目录执行。本次验证环境为 Python 3.12。
+
+```bash
+uv venv .venv
+uv pip install --python .venv/bin/python -r scripts/backtest/requirements.txt
+
+# 只读提取已有 AI 决策；日期参数为 UTC
+.venv/bin/python -m scripts.backtest signals \
+  --trader mac-nofx --since 2026-09-12 --until 2026-10-12T16:00
+
+# 查看缺失的历史 K 线；去掉 --dry-run 才下载
+.venv/bin/python -m scripts.backtest fetch --dry-run
+
+# 两种入场方式均使用 Backtrader 撮合
+.venv/bin/python -m scripts.backtest entry --horizons 8,24
+
+# 基线为数据库里当前策略的 risk_control，不是历史配置快照
+.venv/bin/python -m scripts.backtest exit --set mkt --horizon 72 \
+  --csv data/backtest_cache/backtrader_mkt_72h.csv
+.venv/bin/python -m scripts.backtest exit --set lim --horizon 72 \
+  --csv data/backtest_cache/backtrader_lim_72h.csv
+
+# 扫描现有出场规则变体
+.venv/bin/python -m scripts.backtest exit --set mkt --horizon 72 \
+  --variants scripts/backtest/variants/exit_grid.json --csv data/backtest_cache/variants.csv
+
+.venv/bin/python -m unittest discover -s scripts/backtest/tests -v
+```
+
+`signals` / `fetch` 的数据工具和命令帮助仍可用不含 Backtrader 的 Python 环境执行。`entry` / `exit` / `ml-dataset` 必须使用安装了依赖的环境。
+
+通用参数：`--db` 默认 `<repo>/data/data.db`，`--cache` 默认 `data/backtest_cache`，`--signals` 默认 `<cache>/signals.json`，`--trader` / `--trader-id` 可选择策略。回测命令的 `--engine` 只接受 `backtrader`。
+
+成交参数：`--commission 0.0005` 表示每次成交收取 0.05%；默认对所有订单使用同一费率，包括限价单，不区分 maker/taker。`--slippage 0.0003` 表示市价/止损默认滑点 0.03%；限价单不额外滑点。`--limit-valid-min 45` 为从原始信号时间起算的限价有效期。这些都使用原生 broker 配置；费用根据实际成交价格和实际数量收取。
+
+## 数据来源
+
+| 数据 | 来源与用途 |
+|---|---|
+| 入场信号 | `data/data.db` 的 `decision_records.decisions`，只读打开；成功的 `open_long/short(_limit)` 决策 |
+| 初始 SL/TP/限价 | `sl0` / `tp0` / `px0`，只使用该信号首次决策当时的参数 |
+| 出场模式与 ATR | 首次记录的 `decision_json.exit_mode` 和 Structured Signal 的 1h ATR% |
+| 历史成交标签 | `trader_positions` 的匹配结果，仅作实盘标签分组；不决定模拟限价单是否成交或成交价格 |
+| 基线出场参数 | `traders.strategy_id → strategies.config.risk_control`，每次运行读取当前配置；CSV 保存实际参数 |
+| K 线 | 币安 `fapi/v1/klines` → `<cache>/{kl1m,kl5m}/{SYMBOL}_{t0ms}.json`；每行 `[openMs,o,h,l,c]` |
+
+信号去重沿用原来的方法：同币同向连续限价决策间隔小于 `--dedupe-min`（默认 60 分钟），且期间无实盘成交，合并为一个信号。模拟只提交首次决策的订单，不使用 `sl_last` / `tp_last` / 实际 `fill_px` 来重建未来状态。合并后的撤单/改价过程没有重放。
+
+缓存先用 1m，再接不重叠的 5m 数据。适配器把时间戳转换为 **K 线收盘时间**（分别加 1/5 分钟），所有时间为 UTC；找不到信号分钟、OHLC 不合法或数据重叠会跳过。`fetch` 复用 `HTTPS_PROXY`，请求间隔至少 1 秒，权重高时退避。
+
+## Backtrader 执行口径
+
+- 不启用 cheat-on-close/open。信号分钟收盘后提交开仓订单，市价单最早在下一根开盘成交；限价单由 broker 按 OHLC 和有效期撮合，实盘未成交的信号也可能在模拟中成交。
+- 开仓成交的通知到达后，策略根据实际成交价和原始止损计算初始风险，创建保护订单。保护订单从后续 K 线开始执行；开仓成交所在 K 线内的 SL/TP 触发无法回溯执行。
+- 原始止损使用原生 Stop，止盈/减仓使用原生 Limit，关联为 OCO。减仓成交后，用剩余数量重建保护订单，防止旧订单超额平仓形成反向仓位。同根触及多档时先撮合近档，其余档最早在后续 K 线上重挂。
+- 保本、盈利锁、ATR 追踪和峰值回撤根据已经收盘的 K 线更新 Stop 价格；新价从下一根生效。不会在同一根先观察最高价，再假定已在该根低价路径上成交。跳空成交、同根已有订单的处理顺序均由 Backtrader 决定。
+- quick 时间止损和 horizon 到点后提交原生 Market 平仓，最早在下一根可用 K 线开盘成交。数据结束仍有持仓则标记 `open`，用 broker 账户价值盯市，只收取已发生成交的费用，不伪造最后一笔平仓。
+- 每笔研究账户使用足够的虚拟现金和 1 单位资产，不引入实际资金约束。收益 `R = broker 净盈亏 / 实际初始止损风险`，包括真实发生的部分减仓费用。原生 TradeAnalyzer/DrawDown 可在 `backtrader_adapter.run_trade` 的结果中查看。
+
+默认按 (币, 方向) 过滤持仓重叠，`--allow-overlap` 可关闭，`entry` 的市价和限价两组分别过滤。持仓时间取框架执行结果；数据不足而持仓未结束时，保守占用到覆盖末尾或预定 horizon 中较晚的时间。该过滤只是独立信号研究的样本筛选，不是一个共享账户的并发撮合模型。
+
+### 报告
+
+`exit` 输出 n、sumR、avgR、胜率、`maxDD_R`、前后半段 sumR、去掉最大 5 笔后的均值、blocked、unfilled、open 和出场类型。`maxDD_R` 为按信号时间排序的等权累计 R 回撤，**不是组合权益回撤百分比**。CSV 同时保存 engine、engine_version、手续费、滑点和每个变体的完整出场参数。
+
+`entry` 的 A 行为框架模拟限价入场，B 行为下一根开盘市价入场；B1/B2 仍按实盘 filled/unfilled 标签做描述性分组。改变回测规则后，各组实际接纳交易的数量可能不同。
+
+### 策略参数
+
+`params.py` 从线上配置推导基线：保本 `breakeven_arm_r`，锁盈 `profit_lock_at_r` / `profit_lock_be_offset_r` / `tp_trim_yields_to_lock`，减仓 `tp_trim_at_r`，止盈上限 `tp_max_r`，趋势止盈比例 `tp_close_fraction`，ATR 追踪 `trailing_stop_enabled`，峰值回撤 `peak_drawdown_arm_r` / `peak_drawdown_giveback_r`，quick 时间止损 `time_stop_hours`。旧 ROE 减仓/回撤档未建模时会提示。追踪默认 1.5R 启动、2×开仓时 1h ATR。
+
+变体 JSON 为 `[[名称, {覆盖参数}], ...]`，第一行始终是 baseline。支持键：`be_arm be_off lock_r lock_trim trim_r trim_frac tp_cap tp_frac_trend trail trail_arm trail_atr pd_arm pd_give quick_stop_h force_mode use_tp horizon_h`。未知键和不合法减仓比例会报错。
+
+## 信号过滤器检验
+
+```bash
+.venv/bin/python -m scripts.backtest ml-dataset --csv data/backtest_cache/ml_rows.csv
+uv run --no-project --with numpy --with scikit-learn python -m scripts.backtest ml-eval \
+  --label both --perms 400 --folds 5 --min-train 0.4 --min-coverage 0.8 --seed 7
+```
+
+`ml-dataset` 用同一个 Backtrader 适配器生成 `r_base` / `r_plain`，不做单仓样本过滤，保存 engine 和费率。`mfe` 是框架持仓期间已收盘 K 线的最大有利 R。特征提取和信号与决策记录的 ±10 分钟匹配沿用原工具；匹配是研究近似，不能保证所有特征严格来自开仓前。plain 关闭保本/盈利锁/减仓/追踪/峰值回撤/止盈上限。
+
+`ml-eval` 的 expanding train、模型、置换检验和嵌套筛选保持原来的统计流程：只有嵌套检验与同一个模型在 `r_base` 和 `r_plain` 两个标签上都通过 Bonferroni 阈值，才输出 `PASS`。仅跑单标签不能通过。4 个模型、2 个标签共 18 项检验，400 次置换满足 p 值精度要求。
+
+**旧模拟器的收益标签、CSV 和 2026-10-13 的检验结果不适用于新执行口径。** 使用新的 `ml-dataset` 重建标签后再评估，不能将旧数值与 Backtrader 数值直接混用。
+
+## 数据与模型边界
+
+历史 AI 决策是已记录的信号，回测不会重新调用 AI 生成历史决策。当前策略配置的基线只是对历史信号重放当前规则，不代表当时实际采用的配置。
+
+OHLC 无法确定 K 线内部事件顺序，混合 1m/5m 精度也不同。缓存不含成交量，因此未启用成交量约束或部分成交模型；这里只模拟订单规则中的主动部分减仓。未建模资金费率、合约保证金/清算、交易所最小数量和精度、AI 主动平仓、组合最大仓位数、共享资金或历史改价链。结果应作为规则研究，不能当作实盘账户收益。
+
+Backtrader 参考：[订单执行](https://www.backtrader.com/docu/order-creation-execution/order-creation-execution/)、[OCO](https://www.backtrader.com/docu/order-creation-execution/oco/oco/)、[手续费](https://www.backtrader.com/docu/commission-schemes/commission-schemes/)、[滑点](https://www.backtrader.com/docu/slippage/slippage/)。
+
+## quant_audit 信号审计
+
+`python3 -m scripts.backtest.quant_audit` 用于信号层面的审计与基准对比，**不是下单模拟器**：不模拟杠杆、资金费率、止损或订单成交时序。`positions[i]` 表示第 i 根收盘决定的目标敞口，第 i+1 根收益才应用，并在生效 bar 扣除换向成本。涉及订单与盈亏的结论仍走上述 `scripts/backtest` 的 Backtrader 主流程。
+
+可复用入口包括 `audit_returns`（对齐对数收益的时间切分裁决）、`grid_around` / `sweep_plateau`（参数邻域平台判定），以及 `flag_lookahead_signal`（信号函数截断因果性检验）。`flag_lookahead` 仅是额外滞后一根后的 Sharpe 衰减启发式，不能代替因果性检验；截断检验未报警也只表示所选点未发现泄漏。NaN/inf 按对应日期成对过滤后保序切分；训练窗或保留窗少于 20 期时返回 `INSUFFICIENT_SAMPLE`，不输出收益指标。默认 60/40 切分采用整数截断，至少需要 48 期（28/20），40 期只有 24/16，仍不足。
+
+已知教训：BTC 2019–2026 日线的 200 日滞回规则，旧同 bar 口径曾显示 CAGR **+73.5%**、Sharpe **1.33**、MDD **32.7%**、`DATA_VALIDATED`；改为次日生效后为 **+41.1% / 0.83 / 52.5% / TRADE_OFF**。买入持有为 **+33.5% / 0.47 / 76.7%**。旧启发式因基线自身带前视而漏报，说明必须先修正收益时序再比较。
+
+promotion 报告附加审计仅比较已完成 UTC 日的权益对数收益，按日期与本地 BTC 日线基准内连接；默认基准来自主仓库 `data/factor_mining`，可用 `FACTOR_MINING_DIR` 覆盖。该审计不改变晋升裁决，短期实验会显示样本不足；基准缺失、损坏或没有共同日期时显示 `UNAVAILABLE`。
+
+## 美股组合回测（stocks）
+
+完全离线读取 `<cache>/<SYMBOL>.json` 日线和 `<cache>/1h/<SYMBOL>.json` 小时线，不下载、不调用 LLM。依赖 Backtrader 1.9.78.123 和 Pandas 2.2.3（见 `requirements.txt`）。在仓库根目录运行：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest stocks \
+  --tf 1d --compare data/backtest_cache/stocks/go_ma2060_1d.json \
+  --out data/backtest_cache/stocks/bt_1d.md --json data/backtest_cache/stocks/bt_1d.json
+
+PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest stocks \
+  --tf 1h --compare data/backtest_cache/stocks/go_ma2060_1h.json \
+  --out data/backtest_cache/stocks/bt_1h.md --json data/backtest_cache/stocks/bt_1h.json
+
+PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m unittest discover -s scripts/backtest/tests -v
+```
+
+参数：`--cache` 默认 `data/backtest_cache/stocks`；`--tf 1d|1h`；`--maxpos 10`；`--rebalance 10`（SPY 交易日）；`--commission 0.001`（每边成交额的 0.1%）；`--cash 100000`；`--strategies MOM_TOP,MA_CROSS,MA2060_RULES,MOM_X_MA,SPY_BH,EW_BH`。`--exclude` 是逗号分隔列表，替换默认 TQQQ/SQQQ/SOXL/SOXS/UVXY/MUU/KORU 排除项，接受 underlying 或完整 BUSDT 名称；SPY/QQQ 始终不进入选股池。`--compare` 接受结果 JSON 路径或 cache 下文件名；`--out` 省略则输出 Markdown；`--json` 保存权益、订单、原生交易、分析器及交叉核对数据。
+
+执行与信号规则：
+
+- 每个策略独立运行原生 Cerebro，`broker.setcash` / `setcommission`；PandasData 多 feed，SPY 驱动日历。`prenext → next` 保证晚上市股票不推迟共同起点：SPY 已有 253 根日线排名数据、至少 61 根执行 K 线，且在该交易日最后一根 K 线上。仅对时间戳与当前策略时间一致的 feed 生成订单；指标使用该股票自身已完成的历史 K 线。
+- 不启用 cheat-on-close/open，**无滑点**。t 收盘提交 Market，t+1 SPY 开盘起由 BackBroker 撮合。若缺少该根开盘则取消，不延迟成交或用低排名候选补位。末尾只盯市，不伪造清仓；最后一根提交的未成交订单单独记录。
+- 做多、可用小数股，每个普通仓位目标为当前权益的 `1/maxpos`；收盘计算固定股数，下一开盘跳空会改变实际权重。先卖后买；原生 filler 回调只按 broker 实际可用现金和手续费缩减成交数量并检查槽位，剩余数量当根取消。撮合价格、手续费、仓位及 P&L 均由 Backtrader 管理，无自写账务。与 Go 在下一开盘重算名义金额/费后权重的口径存在差异。
+- `MOM_TOP`：按有效日线排名、是否高于 SMA200、12–1 动量 `close[t-21]/close[t-252]-1` 排序，选高于 SMA200 的前 N 名，每 10 个 SPY 交易日末等权调仓；不足 N 名留现金。
+- `MA_CROSS`：SMA20 上穿 SMA60 开仓，下穿平仓；同根候选按上述动量优先级分配空槽（无有效排名的候选仍可排在最后）。退出优先，预计退出可释放槽位；退出失败只会缩减实际新买入。
+- `MA2060_RULES`：E1 金叉；E2 上行 SMA60 的多头趋势中回踩 SMA20（0.5% 容差）、收于 SMA60 上且阳线；E3 同趋势中最近 3 根收盘曾在 SMA20 下但不低于 SMA60 的 98%，当前重回 SMA20 上；E4 最近 3 根 dev20 ≤ −2.5×ATR/close 后关键阳线（破前高或阳包阴）。按 E1→E4 首个匹配归因。
+- X1 死叉；X2 最近 20 根曾 dev20 ≥ 3×ATR/close、连续 5 根无严格 20 根收盘新高且跌破此前 5 根最低价；X3 连续 10 根无新高且低于两均线；X4 收盘低于实际开仓价 − 2×**信号 ATR**；E4 另有收盘回到 SMA20 的 TARGET。X1→X4→TARGET 优先级，均在下一根开盘平仓，不是盘中 Stop/Limit。
+- `MOM_X_MA`：先选动量前 N，再以 SMA20>SMA60 否决，不补位；调仓间死叉退出，金叉不自行补仓。`SPY_BH` 首日买 SPY 并持有。`EW_BH` 固定共同首日有数据的全部股票，每 63 根**执行 K 线**等权再平衡，不添加后续 IPO；此基准明确例外于 maxpos。
+- SMA20/60/200、Wilder ATR14（首根高低差参与 14 根 seed）和事件窗口严格向前计算。新高排除当根的此前 20 根收盘；事件回看包含当根。1h 均线/ATR 按小时根数，动量仅使用当前 UTC 日期之前的最后完整日线，避免上午偷看当日收盘。
+
+指标：原生 TimeReturn 的**日度权益收益**计算 CAGR、年化波动（252）、Sharpe（rf=0）、Sortino、分年和近 12 月收益；CAGR 按 365.25 天实际跨度。原生 DrawDown 计算最大回撤，权益观测补充峰谷日期；原生 TradeAnalyzer 计算完整平仓交易数、胜率、平均盈利/亏损金额、profit factor、平均持仓执行根数。另记录平均投入比例和实际成交手续费。MA2060 按 E1–E4、X1–X4/TARGET 记录完整交易与已成交订单数，订单 info 保留规则及信号 ATR。
+
+报告包括策略比较、分年收益、规则归因、Go 核对、逐股覆盖和局限。Go 核对明确区分原生完整 trade 与 FIFO lot portion，并为 1h 额外把缓存 Go 权益聚合为日度 Sharpe，区分收益频率和执行差异。当前缓存存在幸存者偏差；Yahoo 调整后的 underlying 常规时段价格不是 bStock 可成交价格；无 LLM；1h 仅约两年。此前本 README 中独立信号 R、仓位重叠等限制仅适用于 entry/exit，不适用于 stocks。
+
+### 仓位缩放（regime overlay，仅 MOM_TOP / 1d）
+
+```bash
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest stocks \
+  --tf 1d --strategies SPY_BH,EW_BH \
+  --scalers NONE,RV_PCT,RV_RATIO,BREADTH,VIX_TS,BASKET_VOL,COMBO,HARD_RV,HARD_VIX,HARD_BREADTH \
+  --sweep --out data/backtest_cache/stocks/regime_1d.md --json data/backtest_cache/stocks/regime_1d.json
+```
+
+`--scalers` 在 `--strategies` 之外逐个增加 `MOM_TOP+名称`，始终保留 `NONE` 对照；不传此参数则沿用原有策略行为。拒绝 `--tf 1h`。`--floor 0.25`、`--band 0.20`、`--target-vol 0.40` 为默认参数。日终目标权重为 `s/maxpos`；两次普通调仓之间，相对上次已应用的 scale 变化达到 band（绝对百分点）或发生零值转换时，仅调整已有股票。零仓位恢复且空仓时，按当天排名重新选篮子。订单仍由原生 Backtrader 下一开盘执行，先卖后买，手续费及现金/槽位限制完全相同。额外调整日的成交标记 `SCALE`，普通调仓继续标记 `REBALANCE`。
+
+`RV_PCT` 根据 SPY 21 日对数收益年化样本波动率在最近 252 个有效值中的百分位缩放；`RV_RATIO` 使用同窗口波动率中位数/当日波动率。`BREADTH` 为排名有效股票中高于 SMA200 的比例，再取滚动百分位。百分位含当天，采用平均秩/n，至少 126 个值，否则 scale=1；RV_RATIO 在首个 21 日波动率出现后使用可用中位数。`VIX_TS` 在 VIX/VIX3M 的 0.90→1.10 区间从 1 线性降到 floor。`BASKET_VOL` 用当前前 maxpos 股票固定篮子过去 21 个交易日的等权简单收益样本波动率，scale=target-vol/vol（截到 floor～1）；只纳入具有完整 21 个收益（22 个收盘价）的股票，不填补股价。`COMBO` 为 RV_PCT、BREADTH、VIX_TS 的均值。`HARD_RV`、`HARD_VIX`、`HARD_BREADTH` 分别在 RV 百分位>0.80、VIX 比值>1、breadth 百分位<0.20 时清仓。输入不可用时保持 scale=1；波动率为零时满额。
+
+宏观缓存默认为 `<cache>/macro/VIX.json` 与 `VIX3M.json`，可用 `--macro` 指定目录；需要宏观数据的 scaler 或 sweep 会校验缓存，缺失则报错，不下载。缓存预先由 **Yahoo chart v8** 的 `^VIX`、`^VIX3M`（`range=10y&interval=1d`）取得，日线覆盖 2016-10-17～2026-10-16，格式与股票相同：`{"series":{"symbol":"VIX","timeframe":"1d","bars":[...]}}`。`open_time` 为交易日 00:00Z。每个序列独立使用日期≤当天的最新收盘价前向填充，绝不后向填充。VIX 收盘约 16:15 ET，股票 16:00 ET，均在次日开盘下单前已知。命令完全离线。
+
+报告增加 scale/敞口、额外缩放成交数及手续费、Calmar、分年收益、按评估日历前后各半的风险指标，以及 NONE 最差三个不重叠回撤峰谷窗口的各策略收益。后半段用前一日收盘作收益锚点，避免漏掉分界日收益；无需重新拟合。JSON 包含每次 overlay（含 sweep）的逐日 `scale_series`。`--sweep` 是固定的单因素扫描：RV_PCT/COMBO 的 floor=0/0.25/0.50，BASKET_VOL 的 target-vol=0.30/0.40/0.50，以及 COMBO 的 band=0.10/0.20/0.35；其余参数固定为默认值，重叠默认组合只运行一次。这些规则没有优化，结果仍受当前股票池幸存者偏差影响。

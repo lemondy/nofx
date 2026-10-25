@@ -53,13 +53,21 @@ func TestAudit05PersistFailureMustKeepLiveParams(t *testing.T) {
 }
 
 func TestAudit05WeakCorrelationMustNotBeCalledSignificant(t *testing.T) {
-	var samples []shortSample
-	for i := 0; i < 30; i++ {
-		x := math.Cos(2 * math.Pi * float64(i) / 30)
-		z := math.Sin(2 * math.Pi * float64(i) / 30)
-		samples = append(samples, shortSample{TS: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Truncate(48 * time.Hour).Add(time.Duration(i) * 48 * time.Hour).UnixMilli(), Components: map[string]float64{"stretch": 50 + 10*x}, Outcome: 0.16*x + math.Sqrt(1-0.16*0.16)*z})
+	samples := reviewRankICSamples(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 30, 10)
+	// Seventeen positive and thirteen negative block ICs: mean IC is positive,
+	// but its t is below 1, so sufficient block count alone must not pass.
+	for i := range samples {
+		block, symbol := i/10, i%10
+		samples[i].Components = map[string]float64{"stretch": float64(symbol)}
+		if block < 17 {
+			samples[i].Outcome = float64(symbol)
+		} else {
+			samples[i].Outcome = -float64(symbol)
+		}
 	}
-	if _, ok := updateShortWeights(samples, DefaultShortWeights(), shortTunerEta); ok {
-		t.Error("n=30 Pearson r=0.16 (t≈0.86) incorrectly admitted as significant")
+	_, stats, ok := updateShortWeightsWithDiagnostics(samples, DefaultShortWeights(), shortTunerEta)
+	stat := stats["stretch"]
+	if ok || stat.N != 30 || stat.T == nil || math.Abs(*stat.T) >= 1 {
+		t.Errorf("weak mean rank IC incorrectly admitted: %+v", stat)
 	}
 }

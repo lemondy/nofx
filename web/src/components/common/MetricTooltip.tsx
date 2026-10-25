@@ -275,83 +275,23 @@ export function MetricTooltip({
         pointerEvents: 'auto',
       }}
     >
-      <div
-        style={{
-          background: 'linear-gradient(145deg, #E9E4D6 0%, #C0B9A2 100%)',
-          border: '1px solid #C0B9A2',
-          borderRadius: '12px',
-          padding: '16px',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
-        }}
-      >
+      <div className="rounded-lg border border-line bg-surface p-4 shadow-pop">
         {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            marginBottom: '12px',
-            paddingBottom: '8px',
-            borderBottom: '1px solid #C0B9A2',
-          }}
-        >
-          <div
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              background: '#B8912A',
-            }}
-          />
-          <span
-            style={{ fontWeight: 'bold', fontSize: '14px', color: '#1E1E1A' }}
-          >
-            {name}
-          </span>
+        <div className="mb-3 flex items-center gap-2 border-b border-line pb-2">
+          <span className="h-2 w-2 rounded-full bg-brand" />
+          <span className="text-sm font-semibold text-fg">{name}</span>
         </div>
 
         {/* Formula */}
-        <div
-          style={{
-            background: 'rgba(30,30,26,0.05)',
-            borderRadius: '8px',
-            padding: '12px',
-            marginBottom: '12px',
-          }}
-        >
-          <div
-            style={{ fontSize: '12px', color: '#6E6E60', marginBottom: '8px' }}
-          >
-            {formulaLabel}
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              padding: '8px 4px',
-              color: '#1E1E1A',
-              overflowX: 'auto',
-              overflowY: 'hidden',
-              maxWidth: '100%',
-              WebkitOverflowScrolling: 'touch',
-            }}
-          >
+        <div className="mb-3 rounded-md bg-surface-2 p-3">
+          <div className="mb-2 text-xs text-fg-3">{formulaLabel}</div>
+          <div className="flex max-w-full items-center justify-center overflow-x-auto px-1 py-2 text-fg">
             <FormulaRenderer formula={metric.formula} displayMode={false} />
           </div>
         </div>
 
         {/* Description */}
-        <p
-          style={{
-            fontSize: '12px',
-            lineHeight: '1.5',
-            color: '#6E6E60',
-            margin: 0,
-          }}
-        >
-          {description}
-        </p>
+        <p className="m-0 text-xs leading-relaxed text-fg-3">{description}</p>
       </div>
     </div>
   )
@@ -370,8 +310,7 @@ export function MetricTooltip({
           }
           setShow(!show)
         }}
-        className={`p-0.5 rounded-full transition-colors hover:bg-[#1E1E1A]/10 ${className}`}
-        style={{ color: '#6E6E60' }}
+        className={`p-0.5 text-fg-3 transition-colors hover:bg-surface-hover ${className}`}
         aria-label={`Info about ${name}`}
       >
         <HelpCircle size={size} />

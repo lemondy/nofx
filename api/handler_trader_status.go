@@ -81,6 +81,13 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	traderConfig := fullConfig.Trader
 	exchangeCfg := fullConfig.Exchange
 
+	// us_stock: the probe reads the FUTURES wallet; the stock trader's baseline
+	// is the spot / paper equity resolved when the trader is built.
+	if fullConfig.Strategy != nil && s.strategyIsUSStock(userID, fullConfig.Strategy.ID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Balance sync is not available for US stock traders (spot / paper account)"})
+		return
+	}
+
 	if exchangeCfg == nil || !exchangeCfg.Enabled {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Exchange not configured or not enabled"})
 		return
@@ -179,6 +186,23 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	}
 
 	exchangeCfg := fullConfig.Exchange
+
+	// us_stock: the futures probe below would target the futures wallet; close
+	// only the program-owned spot quantity through the running trader.
+	if fullConfig.Strategy != nil && s.strategyIsUSStock(userID, fullConfig.Strategy.ID) {
+		at, getErr := s.traderManager.GetTrader(traderID)
+		if getErr != nil {
+			SafeNotFound(c, "Trader")
+			return
+		}
+		result, closeErr := at.ForceCloseStockPosition(req.Symbol)
+		if closeErr != nil {
+			SafeInternalError(c, "Close position", closeErr)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Position closed successfully", "symbol": req.Symbol, "side": "LONG", "result": result})
+		return
+	}
 
 	if exchangeCfg == nil || !exchangeCfg.Enabled {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Exchange not configured or not enabled"})

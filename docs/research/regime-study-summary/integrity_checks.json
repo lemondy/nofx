@@ -1,0 +1,21 @@
+{
+  "source_frozen": true,
+  "preregistration_frozen": true,
+  "global_bh_exact": true,
+  "crypto_tests_5910": true,
+  "crypto_1h_unique_keys": true,
+  "crypto_1h_rows_2955": true,
+  "crypto_1h_no_unapproved_holdout": true,
+  "1h_effective_meets_gates": true,
+  "crypto_1h_cost_cancellation": true,
+  "crypto_1d_unique_keys": true,
+  "crypto_1d_rows_2955": true,
+  "crypto_1d_no_unapproved_holdout": true,
+  "1d_effective_meets_gates": true,
+  "crypto_1d_cost_cancellation": true,
+  "us_1d_unique_keys": true,
+  "us_1d_rows_2955": true,
+  "us_1d_no_unapproved_holdout": true,
+  "us_1d_cost_cancellation": true,
+  "all_tests_8865": true
+}

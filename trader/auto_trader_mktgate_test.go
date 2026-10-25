@@ -19,6 +19,7 @@ func TestMarketExceptionGate(t *testing.T) {
 	at := riskTestTrader(rc)
 	at.cycleGateStates = map[string]*kernel.GateState{
 		"TESTUSDT": {
+			LongAllowed:       true,
 			LongLimitAllowed:  true,
 			LongEntryPrice:    99.5,
 			ShortLimitAllowed: false,
@@ -229,6 +230,7 @@ func TestDailyLossHaltBlocks(t *testing.T) {
 	// registry bucket is per-day, so a rolled-over day finds no anchor and
 	// re-anchors fresh; the reset mirrors that rollover).
 	at.dayStartDay = "2000-01-01"
+	at.dailyHaltDay = "2000-01-01" // the halt latches per UTC day: a rolled-over day clears it
 	ResetDailyBaselineRegistryForTest()
 	if halt := at.dailyLossHaltBlocks(rc, 900); halt != "" {
 		t.Fatalf("new day must re-anchor, got %s", halt)

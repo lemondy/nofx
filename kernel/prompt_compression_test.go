@@ -49,7 +49,12 @@ func TestBlockedCandidateCompressesToOneLine(t *testing.T) {
 
 func TestAllowedCandidateKeepsFullJSON(t *testing.T) {
 	stubLiveMarket(t, neutralBTC4h()) // OKUSDT is long-only: a live BTC downtrend would double-block it
-	engine := NewStrategyEngine(&store.StrategyConfig{})
+	cfg := &store.StrategyConfig{}
+	// The monotone fixture has RSI=100 and a distant live-price anchor;
+	// keep this rendering test independent of the anti-chase caps.
+	cfg.RiskControl.CounterMaxEMA20_1hPct = -1
+	cfg.RiskControl.EntryRSI1hMax = -1
+	engine := NewStrategyEngine(cfg)
 	ctx := &Context{MarketDataMap: map[string]*market.Data{}}
 	now := time.Now()
 	ctx.CandidateCoins = append(ctx.CandidateCoins, CandidateCoin{Symbol: "OKUSDT", Sources: []string{"ai500"}})
@@ -134,6 +139,22 @@ func TestLockedPositionCompresses(t *testing.T) {
 	out = engine.formatPositionInfo(1, pos, ctx)
 	if !strings.Contains(out, `"hard_entry_gate"`) {
 		t.Fatal("near-stop position must keep full JSON")
+	}
+
+	// The trader's opening-risk calculation permits active profit-taking.
+	// Preserve full analysis instead of telling the AI its close is locked.
+	pos.EntryPrice = 19.8
+	pos.StopLossPrice = 19.85
+	pos.EarlyCloseProfitOK = true
+	out = engine.formatPositionInfo(1, pos, ctx)
+	if strings.Contains(out, "平仓门锁定") || !strings.Contains(out, `"hard_entry_gate"`) {
+		t.Fatalf("profitable early close must keep full JSON:\n%s", out)
+	}
+	// The profit exception only removes the early-close lock.
+	engine.config.RiskControl.MinHoldMinutes = 60
+	out = engine.formatPositionInfo(1, pos, ctx)
+	if !strings.Contains(out, "平仓门锁定") || !strings.Contains(out, "持仓不足60min") {
+		t.Fatalf("profit bypass must preserve the separate min-hold lock:\n%s", out)
 	}
 }
 

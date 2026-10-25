@@ -1,8 +1,16 @@
 package trader
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"math"
+	"nofx/logger"
 	"nofx/market"
+	"nofx/store"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -82,5 +90,263 @@ func TestCloseIntentRegistry(t *testing.T) {
 	at.closeIntents[keyOf("ETHUSDT", "short")] = closeIntent{reason: "ai_close", at: time.Now().Add(-2 * closeIntentTTL)}
 	if got := at.consumeCloseIntent("ETHUSDT", "short"); got != "" {
 		t.Fatalf("stale intent = %q, want \"\"", got)
+	}
+}
+
+func newExitReplayTestTrader(t *testing.T) *AutoTrader {
+	t.Helper()
+	st, err := store.New(filepath.Join(t.TempDir(), "exit-replay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return &AutoTrader{id: t.Name(), name: t.Name(), exchange: "binance", store: st}
+}
+
+func addExitReplayTestPosition(t *testing.T, at *AutoTrader, held time.Duration, exit time.Time) store.TraderPosition {
+	t.Helper()
+	row := store.TraderPosition{
+		TraderID: at.id, Symbol: "BTCUSDT", Side: "LONG", Status: "CLOSED",
+		EntryPrice: 100, InitialStopLoss: 98, Quantity: 1,
+		EntryTime: exit.Add(-held).UnixMilli(), ExitTime: exit.UnixMilli(),
+	}
+	if err := at.store.GormDB().Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func exitReplayTestValues(t *testing.T, at *AutoTrader, id int64) [4]float64 {
+	t.Helper()
+	var row store.TraderPosition
+	if err := at.store.GormDB().First(&row, id).Error; err != nil {
+		t.Fatal(err)
+	}
+	return [4]float64{row.MAEPct, row.MFEPct, row.MAER, row.MFER}
+}
+
+func stubExitReplayKlines(t *testing.T, fn func(string, string, time.Time, time.Time) ([]market.Kline, error)) {
+	t.Helper()
+	previous := klinesRangeFn
+	klinesRangeFn = fn
+	t.Cleanup(func() { klinesRangeFn = previous })
+}
+
+func captureExitReplayLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	previous := logger.Log.Out
+	logger.Log.SetOutput(&logs)
+	t.Cleanup(func() { logger.Log.SetOutput(previous) })
+	return &logs
+}
+
+func TestBackfillExitExcursionsUnreplayableDuration(t *testing.T) {
+	for _, held := range []time.Duration{time.Millisecond, 4800 * time.Millisecond, time.Minute - time.Millisecond, 31 * 24 * time.Hour} {
+		t.Run(held.String(), func(t *testing.T) {
+			at := newExitReplayTestTrader(t)
+			row := addExitReplayTestPosition(t, at, held, time.Now())
+			logs := captureExitReplayLogs(t)
+			stubExitReplayKlines(t, func(string, string, time.Time, time.Time) ([]market.Kline, error) {
+				t.Fatal("unreplayable duration must not request klines")
+				return nil, nil
+			})
+			at.backfillExitExcursions()
+			at.backfillExitExcursions()
+			if got := exitReplayTestValues(t, at, row.ID); got != [4]float64{-1, -1, -1, -1} {
+				t.Fatalf("excursions = %v, want four sentinels", got)
+			}
+			if held < time.Minute && strings.Count(logs.String(), "持仓不足 1 分钟，1m K 线无法回放") != 1 {
+				t.Fatalf("expected one sub-minute explanation, got %s", logs.String())
+			}
+		})
+	}
+}
+
+func TestBackfillExitExcursionsInvalidSymbol(t *testing.T) {
+	for _, exchange := range []string{"binance", "paper"} {
+		t.Run(exchange, func(t *testing.T) {
+			at := newExitReplayTestTrader(t)
+			at.exchange = exchange
+			row := addExitReplayTestPosition(t, at, time.Minute, time.Now())
+			calls := 0
+			logs := captureExitReplayLogs(t)
+			stubExitReplayKlines(t, func(string, string, time.Time, time.Time) ([]market.Kline, error) {
+				calls++
+				return nil, fmt.Errorf("historical klines: %w", market.ErrInvalidSymbol)
+			})
+			at.backfillExitExcursions()
+			at.backfillExitExcursions()
+			if calls != 1 || len(at.exitReplayRetries) != 0 {
+				t.Fatalf("permanent error retried: calls=%d retries=%v", calls, at.exitReplayRetries)
+			}
+			if got := exitReplayTestValues(t, at, row.ID); got != [4]float64{-1, -1, -1, -1} {
+				t.Fatalf("excursions = %v, want four sentinels", got)
+			}
+			if strings.Count(logs.String(), "Binance 无效符号 (-1121)") != 1 {
+				t.Fatalf("expected one invalid-symbol explanation, got %s", logs.String())
+			}
+		})
+	}
+}
+
+func TestBackfillExitExcursionsRetryBackoff(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"empty klines", nil},
+		{"other 400", errors.New(`binance klines api returned status 400: {"code":-1100,"msg":"Illegal characters."}`)},
+		{"transient error", errors.New("upstream timeout")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := newExitReplayTestTrader(t)
+			row := addExitReplayTestPosition(t, at, time.Minute, time.Now())
+			logs := captureExitReplayLogs(t)
+			calls := 0
+			stubExitReplayKlines(t, func(string, string, time.Time, time.Time) ([]market.Kline, error) {
+				calls++
+				return nil, tc.err
+			})
+			wantBackoffs := []time.Duration{5 * time.Minute, 15 * time.Minute, time.Hour, 4 * time.Hour, 12 * time.Hour, 12 * time.Hour, 12 * time.Hour}
+			for failure := 1; failure <= 8; failure++ {
+				before := time.Now()
+				at.backfillExitExcursions()
+				after := time.Now()
+				if calls != failure {
+					t.Fatalf("failure %d: calls=%d", failure, calls)
+				}
+				if failure == 8 {
+					if got := exitReplayTestValues(t, at, row.ID); got != [4]float64{-1, -1, -1, -1} {
+						t.Fatalf("retry exhaustion excursions = %v, want sentinels", got)
+					}
+					if len(at.exitReplayRetries) != 0 {
+						t.Fatalf("exhausted row retained after sentinel write: %v", at.exitReplayRetries)
+					}
+				} else {
+					if got := exitReplayTestValues(t, at, row.ID); got != [4]float64{} {
+						t.Fatalf("failure %d prematurely marked permanent: %v", failure, got)
+					}
+					at.exitReplayMu.Lock()
+					retry := at.exitReplayRetries[row.ID]
+					at.exitReplayMu.Unlock()
+					want := wantBackoffs[failure-1]
+					if retry.failures != failure || retry.nextAttempt.Before(before.Add(want)) || retry.nextAttempt.After(after.Add(want)) {
+						t.Fatalf("failure %d: retry=%+v, want backoff %v", failure, retry, want)
+					}
+				}
+				logCount := logs.Len()
+				at.backfillExitExcursions()
+				if calls != failure || logs.Len() != logCount {
+					t.Fatalf("waiting/finished row requested or logged again at failure %d", failure)
+				}
+				if failure < 8 {
+					// Advance only this row's retry deadline; no wall-clock sleeps.
+					at.exitReplayMu.Lock()
+					retry := at.exitReplayRetries[row.ID]
+					retry.nextAttempt = time.Now().Add(-time.Second)
+					at.exitReplayRetries[row.ID] = retry
+					at.exitReplayMu.Unlock()
+				}
+			}
+			if strings.Count(logs.String(), "replay deferred") != 5 || strings.Count(logs.String(), "replay abandoned") != 1 || strings.Count(logs.String(), "[WARN]") != 1 {
+				t.Fatalf("expected five backoff logs and one exhaustion warning, got %s", logs.String())
+			}
+			for failure := 1; failure <= 5; failure++ {
+				if !strings.Contains(logs.String(), fmt.Sprintf("第 %d 次失败，下次最早 ", failure)) {
+					t.Fatalf("missing attempt/deadline in backoff log %d", failure)
+				}
+			}
+		})
+	}
+}
+
+func TestBackfillExitExcursionsQueueSkipsBackoff(t *testing.T) {
+	at := newExitReplayTestTrader(t)
+	at.exitReplayRetries = make(map[int64]exitReplayRetry)
+	now := time.Now()
+	var rows []store.TraderPosition
+	for i := 0; i < 7; i++ {
+		row := addExitReplayTestPosition(t, at, 2*time.Minute, now.Add(-time.Duration(i)*time.Minute))
+		rows = append(rows, row)
+		if i < 3 {
+			at.exitReplayRetries[row.ID] = exitReplayRetry{failures: 1, nextAttempt: now.Add(time.Hour)}
+		}
+	}
+	var requested []int64
+	stubExitReplayKlines(t, func(_ string, _ string, start, _ time.Time) ([]market.Kline, error) {
+		requested = append(requested, start.UnixMilli())
+		return []market.Kline{{High: 104, Low: 97}}, nil
+	})
+	at.backfillExitExcursions()
+	if len(requested) != exitBackfillPerCycle {
+		t.Fatalf("requests=%v, want exactly %d", requested, exitBackfillPerCycle)
+	}
+	for i, start := range requested {
+		if start != rows[i+3].EntryTime {
+			t.Fatalf("request %d entry=%d, want older row #%d", i, start, rows[i+3].ID)
+		}
+	}
+	for i, row := range rows {
+		want := [4]float64{}
+		if i >= 3 && i < 6 {
+			want = [4]float64{3, 4, 1.5, 2}
+		}
+		if got := exitReplayTestValues(t, at, row.ID); got != want {
+			t.Fatalf("row %d excursions=%v, want %v", i, got, want)
+		}
+	}
+	at.backfillExitExcursions()
+	if len(requested) != 4 || requested[3] != rows[6].EntryTime {
+		t.Fatalf("next cycle did not reach last row: %v", requested)
+	}
+}
+
+func TestBackfillExitExcursionsSuccessClearsRetry(t *testing.T) {
+	at := newExitReplayTestTrader(t)
+	row := addExitReplayTestPosition(t, at, 2*time.Minute, time.Now())
+	stubExitReplayKlines(t, func(symbol, timeframe string, start, end time.Time) ([]market.Kline, error) {
+		if symbol != row.Symbol || timeframe != "1m" || start.UnixMilli() != row.EntryTime || end.UnixMilli() != row.ExitTime {
+			t.Fatalf("unexpected replay request: %s %s %s %s", symbol, timeframe, start, end)
+		}
+		return []market.Kline{{High: 104, Low: 97}}, nil
+	})
+	at.exitReplayRetries = map[int64]exitReplayRetry{row.ID: {failures: 3, nextAttempt: time.Now().Add(-time.Second)}}
+	at.backfillExitExcursions()
+	if got := exitReplayTestValues(t, at, row.ID); got != [4]float64{3, 4, 1.5, 2} {
+		t.Fatalf("successful replay=%v, want [3 4 1.5 2]", got)
+	}
+	if len(at.exitReplayRetries) != 0 {
+		t.Fatalf("successful replay retained retry state: %v", at.exitReplayRetries)
+	}
+}
+
+func TestBackfillExitExcursionsSkipsOtherExchanges(t *testing.T) {
+	stubExitReplayKlines(t, func(string, string, time.Time, time.Time) ([]market.Kline, error) {
+		t.Fatal("non-Binance exchange must not request klines")
+		return nil, nil
+	})
+	// A nil store also proves this returns before touching the work queue.
+	for _, exchange := range []string{"bybit", "hyperliquid", "binance_stocks"} {
+		at := &AutoTrader{exchange: exchange}
+		at.backfillExitExcursions()
+	}
+}
+
+func TestBackfillExitExcursionsConcurrentRetry(t *testing.T) {
+	at := newExitReplayTestTrader(t)
+	row := addExitReplayTestPosition(t, at, time.Minute, time.Now())
+	calls := 0
+	stubExitReplayKlines(t, func(string, string, time.Time, time.Time) ([]market.Kline, error) {
+		calls++
+		return nil, errors.New("upstream timeout")
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Go(at.backfillExitExcursions)
+	}
+	wg.Wait()
+	if calls != 1 || at.exitReplayRetries[row.ID].failures != 1 {
+		t.Fatalf("concurrent passes duplicated a retry: calls=%d state=%+v", calls, at.exitReplayRetries[row.ID])
 	}
 }

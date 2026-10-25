@@ -147,7 +147,88 @@ func (s *Server) handleRulesList(c *gin.Context) {
 	if rules == nil {
 		rules = []*store.TradingRuleDB{}
 	}
-	c.JSON(http.StatusOK, gin.H{"rules": rules})
+	c.JSON(http.StatusOK, gin.H{"rules": s.annotateRules(traderID, rules, time.Now().UTC().UnixMilli())})
+}
+
+// ruleView a rule plus computed staleness fields (review 2026-10-09 K).
+type ruleView struct {
+	*store.TradingRuleDB
+	Triggers30d     int64 `json:"triggers_30d"`
+	LastTriggeredAt int64 `json:"last_triggered_at"`
+	ReviewDue       bool  `json:"review_due"`
+}
+
+const ruleReviewAgeMs = int64(30) * 24 * 3600 * 1000
+
+// annotateRules adds triggers_30d / last_triggered_at / review_due using one
+// grouped query over rule_check_logs. review_due: AI-sourced rule older than
+// 30 days whose verification is older than 30 days (or never done).
+func (s *Server) annotateRules(traderID string, rules []*store.TradingRuleDB, nowMs int64) []ruleView {
+	stats, err := s.store.Rule().TriggerStats(traderID, nowMs-ruleReviewAgeMs)
+	if err != nil {
+		logger.Warnf("rule trigger stats failed (rendering without counts): %v", err)
+	}
+	out := make([]ruleView, 0, len(rules))
+	for _, r := range rules {
+		v := ruleView{TradingRuleDB: r}
+		if st, ok := stats[r.ID]; ok {
+			v.Triggers30d, v.LastTriggeredAt = st.Triggers, st.LastAtMs
+		}
+		v.ReviewDue = r.Source == "ai_review" && r.CreatedAt > 0 && nowMs-r.CreatedAt > ruleReviewAgeMs &&
+			(r.VerifiedAt == 0 || nowMs-r.VerifiedAt > ruleReviewAgeMs)
+		out = append(out, v)
+	}
+	return out
+}
+
+// verifyRule replays a rule over the trader's closed AI trades of the last
+// 90 days (all of them, not only the reviewed subset — review 2026-10-09 K).
+func (s *Server) verifyRule(userID, traderID, ruleType, condition string) (kernel.RuleVerification, error) {
+	if ruleType == "soft" {
+		return kernel.VerifyHardRule(ruleType, condition, nil, 0, 0), nil
+	}
+	nowMs := time.Now().UTC().UnixMilli()
+	since := nowMs - int64(kernel.RuleVerifyWindowDays)*24*3600*1000
+	trades, err := s.store.TradeJournal().ListClosedAISince(traderID, since)
+	if err != nil {
+		return kernel.RuleVerification{}, err
+	}
+	equity := 0.0
+	if tr, err := s.store.Trader().GetByID(traderID); err == nil && tr != nil {
+		equity = tr.InitialBalance
+	}
+	return kernel.VerifyHardRule(ruleType, condition, trades, equity, nowMs), nil
+}
+
+// handleRuleReverify POST /api/review/rules/:id/reverify — recompute and store
+// the verification of one rule.
+func (s *Server) handleRuleReverify(c *gin.Context) {
+	traderID, ok := s.getJournalTrader(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		SafeBadRequest(c, "Invalid rule ID")
+		return
+	}
+	rule, err := s.store.Rule().GetRule(traderID, id)
+	if err != nil {
+		SafeBadRequest(c, "Rule not found")
+		return
+	}
+	v, err := s.verifyRule(c.GetString("user_id"), traderID, rule.RuleType, rule.ConditionJSON)
+	if err != nil {
+		SafeInternalError(c, "verify trading rule", err)
+		return
+	}
+	data, _ := json.Marshal(v)
+	now := time.Now().UTC().UnixMilli()
+	if err := s.store.Rule().SetVerification(traderID, id, string(data), now); err != nil {
+		SafeInternalError(c, "store rule verification", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"verification": v, "verified_at": now})
 }
 
 // handleRuleCreate POST /api/review/rules
@@ -401,10 +482,27 @@ func (s *Server) handleAIExtractRules(c *gin.Context) {
 		return
 	}
 
+	// review 2026-10-09 K: code-verify each proposal against ALL closed AI trades
+	// (90d), not the model's free-text claim or the reviewed-only subset.
+	out := make([]proposalView, 0, len(proposals))
+	for _, p := range proposals {
+		v, verr := s.verifyRule(userID, traderID, p.RuleType, p.Condition)
+		if verr != nil {
+			v = kernel.RuleVerification{Status: kernel.VerifyUnverifiable, Reason: "verification failed"}
+		}
+		out = append(out, proposalView{RuleInput: p, Verification: v})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"proposals":   proposals,
+		"proposals":   out,
 		"ai_response": aiResponse,
 	})
+}
+
+// proposalView an extracted proposal plus its server-side verification.
+type proposalView struct {
+	store.RuleInput
+	Verification kernel.RuleVerification `json:"verification"`
 }
 
 // handleAIApplyRules POST /api/review/ai/apply-rules — save approved proposals
@@ -433,8 +531,24 @@ func (s *Server) handleAIApplyRules(c *gin.Context) {
 			rejected = append(rejected, gin.H{"index": i, "reason": err.Error()})
 			continue
 		}
-		if input.Source == "" {
-			input.Source = "ai_review"
+		// Apply always means ai_review; recompute verification server-side
+		// (never trust the client) — review 2026-10-09 K.
+		input.Source = "ai_review"
+		input.VerifiedStats, input.VerifiedAt = "", 0
+		if input.RuleType == "hard" {
+			v, verr := s.verifyRule(c.GetString("user_id"), traderID, input.RuleType, input.Condition)
+			if verr != nil {
+				rejected = append(rejected, gin.H{"index": i, "reason": "verification failed"})
+				continue
+			}
+			if v.Status == kernel.VerifyWeak || v.Status == kernel.VerifyContradicted {
+				rejected = append(rejected, gin.H{"index": i, "status": v.Status, "verification": v,
+					"reason": fmt.Sprintf("rule not supported by history: %s (matched %d of %d closed AI trades in %dd, net %.2f)",
+						v.Status, v.Matched, v.Population, kernel.RuleVerifyWindowDays, v.NetPnL)})
+				continue
+			}
+			data, _ := json.Marshal(v)
+			input.VerifiedStats, input.VerifiedAt = string(data), time.Now().UTC().UnixMilli()
 		}
 		if _, err := s.store.Rule().CreateRule(traderID, &input); err != nil {
 			rejected = append(rejected, gin.H{"index": i, "reason": "rule persistence failed"})
@@ -550,7 +664,8 @@ Return ONLY a JSON array (no markdown fences, no explanation) of proposed rules:
     "on_violation": "block" | "warn",
     "lesson_text": "soft rule lesson text in the trader's language",
     "tags": "comma separated tags",
-    "source_stats": "supporting data, e.g. win_rate=15%,sample=8"
+    "source_stats": "supporting data, e.g. win_rate=15%,sample=8",
+    "supporting_trades": <int, number of journal trades that support this rule>
   }
 ]
 
@@ -722,6 +837,7 @@ func parseRuleProposals(response string) ([]store.RuleInput, error) {
 		LessonText  string      `json:"lesson_text"`
 		Tags        string      `json:"tags"`
 		SourceStats string      `json:"source_stats"`
+		Supporting  int         `json:"supporting_trades"`
 	}
 	if err := json.Unmarshal([]byte(text), &raw); err != nil {
 		return nil, fmt.Errorf("AI response is not a valid rule array: %w", err)
@@ -749,6 +865,8 @@ func parseRuleProposals(response string) ([]store.RuleInput, error) {
 			Tags:        r.Tags,
 			SourceStats: r.SourceStats,
 			Enabled:     boolPtr(true),
+
+			SupportingTrades: r.Supporting,
 		})
 	}
 	return proposals, nil

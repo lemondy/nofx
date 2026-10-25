@@ -14,6 +14,36 @@ import (
 	"time"
 )
 
+// forceMarketEntries rewrites open_long_limit/open_short_limit into market
+// opens (Price cleared) when the strategy is market-entry
+// (risk_control.limit_entry_enabled=false). The prompt already teaches the
+// market path; this keeps a stray limit decision from creating a pending order
+// on a strategy that never opted into limit entries. It runs before any
+// risk/safe-mode filtering so every later stage sees the final action. The
+// input slice is not mutated.
+func (at *AutoTrader) forceMarketEntries(ds []kernel.Decision) []kernel.Decision {
+	if at.config.StrategyConfig == nil || at.config.StrategyConfig.RiskControl.LimitEntryEnabled {
+		return ds
+	}
+	out := make([]kernel.Decision, len(ds))
+	copy(out, ds)
+	for i := range out {
+		var to string
+		switch out[i].Action {
+		case "open_long_limit":
+			to = "open_long"
+		case "open_short_limit":
+			to = "open_short"
+		default:
+			continue
+		}
+		logger.Infof("🔁 [%s] %s %s → %s: strategy is market-entry (limit_entry_enabled=false)", at.name, out[i].Symbol, out[i].Action, to)
+		out[i].Action = to
+		out[i].Price = 0
+	}
+	return out
+}
+
 // executeDecisionWithRecord executes AI decision and records detailed information
 func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	switch decision.Action {
@@ -126,6 +156,11 @@ func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.Deci
 		if !isLong {
 			limitAction = "open_short_limit"
 		}
+		if code := limitEntryBlockCode(gs, !isLong); code != "" {
+			reason := "kernel direction gate: " + code + " (market-to-limit conversion)"
+			at.setFilterReason(*d, reason)
+			return d, fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: %s", d.Action, d.Symbol, reason)
+		}
 		streak, push := at.gateNotifyRecord("mktgate:"+d.Symbol, time.Now())
 		logger.Warnf("🛡️ [%s] MARKET→LIMIT %s %s: no market-exception evidence (or confidence %d < %d) — degraded to anchor limit %.6g (streak %d)",
 			at.name, d.Action, d.Symbol, d.Confidence, kernel.MarketExceptionMinScore, anchor, streak)
@@ -145,6 +180,9 @@ func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.Deci
 // executeOpenLongWithRecord executes open long position and records detailed information
 func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
 	if err := at.entryExecutionBlocked(decision.Symbol, "long"); err != nil {
+		return err
+	}
+	if err := at.unknownSubmitBlocks(decision.Symbol, "long"); err != nil {
 		return err
 	}
 	logger.Infof("  📈 Open long: %s", decision.Symbol)
@@ -207,6 +245,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 
 	// [CODE ENFORCED] Entry risk gates: mandatory SL, SL/TP side sanity,
 	// min RR (dual-anchor), stop-distance window [ATR floor, wide cap].
+	if err := at.entryDataStaleBlock(decision, marketData); err != nil {
+		return err
+	}
 	floorATR, capATR := at.stopBandATRs(decision.Symbol, marketData)
 	if err := at.validateOpenRisk(decision, marketData.CurrentPrice, floorATR, capATR); err != nil {
 		return err
@@ -261,12 +302,17 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// Open position
 	order, err := at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
 	if err != nil {
-		return err
+		return at.trackUnknownSubmit(err, "long", pendingEntry{
+			Symbol: decision.Symbol, Price: marketData.CurrentPrice, Quantity: quantity,
+			StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
+			Leverage: decision.Leverage, ExitMode: decision.ExitMode,
+		})
 	}
 
 	// Record order ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+		actionRecord.EntryOrderID = strconv.FormatInt(orderID, 10) // review 2026-10-08 H
 	}
 
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
@@ -329,12 +375,12 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	at.reportFillSlippage(decision, marketData.CurrentPrice, fillPrice)
 	// F01 (2026-10-01 review): a missing protective leg must never be
 	// reported as a successful entry — surface it as an execution failure
-	// naming the exact leg. The position itself stays open and managed (the
-	// recorded stop/1R anchor are already written); the protection watchdog
-	// re-places from them next cycle.
+	// naming the exact leg. review 2026-10-11: Binance initial SL failures
+	// have already exhausted quick retries and submitted a slice exit here;
+	// recovery stays visible until a fresh snapshot confirms coverage/exit.
 	if slErr != nil {
 		at.setProtectionFault(decision.Symbol+"_long", "entry SL coverage unverified")
-		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — position currently unprotected, watchdog will retry", decision.Action, decision.Symbol, fillPrice, slErr)
+		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — initial protection failed; recovery state retained", decision.Action, decision.Symbol, fillPrice, slErr)
 	}
 	if tpErr != nil {
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
@@ -422,6 +468,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	if err := at.entryExecutionBlocked(decision.Symbol, "short"); err != nil {
 		return err
 	}
+	if err := at.unknownSubmitBlocks(decision.Symbol, "short"); err != nil {
+		return err
+	}
 	logger.Infof("  📉 Open short: %s", decision.Symbol)
 
 	if marketData, err := at.getMarketData(decision.Symbol); err == nil {
@@ -482,6 +531,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 
 	// [CODE ENFORCED] Entry risk gates: mandatory SL, SL/TP side sanity,
 	// min RR (dual-anchor), stop-distance window [ATR floor, wide cap].
+	if err := at.entryDataStaleBlock(decision, marketData); err != nil {
+		return err
+	}
 	floorATR, capATR := at.stopBandATRs(decision.Symbol, marketData)
 	if err := at.validateOpenRisk(decision, marketData.CurrentPrice, floorATR, capATR); err != nil {
 		return err
@@ -537,12 +589,17 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// Open position
 	order, err := at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
 	if err != nil {
-		return err
+		return at.trackUnknownSubmit(err, "short", pendingEntry{
+			Symbol: decision.Symbol, Price: marketData.CurrentPrice, Quantity: quantity,
+			StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
+			Leverage: decision.Leverage, ExitMode: decision.ExitMode,
+		})
 	}
 
 	// Record order ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+		actionRecord.EntryOrderID = strconv.FormatInt(orderID, 10) // review 2026-10-08 H
 	}
 
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
@@ -598,7 +655,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	// F01: same no-false-success contract as the long side above.
 	if slErr != nil {
 		at.setProtectionFault(decision.Symbol+"_"+strings.TrimPrefix(decision.Action, "open_"), "entry SL coverage unverified")
-		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — position currently unprotected, watchdog will retry", decision.Action, decision.Symbol, fillPrice, slErr)
+		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g but SL placement FAILED: %w — initial protection failed; recovery state retained", decision.Action, decision.Symbol, fillPrice, slErr)
 	}
 	if tpErr != nil {
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
@@ -686,23 +743,53 @@ func orderIDString(m map[string]interface{}) (string, bool) {
 // retry after one leg's failure cannot stack duplicate stops on qty-sized
 // adapters (OKX/Bybit); Binance closePosition dedupes via the -4130 self-heal.
 func (at *AutoTrader) placeProtectiveOrders(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice float64) (slErr, tpErr error) {
+	return at.placeProtectiveOrdersTPDone(decision, positionSide, quantity, refPrice, fillPrice, 0)
+}
+
+// placeProtectiveOrdersTPDone is placeProtectiveOrders for a cumulative
+// quantity of which tpDone has ALREADY been realized by earlier take-profit
+// legs (2026-10-20 review area2 #7). The TP target is
+// quantity*fraction - tpDone, so a split TP that already filled is not
+// re-armed against the runner. tpDone == 0 is the unchanged legacy behavior.
+func (at *AutoTrader) placeProtectiveOrdersTPDone(decision *kernel.Decision, positionSide string, quantity float64, refPrice, fillPrice, tpDone float64) (slErr, tpErr error) {
 	mode := decision.ExitMode
 	if mode == "" {
 		mode = kernel.ExitModeTrend
 	}
 	tpQty := quantity * tpFractionForMode(mode, at.effectiveTPCloseFraction())
+	if tpDone > 0 {
+		tpQty = math.Max(0, tpQty-tpDone)
+	}
+	tpNeeded := decision.TakeProfit > 0 && (tpDone <= 0 || tpQty > math.Max(1e-9, quantity*1e-6))
 	if decision.StopLoss > 0 {
 		slErr = ensureProtectiveCoverage(at.trader, decision.Symbol, positionSide, "SL", decision.StopLoss, quantity)
 	}
-	if decision.TakeProfit > 0 {
+	// review 2026-10-11: initial Binance SL failure cannot wait for three
+	// 30s repairs. Verify now, retry 1/2/4s, then exit the unprotected slice.
+	if at.binanceRealtimeCapable() && decision.StopLoss > 0 && at.isAIManaged(decision.Symbol, strings.ToLower(positionSide)) {
+		verified := at.verifyInitialStopCoverage(decision.Symbol, positionSide, decision.StopLoss, quantity)
+		slErr = verified
+		if slErr != nil {
+			slErr = at.initialStopFastFailure(decision.Symbol, strings.ToLower(positionSide), decision.StopLoss, quantity, slErr)
+			if slErr != nil {
+				return slErr, fmt.Errorf("TP deferred after initial SL failure")
+			}
+		}
+	}
+	if tpNeeded {
 		tpErr = ensureProtectiveCoverage(at.trader, decision.Symbol, positionSide, "TP", decision.TakeProfit, tpQty)
 	}
-	verifiedSL, verifiedTP := at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, decision.TakeProfit > 0, quantity, tpQty)
+	verifiedSL, verifiedTP := at.verifyProtectiveLegs(decision, positionSide, decision.StopLoss > 0, tpNeeded, quantity, tpQty)
 	if slErr == nil {
 		slErr = verifiedSL
 	}
 	if tpErr == nil {
 		tpErr = verifiedTP
+	}
+	if slErr != nil && decision.StopLoss > 0 && at.binanceRealtimeCapable() {
+		// review 2026-10-11: coverage can also disappear during final TP
+		// verification. That failure gets the same within-pass exit budget.
+		slErr = at.initialStopFastFailure(decision.Symbol, strings.ToLower(positionSide), decision.StopLoss, quantity, slErr)
 	}
 	if tpErr == nil && decision.TakeProfit > 0 {
 		if tpQty < quantity {
@@ -904,12 +991,11 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — manual positions are never closed/adjusted by the program (close the position manually or take it over via a decision to open it)", decision.Symbol)
 	}
 
-	// Get current price
-	marketData, err := at.getMarketData(decision.Symbol)
-	if err != nil {
-		return err
-	}
-	actionRecord.Price = marketData.CurrentPrice
+	// Reference price for the record only. A close must never be blocked by
+	// market-data trouble (2026-10-16 review D): lightweight quote first, then
+	// the full market data, else record 0 and close anyway.
+	closePrice := at.closeReferencePrice(decision.Symbol)
+	actionRecord.Price = closePrice
 
 	// Normalize symbol for database lookup
 	normalizedSymbol := market.Normalize(decision.Symbol)
@@ -959,8 +1045,18 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	}
 
 	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice)
+	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, closePrice, 0, entryPrice)
 
+	// 2026-10-20 review area2 #2: a successful POST is not a closed position
+	// (a market close can part-fill and expire). Protection state and AI
+	// ownership are released only after a FRESH snapshot shows this side flat;
+	// a remainder keeps its SL/TP, recorded levels and AI mark so the watchdog
+	// and the next decision keep managing it. The per-cycle "position gone"
+	// sweep clears the registry once the remainder really disappears.
+	if !at.closeConfirmedFlat(decision.Symbol, "long") {
+		at.keepUnconfirmedClose(decision.Symbol, "long")
+		return nil
+	}
 	at.ClearRecordedStopLoss(decision.Symbol, "long")
 	at.ClearInitialStopLoss(decision.Symbol, "long")
 	at.ClearExitMode(decision.Symbol, "long")
@@ -980,12 +1076,11 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 		return fmt.Errorf("❌ [HANDS-OFF] %s was not opened by the AI — manual positions are never closed/adjusted by the program (close the position manually or take it over via a decision to open it)", decision.Symbol)
 	}
 
-	// Get current price
-	marketData, err := at.getMarketData(decision.Symbol)
-	if err != nil {
-		return err
-	}
-	actionRecord.Price = marketData.CurrentPrice
+	// Reference price for the record only. A close must never be blocked by
+	// market-data trouble (2026-10-16 review D): lightweight quote first, then
+	// the full market data, else record 0 and close anyway.
+	closePrice := at.closeReferencePrice(decision.Symbol)
+	actionRecord.Price = closePrice
 
 	// Normalize symbol for database lookup
 	normalizedSymbol := market.Normalize(decision.Symbol)
@@ -1035,8 +1130,18 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	}
 
 	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice)
+	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, closePrice, 0, entryPrice)
 
+	// 2026-10-20 review area2 #2: a successful POST is not a closed position
+	// (a market close can part-fill and expire). Protection state and AI
+	// ownership are released only after a FRESH snapshot shows this side flat;
+	// a remainder keeps its SL/TP, recorded levels and AI mark so the watchdog
+	// and the next decision keep managing it. The per-cycle "position gone"
+	// sweep clears the registry once the remainder really disappears.
+	if !at.closeConfirmedFlat(decision.Symbol, "short") {
+		at.keepUnconfirmedClose(decision.Symbol, "short")
+		return nil
+	}
 	at.ClearRecordedStopLoss(decision.Symbol, "short")
 	at.ClearInitialStopLoss(decision.Symbol, "short")
 	at.ClearExitMode(decision.Symbol, "short")
@@ -1044,4 +1149,74 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	at.unmarkAIManaged(decision.Symbol, "short") // lifecycle complete — registry clean
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
+}
+
+// closeFlatRetryDelay spaces the post-close position re-reads (test seam).
+var closeFlatRetryDelay = 400 * time.Millisecond
+
+// closeConfirmedFlat reports whether a fresh (cache-invalidated) position
+// snapshot shows NO position on symbol/side. A failed read is "not confirmed":
+// the caller must keep protection and ownership rather than assume success.
+func (at *AutoTrader) closeConfirmedFlat(symbol, side string) bool {
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(closeFlatRetryDelay)
+		}
+		at.invalidateExecutionCache()
+		positions, err := at.trader.GetPositions()
+		if err != nil {
+			continue
+		}
+		held := false
+		for _, pos := range positions {
+			if pos["symbol"] != symbol || pos["side"] != side {
+				continue
+			}
+			if amt, ok := pos["positionAmt"].(float64); !ok || amt != 0 {
+				held = true
+				break
+			}
+		}
+		if !held {
+			return true
+		}
+	}
+	return false
+}
+
+// keepUnconfirmedClose is the "close submitted, flat NOT confirmed" outcome:
+// nothing is cleared, the operator is alerted, and the first-seen time is
+// seeded from the DB entry (when known) so the per-cycle position-gone sweep
+// can still release the AI mark if the remainder later disappears unseen.
+func (at *AutoTrader) keepUnconfirmedClose(symbol, side string) {
+	posKey := symbol + "_" + side
+	if _, exists := at.positionFirstSeenTime[posKey]; !exists {
+		if entryTime, _, ok := at.lookupOpenPositionEntry(symbol, side); ok && entryTime > 0 {
+			at.positionFirstSeenTime[posKey] = entryTime
+		}
+	}
+	logger.Warnf("⚠️ [%s] %s %s close submitted but the position is NOT confirmed flat (partial fill / stale snapshot) — keeping SL/TP, recorded stop and AI ownership",
+		at.name, symbol, side)
+	notify.Notify("ALERT", at.name, fmt.Sprintf(
+		"<b>⚠️ 平仓未确认归零 %s %s</b>\n<i>平仓单已提交但持仓未确认清空(可能部分成交),已保留保护单与 AI 归属,下周期继续管理</i>",
+		notify.Escape(symbol), side))
+}
+
+// closeReferencePrice returns the price recorded on a close action without
+// depending on full market data (3m/4h klines + stale check): the adapter's
+// lightweight quote first, then getMarketData's CurrentPrice, else 0 (the
+// close proceeds and the record carries price 0).
+func (at *AutoTrader) closeReferencePrice(symbol string) float64 {
+	usable := func(p float64) bool { return p > 0 && !math.IsNaN(p) && !math.IsInf(p, 0) }
+	price, quoteErr := at.trader.GetMarketPrice(symbol)
+	if quoteErr == nil && usable(price) {
+		return price
+	}
+	md, mdErr := at.getMarketData(symbol)
+	if mdErr == nil && md != nil && usable(md.CurrentPrice) {
+		return md.CurrentPrice
+	}
+	logger.Warnf("⚠️ [%s] close %s: no reference price (quote err=%v, market data err=%v) — closing anyway, recording price 0",
+		at.name, symbol, quoteErr, mdErr)
+	return 0
 }

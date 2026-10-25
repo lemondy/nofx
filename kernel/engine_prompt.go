@@ -97,6 +97,9 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// 09-19 audit: min RR is double-enforced (rr_scan gate + executor
 	// checkRR) — it was mis-filed under AI GUIDED and read as relaxable.
 	sb.WriteString(fmt.Sprintf("- Min Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss — 程序双重校验,不可放宽)\n", riskControl.MinRiskRewardRatio))
+	if capR := riskControl.EffectiveTPMaxR(); capR > 0 {
+		sb.WriteString(fmt.Sprintf("- Take-Profit Cap: ≤%.2g×初始风险 (程序强制:take_profit 超过入场价±%.2g×|入场−止损| 时被截断到该价位)\n", capR, capR))
+	}
 	sb.WriteString(fmt.Sprintf("- Max Leverage: Altcoins %dx | BTC/ETH %dx (超限值由后端强制下调)\n",
 		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
 	if riskControl.MinConfidence > 0 {
@@ -195,12 +198,19 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	exEntry := 150.0
 	exSL := exEntry * 1.03  // 154.50 — above entry for a short
 	exTP := exEntry * 0.952 // 142.80 — below entry for a short
+	// Market-entry strategies (limit_entry_enabled=false) get a market example
+	// without "price": the model copies the example's action, so a limit example
+	// would push it to open_*_limit even though the strategy default is market.
+	exAction, exPriceField := "open_short_limit", fmt.Sprintf("\"price\": %.2f, ", exEntry)
+	if !riskControl.LimitEntryEnabled {
+		exAction, exPriceField = "open_short", ""
+	}
 	if TPMenuEnabled(&riskControl) {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"open_short_limit\", \"price\": %.2f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"tp_option\": 2, \"exit_mode\": \"range\", \"confidence\": 85},\n",
-			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"%s\", %s\"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"tp_option\": 2, \"exit_mode\": \"range\", \"confidence\": 85},\n",
+			exAction, exPriceField, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
 	} else {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"open_short_limit\", \"price\": %.2f, \"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85},\n",
-			exEntry, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"%s\", %s\"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85},\n",
+			exAction, exPriceField, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
 	}
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"entry_quality\": 55, \"no_trade_reason\": [\"LIMIT_ANCHOR_SUPPRESSED\", \"MICRO_TREND_NOT_SHORT\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
 	sb.WriteString("  {\"symbol\": \"ARUSDT\", \"action\": \"hold\", \"no_trade_reason\": [\"浮亏未达提前平仓条件\", \"15m 结构未破\"], \"management_quality\": 62, \"management_flags\": [\"STRUCTURE_WEAKENING\"]}\n")
@@ -210,6 +220,8 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	actions := "open_long_limit | open_short_limit | open_long | open_short | close_long | close_short | adjust_stop_loss | partial_close_long | partial_close_short | hold | wait"
 	if riskControl.LimitEntryEnabled {
 		actions += "(本策略默认限价入场: open_long/open_short 仅三类例外成立时可用)"
+	} else {
+		actions += "(本策略默认市价入场: 开仓只用 open_long/open_short,不要输出 open_*_limit)"
 	}
 	sb.WriteString("- `action`: " + actions + "\n")
 	sb.WriteString(fmt.Sprintf("- 开仓必填: leverage, position_size_usd, stop_loss, take_profit, confidence(0-100且≥%d);限价开仓另需 price。后端会拒绝低 confidence、下调超限 leverage;`risk_usd`、开仓的 `entry_quality` 和硬门 `blocking_factors` 由后端计算/回填,不要输出。\n", riskControl.MinConfidence))
@@ -219,6 +231,8 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("- 所有数值必须是数字,禁止公式、占位符或单位字符串。\n")
 	if riskControl.LimitEntryEnabled {
 		sb.WriteString("- 开仓路径只看 hard_entry_gate: `allowed=false` 必须 wait;`allowed=true && limit_allowed=true` 默认输出对应 open_*_limit 并逐字复制 entry_price;`allowed=true && limit_allowed=false && market_exception=true` 才可输出市价 open_*,且 confidence≥80。不存在其他例外。\n")
+	} else {
+		sb.WriteString("- 开仓路径只看 hard_entry_gate: `allowed=false` 必须 wait;`allowed=true` 直接输出市价 open_long/open_short(不填 price),止损/止盈/仓位按 entry_price(=实时价)计算的计划复制。limit_allowed/limit_buy_price/limit_sell_price 在本策略不使用。\n")
 	}
 	sb.WriteString("- wait: 无方向优势时 wait_bias 省略;方向明确但暂不可执行时填 long/short。hard_entry_gate.failed 存在时 no_trade_reason 逐项复制阻断码(去重后最多 4 项,按风险优先级取最重者),不要改写成反向观点;程序会映射 blocking_factors。方向性 wait 的 next_trigger 必须是`触发事件 + RECHECK_ALL_HARD_GATES`;每周期自动重评,禁止按天/周搁置。\n")
 	sb.WriteString("- **持仓管理动作(浮盈/结构变化时用,优先于全平)**:\n")
@@ -234,7 +248,13 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	// (head of the cached prefix) instead of being re-sent inside the user
 	// prompt every cycle. The user prompt then carries per-cycle data only.
 	sb.WriteString("# Structured Signal 字段说明（适用于每个 Structured Signal 块）\n")
-	sb.WriteString(signalBlockLegend)
+	sb.WriteString(signalBlockLegendFor(riskControl.LimitEntryEnabled))
+	if e.config.Indicators.EnableLiquiditySweep {
+		sb.WriteString("- liquidity_sweep 为程序预计算的扫荡证据:sellside_swept 支持做多,buyside_swept 支持做空;mss_confirmed=true 表示结构已转向;仅是参考证据,不是独立入场理由,不能绕过 hard_entry_gate / rr_scan;没有该字段表示近期无扫荡。\n")
+	}
+	if e.config.Indicators.EnableFactorEnsemble {
+		sb.WriteString("- factor_ensemble 为程序每日预计算的多因子截面参考:pct 越大越被因子看多、越小越看空,z 为方向调整后的截面标准分,按 horizon 天数;scope=core 表示因子在该币所在的流动性宇宙验证过;scope=extended 表示未在该币流动性档位验证、仅相对核心宇宙外推,参考权重应低于 core;bull/bear/neutral 为各因子对该币的方向投票(z≥0.5/≤-0.5/其余),top 为影响最大的至多3个因子(含 family、val_t、前向状态);scope=none 表示该币没经过因子校验(reason 说明原因),不能据此推断看多/看空;前向状态 inconclusive/pending 表示尚未被样本外证明;全部仅是参考证据,不是独立入场理由,不能绕过 hard_entry_gate / rr_scan;字段缺失表示无可用参考。\n")
+	}
 	if TPMenuEnabled(&e.config.RiskControl) {
 		sb.WriteString("- stop_loss 复制 stop_plan_price;take_profit 从 rr_scan.tp_options 菜单选编号填 tp_option(并把所选 level 复制为 take_profit):level 全部是程序按 stop_plan 同口径算出的结构位,touch_count 只是近30日触及该价位的次数(中性证据,非概率承诺),beyond_structure=超出全部周期结构极值(历史无参考)。usable=false 或菜单为空→引用 MAX_STRUCTURAL_RR=best_rr 并 wait。\n")
 	} else {
@@ -311,7 +331,11 @@ func (e *StrategyEngine) strategyParamsText() string {
 			params.WriteString(fmt.Sprintf("- 暴涨延伸做多确认门:4h 周期的趋势窗口(最近 5 根已闭合 4h K 线,约 20 小时)累计涨幅 ≥%.0f%% 且回踩未确认时,hard_entry_gate.failed 给出 EXTENDED_PUMP_UNCONFIRMED;这是 4h 周期指标,不是最近 4 小时的涨幅,直接采用程序结论\n", pg))
 		}
 		params.WriteString("- 做多独立确认(可选证据,非必要;轧空条件,程序预计算): 快照 derivatives.long_squeeze.detected=true = 资金费率年化 ≤ −5%(空头付费)+ long_short_account_ratio < 1(散户净空)+ 机构期货净流入 > 0 三者同时成立——作为做多方向的一条独立确认证据,reasoning 可直接引用;detected=false 或字段缺失 = 条件不成立,勿自行换算 FundingRate/比率\n")
-		params.WriteString("- 开仓硬门(唯一权威,禁止重算): hard_entry_gate.allowed 是该方向最终可执行权限;false 时只能 wait 并逐项引用 failed。true 时按 limit_allowed/market_exception 选择限价或市价路径;不得从原始指标推翻程序结论\n")
+		if e.config.RiskControl.LimitEntryEnabled {
+			params.WriteString("- 开仓硬门(唯一权威,禁止重算): hard_entry_gate.allowed 是该方向最终可执行权限;false 时只能 wait 并逐项引用 failed。true 时按 limit_allowed/market_exception 选择限价或市价路径;不得从原始指标推翻程序结论\n")
+		} else {
+			params.WriteString("- 开仓硬门(唯一权威,禁止重算): hard_entry_gate.allowed 是该方向最终可执行权限;false 时只能 wait 并逐项引用 failed。true 时直接市价开仓(open_long/open_short);不得从原始指标推翻程序结论\n")
+		}
 		if v := EffectiveMaxVendorDivergencePct(&e.config.RiskControl); v > 0 {
 			params.WriteString(fmt.Sprintf("- 数据源偏差门:偏差超过%.1f%%时程序输出 VENDOR_DIVERGENCE 并阻断开仓\n", v))
 		}
@@ -404,13 +428,17 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		params.WriteString("- 保护单看门狗(程序强制): 每周期核对全部持仓的止损/止盈挂单,缺失时按开仓计划价自动补挂(止盈只平部分的剩余趋势跑单、以及止盈距离走完转跟踪止损的仓位除外——它们的出场由移动止损接管)——保护单由程序保障,你只负责按结构规划输出 SL/TP 数值\n")
 		if EarlyCloseHours(&e.config.RiskControl) > 0 {
-			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 还必须有至少 2 根逆持仓方向的已收盘 1h K线。该门与浮亏结构位门、最短持仓门串联(AND):所有当前适用的门都通过才放行;任一门拦截就 hold。交易所 SL/TP 与回撤保护不走这些 AI close 门。持仓满 %dh 后不再适用本时间门\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
+			params.WriteString(fmt.Sprintf("- 提前平仓限制(程序强制): 持仓不足 %dh 时,close 还必须有至少 2 根逆持仓方向的已收盘 1h K线。已有 ≥0.5R 浮盈时可主动止盈/分批止盈,豁免本时间门;无开仓风险锚点时以价格方向浮盈 ≥1.5%% 兜底。该门与浮亏结构位门、最短持仓门串联(AND):所有当前适用的门都通过才放行;任一门拦截就 hold。交易所 SL/TP 与回撤保护不走这些 AI close 门。持仓满 %dh 后不再适用本时间门\n", EarlyCloseHours(&e.config.RiskControl), EarlyCloseHours(&e.config.RiskControl)))
 		}
 		if e.config.RiskControl.MinHoldMinutes > 0 {
 			params.WriteString(fmt.Sprintf("- 最短持仓限制(程序强制): 持仓不足 %d 分钟时,close/partial_close 会被程序拦截(现价已触及记录止损的硬退出除外)——不要在时间未到且无 1h 逆势证据时输出平仓动作\n", e.config.RiskControl.MinHoldMinutes))
 		}
 		if e.config.RiskControl.OpenRejectSupplyPct > 0 {
-			params.WriteString("- 锚点呼吸空间已并入 hard_entry_gate;直接采用 entry_price/limit_allowed,不要用 limit_entry_offset_pct 自行重算\n")
+			if e.config.RiskControl.LimitEntryEnabled {
+				params.WriteString("- 锚点呼吸空间已并入 hard_entry_gate;直接采用 entry_price/limit_allowed,不要用 limit_entry_offset_pct 自行重算\n")
+			} else {
+				params.WriteString("- 锚点呼吸空间已并入 hard_entry_gate;直接采用其结论与 entry_price,不要自行重算\n")
+			}
 		}
 		if e.config.RiskControl.AccountMaxDrawdownPct > 0 {
 			params.WriteString(fmt.Sprintf("- 账户级熔断(程序强制): 账户净值自初始值回撤 ≥ %.1f%% 时进入只减仓模式,一切新开仓被程序拦截;此时优先保护本金,减少交易频率\n", e.config.RiskControl.AccountMaxDrawdownPct))
@@ -578,7 +606,19 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 		// Strategy health is language-independent program truth. Compute it
 		// once, then localize only the prose below so switching the prompt
 		// language cannot change the model's risk posture.
-		edge := StrategyHealthEdge(ctx.TradingStats.ProfitFactor)
+		edge := ResolveStrategyEdge(ctx.TradingStats)
+		// PF is undefined without a loser; print a marker, not a fake 0.00.
+		noLoss := noLosingTrade(ctx.TradingStats)
+		pfZH := fmt.Sprintf("%.2f", ctx.TradingStats.ProfitFactor)
+		pfEN := pfZH
+		thinZH, thinEN := "", ""
+		if negativeEdgeSuppressed(ctx.TradingStats) {
+			thinZH = fmt.Sprintf("(样本不足: %d<%d 笔,不判负期望)", ctx.TradingStats.TotalTrades, MinNegativeEdgeTrades)
+			thinEN = fmt.Sprintf("(thin sample: %d<%d trades, negative-edge not assessed)", ctx.TradingStats.TotalTrades, MinNegativeEdgeTrades)
+		}
+		if noLoss {
+			pfZH, pfEN = "n/a(窗口内无亏损单)", "n/a (no losing trade in window)"
+		}
 		expR := expectancyR(ctx.TradingStats.WinRate, ctx.TradingStats.AvgWin, ctx.TradingStats.AvgLoss)
 		expSourceZH := "估算,亏损按-1R假设"
 		expSourceEN := "estimated, losses assumed -1R"
@@ -595,11 +635,11 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			} else {
 				sb.WriteString("## 历史交易统计(全部历史;账户行 PnL 为自启动以来累计,两者口径不同)\n")
 			}
-			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 胜率: %.1f%% | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
+			sb.WriteString(fmt.Sprintf("统计窗口: %s | 总交易: %d 笔 | 胜率: %.1f%% | 盈利因子: %s | 夏普比率: %.2f | 盈亏比: %.2f\n",
 				windowLabel,
 				ctx.TradingStats.TotalTrades,
 				ctx.TradingStats.WinRate,
-				ctx.TradingStats.ProfitFactor,
+				pfZH,
 				ctx.TradingStats.SharpeRatio,
 				winLossRatio))
 			// 净口径(user audit 2026-10-01): 总盈亏/平均盈亏已逐笔扣除手续费;
@@ -630,8 +670,8 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// = −1R while the real baseline measured −0.70R — a systematic
 			// pessimism the model read every cycle (E1, QUANT_REVIEW 09-22).
 			// The label states which caliber rendered.
-			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
-				edge, ctx.TradingStats.ProfitFactor, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
+			sb.WriteString(fmt.Sprintf("strategy_health: %s%s (PF %s, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, 窗口 %s)\n",
+				edge, thinZH, pfZH, expR, expSourceZH, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, windowLabel))
 			if ctx.TradingStats.MeasuredRSamples > 0 && ctx.TradingStats.MeasuredRSamples < ctx.TradingStats.TotalTrades {
 				// R 样本覆盖率(user audit 2026-10-01: 165 笔 R 对 218 笔 USDT
 				// 统计,差值 = 无计划止损的手动/外部仓等,两套数字不可直接互推)
@@ -658,7 +698,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			}
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("表现: 良好 - 保持当前策略\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
+			} else if !noLoss && ctx.TradingStats.ProfitFactor < 1 {
 				sb.WriteString("表现: 需改进 - 提高盈亏比，优化止盈止损\n")
 			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
 				sb.WriteString("表现: 风险偏高 - 减少仓位，控制回撤\n")
@@ -674,10 +714,10 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// data line below honored stats_window_days, so an English-model
 			// reading a non-30d window saw a mislabeled caliber (E3, QUANT_REVIEW 09-22).
 			sb.WriteString(fmt.Sprintf("## Historical Trading Statistics (%s rolling window; the account PnL is a since-start cumulative — different bases)\n", enWindow))
-			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
+			sb.WriteString(fmt.Sprintf("Window: %s | Total Trades: %d | Profit Factor: %s | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
 				enWindow,
 				ctx.TradingStats.TotalTrades,
-				ctx.TradingStats.ProfitFactor,
+				pfEN,
 				ctx.TradingStats.SharpeRatio,
 				winLossRatio))
 			sb.WriteString(fmt.Sprintf("Total PnL: %+.2f USDT | Avg Win: +%.2f | Avg Loss: -%.2f | Max Drawdown: %.1f%% (historical series peak within window, NOT current equity drawdown — see AccountBreaker in the account line)\n",
@@ -685,8 +725,8 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 				ctx.TradingStats.AvgWin,
 				ctx.TradingStats.AvgLoss,
 				ctx.TradingStats.MaxDrawdownPct))
-			sb.WriteString(fmt.Sprintf("strategy_health: %s (PF %.2f, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, window %s)\n",
-				edge, ctx.TradingStats.ProfitFactor, expR, expSourceEN, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, enWindow))
+			sb.WriteString(fmt.Sprintf("strategy_health: %s%s (PF %s, expectancy_r %+.2f [%s], avg_win_r %+.2f, avg_loss_r %.2f, window %s)\n",
+				edge, thinEN, pfEN, expR, expSourceEN, ctx.TradingStats.MeasuredAvgWinR, ctx.TradingStats.MeasuredAvgLossR, enWindow))
 			if edge == "NEGATIVE_EDGE" {
 				clauses := []string{
 					fmt.Sprintf("|directional_score| >= %.0f (NEG_EDGE_SCORE_*)", NegativeEdgeMinScore(&e.config.RiskControl)),
@@ -704,7 +744,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// Performance hints based on profit factor, sharpe, and drawdown
 			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
 				sb.WriteString("Performance: GOOD - maintain current strategy\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
+			} else if !noLoss && ctx.TradingStats.ProfitFactor < 1 {
 				sb.WriteString("Performance: NEEDS IMPROVEMENT - improve win/loss ratio, optimize TP/SL\n")
 			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
 				sb.WriteString("Performance: HIGH RISK - reduce position size, control drawdown\n")
@@ -1010,7 +1050,7 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 		if ctx.QuantDataMap != nil {
 			quantData = ctx.QuantDataMap[pos.Symbol]
 		}
-		if sig := e.computeCoinSignal(marketData, quantData, ctx, nil); sig != nil {
+		if sig := e.computeCoinSignalForSide(marketData, quantData, ctx, nil, pos.Side); sig != nil {
 			// 09-18 token audit ②: when close/partial cannot pass the
 			// close gates this cycle, the 4-TF JSON adds nothing the model
 			// can act on — render one management line. Near-stop danger
@@ -1097,7 +1137,44 @@ func (e *StrategyEngine) strategyEdge(ctx *Context) string {
 	if ctx == nil || ctx.TradingStats == nil || ctx.TradingStats.TotalTrades == 0 {
 		return "POSITIVE_EDGE"
 	}
-	return StrategyHealthEdge(ctx.TradingStats.ProfitFactor)
+	return ResolveStrategyEdge(ctx.TradingStats)
+}
+
+// noLosingTrade reports a window with trades but no loser: store leaves both
+// ProfitFactor and AvgLoss at 0 only then (a real losing window always has
+// AvgLoss > 0), so PF=0 here means "undefined", not "worst".
+func noLosingTrade(st *TradingStats) bool {
+	return st != nil && st.TotalTrades > 0 && st.ProfitFactor == 0 && st.AvgLoss == 0
+}
+
+// MinNegativeEdgeTrades: user decision 2026-10-08 — one or two losers in a
+// thin window armed the NEGATIVE_EDGE gate; below this sample it is not assessed.
+const MinNegativeEdgeTrades = 20
+
+// negativeEdgeSuppressed reports a PF-negative window downgraded for a thin
+// sample; the resolver and the stats-block marker share this one condition.
+func negativeEdgeSuppressed(st *TradingStats) bool {
+	return st != nil && st.TotalTrades > 0 && st.TotalTrades < MinNegativeEdgeTrades &&
+		!noLosingTrade(st) && StrategyHealthEdge(st.ProfitFactor) == "NEGATIVE_EDGE"
+}
+
+// ResolveStrategyEdge is the single edge resolver for prose and gate (review
+// 2026-10-08 A: all-win window read as PF 0 → NEGATIVE_EDGE). No data →
+// POSITIVE_EDGE (never arm on absence); no loser → by TotalPnL; else PF.
+func ResolveStrategyEdge(st *TradingStats) string {
+	if st == nil || st.TotalTrades == 0 {
+		return "POSITIVE_EDGE"
+	}
+	if noLosingTrade(st) {
+		if st.TotalPnL > 0 {
+			return "POSITIVE_EDGE"
+		}
+		return "NO_EDGE"
+	}
+	if negativeEdgeSuppressed(st) {
+		return "NO_EDGE"
+	}
+	return StrategyHealthEdge(st.ProfitFactor)
 }
 
 // formatMarketContext compresses the three market-wide ranking blocks (OI
@@ -1189,7 +1266,7 @@ func fresh60mForInteresting(ctx *Context) map[string]float64 {
 	out := make(map[string]float64, len(ctx.MarketDataMap))
 	for sym := range interestingSymbols(ctx) {
 		if data, ok := ctx.MarketDataMap[sym]; ok {
-			out[sym] = rolling1hChangePct(data, time.Now())
+			out[sym] = rolling1hChangePct(data, snapshotNow(data, time.Time{}))
 		}
 	}
 	return out
@@ -1552,6 +1629,12 @@ func fmtPx(v float64) string {
 // Market Data Formatting
 // ============================================================================
 
+// ShortScanNeedsTopConfirmation is shared by entry and pending rechecks.
+// Breakdown is a continuation signal, rather than a topping reversal.
+func ShortScanNeedsTopConfirmation(universe string) bool {
+	return universe != "breakdown"
+}
+
 // computeCoinSignal builds the SignalOptions for one symbol, runs the signal
 // layer, and records the program-side bookkeeping the decision validator and
 // datasets read (anchors / RR ceilings / gate states). Returns nil when the
@@ -1561,11 +1644,23 @@ func fmtPx(v float64) string {
 // render (double-blocked candidates and close-locked positions compress to
 // one line), while the bookkeeping must still happen every cycle.
 func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantData, ctx *Context, coin *CandidateCoin) *SymbolSignal {
+	return e.computeCoinSignalForSide(data, quantData, ctx, coin, "")
+}
+
+// computeCoinSignalForSide is computeCoinSignal with an explicit held side
+// ("long"/"short"). The position renderer passes the side of the position it
+// is rendering so a hedged symbol (long AND short open) gets the exit signal
+// of the right leg (review 2026-10-20 area4 #6). Empty heldSide infers the
+// side from ctx.Positions and stays empty when the symbol is held on both
+// sides (ambiguous) — never "the first matching position".
+func (e *StrategyEngine) computeCoinSignalForSide(data *market.Data, quantData *QuantData, ctx *Context, coin *CandidateCoin, heldSide string) *SymbolSignal {
 	// Signal layer: structured, normalized feature block replaces the raw
 	// candle dump. Falls back to the legacy text dump only if computation fails.
 	opt := SignalOptions{
 		Now:                     time.Now(),
 		PrimaryTF:               e.config.Indicators.Klines.PrimaryTimeframe,
+		EnableLiquiditySweep:    e.config.Indicators.EnableLiquiditySweep,
+		EnableFactorEnsemble:    e.config.Indicators.EnableFactorEnsemble,
 		CurrentPrice:            data.CurrentPrice,
 		LimitEntryOffsetPct:     e.config.RiskControl.LimitEntryOffsetPct,
 		LimitEntryOffsetMode:    e.config.RiskControl.LimitEntryOffsetMode,
@@ -1595,7 +1690,12 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// greed deweight — all config-switchable via risk_control.
 		LongPullbackEntry:   e.config.RiskControl.EffectiveLongPullbackEntry(),
 		LongMaxEMA20DistPct: e.config.RiskControl.EffectiveLongMaxEMA20DistPct(),
-		BTCFilterLong:       e.config.RiskControl.EffectiveBTCFilterLong(),
+		// Anti-chase symmetric gates (Opus analysis 2026-10-11, 273 live trades).
+		ChaseMaxEMA20_1hPct:   e.config.RiskControl.EffectiveChaseMaxEMA20_1hPct(),
+		CounterMaxEMA20_1hPct: e.config.RiskControl.EffectiveCounterMaxEMA20_1hPct(),
+		EntryRSI1hMax:         e.config.RiskControl.EffectiveEntryRSI1hMax(),
+		ChaseMaxMove4hPct:     e.config.RiskControl.EffectiveChaseMaxMove4hPct(),
+		BTCFilterLong:         e.config.RiskControl.EffectiveBTCFilterLong(),
 		// Short-side mirrors (2026-10-04 batch-2): the BTC strong-bull hard
 		// pause is OPT-IN (the scan-side ×0.85 haircut off the same shared
 		// classifier stays the default treatment); the top-confirmation gate
@@ -1646,8 +1746,14 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				opt.ScannerBias = "short"
 				// The top-confirmation gate consumes the scanner's own
 				// confirmation verdict (2026-10-04 batch-2).
-				conf := coin.ShortConfirmed
-				opt.ShortScanConfirmed = &conf
+				// universe=breakdown is a CONTINUATION short (sell the failed
+				// bounce in a downtrend): it can never print a topping
+				// confirmation, so it is exempt from the top-confirm gate
+				// (the 15m MICRO_TREND gate still applies).
+				if ShortScanNeedsTopConfirmation(coin.ShortUniverse) {
+					conf := coin.ShortConfirmed
+					opt.ShortScanConfirmed = &conf
+				}
 				break
 			}
 		}
@@ -1721,6 +1827,36 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 			}
 		}
 	}
+	// exit_rule_triggered is direction-aware (2026-10-09 ONUSDT): thread the
+	// held position's side into the signal so the rule evaluates the matching
+	// mirror. An empty side (not held) leaves the flag false — the phantom
+	// suppression this replaces also covered the held case wrongly, by
+	// showing a SHORT the long-side exit semantics.
+	switch {
+	case strings.EqualFold(heldSide, "long"):
+		opt.PositionSide = "long"
+	case strings.EqualFold(heldSide, "short"):
+		opt.PositionSide = "short"
+	case ctx != nil:
+		hasLong, hasShort := false, false
+		for _, p := range ctx.Positions {
+			if market.Normalize(p.Symbol) != market.Normalize(data.Symbol) {
+				continue
+			}
+			switch {
+			case strings.EqualFold(p.Side, "long"):
+				hasLong = true
+			case strings.EqualFold(p.Side, "short"):
+				hasShort = true
+			}
+		}
+		switch {
+		case hasLong && !hasShort:
+			opt.PositionSide = "long"
+		case hasShort && !hasLong:
+			opt.PositionSide = "short"
+		}
+	}
 	if sig, err := ComputeSymbolSignals(data.Symbol, data, opt); err == nil {
 		// Naming consistency: the JSON symbol MUST match the candidate heading
 		// and the decision symbol — market data may carry a prefixed exchange
@@ -1728,20 +1864,6 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 		// form. Decisions route through the candidate name.
 		if coin != nil && coin.Symbol != "" {
 			sig.Symbol = strings.ToUpper(coin.Symbol)
-		}
-		// exit_rule_triggered is only meaningful when the trader actually
-		// holds this symbol — otherwise it reads as a phantom exit signal.
-		if ctx != nil {
-			held := false
-			for _, p := range ctx.Positions {
-				if market.Normalize(p.Symbol) == market.Normalize(data.Symbol) {
-					held = true
-					break
-				}
-			}
-			if !held {
-				sig.ExitTriggered = false
-			}
 		}
 		// Remember the anchors the model is being shown, so post-parse
 		// compliance can snap open_*_limit prices back to the pre-computed
@@ -1784,6 +1906,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				if sig.HardGate.Long != nil {
 					gs.LongStopPlanPrice = sig.HardGate.Long.StopPlanPrice
 					gs.LongEntryPrice = sig.HardGate.Long.EntryPrice
+					gs.LongEntryBasis = sig.HardGate.Long.EntryBasis
 					gs.LongFailed = sig.HardGate.Long.Failed
 					gs.LongMarketException = sig.HardGate.Long.MarketException
 					gs.LongLimitAllowed = sig.HardGate.Long.LimitAllowed
@@ -1803,6 +1926,7 @@ func (e *StrategyEngine) computeCoinSignal(data *market.Data, quantData *QuantDa
 				if sig.HardGate.Short != nil {
 					gs.ShortStopPlanPrice = sig.HardGate.Short.StopPlanPrice
 					gs.ShortEntryPrice = sig.HardGate.Short.EntryPrice
+					gs.ShortEntryBasis = sig.HardGate.Short.EntryBasis
 					gs.ShortFailed = sig.HardGate.Short.Failed
 					gs.ShortMarketException = sig.HardGate.Short.MarketException
 					gs.ShortLimitAllowed = sig.HardGate.Short.LimitAllowed
@@ -1995,8 +2119,26 @@ const signalBlockLegend = `时间口径: timeframe 名称是K线粒度;trend_win
 - bias.scanner 只是候选来源姿态;方向依据 structure/execution/directional_score。仅在 hard_entry_gate.allowed=true 且准备开仓时处理 signal_conflict;已被硬门阻断时直接 wait,不展开冲突分析。
 - support/resistance 与距离均按实时价生成;空数组表示对应方向没有结构参考。trend 与窗口收益方向不同可以是合法反弹/回撤,不自动构成冲突。
 - rr_scan.first_obstacle / first_obstacle_rr = 交易路径上最近的结构位及该位的净 RR(无论是否达到 min_rr)。止盈目标若在它之后,价格要先穿过它;first_obstacle_rr 很低说明前方很近就有墙——这是证据,不是禁开码,请在推理中说明你如何看待它。
+- exit_rule_triggered 按当前持仓方向计算,只在你持有该币时可能为 true:多头=价格跌破主TF结构低/RSI>80/主TF趋势转down且收阴;空头=镜像(升破结构高/RSI<20/趋势转up且收阳);无持仓恒 false。它是该方向反转的程序证据,不是平仓指令——引用时必须写明触发的是哪个条件并与 1h/4h 结构互证;程序值为 true 但你的结构判断不成立时可以继续 hold 并说明理由。
+- regime_line 是 trend_tf(默认1h)EMA50 收敛线;last_close_above(最近已收盘K线收盘 vs 线)与 live_price_above(实时价 vs 线)已由程序预计算。判断「升破/跌破」直接引用这两个布尔值,禁止自己比较小数——0.1107 与 0.110776 曾被读成「升破」。
 数据新鲜度优先级: Structured Signal timestamp > derivatives/liquidity > scanner/rankings。hint/榜单旧价格禁止参与 entry/SL/TP/RR 精确计算。ohlcv 只用于软证据,不得覆盖上述程序结论。
 `
+
+// signalGateLineLimit / signalGateLineMarket are the hard_entry_gate rule line
+// inside signalBlockLegend for limit-entry and market-entry strategies.
+const (
+	signalGateLineLimit  = "- hard_entry_gate.long/short.allowed 是最终方向权限。false→wait并逐项引用 failed;true 且 limit_allowed→限价复制 entry_price;true 且 !limit_allowed 且 market_exception→可走市价例外。不存在其他路径。\n"
+	signalGateLineMarket = "- hard_entry_gate.long/short.allowed 是最终方向权限。false→wait并逐项引用 failed;true→市价 open_long/open_short,按 entry_price(实时价)计划复制止损止盈。不存在其他路径。\n"
+)
+
+// signalBlockLegendFor returns the legend for the strategy's entry mode.
+// Limit mode is byte-identical to signalBlockLegend.
+func signalBlockLegendFor(limitEntryEnabled bool) string {
+	if limitEntryEnabled {
+		return signalBlockLegend
+	}
+	return strings.Replace(signalBlockLegend, signalGateLineLimit, signalGateLineMarket, 1)
+}
 
 // renderSignalBlock renders the structured signal block: a plain-language
 // summary header (structure state, key levels, derivatives, rules) followed by
@@ -2138,7 +2280,7 @@ func positionCloseLocked(pos PositionInfo, data *market.Data, rc *store.RiskCont
 		}
 	}
 	var locks []string
-	if hours := EarlyCloseHours(rc); hours > 0 && held < time.Duration(hours)*time.Hour {
+	if hours := EarlyCloseHours(rc); hours > 0 && held < time.Duration(hours)*time.Hour && !pos.EarlyCloseProfitOK {
 		if oneHAgainstCandles(data, strings.ToLower(pos.Side)) < 2 {
 			locks = append(locks, fmt.Sprintf("持仓不足%dh且1h逆向收盘<2根", hours))
 		}

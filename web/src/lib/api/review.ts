@@ -120,6 +120,16 @@ export const reviewApi = {
     if (!result.success) throw new Error('Failed to delete trading rule')
   },
 
+  async reverifyRule(id: number, traderId?: string): Promise<void> {
+    const params = new URLSearchParams()
+    if (traderId) params.append('trader_id', traderId)
+    const result = await httpClient.request(
+      `${API_BASE}/review/rules/${id}/reverify?${params}`,
+      { method: 'POST' }
+    )
+    if (!result.success) throw new Error('Failed to re-verify rule')
+  },
+
   async getRuleLogs(
     traderId?: string,
     limit = 50
@@ -175,13 +185,19 @@ export const reviewApi = {
   async aiApplyRules(
     traderId: string | undefined,
     rules: RuleInput[]
-  ): Promise<{ saved: number }> {
+  ): Promise<{
+    saved: number
+    rejected?: { index: number; reason: string }[]
+  }> {
     const params = new URLSearchParams()
     if (traderId) params.append('trader_id', traderId)
-    const result = await httpClient.request<{ saved: number }>(
-      `${API_BASE}/review/ai/apply-rules?${params}`,
-      { method: 'POST', data: { rules } }
-    )
+    const result = await httpClient.request<{
+      saved: number
+      rejected?: { index: number; reason: string }[]
+    }>(`${API_BASE}/review/ai/apply-rules?${params}`, {
+      method: 'POST',
+      data: { rules },
+    })
     if (!result.success) throw new Error('Failed to apply AI rules')
     return result.data!
   },

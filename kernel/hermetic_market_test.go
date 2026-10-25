@@ -105,7 +105,12 @@ func okCandidateCtx() *Context {
 // becomes double-blocked and compresses to the one-row table.
 func TestBTC4hDowntrendCompressesLongOnlyCandidate(t *testing.T) {
 	stubLiveMarket(t, downtrendBTC4h())
-	engine := NewStrategyEngine(&store.StrategyConfig{})
+	cfg := &store.StrategyConfig{}
+	// The monotone fixture has RSI=100 and a distant live-price anchor; keep
+	// this test about the BTC regime, independent of the anti-chase caps.
+	cfg.RiskControl.CounterMaxEMA20_1hPct = -1
+	cfg.RiskControl.EntryRSI1hMax = -1
+	engine := NewStrategyEngine(cfg)
 	ctx := okCandidateCtx()
 
 	prompt := engine.BuildUserPrompt(ctx)

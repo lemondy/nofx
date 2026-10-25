@@ -212,10 +212,10 @@ func (s *Server) handlePositions(c *gin.Context) {
 	for _, pos := range positions {
 		symbol, _ := pos["symbol"].(string)
 		side, _ := pos["side"].(string)
-		if symbol == "" {
+		if symbol == "" || trader.IsStockStrategy() { // us_stock positions carry their own protection
 			continue
 		}
-		orders, err := trader.GetOpenOrders(symbol)
+		orders, err := uiOpenOrdersFor(traderID, symbol, trader)
 		if err != nil {
 			// F17 (2026-10-01 review): a FAILED query used to `continue`,
 			// which renders identically to "no protection orders" — the
@@ -475,7 +475,7 @@ func (s *Server) handleOpenOrders(c *gin.Context) {
 	symbol = market.Normalize(symbol)
 
 	// Get open orders from exchange
-	openOrders, err := trader.GetOpenOrders(symbol)
+	openOrders, err := uiOpenOrdersFor(traderID, symbol, trader)
 	if err != nil {
 		SafeInternalError(c, "Get open orders", err)
 		return

@@ -17,6 +17,13 @@ import (
 
 // runCycle runs one trading cycle (using AI full decision-making)
 func (at *AutoTrader) runCycle() error {
+	return at.runCycleWithDecision(func(ctx *kernel.Context) (*kernel.FullDecision, error) {
+		return kernel.GetFullDecisionWithStrategy(ctx, at.mcpClient, at.strategyEngine, "balanced")
+	})
+}
+
+// Keep the cycle orchestration testable without market-data or model requests.
+func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel.FullDecision, error)) error {
 	mu := at.executionMutex()
 	mu.Lock()
 	defer mu.Unlock()
@@ -113,9 +120,17 @@ func (at *AutoTrader) runCycle() error {
 	// lazily at the day's first open decision — losses between midnight and
 	// the first open attempt must count toward the daily cap.
 	at.anchorDailyBaseline(ctx.Account.TotalEquity)
+	// 2026-10-20 area2 #6: evaluate + latch the daily-loss halt on EVERY valid
+	// equity snapshot, before the candidate check / model call — a breach seen
+	// in a hold/close-only cycle must stay latched when equity later rebounds
+	// (the old latch only ran when an open decision reached the entry gate).
+	if halt := at.evaluateDailyLossLatch(ctx.Account.TotalEquity); halt != "" {
+		logger.Warnf("🛑 [%s] daily-loss halt active this cycle: %s", at.name, halt)
+	}
 
-	// If no candidate coins available, log but do not error
-	if len(ctx.CandidateCoins) == 0 {
+	// A source outage/empty entry pool must not suppress management of live
+	// positions or unresolved entries. The pending lifecycle already ran above.
+	if len(ctx.CandidateCoins) == 0 && len(ctx.Positions) == 0 && len(at.snapshotPendingKeys()) == 0 {
 		logger.Infof("ℹ️  No candidate coins available, skipping this cycle")
 		record.Success = true // Not an error, just no candidate coins
 		record.ExecutionLog = append(record.ExecutionLog, "No candidate coins available, cycle skipped")
@@ -131,6 +146,10 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	logger.Info(strings.Repeat("=", 70))
+	if len(ctx.CandidateCoins) == 0 {
+		logger.Infof("ℹ️  No entry candidates; continuing with position/pending management only")
+		record.ExecutionLog = append(record.ExecutionLog, "No entry candidates; management-only cycle")
+	}
 	// Candidate-source attribution snapshot: rebuild the normalized-symbol
 	// map from THIS cycle's pool — wholesale replacement, so a symbol dropped
 	// from the pool can't attribute stale sources at a later fill.
@@ -150,7 +169,7 @@ func (at *AutoTrader) runCycle() error {
 	// 5. Use strategy engine to call AI for decision
 	logger.Infof("🤖 Requesting AI analysis and decision... [Strategy Engine]")
 	aiDecision, err := withoutExecutionLock(mu, func() (*kernel.FullDecision, error) {
-		return kernel.GetFullDecisionWithStrategy(ctx, at.mcpClient, at.strategyEngine, "balanced")
+		return decide(ctx)
 	})
 	at.isRunningMutex.RLock()
 	stopped := !at.isRunning
@@ -168,6 +187,10 @@ func (at *AutoTrader) runCycle() error {
 		record.ExecutionLog = append(record.ExecutionLog,
 			fmt.Sprintf("AI call duration: %d ms", record.AIRequestDurationMs))
 	}
+
+	// 2026-10-10 per-candidate block reasons: gate states exist once the prompt
+	// is built (model-decided and regime-skip cycles alike).
+	record.CandidateVerdicts = kernel.BuildCandidateVerdicts(ctx)
 
 	// Save chain of thought, decisions, and input prompt even if there's an error (for debugging)
 	if aiDecision != nil {
@@ -273,6 +296,9 @@ func (at *AutoTrader) runCycle() error {
 
 	// 8. Sort decisions: ensure close positions first, then open positions (prevent position stacking overflow)
 	sortedDecisions := sortDecisionsByPriority(aiDecision.Decisions)
+	// Market-entry strategies (limit_entry_enabled=false): belt and braces on top
+	// of the prompt — any open_*_limit the model still emits becomes a market open.
+	sortedDecisions = at.forceMarketEntries(sortedDecisions)
 
 	logger.Info("🔄 Execution order (optimized): Close positions first → Open positions later")
 	for i, d := range sortedDecisions {
@@ -289,19 +315,25 @@ func (at *AutoTrader) runCycle() error {
 		return nil
 	}
 
-	// Safe mode: filter out open positions, only allow close/hold
-	if at.safeMode {
+	// Held AI positions normally remain eligible for adds in cycleEntryPool.
+	// An empty candidate pool must explicitly forbid those as well as fresh
+	// opens, while keeping close/hold/protection decisions available.
+	if at.safeMode || len(ctx.CandidateCoins) == 0 {
+		reason := "No entry candidates"
+		if at.safeMode {
+			reason = "Safe mode"
+		}
 		filtered := make([]kernel.Decision, 0)
 		for _, d := range sortedDecisions {
-			if d.Action == "open_long" || d.Action == "open_short" || d.Action == "open_long_limit" || d.Action == "open_short_limit" {
-				logger.Warnf("🛡️ [%s] Safe mode: BLOCKED %s %s (no new positions allowed)", at.name, d.Action, d.Symbol)
+			if kernel.IsOpenDecision(d.Action) {
+				logger.Warnf("🛡️ [%s] %s: BLOCKED %s %s (no new positions allowed)", at.name, reason, d.Action, d.Symbol)
 				continue
 			}
 			filtered = append(filtered, d)
 		}
 		sortedDecisions = filtered
 		if len(sortedDecisions) == 0 {
-			logger.Infof("🛡️ [%s] Safe mode: all decisions were open positions, nothing to execute", at.name)
+			logger.Infof("🛡️ [%s] %s: all decisions were open positions, nothing to execute", at.name, reason)
 		}
 	}
 
@@ -325,15 +357,15 @@ func (at *AutoTrader) runCycle() error {
 
 	// Pre-trade rule check: evaluate review-derived rules before execution.
 	// Hard rules with action=block reject the decision outright.
-	sortedDecisions = at.preTradeRuleCheck(sortedDecisions, ctx.Account.TotalEquity)
+	sortedDecisions = at.preTradeRuleCheckWithContext(sortedDecisions, ctx.Account.TotalEquity, ctx)
 
 	// Hard risk gates the AI cannot override: 1d-uptrend short block and the
 	// minimum holding period lock on closes (both strategy risk_control driven).
+	at.settleHeldReservations() // defensive: a previous batch that exited early must not leave entries uncounted
 	at.cycleRiskReservedUSD = 0 // fresh batch — the reservation accumulates as opens pass the gate
 	at.cycleLongRiskReservedUSD = 0
 	at.cycleShortRiskReservedUSD = 0
 	at.cycleSymbolRiskReservedUSD = make(map[string]float64)
-	at.seedAIManagedOnce() // one-time migration: pre-registry positions presumed AI-managed
 	sortedDecisions = at.applyHardRiskGates(sortedDecisions, ctx)
 	if len(sortedDecisions) == 0 {
 		logger.Infof("🛡️ [%s] All decisions filtered by hard risk gates", at.name)
@@ -364,20 +396,19 @@ func (at *AutoTrader) runCycle() error {
 			Success:    false,
 		}
 
-		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
+		origAction := d.Action
+		execErr := at.executeDecisionWithRecord(&d, &actionRecord)
+		// 2026-10-20 area2 #5: a market→limit degrade inside the executor
+		// changes the execution price — re-book the reservation at the anchor.
+		at.repriceCycleReservation(&d, origAction, ctx)
+		if err := execErr; err != nil {
 			// R8 release: an open that FAILED execution must give back the
 			// stop-risk it booked at the exposure gate — otherwise a failed
 			// order keeps eating the account's risk budget for the cycle.
-			if strings.HasPrefix(d.Action, "open_") && d.CycleReservedRiskUSD > 0 {
-				at.cycleRiskReservedUSD -= d.CycleReservedRiskUSD
-				symbol := market.Normalize(d.Symbol)
-				at.cycleSymbolRiskReservedUSD[symbol] -= d.CycleReservedRiskUSD
-				if at.cycleSymbolRiskReservedUSD[symbol] < 0 {
-					at.cycleSymbolRiskReservedUSD[symbol] = 0
-				}
-				if at.cycleRiskReservedUSD < 0 {
-					at.cycleRiskReservedUSD = 0
-				}
+			// An UNKNOWN submit may be live on the exchange: its reservation
+			// stays booked until the pending reconciliation resolves it.
+			if strings.HasPrefix(d.Action, "open_") && d.CycleReservedRiskUSD > 0 && !at.holdUnknownSubmitReservation(err, &d) {
+				at.releaseCycleReservation(&d)
 			}
 			logger.Warnf("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			// Alert dedup (CAPUSDT 09-15): the AI retrying an illegal
@@ -465,7 +496,17 @@ func (at *AutoTrader) runCycle() error {
 					gateRR, gateUsable = c.ShortRR, c.ShortUsable
 				}
 			}
+			// Exact order link for open actions (review 2026-10-08 H): tracked
+			// + empty id = the open never placed an order (failed/rejected).
+			orderTracked, entryOrderID := false, ""
+			if strings.HasPrefix(strings.ToLower(d.Action), "open") {
+				orderTracked = true
+				if actionRecord.Success {
+					entryOrderID = actionRecord.EntryOrderID
+				}
+			}
 			if err := at.store.EntryAssessment().Insert(&store.EntryAssessment{
+				OrderTracked: orderTracked, OrderID: entryOrderID,
 				TraderID: at.id, Cycle: at.cycleNumber, Ts: time.Now().UTC(),
 				Symbol: d.Symbol, Direction: direction, Action: d.Action,
 				Stage: d.Stage, WaitBias: d.WaitBias, EntryQuality: quality,
@@ -483,6 +524,10 @@ func (at *AutoTrader) runCycle() error {
 			}
 		}
 	}
+
+	// Hand any UNKNOWN-submit reservations over from the cycle counters to the
+	// pending-risk accounting (kept until the exchange answers).
+	at.settleHeldReservations()
 
 	// Chain-of-thought push: whenever the AI proposed at least one actionable
 	// decision, send its reasoning to Telegram with per-decision outcomes —
@@ -721,6 +766,10 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			automationStage = "REDUCED_PRIOR_OR_EXTERNAL"
 		}
 
+		profitBypass := false
+		if managed {
+			profitBypass, _ = at.earlyCloseProfitBypass(symbol, side, entryPrice, markPrice)
+		}
 		positionInfos = append(positionInfos, kernel.PositionInfo{
 			Symbol:               symbol,
 			Side:                 side,
@@ -740,6 +789,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			Managed:              managed,
 			AutomationStage:      automationStage,
 			CumulativeReducedPct: cumulativeReducedPct,
+			EarlyCloseProfitOK:   profitBypass,
 		})
 	}
 
@@ -830,7 +880,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		CandidateCoins: candidateCoins,
 		// F10 (2026-10-01 review): analysis/anchor data pinned to the
 		// EXECUTION venue — Binance data must not drive another venue's book.
-		Exchange: at.exchange,
+		Exchange: at.marketDataExchange(),
 		// Daily-loss halt baseline (user audit 2026-10-01: the −10% day
 		// anchor was invisible to the model). anchorDailyBaseline ran earlier
 		// this cycle, so the anchor is current.

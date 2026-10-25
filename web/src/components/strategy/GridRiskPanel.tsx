@@ -1,3 +1,4 @@
+import { cn } from '../../lib/cn'
 import { useState, useEffect, useCallback } from 'react'
 import {
   Shield,
@@ -10,6 +11,7 @@ import {
 } from 'lucide-react'
 import type { GridRiskInfo } from '../../types'
 import { gridRisk, ts } from '../../i18n/strategy-translations'
+import { withAlpha } from '../../lib/colorAlpha'
 
 interface GridRiskPanelProps {
   traderId: string
@@ -59,39 +61,39 @@ export function GridRiskPanel({
   const getRegimeColor = (regime: string) => {
     switch (regime) {
       case 'narrow':
-        return '#2E7D4F'
+        return 'var(--up)'
       case 'standard':
-        return '#B8912A'
+        return 'var(--brand)'
       case 'wide':
-        return '#F7931A'
+        return 'var(--warn)'
       case 'volatile':
-        return '#C0392B'
+        return 'var(--down)'
       case 'trending':
-        return '#8B5CF6'
+        return 'var(--ai)'
       default:
-        return '#6E6E60'
+        return 'var(--fg-3)'
     }
   }
 
   const getBreakoutColor = (level: string) => {
     switch (level) {
       case 'none':
-        return '#2E7D4F'
+        return 'var(--up)'
       case 'short':
-        return '#B8912A'
+        return 'var(--brand)'
       case 'mid':
-        return '#F7931A'
+        return 'var(--warn)'
       case 'long':
-        return '#C0392B'
+        return 'var(--down)'
       default:
-        return '#6E6E60'
+        return 'var(--fg-3)'
     }
   }
 
   const getPositionColor = (percent: number) => {
-    if (percent < 50) return '#2E7D4F'
-    if (percent < 80) return '#B8912A'
-    return '#C0392B'
+    if (percent < 50) return 'var(--up)'
+    if (percent < 80) return 'var(--brand)'
+    return 'var(--down)'
   }
 
   const formatPrice = (price: number) => {
@@ -109,14 +111,9 @@ export function GridRiskPanel({
     return `$${value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
   }
 
-  const cardStyle = {
-    background: '#F2EFE6',
-    border: '1px solid #C0B9A2',
-  }
-
   if (loading) {
     return (
-      <div className="p-3 text-center text-xs" style={{ color: '#6E6E60' }}>
+      <div className="p-3 text-center text-xs text-fg-3">
         {ts(gridRisk.loading, language)}
       </div>
     )
@@ -124,7 +121,7 @@ export function GridRiskPanel({
 
   if (error) {
     return (
-      <div className="p-3 text-center text-xs" style={{ color: '#C0392B' }}>
+      <div className="p-3 text-center text-xs text-down">
         {ts(gridRisk.error, language)}: {error}
       </div>
     )
@@ -132,22 +129,22 @@ export function GridRiskPanel({
 
   if (!riskInfo) {
     return (
-      <div className="p-3 text-center text-xs" style={{ color: '#6E6E60' }}>
+      <div className="p-3 text-center text-xs text-fg-3">
         {ts(gridRisk.noData, language)}
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg" style={cardStyle}>
+    <div className="rounded-lg bg-surface-2 border border-line">
       {/* Collapsible Header */}
       <div
-        className="flex items-center justify-between p-3 cursor-pointer hover:bg-[#E9E4D6] transition-colors"
+        className="flex items-center justify-between p-3 cursor-pointer hover:bg-surface-hover transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center gap-2">
-          <Shield className="w-4 h-4" style={{ color: '#B8912A' }} />
-          <span className="font-medium text-sm" style={{ color: '#1E1E1A' }}>
+          <Shield className="w-4 h-4 text-brand" />
+          <span className="font-medium text-sm text-fg">
             {ts(gridRisk.gridRisk, language)}
           </span>
         </div>
@@ -157,7 +154,10 @@ export function GridRiskPanel({
             <span
               className="px-2 py-0.5 rounded"
               style={{
-                background: getRegimeColor(riskInfo.regime_level) + '20',
+                background: withAlpha(
+                  getRegimeColor(riskInfo.regime_level),
+                  13
+                ),
                 color: getRegimeColor(riskInfo.regime_level),
               }}
             >
@@ -168,20 +168,20 @@ export function GridRiskPanel({
                 language
               )}
             </span>
-            <span className="font-mono" style={{ color: '#1E1E1A' }}>
+            <span className="num text-fg">
               {riskInfo.effective_leverage.toFixed(1)}x
             </span>
             <span
-              className="font-mono"
+              className="num"
               style={{ color: getPositionColor(riskInfo.position_percent) }}
             >
               {riskInfo.position_percent.toFixed(0)}%
             </span>
           </div>
           {expanded ? (
-            <ChevronUp className="w-4 h-4" style={{ color: '#6E6E60' }} />
+            <ChevronUp className="w-4 h-4 text-fg-3" />
           ) : (
-            <ChevronDown className="w-4 h-4" style={{ color: '#6E6E60' }} />
+            <ChevronDown className="w-4 h-4 text-fg-3" />
           )}
         </div>
       </div>
@@ -190,48 +190,43 @@ export function GridRiskPanel({
       {expanded && (
         <div className="px-3 pb-3 space-y-3">
           {/* Row 1: Leverage & Position */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Leverage */}
-            <div className="p-2 rounded" style={{ background: '#E9E4D6' }}>
+            <div className="p-2 rounded bg-surface-2">
               <div className="flex items-center gap-1 mb-2">
-                <TrendingUp className="w-3 h-3" style={{ color: '#B8912A' }} />
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: '#6E6E60' }}
-                >
+                <TrendingUp className="w-3 h-3 text-brand" />
+                <span className="text-xs font-medium text-fg-3">
                   {ts(gridRisk.leverageInfo, language)}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-1 text-xs">
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.currentLeverage, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#1E1E1A' }}>
+                  <div className="num text-fg">
                     {riskInfo.current_leverage}x
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.effectiveLeverage, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#B8912A' }}>
+                  <div className="num text-brand">
                     {riskInfo.effective_leverage.toFixed(2)}x
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.recommendedLeverage, language)}
                   </div>
                   <div
-                    className="font-mono"
-                    style={{
-                      color:
-                        riskInfo.current_leverage >
-                        riskInfo.recommended_leverage
-                          ? '#C0392B'
-                          : '#2E7D4F',
-                    }}
+                    className={cn(
+                      'num',
+                      riskInfo.current_leverage > riskInfo.recommended_leverage
+                        ? 'text-down'
+                        : 'text-up'
+                    )}
                   >
                     {riskInfo.recommended_leverage}x
                   </div>
@@ -240,39 +235,36 @@ export function GridRiskPanel({
             </div>
 
             {/* Position */}
-            <div className="p-2 rounded" style={{ background: '#E9E4D6' }}>
+            <div className="p-2 rounded bg-surface-2">
               <div className="flex items-center gap-1 mb-2">
-                <Activity className="w-3 h-3" style={{ color: '#B8912A' }} />
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: '#6E6E60' }}
-                >
+                <Activity className="w-3 h-3 text-brand" />
+                <span className="text-xs font-medium text-fg-3">
                   {ts(gridRisk.positionInfo, language)}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-1 text-xs">
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.currentPosition, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#1E1E1A' }}>
+                  <div className="num text-fg">
                     {formatUSD(riskInfo.current_position)}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.maxPosition, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#1E1E1A' }}>
+                  <div className="num text-fg">
                     {formatUSD(riskInfo.max_position)}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.positionPercent, language)}
                   </div>
                   <div
-                    className="font-mono"
+                    className="num"
                     style={{
                       color: getPositionColor(riskInfo.position_percent),
                     }}
@@ -282,10 +274,7 @@ export function GridRiskPanel({
                 </div>
               </div>
               {/* Mini progress bar */}
-              <div
-                className="h-1 mt-2 rounded-full overflow-hidden"
-                style={{ background: '#C0B9A2' }}
-              >
+              <div className="h-1 mt-2 rounded-full overflow-hidden bg-line">
                 <div
                   className="h-full rounded-full"
                   style={{
@@ -298,21 +287,18 @@ export function GridRiskPanel({
           </div>
 
           {/* Row 2: Market State & Liquidation */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Market State */}
-            <div className="p-2 rounded" style={{ background: '#E9E4D6' }}>
+            <div className="p-2 rounded bg-surface-2">
               <div className="flex items-center gap-1 mb-2">
-                <Shield className="w-3 h-3" style={{ color: '#B8912A' }} />
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: '#6E6E60' }}
-                >
+                <Shield className="w-3 h-3 text-brand" />
+                <span className="text-xs font-medium text-fg-3">
                   {ts(gridRisk.marketState, language)}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.regimeLevel, language)}
                   </div>
                   <div
@@ -329,15 +315,15 @@ export function GridRiskPanel({
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.currentPrice, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#1E1E1A' }}>
+                  <div className="num text-fg">
                     {formatPrice(riskInfo.current_price)}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.breakoutLevel, language)}
                   </div>
                   <div
@@ -354,19 +340,18 @@ export function GridRiskPanel({
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.breakoutDirection, language)}
                   </div>
                   <div
-                    className="font-medium"
-                    style={{
-                      color:
-                        riskInfo.breakout_direction === 'up'
-                          ? '#2E7D4F'
-                          : riskInfo.breakout_direction === 'down'
-                            ? '#C0392B'
-                            : '#6E6E60',
-                    }}
+                    className={cn(
+                      'font-medium',
+                      riskInfo.breakout_direction === 'up'
+                        ? 'text-up'
+                        : riskInfo.breakout_direction === 'down'
+                          ? 'text-down'
+                          : 'text-fg-3'
+                    )}
                   >
                     {riskInfo.breakout_direction
                       ? ts(
@@ -382,35 +367,29 @@ export function GridRiskPanel({
             </div>
 
             {/* Liquidation */}
-            <div className="p-2 rounded" style={{ background: '#E9E4D6' }}>
+            <div className="p-2 rounded bg-surface-2">
               <div className="flex items-center gap-1 mb-2">
-                <AlertTriangle
-                  className="w-3 h-3"
-                  style={{ color: '#C0392B' }}
-                />
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: '#6E6E60' }}
-                >
+                <AlertTriangle className="w-3 h-3 text-down" />
+                <span className="text-xs font-medium text-fg-3">
                   {ts(gridRisk.liquidationInfo, language)}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.liquidationPrice, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#C0392B' }}>
+                  <div className="num text-down">
                     {riskInfo.liquidation_price > 0
                       ? formatPrice(riskInfo.liquidation_price)
                       : '-'}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: '#8A8A7C' }}>
+                  <div className="text-fg-3">
                     {ts(gridRisk.liquidationDistance, language)}
                   </div>
-                  <div className="font-mono" style={{ color: '#C0392B' }}>
+                  <div className="num text-down">
                     {riskInfo.liquidation_distance > 0
                       ? `${riskInfo.liquidation_distance.toFixed(1)}%`
                       : '-'}
@@ -421,40 +400,37 @@ export function GridRiskPanel({
           </div>
 
           {/* Row 3: Box State */}
-          <div className="p-2 rounded" style={{ background: '#E9E4D6' }}>
+          <div className="p-2 rounded bg-surface-2">
             <div className="flex items-center gap-1 mb-2">
-              <Box className="w-3 h-3" style={{ color: '#B8912A' }} />
-              <span
-                className="text-xs font-medium"
-                style={{ color: '#6E6E60' }}
-              >
+              <Box className="w-3 h-3 text-brand" />
+              <span className="text-xs font-medium text-fg-3">
                 {ts(gridRisk.boxState, language)}
               </span>
             </div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div className="flex justify-between">
-                <span style={{ color: '#8A8A7C' }}>
+                <span className="text-fg-3">
                   {ts(gridRisk.shortBox, language)}
                 </span>
-                <span className="font-mono" style={{ color: '#1E1E1A' }}>
+                <span className="num text-fg">
                   {formatPrice(riskInfo.short_box_lower)} -{' '}
                   {formatPrice(riskInfo.short_box_upper)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span style={{ color: '#8A8A7C' }}>
+                <span className="text-fg-3">
                   {ts(gridRisk.midBox, language)}
                 </span>
-                <span className="font-mono" style={{ color: '#1E1E1A' }}>
+                <span className="num text-fg">
                   {formatPrice(riskInfo.mid_box_lower)} -{' '}
                   {formatPrice(riskInfo.mid_box_upper)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span style={{ color: '#8A8A7C' }}>
+                <span className="text-fg-3">
                   {ts(gridRisk.longBox, language)}
                 </span>
-                <span className="font-mono" style={{ color: '#1E1E1A' }}>
+                <span className="num text-fg">
                   {formatPrice(riskInfo.long_box_lower)} -{' '}
                   {formatPrice(riskInfo.long_box_upper)}
                 </span>

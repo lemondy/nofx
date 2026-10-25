@@ -2,8 +2,10 @@ package market
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"nofx/market/bnweight"
 	"nofx/security"
 	"time"
 )
@@ -12,6 +14,17 @@ const (
 	binanceFuturesKlinesURL = "https://fapi.binance.com/fapi/v1/klines"
 	binanceMaxKlineLimit    = 1500
 )
+
+// ErrInvalidSymbol identifies Binance's permanent -1121 symbol rejection.
+var ErrInvalidSymbol = errors.New("invalid symbol")
+
+// Preserve the historical API error text while exposing a sentinel to callers.
+type invalidSymbolError struct {
+	message string
+}
+
+func (e *invalidSymbolError) Error() string { return e.message }
+func (e *invalidSymbolError) Unwrap() error { return ErrInvalidSymbol }
 
 // GetKlinesRange fetches K-line series within specified time range (closed interval), returns data sorted by time in ascending order.
 func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kline, error) {
@@ -30,7 +43,8 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 	var all []Kline
 	cursor := startMs
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	// History paging (limit=1500 = weight 10 per page) is Low priority.
+	client := &http.Client{Timeout: 15 * time.Second, Transport: bnweight.Wrap(nil, bnweight.Low)}
 
 	for cursor < endMs {
 		req, err := http.NewRequest("GET", binanceFuturesKlinesURL, nil)
@@ -57,7 +71,14 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 			return nil, err
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("binance klines api returned status %d: %s", resp.StatusCode, string(body))
+			apiErr := fmt.Errorf("binance klines api returned status %d: %s", resp.StatusCode, string(body))
+			var rejection struct {
+				Code int `json:"code"`
+			}
+			if json.Unmarshal(body, &rejection) == nil && rejection.Code == -1121 {
+				return nil, &invalidSymbolError{message: apiErr.Error()}
+			}
+			return nil, apiErr
 		}
 
 		var raw [][]interface{}

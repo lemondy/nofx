@@ -21,9 +21,11 @@ import (
 	"nofx/trader/kucoin"
 	"nofx/trader/lighter"
 	"nofx/trader/okx"
-	"os"
+	"nofx/trader/paper"
+	"nofx/trader/types"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	notify "nofx/telegram/notify"
@@ -37,8 +39,10 @@ type AutoTraderConfig struct {
 	AIModel string // AI model: "qwen" or "deepseek"
 
 	// Trading platform selection
-	Exchange   string // Exchange type: "binance", "bybit", "okx", "bitget", "gate", "hyperliquid", "aster" or "lighter"
-	ExchangeID string // Exchange account UUID (for multi-account support)
+	Exchange         string            // Exchange type, including credential-free "paper" futures
+	PaperConfig      *paper.Config     // Paper account settings (no credentials)
+	PaperPriceSource paper.PriceSource // Optional deterministic market dependency for tests
+	ExchangeID       string            // Exchange account UUID (for multi-account support)
 
 	// Binance API configuration
 	BinanceAPIKey          string
@@ -147,10 +151,11 @@ type AutoTrader struct {
 	recheckDataFn func(symbol string) (*market.Data, error)
 	// btcTrendClosesFn, when set (tests), replaces the BTC 4h closes fetch;
 	// nil = live kernel.BTC4hTrendCloses.
-	btcTrendClosesFn           func(limit int) []float64
+	btcTrendClosesFn func(limit int) []float64
 	// marketDataFn, when set (tests), replaces the generic execution-quote
 	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
-	marketDataFn func(symbol string) (*market.Data, error)
+	marketDataFn               func(symbol string) (*market.Data, error)
+	computedProtectionDataFn   func(symbol string) (*market.Data, error) // tests: replaces the watchdog's 1h fetch
 	mcpClient                  mcp.AIClient
 	store                      *store.Store           // Data storage (decision records, etc.)
 	strategyEngine             *kernel.StrategyEngine // Strategy engine (uses strategy configuration)
@@ -161,6 +166,8 @@ type AutoTrader struct {
 	dailyPnL                   float64
 	dayStartDay                string             // UTC day anchor for the daily-loss halt (D2, QUANT_REVIEW 09-22)
 	dayStartEquity             float64            // first equity seen on dayStartDay — the halt's baseline
+	dailyHaltDay               string             // UTC day the daily-loss halt latched on (held until the next UTC day)
+	dailyHaltReason            string             // halt message recorded at trigger time (loss % at that moment)
 	cycleRiskReservedUSD       float64            // stop-risk booked by opens that PASSED the exposure gate this cycle (D2 reservation, 09-25 P1)
 	cycleLongRiskReservedUSD   float64            // admitted long stop-risk in this cycle; used by net-direction concentration gate
 	cycleShortRiskReservedUSD  float64            // admitted short stop-risk in this cycle; used by net-direction concentration gate
@@ -173,6 +180,8 @@ type AutoTrader struct {
 	isRunning                  bool
 	lifecycleMu                sync.Mutex
 	executionStateMu           sync.Mutex
+	realtimeMu                 sync.RWMutex
+	realtime                   *realtimeProtection // review 2026-10-11: Binance-only stream lifecycle
 	runVersion                 uint64
 	aiCancel                   context.CancelFunc
 	runDone                    chan struct{}
@@ -216,13 +225,38 @@ type AutoTrader struct {
 	openTPMu              sync.RWMutex
 	closeIntents          map[string]closeIntent // program close intents for exit classification (symbol|side → why)
 	closeIntentsMu        sync.Mutex
+	exitReplayRetries     map[int64]exitReplayRetry // per-row transient replay failures; guarded by exitReplayMu
+	exitReplayMu          sync.Mutex
 	positionExitMode      map[string]string // exit template per open position (symbol_side → trend|range|quick), chosen at open; DB row is the restart authority
+
+	// us_stock (design 2026-10-09): live spot executor (nil in paper mode),
+	// injectable scheduler clock (nil = time.Now) and run state.
+	stockTrader types.SpotStockTrader
+	stockNow    func() time.Time
+	stock       stockRuntime
+
+	// keepRestingOnStop: set by StopForRestart — the trader is about to come
+	// back (process restart / config reload), so us_stock resting limit entries
+	// stay on the exchange and are restored + reconciled on the next start.
+	keepRestingOnStop atomic.Bool
 }
 
 // Binance hedge legs must use isolated margin for this strategy. Other
 // exchanges keep their configured margin mode.
 func (at *AutoTrader) entryUsesCrossMargin() bool {
-	return at.exchange != "binance" && at.config.IsCrossMargin
+	return !isBinanceFuturesLike(at.exchange) && at.config.IsCrossMargin
+}
+
+// isBinanceFuturesLike identifies executors sharing Binance hedge-mode semantics
+// and public futures prices; authenticated streams remain capability-based.
+func isBinanceFuturesLike(exchange string) bool { return exchange == "binance" || exchange == "paper" }
+
+// marketDataExchange names the public venue underlying simulated execution.
+func (at *AutoTrader) marketDataExchange() string {
+	if isBinanceFuturesLike(at.exchange) {
+		return "binance"
+	}
+	return at.exchange
 }
 
 // NewAutoTrader creates an automatic trader
@@ -299,15 +333,62 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	var trader Trader
 	var err error
 
-	// Record position mode (general)
-	marginModeStr := "Cross Margin"
-	if !config.IsCrossMargin {
-		marginModeStr = "Isolated Margin"
+	// us_stock (design 2026-10-09): spot bStock pairs, no futures init at all
+	// (no hedge/margin mode, leverage or futures trader construction).
+	stockMode := config.StrategyConfig != nil && config.StrategyConfig.StrategyType == store.StrategyTypeUSStock && config.StrategyConfig.StockConfig != nil
+	var stockExec types.SpotStockTrader
+	if stockMode {
+		if stockExec, err = newStockExecutor(&config); err != nil {
+			return nil, err
+		}
+		if stockExec != nil {
+			trader = stockExec
+		}
+		logger.Infof("🇺🇸 [%s] Using Binance spot bStock trading (paper=%v)", config.Name, config.StrategyConfig.StockConfig.IsPaper())
+	} else {
+		// Record position mode (general)
+		marginModeStr := "Cross Margin"
+		if !config.IsCrossMargin {
+			marginModeStr = "Isolated Margin"
+		}
+		logger.Infof("📊 [%s] Position mode: %s", config.Name, marginModeStr)
 	}
-	logger.Infof("📊 [%s] Position mode: %s", config.Name, marginModeStr)
 
 	switch config.Exchange {
+	case "paper":
+		if stockMode {
+			return nil, fmt.Errorf("模拟盘账户仅支持加密合约策略")
+		}
+		if config.PaperConfig == nil || config.ExchangeID == "" {
+			return nil, fmt.Errorf("模拟盘账户缺少配置或账户 ID")
+		}
+		cfg := *config.PaperConfig
+		cfg.ExchangeID = config.ExchangeID
+		publicCfg := store.PaperConfig{InitialBalance: cfg.InitialBalance, TakerFeeBps: cfg.TakerFeeBps, MakerFeeBps: cfg.MakerFeeBps, SlippageBps: cfg.SlippageBps, DefaultLeverage: cfg.DefaultLeverage}
+		if err := publicCfg.Validate(); err != nil {
+			return nil, err
+		}
+		price := config.PaperPriceSource
+		if price == nil {
+			price = paper.NewMarketPriceSource()
+		}
+		paperTrader := paper.New(cfg, st, price)
+		// Bind before any trading so a second trader cannot silently write to the
+		// first trader's ledger. Sync exposes initialization/binding errors.
+		if err := paperTrader.SyncOrdersFromBinance(config.ID, config.ExchangeID, "paper", st); err != nil {
+			return nil, fmt.Errorf("初始化模拟盘账户失败：%w", err)
+		}
+		trader = paperTrader
+		ledger, err := st.PaperLedger().Get(config.ExchangeID)
+		if err != nil {
+			return nil, err
+		}
+		// A configuration edit must not change the baseline of a restored account.
+		config.InitialBalance = ledger.InitialBalance
 	case "binance":
+		if stockMode {
+			break
+		}
 		logger.Infof("🏦 [%s] Using Binance Futures trading", config.Name)
 		trader = binance.NewFuturesTrader(config.BinanceAPIKey, config.BinanceSecretKey, userID)
 	case "binance_stocks":
@@ -370,7 +451,11 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	}
 
 	// Validate initial balance configuration, auto-fetch from exchange if 0
-	if config.InitialBalance <= 0 {
+	if stockMode {
+		if config.InitialBalance, err = resolveStockInitialBalance(&config, st, userID, stockExec); err != nil {
+			return nil, err
+		}
+	} else if config.InitialBalance <= 0 {
 		logger.Infof("📊 [%s] Initial balance not set, attempting to fetch current balance from exchange...", config.Name)
 		account, err := trader.GetBalance()
 		if err != nil {
@@ -424,6 +509,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		showInCompetition:       config.ShowInCompetition,
 		config:                  config,
 		trader:                  trader,
+		stockTrader:             stockExec,
 		mcpClient:               mcpClient,
 		store:                   st,
 		strategyEngine:          strategyEngine,
@@ -454,6 +540,12 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		peakPnLCacheMutex:       sync.RWMutex{},
 		lastBalanceSyncTime:     time.Now(),
 		userID:                  userID,
+	}
+	if stockMode {
+		at.stock.cfg = config.StrategyConfig.StockConfig
+		at.stock.stopTicks = map[string]int{}
+		at.stock.lastProtect = map[string]stockProtect{}
+		at.stock.pendings = map[string]*stockPending{}
 	}
 	registerAccountTrader(at)
 	return at, nil
@@ -544,6 +636,7 @@ func (at *AutoTrader) run() (err error) {
 			close(at.stopMonitorCh)
 		}
 		at.isRunningMutex.Unlock()
+		at.stopRealtimeProtection()
 		if syncer, ok := at.trader.(interface{ StopOrderSync() }); ok {
 			syncer.StopOrderSync()
 		}
@@ -573,6 +666,15 @@ func (at *AutoTrader) run() (err error) {
 
 	at.seedConfigVersionBaseline()
 
+	// us_stock (design 2026-10-09): own scheduler and protection tick; none of
+	// the futures-only monitors / reconcilers / order sync below apply.
+	if at.IsStockStrategy() {
+		return at.runStockLoop()
+	}
+	if onFuturesMonitorsStart != nil {
+		onFuturesMonitorsStart(at)
+	}
+
 	// Start drawdown monitoring
 	at.startDrawdownMonitor()
 
@@ -587,6 +689,7 @@ func (at *AutoTrader) run() (err error) {
 	// orders, offline fills get their protective orders placed, unowned
 	// tagged orders get cancelled (see auto_trader_reconcile.go).
 	withExecutionLock(at.executionMutex(), func() (bool, error) { at.ReconcilePendingEntries(); return true, nil })
+	at.startRealtimeProtection()
 
 	// All adapters, including wrappers such as Binance Stocks, share one
 	// lifecycle contract instead of a per-exchange start/stop matrix.
@@ -682,6 +785,15 @@ func nextAlignedWait(interval time.Duration, now time.Time) time.Duration {
 	return interval
 }
 
+// StopForRestart stops the trader like Stop but keeps the us_stock resting
+// limit entries on the exchange: the caller guarantees the trader is restarted
+// right away (process restart, config reload). The next start restores them
+// and the live protection tick (every 60s) books any fill and places its stop.
+func (at *AutoTrader) StopForRestart() {
+	at.keepRestingOnStop.Store(true)
+	at.Stop()
+}
+
 // Stop stops the automatic trading
 func (at *AutoTrader) Stop() {
 	at.lifecycleMu.Lock()
@@ -697,6 +809,7 @@ func (at *AutoTrader) Stop() {
 	}
 	at.isRunningMutex.Unlock()
 
+	at.stopRealtimeProtection()
 	at.executionMutex().Lock()
 	if at.trader != nil && at.gridState != nil && at.config.StrategyConfig != nil && at.config.StrategyConfig.GridConfig != nil {
 		if err := at.pauseGrid("trader stopped"); err != nil {
@@ -704,6 +817,7 @@ func (at *AutoTrader) Stop() {
 		}
 	}
 	at.cancelAllPendingEntries("trader stopped")
+	at.cleanupStockOnStop()
 	at.executionMutex().Unlock()
 	if at.runDone != nil {
 		<-at.runDone
@@ -885,12 +999,39 @@ func (at *AutoTrader) unmarkAIManaged(symbol, side string) {
 	if at.store == nil {
 		return
 	}
-	if err := at.store.AIManaged().Unmark(at.id, symbol, strings.ToLower(side)); err == nil {
+	// review 2026-10-11: Unmark is a DELETE that succeeds even when no mark
+	// existed, so manual positions closing logged a false "AI-managed mark
+	// removed" (STRKUSDT 10-11). Only report a mark that was really there.
+	wasMarked := at.store.AIManaged().IsMarked(at.id, symbol, strings.ToLower(side))
+	if err := at.store.AIManaged().Unmark(at.id, symbol, strings.ToLower(side)); err == nil && wasMarked {
 		// Warn-level: an unexpected unmark = automation silently stops
 		// managing a live position (the BEATUSDT 09-27 vanish was invisible
 		// because this had no log).
 		logger.Warnf("🤖 [%s] AI-managed mark removed: %s %s — automation hands-off from here", at.name, symbol, strings.ToLower(side))
 	}
+}
+
+// unmarkAIManagedIfEntry removes the live AI-managed mark only while it still
+// belongs to the given entry order. Stale recovery paths use it so they can
+// never delete the mark of a newer generation of the same symbol+side.
+// Returns true when a mark was removed.
+func (at *AutoTrader) unmarkAIManagedIfEntry(symbol, side, orderID string) bool {
+	if at.store == nil || orderID == "" {
+		return false
+	}
+	marks, err := at.store.AIManaged().List(at.id)
+	if err != nil {
+		logger.Warnf("🤖 [%s] AI-managed mark lookup failed for %s %s: %v — mark left untouched", at.name, symbol, side, err)
+		return false
+	}
+	side = strings.ToLower(side)
+	for _, m := range marks {
+		if m.Symbol == symbol && strings.ToLower(m.Side) == side && m.EntryOrderID == orderID {
+			at.unmarkAIManaged(symbol, side)
+			return true
+		}
+	}
+	return false
 }
 
 // isAIManaged reports whether the position belongs to the automation. A
@@ -901,40 +1042,6 @@ func (at *AutoTrader) isAIManaged(symbol, side string) bool {
 		return true
 	}
 	return at.store.AIManaged().IsMarked(at.id, symbol, strings.ToLower(side))
-}
-
-// seedAIManagedOnce: ONE-TIME migration for the deploy that introduced the
-// registry — every position already open at that moment is presumed
-// AI-managed so existing trades keep their protection. Guarded by a flag
-// file, NOT a per-boot re-seed (a per-boot seed would re-adopt manual
-// positions on every restart and defeat the hands-off rule).
-func (at *AutoTrader) seedAIManagedOnce() {
-	// R6 (2026-09-26 review): per-trader flag — a shared file let the first
-	// trader mark migration done and every OTHER trader skip its own seeding.
-	flag := fmt.Sprintf("data/ai_marks_seeded_%s", at.id)
-	if _, err := os.Stat(flag); err == nil {
-		return
-	}
-	if at.store == nil {
-		return
-	}
-	positions, err := at.trader.GetPositions()
-	if err != nil {
-		return // retry next cycle (flag not written)
-	}
-	n := 0
-	for _, pos := range positions {
-		symbol, _ := pos["symbol"].(string)
-		side, _ := pos["side"].(string)
-		if symbol == "" || side == "" {
-			continue
-		}
-		at.markAIManaged(symbol, side)
-		n++
-	}
-	if err := os.WriteFile(flag, []byte(time.Now().Format(time.RFC3339)), 0o644); err == nil {
-		logger.Infof("🤖 [%s] AI-managed registry seeded: %d pre-existing positions marked (one-time migration; manual positions opened AFTER this are hands-off)", at.name, n)
-	}
 }
 
 // setFilterReason records why an actionable proposal was dropped by an

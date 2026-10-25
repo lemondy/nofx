@@ -135,6 +135,9 @@ func (at *AutoTrader) cancelAccountPendingRisk(reason string) {
 }
 
 func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
+	if reason := at.pendingExcludedReason(pe.Symbol); reason != "" {
+		return reason
+	}
 	if gs := at.cycleGateStates[market.Normalize(pe.Symbol)]; gs != nil {
 		allowed, failed := gs.LongAllowed, gs.LongFailed
 		if pe.Side == "short" {
@@ -163,8 +166,10 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		if primaryTF == "" {
 			primaryTF = "15m"
 		}
-		if pe.Side == "short" && rc.BlockShort1dUptrend && kernel.TimeframeTrend(md, "1d") == "up" {
-			return "pending short: 1d trend is up"
+		if pe.Side == "short" && rc.BlockShort1dUptrend {
+			if blocked, why := short1dUptrendBlocks(md); blocked {
+				return "pending short: " + why
+			}
 		}
 		// R2 (recheck 2026-10-07): the old blanket cancel — any BTC filter
 		// enabled + data below 60 closes → cancel BOTH sides — contradicted
@@ -180,6 +185,8 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 			EntryTimingGate: rc.EntryTimingGate, PumpGuard4hPct: kernel.PumpGuard4h(&rc),
 			BTCFilterLong: rc.EffectiveBTCFilterLong(), BTCFilterShort: rc.EffectiveBTCFilterShort(), BtcTrendCloses: btc,
 			LongMaxEMA20DistPct: rc.EffectiveLongMaxEMA20DistPct(), LongPullbackEntry: rc.EffectiveLongPullbackEntry(),
+			ChaseMaxEMA20_1hPct: rc.EffectiveChaseMaxEMA20_1hPct(), CounterMaxEMA20_1hPct: rc.EffectiveCounterMaxEMA20_1hPct(),
+			EntryRSI1hMax: rc.EffectiveEntryRSI1hMax(), ChaseMaxMove4hPct: rc.EffectiveChaseMaxMove4hPct(),
 			ConfiguredTimeframes: at.recheckConfiguredTimeframes(pe.Symbol),
 		})
 		if err != nil || sig == nil || sig.HardGate == nil {
@@ -192,6 +199,9 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		if gate == nil {
 			return "pending fresh direction gate unavailable"
 		}
+		// Anti-chase codes are deliberately not re-checked here: they are
+		// evaluated at the LIVE price, while a resting order buys at its
+		// anchor (review 2026-10-11).
 		for _, code := range gate.Failed {
 			if absoluteBanCode(code) || strings.HasPrefix(code, "MICRO_TREND_") || code == "EXTENDED_PUMP_UNCONFIRMED" {
 				return "pending fresh gate: " + code
@@ -199,14 +209,46 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 		}
 		if pe.Side == "short" && rc.EffectiveShortTopConfirmGate() {
 			shorts, _ := breakout.DefaultScheduler().ShortSnapshot()
-			for _, s := range shorts {
-				if market.Normalize(s.Symbol) == market.Normalize(pe.Symbol) && !s.Confirmed {
-					return "pending short topping confirmation lost"
-				}
+			if pendingShortTopConfirmationLost(pe.Symbol, shorts) {
+				return "pending short topping confirmation lost"
 			}
 		}
 	}
 	return ""
+}
+
+func pendingShortTopConfirmationLost(symbol string, shorts []breakout.ShortSignal) bool {
+	for _, s := range shorts {
+		if market.Normalize(s.Symbol) == market.Normalize(symbol) && kernel.ShortScanNeedsTopConfirmation(s.Universe) && !s.Confirmed {
+			return true
+		}
+	}
+	return false
+}
+
+func (at *AutoTrader) pendingExcludedReason(symbol string) string {
+	if at.config.StrategyConfig == nil {
+		return ""
+	}
+	normalized := market.Normalize(strings.TrimSpace(symbol))
+	for _, excluded := range at.config.StrategyConfig.CoinSource.ExcludedCoins {
+		if strings.TrimSpace(excluded) != "" && market.Normalize(strings.TrimSpace(excluded)) == normalized {
+			return "pending entry excluded: EXCLUDED_COIN"
+		}
+	}
+	return ""
+}
+
+func (at *AutoTrader) cancelExcludedPending(pe *pendingEntry) bool {
+	reason := at.pendingExcludedReason(pe.Symbol)
+	if reason == "" {
+		return false
+	}
+	logger.Infof("🗑️ [%s] Cancelling excluded limit entry %s %s: %s", at.name, pe.Symbol, pe.Side, reason)
+	if err := at.cancelPending(pe); err != nil {
+		logger.Warnf("%s: %v", reason, err)
+	}
+	return true
 }
 
 func (at *AutoTrader) entryExecutionBlocked(symbol, side string) error {
@@ -270,7 +312,7 @@ func (at *AutoTrader) recheckConfiguredTimeframes(symbol string) []string {
 			tfs = append(tfs, l)
 		}
 	}
-	return kernel.WithRequiredSymbolTimeframes(tfs, symbol)
+	return kernel.WithRequiredSymbolTimeframesFor(tfs, symbol, at.config.StrategyConfig.RiskControl.BlockShort1dUptrend)
 }
 
 // btcTrendClosesForRecheck fetches BTC's 4h closes for the pending recheck.

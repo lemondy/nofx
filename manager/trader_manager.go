@@ -7,6 +7,7 @@ import (
 	"nofx/logger"
 	"nofx/store"
 	"nofx/trader"
+	"nofx/trader/paper"
 	"runtime/debug"
 	"sort"
 	"sync"
@@ -151,7 +152,9 @@ func (tm *TraderManager) StopAll() {
 	var wg sync.WaitGroup
 	for _, t := range traders {
 		wg.Add(1)
-		go func(t *trader.AutoTrader) { defer wg.Done(); t.Stop() }(t)
+		// Process shutdown: traders come back on the next start, so resting
+		// us_stock entries are kept and reconciled then.
+		go func(t *trader.AutoTrader) { defer wg.Done(); t.StopForRestart() }(t)
 	}
 	wg.Wait()
 }
@@ -503,6 +506,16 @@ func (tm *TraderManager) RemoveTrader(traderID string) {
 
 // Keep reloads out until both the running client and its database state are removed.
 func (tm *TraderManager) RemoveTraderAndThen(traderID string, after func() error) error {
+	return tm.removeTrader(traderID, false, after)
+}
+
+// RemoveTraderForReload removes a trader that is reloaded right away (config
+// save): its us_stock resting entries stay on the exchange for the new instance.
+func (tm *TraderManager) RemoveTraderForReload(traderID string) error {
+	return tm.removeTrader(traderID, true, nil)
+}
+
+func (tm *TraderManager) removeTrader(traderID string, forRestart bool, after func() error) error {
 	tm.loadMu.Lock()
 	defer tm.loadMu.Unlock()
 	tm.mu.Lock()
@@ -510,7 +523,11 @@ func (tm *TraderManager) RemoveTraderAndThen(traderID string, after func() error
 	delete(tm.traders, traderID)
 	tm.mu.Unlock()
 	if t != nil {
-		t.Stop()
+		if forRestart {
+			t.StopForRestart()
+		} else {
+			t.Stop()
+		}
 	}
 	if after != nil {
 		return after()
@@ -772,6 +789,14 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 
 	// Set API keys based on exchange type (convert EncryptedString to string)
 	switch exchangeCfg.ExchangeType {
+	case "paper":
+		cfg, err := exchangeCfg.ParsePaperConfig()
+		if err != nil {
+			return err
+		}
+		traderConfig.PaperConfig = &paper.Config{ExchangeID: exchangeCfg.ID, InitialBalance: cfg.InitialBalance,
+			TakerFeeBps: cfg.TakerFeeBps, MakerFeeBps: cfg.MakerFeeBps, SlippageBps: cfg.SlippageBps, DefaultLeverage: cfg.DefaultLeverage}
+		traderConfig.InitialBalance = cfg.InitialBalance
 	case "binance":
 		traderConfig.BinanceAPIKey = string(exchangeCfg.APIKey)
 		traderConfig.BinanceSecretKey = string(exchangeCfg.SecretKey)

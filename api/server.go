@@ -21,6 +21,8 @@ import (
 // Server HTTP API server
 type Server struct {
 	traderOpsMu               sync.Mutex
+	fundsSyncMu               sync.Mutex
+	fundsSync                 map[string]*fundsSyncState
 	router                    *gin.Engine
 	traderManager             *manager.TraderManager
 	store                     *store.Store
@@ -129,6 +131,7 @@ func (s *Server) setupRoutes() {
 		s.route(api, "GET", "/breakout/scan", "Scan top-volume perps for breakout signals (?limit=10&concurrency=4)", s.handleBreakoutScan)
 		s.route(api, "GET", "/breakout/snapshot", "Background breakout snapshot (refreshed every 5 min)", s.handleBreakoutSnapshot)
 		s.route(api, "GET", "/breakout/short-scan", "Short-scan ranking: top 24h gainers scored for short suitability (?limit=)", s.handleBreakoutShortScan)
+		s.route(api, "GET", "/breakout/trend-short-shadow", "Read-only trend-continuation short shadow research statistics", s.handleTrendShortShadow)
 		s.route(api, "GET", "/breakout/params", "Tunable parameters and last backtest tuning summary", s.handleBreakoutParams)
 
 		// Public strategy market (no authentication required)
@@ -273,6 +276,12 @@ CRITICAL: Always use the "id" field for strategy_id.`,
 			s.route(protected, "GET", "/entry-quality-stats", "Quality→outcome backtest: decisions bucketed by entry_quality joined with journal outcomes (?trader_id=)", s.handleEntryQualityStats)
 			s.route(protected, "GET", "/gate-shadow-stats", "Gate-threshold calibration: blocked would-be trades resolved against the later price path, per blocking code", s.handleGateShadowStats)
 			s.route(protected, "GET", "/system-quality", "System health: per-cycle AI-call duration stats, success rate, failure categories (?trader_id=&hours=24)", s.handleSystemQuality)
+			s.route(protected, "GET", "/factor-mining/overview", "Read-only factor mining status, factor zoo and ensembles", s.handleFactorMiningOverview)
+			s.route(protected, "GET", "/factor-mining/runs", "Recent factor mining runs (?limit=50, max 500), newest first", s.handleFactorMiningRuns)
+			s.routeWithSchema(protected, "GET", "/promotion/report", "Read-only paper promotion report; never changes trader configuration",
+				`No parameters. Returns report.json verbatim: {"generated_at":<UTC ISO8601 or null>,"pairs":[{"id":<string>,"candidate":<statistics>,"control":<statistics>,"live":<optional statistics>,"paired_daily":<comparison>,"weekly_avg_r":<comparison>,"verdict":"insufficient|ready|hold","reasons":[<string>],"caveats":<string>}]}.
+Missing or unreadable report: {"pairs":[],"generated_at":null}. Statistics use fractional rates. Manual promotion only after at least 7 days of positive paper validation; this endpoint never modifies configuration.`,
+				s.handlePromotionReport)
 			s.route(protected, "GET", "/strategies/:id", "Get strategy by ID", s.handleGetStrategy)
 			s.route(protected, "GET", "/strategies/:id/versions", "Config version history for one strategy: append-only snapshots with field-level diffs + realized trade stats (win rate / net PnL / profit factor / avg R) per version's active window", s.handleGetStrategyVersions)
 			s.routeWithSchema(protected, "POST", "/strategies", "Create a new trading strategy",
@@ -341,6 +350,19 @@ After activating, create or update a trader with this strategy_id to apply it.`,
 				`:id = EXACT id from GET /api/strategies. Creates a copy with " (copy)" appended to the name.`,
 				s.handleDuplicateStrategy)
 
+			// US stock (Binance bStock) strategy support
+			s.routeWithSchema(protected, "GET", "/usstock/symbols", "Tradable Binance bStock pairs for the us_stock strategy",
+				`Returns: {"symbols":[{"symbol":"AAPLBUSDT","underlying":"AAPL","base_asset":"AAPLB"}]}`,
+				s.handleUSStockSymbols)
+			s.routeWithSchema(protected, "GET", "/usstock/scan", "Kell price-cycle scan of all listed bStock pairs (cached; refreshed in the background)",
+				`Returns: {"scanning":<bool>,"generated_at":"<RFC3339>"|null,"results":[{"symbol":"AAPLBUSDT","underlying":"AAPL","source":"bstock|yahoo","cycle":{"phase":"wedge_pop","long_setup":true,"score":<0-100>,"ext10_atr":<float>,"dist20_atr":<float>,"rs63_pct":<float>,"vol_ratio":<float>,"above_sma50":<bool>,"sma50_above_200":<bool>,"bars":<int>,"notes":["..."]}}],"skipped":{"<SYMBOL>":"<reason>"}}
+scanning=true with empty results means the first scan has just been started; call again in a few seconds. Results are sorted: long setups first, then by score.`,
+				s.handleUSStockScan)
+			s.routeWithSchema(protected, "GET", "/usstock/paper/:trader_id", "Paper-trading ledger of a us_stock trader",
+				`:trader_id = EXACT trader_id from GET /api/my-traders.
+Returns: {"account":{"cash":<float>,"initial_cash":<float>},"equity":<float>,"open_positions":[...],"closed_positions":[...]}`,
+				s.handleUSStockPaper)
+
 			// Data for specified trader (using query parameter ?trader_id=xxx)
 			// IMPORTANT: All ?trader_id= values must be the EXACT "trader_id" field from GET /api/my-traders
 			s.routeWithSchema(protected, "GET", "/status", "Trader running status",
@@ -355,6 +377,10 @@ Returns: daily-loss halt, account drawdown breaker, loss-streak bans, resting li
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: {"balance":<float>,"equity":<float>,"unrealized_pnl":<float>,"initial_balance":<float>,"total_return_pct":<float>}`,
 				s.handleAccount)
+			s.routeWithSchema(protected, "GET", "/funds/overview", "Funds overview with transfer-adjusted returns",
+				`Query: ?days=<1..365, default 90>&tz=<IANA timezone, default Asia/Shanghai>&include_paper=<0|1, default 0>
+Returns: {generated_at,tz,days,totals,accounts,daily,daily_total,flows}. Only the authenticated user's traders; totals exclude paper. Amounts USDT, returns in percentage points. Account amounts are cumulative; days limits daily/flows.`,
+				s.handleFundsOverview)
 			s.routeWithSchema(protected, "GET", "/positions", "Current open positions",
 				`Query: ?trader_id=<EXACT trader_id from GET /api/my-traders>
 Returns: [{"symbol":"<string>","side":"long|short","size":<float>,"entry_price":<float>,"mark_price":<float>,"unrealized_pnl":<float>,"leverage":<int>}]`,
@@ -412,6 +438,9 @@ Soft rule Body: {"rule_type":"soft","name":"<string>","lesson_text":"<string>","
 			s.routeWithSchema(protected, "POST", "/review/rules/:id", "Update a trading rule",
 				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>. Same body as POST /api/review/rules (partial updates allowed, include "enabled":<bool> to toggle).`,
 				s.handleRuleUpdate)
+			s.routeWithSchema(protected, "POST", "/review/rules/:id/reverify", "Recompute and store the historical verification of one rule",
+				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>. Returns {"verification":{status,matched,wins,net_pnl,baseline_win_rate,baseline_net_per_trade,population},"verified_at":<ms>}.`,
+				s.handleRuleReverify)
 			s.routeWithSchema(protected, "DELETE", "/review/rules/:id", "Delete a trading rule",
 				`:id = rule id from GET /api/review/rules. Query: ?trader_id=<EXACT trader_id>`,
 				s.handleRuleDelete)
@@ -607,11 +636,36 @@ func (s *Server) getTraderIDPublic(c *gin.Context) (string, error) {
 		return "", fmt.Errorf("trader_id is required")
 	}
 	t, err := s.store.Trader().GetByID(traderID)
-	if err != nil || t == nil || !t.ShowInCompetition {
-		// Same error for missing and hidden — no existence oracle.
+	if err != nil || t == nil {
 		return "", fmt.Errorf("trader not found")
 	}
+	if !t.ShowInCompetition {
+		// Hidden traders (paper pair, kept off the leaderboard) stay viewable by
+		// their own authenticated owner. Same error otherwise — no existence oracle.
+		if userID := s.optionalUserID(c); userID == "" || t.UserID != userID {
+			return "", fmt.Errorf("trader not found")
+		}
+	}
 	return traderID, nil
+}
+
+// optionalUserID returns the user behind a valid Bearer token on a public
+// route, or "" when the token is absent or fails any authMiddleware check.
+func (s *Server) optionalUserID(c *gin.Context) string {
+	parts := strings.Split(c.GetHeader("Authorization"), " ")
+	if len(parts) != 2 || parts[0] != "Bearer" || auth.IsTokenBlacklisted(parts[1]) {
+		return ""
+	}
+	claims, err := auth.ValidateJWT(parts[1])
+	if err != nil {
+		return ""
+	}
+	user, userErr := s.store.User().GetByID(claims.UserID)
+	revoked, revokeErr := s.store.TokenRevoked(parts[1])
+	if userErr != nil || revokeErr != nil || revoked || user.TokenVersion != claims.TokenVersion {
+		return ""
+	}
+	return claims.UserID
 }
 
 // getTraderFromQuery resolves the query trader FOR THE AUTHENTICATED USER
@@ -721,6 +775,7 @@ func (s *Server) Start() error {
 	logger.Infof("  • GET  /api/exchanges        - Get exchange config")
 	logger.Infof("  • PUT  /api/exchanges        - Update exchange config")
 	logger.Infof("  • GET  /api/status?trader_id=xxx     - Specified trader's system status")
+	logger.Infof("  • GET  /api/funds/overview?days=90&tz=Asia/Shanghai - Funds overview (login required)")
 	logger.Infof("  • GET  /api/account?trader_id=xxx    - Specified trader's account info")
 	logger.Infof("  • GET  /api/positions?trader_id=xxx  - Specified trader's position list")
 	logger.Infof("  • GET  /api/decisions?trader_id=xxx  - Specified trader's decision log")

@@ -67,7 +67,7 @@ func TestVendorDivergenceBlocksAllOpenPaths(t *testing.T) {
 		LongFailed:  []string{"VENDOR_DIVERGENCE_1.36"},
 		ShortFailed: []string{"VENDOR_DIVERGENCE_UNKNOWN"},
 	}
-	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}}
+	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, CandidateCoins: []kernel.CandidateCoin{{Symbol: "TESTUSDT"}, {Symbol: "CLEANUSDT"}}}
 
 	out := at.applyHardRiskGates([]kernel.Decision{
 		{Symbol: "TESTUSDT", Action: "open_long", Confidence: 95, Reasoning: "breakout"},
@@ -90,10 +90,31 @@ func TestVendorDivergenceBlocksAllOpenPaths(t *testing.T) {
 	// A symbol without the code passes untouched.
 	at.cycleGateStates["CLEANUSDT"] = &kernel.GateState{LongFailed: []string{"RR_MAX_0.90"}}
 	out = at.applyHardRiskGates([]kernel.Decision{
-		{Symbol: "CLEANUSDT", Action: "open_long", Confidence: 95, Reasoning: "x"},
+		{Symbol: "CLEANUSDT", Action: "open_long", Price: 100, Confidence: 95, Reasoning: "x"},
 	}, ctx)
 	if len(out) != 1 {
 		t.Fatalf("non-vendor codes must not be touched by this gate, got %d", len(out))
+	}
+}
+
+// Anti-chase codes block a MARKET open at the executor (it buys at the live
+// price the gate evaluated) but are not absolute bans for resting limits.
+func TestAntiChaseCodesBlockMarketOpen(t *testing.T) {
+	at := vendorGateTrader()
+	at.cycleGateStates["CHASEUSDT"] = &kernel.GateState{
+		LongFailed:  []string{"CHASE_EMA20_1H_7.0_GT_6"},
+		ShortFailed: []string{"RSI1H_EXHAUSTED_15"},
+	}
+	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, CandidateCoins: []kernel.CandidateCoin{{Symbol: "CHASEUSDT"}}}
+	out := at.applyHardRiskGates([]kernel.Decision{
+		{Symbol: "CHASEUSDT", Action: "open_long", Confidence: 95, Reasoning: "x"},
+		{Symbol: "CHASEUSDT", Action: "open_short", Confidence: 95, Reasoning: "x"},
+	}, ctx)
+	if len(out) != 0 {
+		t.Fatalf("market chase opens must be refused, got %d through: %+v", len(out), out)
+	}
+	if absoluteBanCode("CHASE_EMA20_1H_7.0_GT_6") {
+		t.Fatal("anti-chase codes must stay out of absoluteBanCode (pending recheck would cancel resting pullback limits)")
 	}
 }
 

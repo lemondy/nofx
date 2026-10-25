@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -51,6 +52,9 @@ type PositionInfo struct {
 	// it does not repeat an already executed breakeven/trim action.
 	AutomationStage      string  `json:"automation_stage"`
 	CumulativeReducedPct float64 `json:"cumulative_reduced_pct"` // fraction of original entry quantity already closed, 0..100
+	// Computed by the trader against its opening-risk anchor for prompt
+	// compression only; execution rechecks profit against the current mark.
+	EarlyCloseProfitOK bool `json:"-"`
 }
 
 // AccountInfo account information
@@ -207,10 +211,15 @@ type Context struct {
 	// was SHOWN (allowed per direction) at prompt-build time. wait_state is
 	// derived from these + wait_bias — the model no longer outputs it
 	// (schema-redundancy audit 09-16).
-	GateStates      map[string]*GateState `json:"-"`
-	BTCETHLeverage  int                   `json:"-"`
-	AltcoinLeverage int                   `json:"-"`
-	Timeframes      []string              `json:"-"`
+	GateStates map[string]*GateState `json:"-"`
+	// FilteredCandidates: normalized symbol -> why the coin was dropped before
+	// prompt rendering; CandidateOrder: the pool as it was BEFORE the fetch
+	// pass removed coins (2026-10-10 per-candidate block reasons).
+	FilteredCandidates map[string]string `json:"-"`
+	CandidateOrder     []string          `json:"-"`
+	BTCETHLeverage     int               `json:"-"`
+	AltcoinLeverage    int               `json:"-"`
+	Timeframes         []string          `json:"-"`
 }
 
 // LimitAnchor carries the pre-computed limit-entry prices for one symbol —
@@ -278,6 +287,8 @@ type GateState struct {
 	// (live price or limit anchor); TP is rr_scan.first_rr_ge_target.
 	LongEntryPrice  float64
 	ShortEntryPrice float64
+	LongEntryBasis  string
+	ShortEntryBasis string
 	LongTakeProfit  float64
 	ShortTakeProfit float64
 	LongFailed      []string
@@ -756,7 +767,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// 猪猪冲刺: strongest breakout/breakdown signals from the 5-min engine.
 		// Note: unlike ai500/oi_*, there is no separate enable gate — selecting
 		// this source type IS the switch.
-		coins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
+		coins, err := e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection, coinSource.EffectivePiggyDashMinGrade())
 		if err != nil {
 			return nil, err
 		}
@@ -765,7 +776,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	case "short_scan":
 		// 做空扫描: top 24h gainers ranked by short-suitability score.
 		// Like piggy_dash, selecting this source type IS the switch.
-		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+		coins, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(), coinSource.EffectiveShortScanMinScore(),
 			coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 		if err != nil {
 			return nil, err
@@ -842,7 +853,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		// (QUANT_REVIEW_2026-09-22 A5).
 		var shortCoins []CandidateCoin
 		if coinSource.UseShortScan {
-			sc, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(),
+			sc, err := e.getShortScanCoins(coinSource.ShortScanLimit, coinSource.EffectiveMinOIMillions(), coinSource.EffectiveShortScanMinScore(),
 				coinSource.ShortScanHistoryDays, coinSource.ShortScanHistoryMax)
 			if err != nil {
 				logger.Infof("⚠️  Failed to get short-scan coins: %v", err)
@@ -887,7 +898,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			// ScannerDirection/SCANNER_VS_SCANNER never fired in mixed (the
 			// production主力 source). Declare the error outside, assign with =.
 			var piggyErr error
-			piggyCoins, piggyErr = e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection)
+			piggyCoins, piggyErr = e.getPiggyDashCoins(coinSource.PiggyDashLimit, coinSource.PiggyDashDirection, coinSource.EffectivePiggyDashMinGrade())
 			if piggyErr != nil {
 				logger.Infof("⚠️  Failed to get Piggy Dash coins: %v", piggyErr)
 			} else {
@@ -1008,6 +1019,10 @@ func (e *StrategyEngine) filterExcludedCoins(candidates []CandidateCoin) []Candi
 	// coin source passes through.
 	filtered0 := make([]CandidateCoin, 0, len(candidates))
 	for _, c := range candidates {
+		if strings.TrimSpace(c.Symbol) == "" {
+			continue
+		}
+		c.Symbol = market.Normalize(c.Symbol)
 		if strings.Contains(strings.ToUpper(c.Symbol), ":") {
 			logger.Infof("🚫 Excluded XYZ (tokenized stock/commodity) symbol: %s", c.Symbol)
 			continue
@@ -1057,20 +1072,21 @@ const piggyDashMaxAge = 12 * time.Minute
 // snapshot (background scan failing > piggyDashMaxAge) one synchronous
 // refresh is attempted, and its failure HALTS this source for the cycle —
 // an old board must not keep minting entries.
-func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]CandidateCoin, error) {
+//
+// minGrade is the quality floor (pass CoinSourceConfig.EffectivePiggyDashMinGrade);
+// see piggyGradeRank for the ordering.
+func (e *StrategyEngine) getPiggyDashCoins(limit int, direction, minGrade string) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 5
 	}
 	scheduler := breakout.DefaultScheduler()
-	// Over-fetch 3× so the quality floor can decline weak rows and still
-	// fill the configured slot count from the rest of the ranking.
-	fetch := limit * 3
-	symbols, age := scheduler.TopSymbolsWithDirectionAge(fetch, direction)
+	// Read the complete snapshot; quality filtering must precede truncation.
+	symbols, age := scheduler.TopSymbolsWithDirectionAge(0, direction)
 	// 2026-10-03 review P2: distinguish "empty board" from "direction has no
 	// match on a FRESH board" — the old condition re-ran a full synchronous
 	// scan every cycle just to confirm the direction filter still matches
 	// nothing. Refresh only on staleness or a genuinely empty board.
-	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(fetch, "")
+	anyCount, _ := scheduler.TopSymbolsWithDirectionAge(0, "")
 	directionEmpty := len(anyCount) == 0
 	if directionEmpty || age > piggyDashMaxAge {
 		// review 2026-10-07 S9: only a FRESH board may take this early return;
@@ -1085,7 +1101,7 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 			logger.Infof("🐷 Piggy-dash snapshot cold — running synchronous Binance scan")
 		}
 		scheduler.RefreshNow(60 * time.Second)
-		symbols, age = scheduler.TopSymbolsWithDirectionAge(fetch, direction)
+		symbols, age = scheduler.TopSymbolsWithDirectionAge(0, direction)
 	}
 	if len(symbols) == 0 {
 		return nil, fmt.Errorf("piggy-dash scan produced no signals (Binance data unavailable)")
@@ -1097,13 +1113,18 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 	}
 	// Quality floor (review 2026-10-04 #4): the snapshot is a RANKING, not a
 	// filter — in a dead market noise-graded rows and not-yet-crossed
-	// approach patterns filled every slot. weak+ grade on a real cross
-	// pattern only; an empty result is an ERROR (the source halts for the
-	// cycle and the kernel's regime-skip synthesizes the wait) — never a
-	// quiet backfill of weak rows.
+	// approach patterns filled every slot. Grade at or above minGrade
+	// (piggy_dash_min_grade, default medium) on a real cross pattern only;
+	// an empty result is an ERROR (the source halts for the cycle and the
+	// kernel's regime-skip synthesizes the wait) — never a quiet backfill
+	// of weaker rows.
+	minRank := piggyGradeRank(minGrade)
 	picked := make([]breakout.SymbolDirection, 0, limit)
 	for _, row := range symbols {
 		if row.Grade == "noise" || row.Pattern == "" || row.Pattern == breakout.PatternApproach {
+			continue
+		}
+		if piggyGradeRank(row.Grade) < minRank {
 			continue
 		}
 		picked = append(picked, row)
@@ -1112,13 +1133,13 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 		}
 	}
 	if len(picked) == 0 {
-		return nil, fmt.Errorf("piggy-dash: %d rows on the board, none above the weak+cross floor — pool empty this cycle", len(symbols))
+		return nil, fmt.Errorf("piggy-dash: %d rows on the board, none at %s+ grade on a cross pattern — pool empty this cycle", len(symbols), minGrade)
 	}
-	logger.Infof("🐷 Piggy-dash source: %d symbols (direction=%q, floor %d/%d rows)", len(picked), direction, len(picked), len(symbols))
+	logger.Infof("🐷 Piggy-dash source: %d symbols (direction=%q, min grade=%s, floor %d/%d rows)", len(picked), direction, minGrade, len(picked), len(symbols))
 	var candidates []CandidateCoin
 	for _, row := range picked {
 		candidates = append(candidates, CandidateCoin{
-			Symbol:           row.Symbol,
+			Symbol:           market.Normalize(row.Symbol),
 			Sources:          []string{"piggy_dash"},
 			ScannerDirection: row.Direction,
 		})
@@ -1126,9 +1147,21 @@ func (e *StrategyEngine) getPiggyDashCoins(limit int, direction string) ([]Candi
 	return candidates, nil
 }
 
-// shortScanPoolMinScore: review 2026-10-07 S1 — non-near_high candidates need
-// score >= 55 (medium+) to enter the pool.
-const shortScanPoolMinScore = 55.0
+// piggyGradeRank orders breakout grades for the piggy_dash quality floor:
+// noise 0 < weak 1 < medium 2 < strong 3. Anything unrecognised ranks 0, so
+// it never clears a floor set above noise.
+func piggyGradeRank(grade string) int {
+	switch grade {
+	case "strong":
+		return 3
+	case "medium":
+		return 2
+	case "weak":
+		return 1
+	default:
+		return 0
+	}
+}
 
 // dedupeShortCandidates keeps one entry per symbol (the higher ShortScore;
 // first wins ties) preserving the relative order of the survivors. The
@@ -1163,9 +1196,13 @@ func dedupeShortCandidates(in []CandidateCoin) []CandidateCoin {
 // histDays/histMax are the RAW strategy config values; they sync into the
 // scanner here every cycle (UI saves take effect next cycle), because the
 // scheduler shares one scan cache and must resolve the same universe.
-func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, histDays, histMax int) ([]CandidateCoin, error) {
+func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions, minScore float64, histDays, histMax int) ([]CandidateCoin, error) {
 	if limit <= 0 {
 		limit = 5
+	}
+	if minScore <= 0 {
+		// Defensive: callers pass coinSource.EffectiveShortScanMinScore().
+		minScore = store.DefaultShortScanMinScore
 	}
 	if minOIMillions <= 0 {
 		// Defensive: callers should pass coinSource.EffectiveMinOIMillions();
@@ -1204,8 +1241,9 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 		// its own ≥55 bar. Applies to every universe (gainer/hist/breakdown)
 		// — a sub-noise breakdown signal is not a continuation setup either.
 		// review 2026-10-07 S1: the journal showed score 40-55 averaging -0.43%
-		// (24h short return) vs +0.5% at 55-70, so the pool floor is medium+.
-		if sig.Score < shortScanPoolMinScore {
+		// (24h short return) vs +0.5% at 55-70, so the default floor is medium+
+		// (55); the strategy's short_scan_min_score overrides it.
+		if sig.Score < minScore {
 			floorSkipped = append(floorSkipped, fmt.Sprintf("%s(%.0f)", sig.Symbol, sig.Score))
 			continue
 		}
@@ -1253,11 +1291,14 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	// Audit 2026-09-12 #6: near_high symbols are OI-exempt (structurally
 	// lower liquidity, squeeze fuel) — the reserved slot requires at least a
 	// MEDIUM grade (score ≥ 55) so a marginal grinding top can't occupy a
-	// slot under the same bar as liquid gainers.
+	// slot under the same bar as liquid gainers. The reserved slot also
+	// honours the strategy's short_scan_min_score (review 2026-10-11): the
+	// bar is the higher of that floor and 55.
 	const nearHighReservedMinScore = 55
-	if bestNearHigh != nil && bestNearHigh.ShortScore < nearHighReservedMinScore {
-		logger.Infof("🩸 Grinding-top reserved slot skipped: %s score %.0f < %d (low-OI squeeze risk bar)",
-			bestNearHigh.Symbol, bestNearHigh.ShortScore, nearHighReservedMinScore)
+	reservedMin := math.Max(minScore, nearHighReservedMinScore)
+	if bestNearHigh != nil && bestNearHigh.ShortScore < reservedMin {
+		logger.Infof("🩸 Grinding-top reserved slot skipped: %s score %.0f < %.0f (low-OI squeeze risk bar)",
+			bestNearHigh.Symbol, bestNearHigh.ShortScore, reservedMin)
 		bestNearHigh = nil
 	}
 	if bestNearHigh != nil {
@@ -1286,7 +1327,7 @@ func (e *StrategyEngine) getShortScanCoins(limit int, minOIMillions float64, his
 	}
 	if len(floorSkipped) > 0 {
 		logger.Infof("🩸 Short-scan quality floor (score<%.0f): skipped %d candidates %v",
-			shortScanPoolMinScore, len(floorSkipped), floorSkipped)
+			minScore, len(floorSkipped), floorSkipped)
 	}
 	var syms []string
 	for _, c := range candidates {
@@ -1314,7 +1355,7 @@ func shortEvidenceAtMs(sig breakout.ShortSignal, scanAt time.Time) int64 {
 // shortSignalToCandidate converts a scanner ShortSignal into a CandidateCoin.
 func shortSignalToCandidate(sig breakout.ShortSignal, scanAt time.Time) CandidateCoin {
 	c := CandidateCoin{
-		Symbol:           sig.Symbol,
+		Symbol:           market.Normalize(sig.Symbol),
 		Sources:          []string{"short_scan"},
 		ScannerDirection: "short",
 		ShortScore:       sig.Score,
@@ -1385,6 +1426,26 @@ func fmtFloatPct(v float64) string {
 	return strconv.FormatFloat(v, 'f', 0, 64)
 }
 
+// ai500FallbackTTL bounds how old a last-good AI500 list may be when vergex
+// fails: long enough to ride over a transient 403, short enough not to go stale.
+const ai500FallbackTTL = 15 * time.Minute
+
+// ai500LastGood is the most recent successful AI500 list. It is package-level,
+// not per engine: the list is global and StrategyEngine is recreated per cycle.
+var ai500LastGood struct {
+	mu      sync.Mutex
+	symbols []string
+	at      time.Time
+	expires time.Time
+}
+
+// Test seams for getAI500Coins: the vergex fetch and the clock.
+var ai500Now = time.Now
+
+var ai500Fetch = func(e *StrategyEngine) (vergex.AI500Snapshot, error) {
+	return e.vergexClient.GetAI500Snapshot()
+}
+
 // getAI500Coins returns AI500 picks from vergex trending — the same source as
 // the data page's "AI500 Picks" card (browser-relayed payloads).
 // Vergex is the only source: NofxOS public keys were deprecated server-side.
@@ -1393,11 +1454,27 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 		limit = 30
 	}
 
-	symbols, err := e.vergexClient.GetAI500Symbols(limit)
+	snapshot, err := ai500Fetch(e)
+	symbols := snapshot.Symbols
 	if err != nil {
-		return nil, err
+		// 2026-10-09: transient vergex 403 dropped the AI500 source for a whole
+		// cycle — reuse the last-good list while it is younger than the TTL.
+		cached, age, ok := ai500LastGoodSymbols(limit)
+		if !ok {
+			return nil, err
+		}
+		logger.Infof("📊 AI500 (vergex) failed (%v) — using last-good list from %s ago (%d coins, TTL %s)", err, age.Round(time.Second), len(cached), ai500FallbackTTL)
+		symbols = cached
+	} else {
+		// An empty success must not wipe a usable last-good list.
+		if len(symbols) > 0 {
+			ai500Remember(snapshot)
+		}
+		logger.Infof("📊 AI500 (vergex) returned %d coins (limit %d)", len(symbols), limit)
 	}
-	logger.Infof("📊 AI500 (vergex) returned %d coins (limit %d)", len(symbols), limit)
+	if len(symbols) > limit {
+		symbols = symbols[:limit]
+	}
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
@@ -1407,6 +1484,39 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 		})
 	}
 	return candidates, nil
+}
+
+// ai500Remember preserves source age and caps fallback at the earlier deadline.
+func ai500Remember(snapshot vergex.AI500Snapshot) {
+	cp := append([]string(nil), snapshot.Symbols...)
+	expires := snapshot.FetchedAt.Add(ai500FallbackTTL)
+	if snapshot.ExpiresAt.Before(expires) {
+		expires = snapshot.ExpiresAt
+	}
+	ai500LastGood.mu.Lock()
+	ai500LastGood.symbols = cp
+	ai500LastGood.at = snapshot.FetchedAt
+	ai500LastGood.expires = expires
+	ai500LastGood.mu.Unlock()
+}
+
+// ai500LastGoodSymbols returns up to limit cached symbols and their age. ok is
+// false when nothing is cached or the cached list is at least ai500FallbackTTL old.
+func ai500LastGoodSymbols(limit int) (symbols []string, age time.Duration, ok bool) {
+	ai500LastGood.mu.Lock()
+	defer ai500LastGood.mu.Unlock()
+	if ai500LastGood.at.IsZero() {
+		return nil, 0, false
+	}
+	age = ai500Now().Sub(ai500LastGood.at)
+	if age < 0 || !ai500Now().Before(ai500LastGood.expires) {
+		return nil, 0, false
+	}
+	n := len(ai500LastGood.symbols)
+	if n > limit {
+		n = limit
+	}
+	return append([]string(nil), ai500LastGood.symbols[:n]...), age, true
 }
 
 // getOITopCoins returns the top OI-increase coins from vergex trending (1h
@@ -1467,8 +1577,7 @@ func (e *StrategyEngine) getHyperAllCoins() ([]CandidateCoin, error) {
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
-		// Add USDT suffix for compatibility
-		normalizedSymbol := market.Normalize(symbol + "USDT")
+		normalizedSymbol := market.Normalize(symbol)
 		candidates = append(candidates, CandidateCoin{
 			Symbol:  normalizedSymbol,
 			Sources: []string{"hyper_all"},
@@ -1492,8 +1601,7 @@ func (e *StrategyEngine) getHyperMainCoins(limit int) ([]CandidateCoin, error) {
 
 	var candidates []CandidateCoin
 	for _, symbol := range symbols {
-		// Add USDT suffix for compatibility
-		normalizedSymbol := market.Normalize(symbol + "USDT")
+		normalizedSymbol := market.Normalize(symbol)
 		candidates = append(candidates, CandidateCoin{
 			Symbol:  normalizedSymbol,
 			Sources: []string{"hyper_main"},

@@ -26,18 +26,19 @@ type GateShadowBlock struct {
 	CycleNumber  int       `gorm:"column:cycle_number" json:"cycle_number"`
 	BlockedCodes string    `gorm:"column:blocked_codes;size:256" json:"blocked_codes"` // comma-joined machine codes
 	EntryPrice   float64   `gorm:"column:entry_price" json:"entry_price"`
+	EntryBasis   string    `gorm:"column:entry_basis;size:16" json:"entry_basis"` // "" (legacy) = live_price
 	StopPrice    float64   `gorm:"column:stop_price" json:"stop_price"`
 	TakeProfit   float64   `gorm:"column:take_profit" json:"take_profit"`
 	PlanRR       float64   `gorm:"column:plan_rr" json:"plan_rr"` // |tp-entry|/|entry-sl|
 	CreatedAt    time.Time `gorm:"column:created_at;index" json:"created_at"`
-	Outcome      string    `gorm:"column:outcome;size:16;index" json:"outcome"` // "" | tp_first | sl_first | timeout | no_data
+	Outcome      string    `gorm:"column:outcome;size:16;index" json:"outcome"` // "" | tp_first | sl_first | timeout | unfilled | no_data
 	ExitPrice    float64   `gorm:"column:exit_price" json:"exit_price"`
 	EvaluatedAt  time.Time `gorm:"column:evaluated_at" json:"evaluated_at"`
 	// Second horizon (E1, QUANT_REVIEW 09-22): 8h resolves mostly `timeout`
 	// for structural TPs (live data: 39/56 timeout, 2 tp_first) — the 48h
 	// pass lets the same counterfactual play out far enough for the
 	// tp_first/sl_first split to mean something. Same verdict vocabulary.
-	Outcome48     string    `gorm:"column:outcome_48h;size:16" json:"outcome_48h"` // "" | tp_first | sl_first | timeout | no_data
+	Outcome48     string    `gorm:"column:outcome_48h;size:16" json:"outcome_48h"` // "" | tp_first | sl_first | timeout | unfilled | no_data
 	ExitPrice48   float64   `gorm:"column:exit_price_48h" json:"exit_price_48h"`
 	EvaluatedAt48 time.Time `gorm:"column:evaluated_at_48h" json:"evaluated_at_48h"`
 }

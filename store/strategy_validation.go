@@ -15,7 +15,7 @@ func (c *StrategyConfig) Validate() error {
 	if _, err := json.Marshal(c); err != nil {
 		return fmt.Errorf("strategy contains non-finite values: %w", err)
 	}
-	if c.StrategyType != "" && c.StrategyType != "ai_trading" && c.StrategyType != "grid_trading" {
+	if c.StrategyType != "" && c.StrategyType != "ai_trading" && c.StrategyType != "grid_trading" && c.StrategyType != StrategyTypeUSStock {
 		return fmt.Errorf("invalid strategy_type")
 	}
 	r := c.RiskControl
@@ -49,6 +49,9 @@ func (c *StrategyConfig) Validate() error {
 	}
 	if c.StrategyType == "grid_trading" {
 		return c.GridConfig.Validate()
+	}
+	if c.StrategyType == StrategyTypeUSStock {
+		return c.StockConfig.Validate()
 	}
 	return nil
 }

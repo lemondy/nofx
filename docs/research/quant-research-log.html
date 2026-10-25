@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>量化研究记录 · nofx</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--fg:#1c2330;--mut:#667085;--line:#e4e7ec;
+  --ok:#0a7a45;--okbg:#e3f5ec;--no:#b42318;--nobg:#fdecea;--part:#92580a;--partbg:#fdf2dc;--run:#1d4ed8;--runbg:#e5edff;
+  --code:#f0f2f5;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1319;--card:#171c24;--fg:#e6e9ef;--mut:#98a2b3;--line:#2a313c;
+  --ok:#4ade80;--okbg:#12301f;--no:#f87171;--nobg:#3a1717;--part:#fbbf24;--partbg:#3a2c0f;--run:#7aa2ff;--runbg:#16224a;
+  --code:#222a35;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:32px 16px 80px}
+h1{font-size:26px;margin:0 0 6px}
+.sub{color:var(--mut);margin:0 0 20px}
+.sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:18px 0 22px}
+.sum div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.sum b{display:block;font-size:22px}
+.sum span{color:var(--mut);font-size:13px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.bar button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:5px 14px;font-size:13px;cursor:pointer}
+.bar button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.rule{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--run);border-radius:8px;padding:12px 16px;margin-bottom:26px;font-size:14px}
+.rule b{color:var(--run)}
+.day{margin:34px 0 10px;font-size:13px;font-weight:600;color:var(--mut);letter-spacing:.04em;border-bottom:1px solid var(--line);padding-bottom:4px}
+article{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:0 0 14px}
+article h2{font-size:17px;margin:0 0 6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tag{font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.t-no{background:var(--nobg);color:var(--no)}
+.t-ok{background:var(--okbg);color:var(--ok)}
+.t-part{background:var(--partbg);color:var(--part)}
+.t-run{background:var(--runbg);color:var(--run)}
+.dom{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-weight:400}
+article p{margin:6px 0}
+.k{color:var(--mut);font-size:13px}
+ul{margin:6px 0 6px 20px;padding:0}
+li{margin:2px 0}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font-size:12.5px;font-family:ui-monospace,Menlo,monospace}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0;display:block;overflow-x:auto}
+th,td{border-bottom:1px solid var(--line);padding:4px 10px;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:600}
+.src{font-size:12.5px;color:var(--mut);margin-top:8px;word-break:break-all}
+.hide{display:none}
+@media(max-width:560px){article{padding:14px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>量化研究记录</h1>
+<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-10-18。</p>
+
+<div class="sum" id="sum"></div>
+
+<div class="rule"><b>阅读口径：</b>所有带订单/盈亏的回测统一走 <code>scripts/backtest</code>（Backtrader），不另写模拟器。加密货币费用 0.05%/边 + 0.03% 滑点，同币同向单仓（重叠过滤），并配时间错位的随机对照；统计推断按周聚类 SE。R = 以初始止损距离为 1 的盈亏倍数。<b>“未发现优势”≠“已证伪”</b>：多数样本只有 4–12 个月，且处于偏空行情，结论仅对该样本有效。</div>
+
+<div class="bar" id="bar">
+  <button class="on" data-f="all">全部</button>
+  <button data-f="no">无优势</button>
+  <button data-f="part">有信号但不足以上线</button>
+  <button data-f="ok">已采用 / 有支持</button>
+  <button data-f="run">进行中</button>
+</div>
+
+<div id="log">
+
+<div class="day">2026-10-24</div>
+
+<article data-v="no">
+<h2>三推 / 楔形反转按斜率分类（陡峭·中等·低斜率·近水平）信号层研究 <span class="tag t-no">无证据支持，不接入</span><span class="dom">加密 + 美股 · 价格行为</span></h2>
+<p class="k">思路：用户提供一张“不同斜率的三推/楔形反转”价格行为图与文字：陡峭三推第三推后常继续延伸、不宜逆势；中等斜率三推反转机会较好；低斜率三推更像区间、盈亏比差；近水平为三重顶/底；强调位置+力量+空间，三推是背景而非入场信号。系统里没有真正的三推识别（cycle.go 的 wedge_pop/drop 只是 EMA 事件），Brooks 研究也没测过。</p>
+<ul>
+<li>因果识别器：分形摆动点右侧 k 根确认后才可见，检出时点=第三推确认收盘；三推不重叠复用；斜率按 ATR/根数归一，训练期三分位冻结分 steep/medium/low，近水平单列。对照：同币同方向、±30 日、过去同幅度同向五分位匹配的 5 个随机时点（回答“三推是否超出‘刚涨过一段’的信息”）。数据：加密 1h（100 币约 2~3 年）、加密日线、美股日线（泛化）。</li>
+<li>v1 校准失败：标准 10 小种子零通过，但大面板随机游走出现 605 个训练通过/436 个保留确认。复核定位两个设计偏差：对照抽样把检出时点之前的 k 根也排除（对未来的条件化）；Y2 首次穿越 R 期望/rr_space/延续幅度由形态几何机械决定，类别间天然不同。v1 的“有效”全部被否决（真实数据本身也是 0 通过）。</li>
+<li>v2 修正（预注册先于重跑，并披露 v1 结果已被看过）：对照只排除 [t,t+k]；推断仅保留几何中性的 Y1（形态−匹配对照反转收益，成本后）及类别差、H5 要素增量；Y2/rr_space/Y3 降为描述性统计。校准：10 个种子、每个 1h 50×15,000 + 日线 100×2,500（按真实逐币波动缩放）训练通过全为 0；植入 medium 反转效应训练通过 504、保留确认 474。本人换种子 777/778 独立复跑：每个约 2.5 万形态，0 通过/0 确认；植入版 1702/1450。</li>
+<li>真实 v2：检验 21,384 项（可估计 6,630），训练 FDR 通过 0，保留确认 0，默认参数“有效”清单为空。形态数（训练/保留）：1h steep 2286/4314、medium 2285/4572、low 2286/4920、flat 134/260；日线 steep 163/431、medium 163/345、low 164/314、flat 11/17。形态−对照的 Y1 点估计在训练与保留窗符号常相反（如 1h medium 中期 −26.0/+15.6 bps；日线 medium 短期 +179/−151 bps），没有稳定的类别差。</li>
+<li>三个原问题：陡峭三推逆势是否更差——不支持（无证据表明 steep 比 medium 差）；中等斜率是否最好——不支持；低斜率反转空间是否有限——不可推断（空间/盈亏比由几何决定，不是预测证据）。日线与 flat 类样本偏少，“不支持”不等于“原文错误”。</li>
+<li>最脆弱：v1 保留窗已被看过，v2 并非全新独立验证；日线/flat 匹配样本少；1h 仅 2~3 年且大半处于同一大行情；检出器参数（k、回调下限、分位切点）的选择自由度虽有邻域检验，仍是一族。</li>
+</ul>
+<p><b>结论：</b>没有证据支持把“三推按斜率分类”做成可交易规则或参考字段；不改任何提示词与风控。三推更适合作为人工阅读图形时的背景判断，而非系统信号。研究脚本与预注册、校准框架保留（scripts/backtest/threepush_study.py）。</p>
+<p class="src">来源：<code>scripts/backtest/threepush_study.py</code> · <code>threepush-study.md</code> · <code>threepush-preregistration.md</code></p>
+</article>
+
+<article data-v="part">
+<h2>市场形态统计特征（15 种形态）信号层研究 <span class="tag t-part">部分有效：仅波动/回撤风险类特征有效，收益择时与 exit_mode 无证据</span><span class="dom">加密 + 美股 · 市场状态</span></h2>
+<p class="k">思路：一张“15 种市场形态”图（趋势/均值回归/随机游走/暴涨/波动聚集/挤压/厚尾/跳跃/闪崩/区间/V 反转/状态切换…）能否转成可检验的统计特征，补充现有仅 EMA+ADX×BB/ATR 的 market_regime。先预注册标准再看结果，不接入任何交易逻辑。</p>
+<ul>
+<li>数据：加密 1h（100 币，2023-10 起约 3 年）、加密日线（2019 起）、美股日线（96 只，仅泛化）。特征 28 个（效率比、方差比、自相关、Hurst-lite、凸性、波动比、波动的波动、峰度、跳跃、影线、区间穿越、回撤反弹…）× 5 个窗口邻域 × 3 个预测期 × 目标：T1 顺势/逆势收益差（扣成本）、T2 未来波动（HAR 基线控制）、T3 尾部/回撤概率（当前波动 logit 基线）、T4 状态可用性。每个周期 2,955 项检验，两个加密周期合并 5,910 项做一次 BH FDR=10%。</li>
+<li>统计纪律：预注册文档在真实数据检验前写入（v1→v3 的修订只依据合成数据负对照，未看真实目标）；60/40 时间切分并 purge；日期聚类 + HAC 取较大 SE；候选清单在保留窗打开前冻结并存哈希；保留窗只评一次；14 个随机游走面板的负对照训练拒绝为 0；植入的高 ER 动量效应可被检出；完整性检查全部通过。</li>
+<li>结果：训练 FDR 通过 708 项，保留窗同向确认 594 项（含所有五点窗口，不是独立发现数）；默认窗口且同时满足平台与经济门槛的“有效”只有 4 个特征、7 个组合：日线 ewma_ratio / volvol / tail_frequency → 未来 3/7 日波动（HAR 控制后增量 R² 0.55~1.65 个百分点，美股同向）；last_jump（单根 |r|/σ&gt;4）→ 未来回撤风险（1h h=4：保留窗 9.9% 对波动基线 2.7%，3.7×；日线 h=7 为 3.4~3.9×，美股仅同向 t≈1.1）。</li>
+<li>无效：T1（顺势/逆势收益择时）全部在保留窗未确认；T4（用 ER/VR 状态选 trend/range/quick）训练窗无候选；ER、VR、ρ1、Hurst、凸性、加速度、stretch、squeeze、BB 分位、峰度、区间穿越、回撤/反弹等均无效。盘口深度/买卖价反弹在 1h 与日线频率不可检验。</li>
+<li>独立复算（本人自己的实现，不用研究脚本）：1h last_jump → 未来 4 小时回撤&gt;3×ATR，波动匹配基线下训练 1.87×、保留 3.67×——方向与量级复现，但训练明显弱于保留（训练 q=0.075 勉强通过），且“跳跃”不分方向（向上暴涨后的回落也算）。</li>
+<li>最脆弱：volvol 增量 R² 仅比门槛高 0.047pp；跳跃样本稀少（保留窗 1h 约 7,000 条，日线仅数百）且集中在共同冲击日，不是独立事件；美股回撤只同向；状态持续性有机械持续性；加密与美股共享全球风险周期。</li>
+</ul>
+<p><b>结论：</b>可考虑的落地范围很窄：把“近期出现跳跃”作为短期回撤风险的参考证据、把日线波动特征作为未来波动的参考估计，先做影子记录。本批不支持任何开仓门控、收益择时，也不支持用状态自动选 exit_mode；未改 market_regime 或其它交易代码。“无效”表示未达预注册标准，不等于证明为零。</p>
+<p class="src">来源：<code>scripts/backtest/regime_study.py</code> · <code>regime-statistics-study.md</code> · <code>regime-statistics-preregistration.md</code></p>
+</article>
+
+<div class="day">2026-10-23</div>
+
+<article data-v="no">
+<h2>美股扩大候选数 / 趋势过滤能否改善（候选池质量检验） <span class="tag t-no">无证据支持，维持现状</span><span class="dom">美股 · 候选筛选</span></h2>
+<p class="k">思路：us-stock 交易员近一周无新开仓：扫描器按 12-1 动量取前 5 名，而领涨股集体回撤，前 5 名几乎都在下降趋势，AI 按规则全部 wait。检验：扩大候选数（前 10/15），或先剔除下降趋势标的再取前 N，是否改善结果。AI 逐笔决策无法回测，只验证候选池质量。</p>
+<ul>
+<li>数据：95 个美股正股/ETF（SPY 外）日线，有效回测 2021-10 ~ 2026-10；宇宙是“当前已上线 bStock”，存活者/选择偏差严重（绝对 CAGR 被高估，如基线 79.8%），只有变体间的相对比较有意义，且该偏差也可能影响相对比较。</li>
+<li>信号层（不含订单，按日期聚类 + 整日自助法）：动量前 15 名按趋势分类，下行 vs 上升的前瞻收益，样本外 10 日 2.86% vs 3.15%（差 −0.29pp，区间 [−2.19, 1.61]），大盘回撤期 10 日 4.35% vs 3.14%（差 +1.21pp，区间 [−2.60, 4.87]）；训练/验证期下行组 10 日反而比上升组高 2.2~2.7pp，样本外未确认。即没有证据表明“下降趋势的动量标的更差”。</li>
+<li>Backtrader 机械组合（MOM_TOP，每 10 个交易日调仓、等权、佣金 0.1%/边，预注册 7 个变体）：V0 前 5 无过滤 Sharpe 1.29 / CAGR 79.8% / MaxDD 53.0%；扩大到 10/15 名 Sharpe 1.15/1.17；T1(close&gt;EMA50) 过滤前 5/前 10 Sharpe 0.91/0.96；T2(close&gt;EMA20&gt;EMA50) 0.75/0.80。所有变体相对 V0 的日收益差为负（全期 −7.6 ~ −17.1 bp/日），大盘回撤期差异区间全部低于 0（−47 ~ −75 bp/日）。波动与回撤略降，但收益与 Sharpe 都更差。</li>
+<li>训练+验证按预定规则选中 T1，但它只是两个定义里落后较少的；样本外仍落后。因此不支持“回撤期加趋势过滤会改善”。</li>
+</ul>
+<p><b>结论：</b>维持现状：不扩大候选数，不加趋势过滤。近期无开仓是规则（downtrend / wedge_drop 禁开）与行情（领涨股集体回撤）的共同结果，符合设计，不是故障。注意：同一份数据显示下降趋势的动量标的前瞻收益并不更差（样本内更高），但因宇宙存活者偏差，不能据此放宽“downtrend 绝不开仓”的规则。局限：6 年单一行情、日期聚类对重叠标签区间偏窄、未做多重检验校正、EMA 分类不等同线上完整结构判断。</p>
+<p class="src">来源：<code>scripts/backtest/us_candidate_study.py</code> · <code>stocks_cache.py</code> · <code>scripts/backtest stocks</code>（MOM_TOP 增加候选过滤参数）</p>
+</article>
+
+<article data-v="no">
+<h2>Al Brooks 价格行为体系（always-in / H2·L2 / 高潮 / 均线缺口）信号层检验 <span class="tag t-no">无证据支持，未进入订单回测</span><span class="dom">加密 + 美股 · 价格行为</span></h2>
+<p class="k">思路：用户提供从《高级趋势技术分析》提取的量化规则（trend_trade/）。先验证核心断言在我们数据上是否成立：always-in 状态是否真有条件区分力、“80% 反转/突破失败”、强趋势分层、H2/L2 顺势回调加过滤器、高潮与 20 根均线缺口后的调整、禁做清单的价值。</p>
+<ul>
+<li>特征库（Codex）：183 个因果向量化特征 + 与提取代码 <code>brooks_pa</code> 的 46 项规则差异审计（H/L 计数未保留尝试间隔与重置；参考强趋势评分最高仅 20 分却以 30 分为门槛；二次入场比较符号、下影线公式、量度目标单位有误）。强趋势表 8 项因缺会话开盘/明确分段定义等无法程序化。</li>
+<li>数据：加密日线（约 100 币，2019 起）、加密 1h（7 个满 2 年的主流币，2022 起）、美股日线（SPY 外 95 个文件，含 ETF）；训练 ~2023、验证 2024、样本外 2025-01 起只看一次。信号层标签（前瞻收益，不含止损与盈亏），日期聚类稳健 SE + 2000 次整日自助法 + 500 次时间错位随机对照；预注册 7 组检验，共 3168 项，BH 校正后 123 项显著（其中样本外 37 项，含反方向结果）。</li>
+<li>“80% 失败”公理被否定：区间向上突破后收回区间的比例样本外为 70.5%（币日）、70.2%（币 1h，相对 80% q=5.8e-10）、57.4%（美日，q=2.8e-10）；强趋势里的逆势反转分支样本为 0，无法检验。50/50 基线也不成立：样本外币日线 43.7% 上涨（bearish 阶段）。</li>
+<li>always-in 条件化：主周期 H2/L2 顺势减逆势在三个市场均不显著（q≥0.47）；仅美股“反转最低要求”在 10/20 根上顺势比不确定高 +118/+160 bps（q=.005/.014），但训练与验证阶段没有提名、单一市场，属探索性发现。H2/L2 加顺势过滤、再加反转K线质量过滤，增量均不显著（q≥.27）。禁做清单三条（十字星、过度重叠、微型通道逆势）样本外无一通过校正。</li>
+<li>均线缺口：首次触线后回到 EMA20 附近的比例为 89.0%（币 1h）/ 83.7%（美日），比基线高约 10~12 个百分点（q&lt;2e-4），只是“回归均线”的统计规律，并非可交易边际；高潮停止后回均线的概率反而低于基线（69.0% / 63.7%），与书中“高潮后调整”的说法相反。</li>
+<li>按事先冻结的晋级规则（训练与验证共同提名才进入订单回测）：没有任何规则被提名。原书语境是 Emini 5 分钟图，规则在日线与 1h 上的迁移本身可能就不成立；没有测 5 分钟级别。</li>
+</ul>
+<p><b>结论：</b>没有可落地的交易规则，不进入 Backtrader 订单回测，不改任何提示词或风控。特征库与检验脚本保留为研究工具（<code>scripts/backtest/brooks*</code>）。若要继续：先补充 5 分钟数据与会话/开盘类特征再测日内剧本；否则不建议在这套规则上继续投入。“证据不足”不等于证明效应为零，样本含存活者偏差与收益重叠，周聚类可能低估不确定性。</p>
+<p class="src">来源：<code>scripts/backtest/brooks/</code> · <code>brooks_study.py</code> · <code>brooks_fetch.py</code> · <code>DISCREPANCIES.md</code></p>
+</article>
+
+<div class="day">2026-10-22</div>
+
+<article data-v="no">
+<h2>因子集成分数能否区分真实交易的好坏（206 笔） <span class="tag t-no">无证据支持提高因子比重</span><span class="dom">加密 · 因子 × 实盘交易</span></h2>
+<p class="k">思路：因子集成在验证集上 IC 为正（0.086/0.118/0.148，t≈5.6~5.9），但扣费后多空收益不稳定（1 日 −13%、3 日 +70%、7 日 −3.6%），前向校验 34 个入选因子里 31 个未定论、3 个失败、0 个确认。检验这个分数对实际成交的入场点有没有区分力：若有，才谈提高它在大模型开平仓里的比重。</p>
+<ul>
+<li>方法：206 笔已平仓、币在因子宇宙内的交易（2026-08-29~10-21，其余约 248 笔为代币化股票/小币种不在宇宙内）；取入场前一个已收盘日的集成百分位，按多空方向对齐（越高 = 因子越同意该方向），与该笔实际收益做秩相关。</li>
+<li>结果（对齐分数与交易收益的秩相关，95% 自助法区间）：1 日 −0.124 [−0.27, +0.03]；3 日 −0.077 [−0.24, +0.08]；7 日 −0.083 [−0.25, +0.08]。因子最同意的 1/3：胜率 39~41%、平均收益 −0.56%~−0.83%；最不同意的 1/3：胜率 46~56%、平均收益 −0.21%~+0.26%。整体基准胜率 46%、平均收益 −0.16%。</li>
+<li>解读：区间都跨过 0，只能说“没看到任何帮助”，不能说有害。检验对因子偏有利（因子用截至 10 月的数据挑选，这些交易多数落在其训练/验证窗口内），仍无正向。分数是约 60 个币内的截面排序，AI 入场本身已是突破候选里挑出来的，持有期与止盈止损也与 1/3/7 日因子周期不对应。样本 137 多 / 41 空，偏小。</li>
+<li>同时改了一处：前向校验失败的因子不再进入给 AI 看的实盘参考分数（<code>live_scores.json</code> 新增 <code>forward_failed_excluded</code> 字段）；<code>ensemble.json</code> 与研究侧保持对前向结果“只展示、不参与选择”，否则前向不再是干净的样本外证据。</li>
+</ul>
+<p><b>结论：</b>不提高因子在大模型开仓/平仓中的比重，仍仅作参考。若要升级，按顺序：前向出现 confirmed（扣费后多空转正）→ 候选/对照模拟盘跑满 ≥7 天且 ≥20 笔 → 先做确定性规则（因子强烈反对时否决开仓、仓位小幅缩放），最后才考虑提示词比重。</p>
+<p class="src">脚本：<code>scripts/factor_mining/live_scores.py</code> · 检验：对 <code>data.db</code> 的 <code>trader_positions</code> 与 factor_mining 面板做点时分数对齐（一次性分析）</p>
+</article>
+
+<article data-v="no">
+<h2>因子挖掘后续优化（参考 RD-Agent）：四项均无可测量的质量收益 <span class="tag t-no">无法证明有价值</span><span class="dom">加密 · 因子挖掘流程</span></h2>
+<p class="k">思路：对照 microsoft/RD-Agent 的因子循环，检验我们流程还能怎么优化：增量选择集成因子、按家族历史产出分配变异预算、LLM 跨夜记忆。另对夜内闭环（每批评估后把训练集结果反馈给下一批，PR #6）做了有无反馈对照。</p>
+<ul>
+<li>增量贪心选集成（按训练集 IC t 值逐个加入）：不论增益阈值取 0~2%，集成都被压到 2~3 个因子；训练集 t 升（h1 8.3→11.2）、验证集 t 两升一降，但验证集 IC 三个周期都下降（0.085→0.073、0.117→0.092、0.142→0.105）。未采用。</li>
+<li>变异按家族产出加权（仅用训练集 t 统计，保留 30% 均匀探索）：同数据同随机种子各 600 个变异，训练集 t≥3 的比例 49.4% 对 50.0%、t≥5 为 34.6% 对 35.5%。现有 <code>family()</code> 把大多数表达式归为 other，粒度太粗。未采用。</li>
+<li>LLM 跨夜记忆（前 3 晚训练集最优表达式与失败原因统计）：真实 GLM 各连跑两晚（每晚 40 条）；第二晚训练集初筛通过 64% 对 54%，新颖表达式 29 对 29；样本约 87，差距在噪声内。未采用。</li>
+<li>夜内闭环有无反馈对照（同数据副本、各 3 次、每次 60 条真实 GLM、不带变异）：第 1 批两臂条件相同，初筛通过率（训练集 t≥3）却是 94% 对 83%，这就是噪声量级；第 2/3 批 76%/59% 对 67%/72%，差距落在噪声内且方向不一致，top10 平均 t 也无差别（11.6/11.4/10.6 对 11.5/10.7/10.3）。唯一一致的信号：有效表达式数 41/44/46 对 39/40/37（带反馈约多 13%，3 次中最低值高于对照最高值），推测反馈里的合法样例减少了语法错误。结论：闭环不提升质量，只略增有效产出；保留（无副作用、无验证集泄漏），但不要期待它抬高入选率。</li>
+<li>实现过程中发现：<code>evaluate.py</code> 是冻结评估器，其 SHA256 会写入每次运行，不能往里加辅助函数；<code>train_screen</code> / <code>reject_reason</code> 因此放在 <code>feedback.py</code>。</li>
+</ul>
+<p><b>结论：</b>三项优化没有证据支持，已回退；夜内闭环对质量也没有可测量提升，只略增有效表达式数，作为低成本改进保留。需要更大样本或更细的家族划分才可能看出差别；在此之前，把精力放在数据与前向校验上更有价值。</p>
+<p class="src">来源：<code>scripts/factor_mining/</code> · PR #6（夜内闭环）· 实验：每臂 3 次重复的有无反馈对照</p>
+</article>
+
+<div class="day">2026-10-20</div>
+
+<article data-v="part">
+<h2>因子挖掘 ensemble 接入实盘提示词（仅参考字段） <span class="tag t-part">已接入 · 默认关闭 · 无 edge 证据</span><span class="dom">加密 · 提示词参考</span></h2>
+<p class="k">思路：把夜间因子挖掘里已 accepted 因子的等权方向调整 z 分 ensemble，取最新已收盘日的截面百分位，导出为 <code>data/factor_mining/crypto/live_scores.json</code>；实盘引擎在 <code>enable_factor_ensemble</code> 开启时，把该币 1/3/7 日 horizon 的 pct/z 作为 <code>factor_ensemble</code> 参考字段交给 AI。</p>
+<ul>
+<li>研究记录里已采用的结论（basket_vol 仓位缩放、12-1 动量排序）早已在线上，本次只补上因子挖掘这一路。</li>
+<li>数据过期保护：<code>as_of</code> 距今超过 3 个日历日、或币不在因子宇宙（约 60 个币）时不输出该字段；文件缺失/损坏一律静默降级。</li>
+<li>任何 hard gate、评分、候选筛选、下单逻辑都不读取该字段；提示词明确写「不能绕过 <code>hard_entry_gate</code> / <code>rr_scan</code>」。</li>
+<li>当前 crypto 入选因子的前向校验（约 176~179 天）绝大多数为 inconclusive（1 个 failed）：IC 为正（0.02~0.06），但多空净收益为负，属于「排序有信息、扣费后不可交易」。</li>
+</ul>
+<p><b>结论：</b>只作为 AI 的参考证据上线，不提升为评分或入选条件；等前向校验出现 <code>confirmed</code>（多空净收益转正）且实盘决策样本里 pct 与结果有可测关系，再考虑升级。</p>
+<p class="src">脚本：<code>scripts/factor_mining/live_scores.py</code> · <code>kernel/factor_ensemble.go</code> · 设计：<code>docs/research/factor-mining-design.md</code>「实盘参考字段导出」</p>
+</article>
+
+<div class="day">2026-10-19</div>
+
+<article data-v="no">
+<h2>账户级连亏 / 日亏熔断：状态之后入场是否更差 <span class="tag t-no">无法证明有价值</span><span class="dom">加密 · 风控</span></h2>
+<p class="k">问题：账户级、跨币种的“连亏 k 笔 / 当日累计亏损”之后再入场的交易，期望是否显著更差？现有熔断：日亏 10%（有效默认值）、连亏禁入仅按单币种、净方向止损风险 20%。10-19 日内约 −8% 未触发任何熔断。</p>
+<ul>
+<li>数据两套：实盘成交 200 笔有初始止损的 R（6 周，入场时只用已平仓交易的状态）；历史 NEW≥50 信号流（同币同向单仓，每 UTC 日下采样 ≤8 笔近似实盘，20 个种子）。共 1650 个探索性比较。</li>
+<li>历史（20 种子均值）：24h 连亏≥4 之后入场 avgR −0.073R，与其余的差 −0.126±0.064R（p=0.050）；日亏≤−3R 之后 −0.110R，差 −0.157±0.077R（p=0.043）；24h 连亏≥3 差 −0.069±0.062R 不显著。名义显著未通过多重校正，后半段未复现。</li>
+<li>实盘：样本只有 6 个日历周，周聚类 SE 不可靠；其中 BNCUSDT 一笔 +34.44R 是止损距离几乎为 0 的手动同步仓造成的数据假象，主导了总体结果，因此实盘数字不能作为部署依据。静态剔除这些状态后，历史样本 sumR 与最大回撤改善，实盘样本几乎无变化或略差；未重放被剔除交易对后续状态的反馈。</li>
+</ul>
+<p class="src">结论：无法证明账户级连亏冷却或更紧的日亏线有正期望价值，因此未改任何风控参数。若出于控制尾部风险想收紧，应作为风险偏好决定（如日亏线 10%→6%），而不是已被回测证明的优势。 来源：<code>scripts/backtest/breaker_state_study.py</code>。</p>
+</article>
+
+<article data-v="no">
+<h2>区间震荡期的破位做空：降级 / 回抽确认 <span class="tag t-no">无法证明有差异</span><span class="dom">加密 · 做空</span></h2>
+<p class="k">起因：10-19 实盘连续止损——BTC 三天在 80.8k–82.7k 区间震荡，凌晨砸到下沿后 V 型反弹 +2%，TIA / SEI / WLD / PROM 的破位做空在下沿附近入场被反弹打掉。问：区间期的破位做空是否该降级？改成等反抽再空是否更好？</p>
+<ul>
+<li>沿用 breakdown_study 的 22569 个历史信号（100 币，2025-10 ~ 2026-10-13，下一根 5m 开盘市价空，SL=2×ATR，TP=4×ATR，72h，扣费滑点，同币同向单仓）。新增特征：BTC 最近 18 根 4h 振幅 btc_range72（三分位 + 先验阈值 &lt;3%）、入场价离 24h 低点的 ATR 距离 chase_low_atr。</li>
+<li>区间期 / 追下沿均无显著更差：range&lt;3% 的 BASELINE 为 −0.037±0.064R（n=475），NEW≥50 为 +0.030±0.073R；振幅最低三分位反而是 +0.067±0.030R，且前半段 +0.39R、后半段 −0.09R，不稳定。</li>
+<li>回抽确认（限价空 ref+0.5/1.0×ATR，未成交按 0R 计）：成交率 53% / 38%，按信号计 sumR 相对市价入场的配对差 +0.003±0.032 / −0.014±0.040R；range&lt;3% 子集 +0.053±0.091R，均不显著。</li>
+<li>更大的因素是市场方向：该破位空策略逐月 avgR 在 −0.33R ~ +0.51R 之间摆动（2026-03/04/05/07/08/09 为负，其余多为正），是净空头 beta，行情反弹的月份必然成串止损。共 66 项检验，未校正多重比较。</li>
+</ul>
+<p class="src">结论：不建议为区间期加降级或回抽确认门：样本里没有证据。10-19 的连续止损更像反弹日的市场方向风险；若要治理，应试验组合层面的相关性 / 日亏熔断，而不是区间过滤。来源：<code>scripts/backtest/breakdown_range_study.py</code>。</p>
+</article>
+
+<div class="day">2026-10-18</div>
+
+<article data-v="run">
+<h2>qlib 式自动因子挖掘（美股 + 虚拟币） <span class="tag t-run">进行中</span><span class="dom">美股 + 加密 · 截面因子</span></h2>
+<p class="k">思路：参考 microsoft/qlib 的 Alpha158 表达式因子库与 RD-Agent 的 LLM 提案闭环，在日线截面上自动挖掘“因子值越高，未来 h 日超额收益越高”的因子；系统页面「因子挖掘」可实时查看。</p>
+<ul>
+<li>表达式 DSL：白名单 AST，字段 <code>$open/$high/$low/$close/$volume/$vwap/$ret</code>，约 40 个算子，窗口 ≤120，禁止任意代码；通用无前视测试。</li>
+<li>候选三路：195 个 Alpha158 风格种子 → 对 top 因子随机变异 → GLM-5.3-flash 提案（提示词只含 train 指标）。</li>
+<li>评估：日 RankIC、Newey-West HAC t（lag=h）、五分位多空净收益（币 0.08% / 股 0.05% 单边）、换手；train/val/holdout 为定长滚动窗口（币 1095/365/180 天、股 756/252/126 交易日，每晚整体前移，purge h+2，旧因子每晚重评估），holdout 仅 <code>judge.py</code> 人工开启。</li>
+<li>前向校验：因子首次 accepted 时登记并冻结方向，仅用入选前选择从未读过的新数据统计 IC / 多空，只展示、不参与任何筛选，实盘参考以此为准。</li>
+<li>多重检验：同一 (市场, 周期) 的有效试验数 K 持续累加，<code>t_req = max(2, Φ⁻¹(1−0.025/K))</code>，旧因子会随 K 增大被降级。</li>
+<li>accepted 需 train 达标 + val IC 同号 t≥1.65 + train 与 val 扣费后多空收益均 &gt; 0；与已接受因子截面相关 ≥0.8 标为冗余。</li>
+<li>首次运行：币 100 个标的（2019~今，点时刻成交额前 60），美股 91 个 bStock 正股 + SPY 基准（Yahoo 复权日线，约 6 年）；币圈大量 IC 显著但多空净收益为负（均值被高波动币的偏态主导），因此几乎没有 accepted。</li>
+</ul>
+<p class="src">代码：<code>scripts/factor_mining/</code> · 设计：<code>docs/research/factor-mining-design.md</code>。研究层筛选，不接入下单；accepted ≠ 可交易（未建模资金费、冲击成本与容量，美股存在幸存者偏差）。</p>
+</article>
+
+<article data-v="run">
+<h2>GLM 自进化评分挖掘框架 <span class="tag t-run">进行中</span><span class="dom">加密 · 多空评分</span></h2>
+<p class="k">思路：用订阅的 GLM-5.3-flash 夜间自主提出候选评分函数 <code>score(X)</code>，目标是“分数越高，对应方向收益 / 胜率越高”。</p>
+<ul>
+<li>冻结评估器；候选评分在 AST 沙箱内运行，特征 ≤12 个。</li>
+<li>时间切分 train / val / holdout = 60/20/20，间隔 76h purge；holdout 放在独立私有目录，验证只返回通过/不通过。</li>
+<li>通过门槛 <code>t_req = max(2, Φ⁻¹(1−0.025/K))</code>，K 为有效试验次数（多重比较校正）。</li>
+<li>只晋升为“候选”，需人工 + Backtrader 复核；永不自动上线。</li>
+<li>新增数据源：OI 历史、全局 / 大户多空比、主动买卖比、premiumIndex K 线、恐慌贪婪指数、资金费历史。爆仓流因 <code>allForceOrders</code> 已下线（404）且无 websockets 库，暂未接入。</li>
+</ul>
+<p class="src">代码：<code>scripts/autoresearch/</code>（尚未提交）· 状态：Codex 构建中，定时任务待用户确认频率后创建</p>
+</article>
+
+<article data-v="no">
+<h2>做空前置筛选审计 + 特征 IC + 样本外评分 <span class="tag t-no">无稳定优势</span><span class="dom">加密 · 做空</span></h2>
+<p class="k">问题：当前“前置筛选”本身是否把更适合做空的币选了出来？有没有“分数越高收益越高”的更好评分？</p>
+<p>方法：100 币、2100 个决策时点（2025-10-29 ~ 2026-10-13，4h 步长），入场 = 下一根 5m 开盘做空，SL = ref + 2×ATR14(1h)，TP = ref − 4×ATR，72h；价格、成交量、主动买卖比、OI、资金费等特征，Fama-MacBeth 式截面 IC（周聚类 SE），五分位价差，50/50 与 4 折扩展窗口 walk-forward。</p>
+<ul>
+<li>前置筛选（涨幅榜 / 历史涨幅池 / 破位池等）选出的币，扣费后收益<b>不优于随机 12 币</b>。</li>
+<li>单特征 IC 量级只有 ±0.02 ~ 0.03，且前后半段、牛 / 熊 / 震荡状态下符号会翻；<code>ret_5d</code>、<code>ema_gap</code> 对 netR 的 IC 为正但集中在后半段 / btc_bull（等于“趋势延续而非回落”，与做空直觉相反），并受多重比较影响。</li>
+<li>样本外综合评分（价格 + 量 + 主动买卖 + 资金费）没有找到稳定跨折有效的组合。</li>
+<li>市场状态开关（仅 btc_bear 时做空）样本外不成立：btc_bull 下做空约 −0.14 ~ −0.19R，btc_bear 略正但不显著。</li>
+</ul>
+<p><b>结论：</b>当前数据下无法靠价量 / 资金费特征构造出“分数越高收益越高”的做空评分；“候选少”主要是供给结构问题，而不是漏掉了好机会。</p>
+<p class="src">脚本：<code>scripts/backtest/short_features_study.py</code> · 提交 179ca29a · 报告：<code>data/short_features_full_v3/report.txt</code>（gitignored）</p>
+</article>
+
+<article data-v="part">
+<h2>破位池延续型结构评分 + 豁免顶部确认门 <span class="tag t-part">已上线代码 · 无 edge 证据</span><span class="dom">加密 · 做空</span></h2>
+<p class="k">起因：市场偏空但做空候选达标者少。根因：破位池沿用 pump-fade 的结构 / 背离维度，对已下跌币恒为 ~0（45% 权重失效），分数上限约 26，永远过不了 <code>short_scan_min_score</code>；破位候选还会被 SHORT_TOP_CONFIRM_MISSING 顶部确认门拦下。</p>
+<p>改动：新分数 = 0.35 延续（1h EMA20 反弹失败 .45 + 24 根新低 .30 + 4h 更低高点 .25）+ 0.25 下行空间 + 0.15 拒绝 + 0.10 相对 BTC 弱势 + 0.15 资金费健康；<code>universe=breakdown</code> 豁免顶部确认门。</p>
+<table>
+<tr><th>方案</th><th>n</th><th>avgR（扣费）</th><th>毛 avgR</th><th>每决策候选数</th></tr>
+<tr><td>NEW ≥ 50</td><td>4713</td><td>+0.017 ± 0.020</td><td>+0.075</td><td>4.83</td></tr>
+<tr><td>随机对照（匹配 NEW）</td><td>7484</td><td>+0.021 ± 0.016</td><td>+0.081</td><td>—</td></tr>
+<tr><td>OLD ≥ 50</td><td>620</td><td>+0.064 ± 0.056</td><td>+0.128</td><td>0.31</td></tr>
+<tr><td>基线（全部破位候选）</td><td>6946</td><td>−0.003 ± 0.016</td><td>+0.051</td><td>—</td></tr>
+</table>
+<p>NEW vs 随机 Δ = −0.004（95% CI [−0.065, +0.057]），NEW vs OLD Δ = −0.047（CI [−0.162, +0.068]）：均不显著。分数分层也不单调（NEW 30–40 反而 +0.086R，≥60 为 +0.036R）。</p>
+<p><b>结论：</b>修复了供给（达标候选 0.31 → 4.83 个/决策），但<b>没有证明收益更好</b>；评分只是“把候选交给模型”，不是 edge 来源。线上进程未重启，生效需下次发版。</p>
+<p class="src">提交 54074535（研究脚本）、c5fd7226（<code>market/breakout/breakdownscan.go</code>、<code>kernel/engine_prompt.go</code>）· 脚本：<code>scripts/backtest/breakdown_study.py</code></p>
+</article>
+
+<article data-v="no">
+<h2>ICT 概念作为独立入场信号 <span class="tag t-no">≈随机择时，扣费后为负</span><span class="dom">加密 / 股票永续</span></h2>
+<p class="k">对象：流动性扫荡（sweep）、MSS、CISD、FVG 回补、溢价 / 折价区（p1–p3）、ERL 被扫、SMT。每个 setup 配“同币同向同几何、错位 6–48h”的随机对照。</p>
+<table>
+<tr><th>样本</th><th>信号</th><th>n</th><th>avgR</th><th>对照 avgR</th><th>差</th></tr>
+<tr><td>加密 30 币 5m ~120 天</td><td>sweep/any</td><td>18134</td><td>−0.149</td><td>−0.181</td><td>+0.03</td></tr>
+<tr><td>加密 100 币（剔除缺口币）</td><td>sweep/any</td><td>82950</td><td>−0.112</td><td>−0.122</td><td>+0.010 ± 0.007</td></tr>
+<tr><td>同上</td><td>sweep/erl_swept</td><td>10632</td><td>−0.141</td><td>−0.197</td><td>+0.056 ± 0.019</td></tr>
+<tr><td>同上</td><td>cisd/any、mss/any</td><td>35.8k</td><td>−0.12 ~ −0.13</td><td>−0.11</td><td>−0.02 ~ −0.03</td></tr>
+<tr><td>股票永续</td><td>sweep/any</td><td>23941</td><td>−0.211</td><td>−0.260</td><td>+0.049 ± 0.013</td></tr>
+</table>
+<ul>
+<li>个别子条件（ERL 被扫、SMT）相对对照有 +0.05 左右的小幅差，但绝对 avgR 仍为负，扣费后亏损；p1 区间相对对照为 −0.15。</li>
+<li>111k 个 setup 的绝对结果一致为负：胜率 ~33%、盈亏比 ~1.6、PF 0.75–0.85。</li>
+</ul>
+<p><b>结论：</b>ICT 单独使用没有可交易 edge。</p>
+<p class="src">脚本：<code>scripts/backtest/{ict,ict_bt,ict_fetch,ict_study}.py</code> · 提交 20d7083f、d024f15b、fdf49994 · 报告：side-session-notes 下 <code>ict_*_report.txt</code></p>
+</article>
+
+<article data-v="no">
+<h2>ICT 叠加到 nofx 的 AI 开仓信号上 <span class="tag t-no">没有帮助</span><span class="dom">加密 · AI 信号</span></h2>
+<p class="k">用 2026-09-12 ~ 10-12 的 420 个 AI 开仓信号（可回测 317 个），按“近 4h 有 sweep / MSS / CISD / FVG 回补 / 位置是否折价做多”分组。</p>
+<table>
+<tr><th>分组</th><th>n</th><th>avgR</th><th>胜率</th></tr>
+<tr><td>全部 AI 信号</td><td>317</td><td>−0.031 ± 0.056</td><td>55%</td></tr>
+<tr><td>近 4h 有 sweep</td><td>239</td><td>−0.057 ± 0.064</td><td>54%</td></tr>
+<tr><td>近 4h 有 MSS</td><td>164</td><td>−0.096 ± 0.077</td><td>53%</td></tr>
+<tr><td>无 ICT 触发</td><td>62</td><td>+0.104 ± 0.127</td><td>61%</td></tr>
+<tr><td>ICT 触发 &amp; 位置合理</td><td>32</td><td>−0.083 ± 0.179</td><td>53%</td></tr>
+</table>
+<p>有 ICT 触发的信号反而略差，且样本小、SE 大于差距。</p>
+<p><b>结论：</b>ICT 不能提升现有 AI 信号质量。作为提示词参考字段保留 <code>liquidity_sweep</code>（<code>enable_liquidity_sweep</code>，<b>默认关闭</b>，仅作参考证据）。</p>
+<p class="src">提交 d63cca06（kernel 可选字段）· 报告：<code>ict_A_aisignals_report.txt</code></p>
+</article>
+
+<div class="day">2026-10-17</div>
+
+<article data-v="ok">
+<h2>美股市场状态仓位缩放（regime overlay） <span class="tag t-ok">已采用 basket_vol</span><span class="dom">美股 · 组合</span></h2>
+<p class="k">在动量 Top-10 组合上叠加：已实现波动分位（RV_PCT / RV_RATIO）、广度（BREADTH）、VIX 期限结构、动量篮子波动（BASKET_VOL）、组合（COMBO），以及硬开关版本。Backtrader 日线，佣金 0.10%/边，无滑点。</p>
+<table>
+<tr><th>策略</th><th>CAGR</th><th>Sharpe</th><th>MaxDD</th><th>曝险</th></tr>
+<tr><td>MOM_TOP + NONE</td><td>94.7%</td><td>1.510</td><td>51.4%</td><td>98%</td></tr>
+<tr><td><b>MOM_TOP + BASKET_VOL</b></td><td>77.3%</td><td><b>1.690</b></td><td><b>29.5%</b></td><td>80%</td></tr>
+<tr><td>MOM_TOP + RV_PCT</td><td>76.1%</td><td>1.484</td><td>37.0%</td><td>83%</td></tr>
+<tr><td>MOM_TOP + VIX_TS</td><td>78.4%</td><td>1.431</td><td>50.0%</td><td>90%</td></tr>
+<tr><td>MOM_TOP + BREADTH</td><td>61.8%</td><td>1.318</td><td>36.3%</td><td>86%</td></tr>
+<tr><td>HARD_RV / HARD_VIX / HARD_BREADTH</td><td>62–68%</td><td>1.27–1.35</td><td>38–51%</td><td>81–93%</td></tr>
+</table>
+<p><b>结论：</b>只有 BASKET_VOL 同时提高 Sharpe 并把回撤从 51% 压到 30%；硬开关因换手高、成本重，均不如连续缩放。绝对收益含幸存者偏差（见下条），应看相对改善。</p>
+<p class="src">提交 a1a5f37c（回测）、0ddbad23（<code>us_stock</code> 上线 basket_vol）· 报告：<code>docs/research/2026-10-17-regime-overlay-backtrader-1d.md</code></p>
+</article>
+
+<div class="day">2026-10-16</div>
+
+<article data-v="part">
+<h2>MA20/60 双均线规则 vs 动量选股（美股组合） <span class="tag t-part">均线规则不占优</span><span class="dom">美股 · 组合</span></h2>
+<table>
+<tr><th>策略</th><th>CAGR</th><th>Sharpe</th><th>MaxDD</th><th>交易数</th><th>胜率</th></tr>
+<tr><td>MOM_TOP</td><td>94.7%</td><td>1.510</td><td>51.4%</td><td>175</td><td>54%</td></tr>
+<tr><td>MOM_X_MA（动量 × 均线过滤）</td><td>59.6%</td><td>1.391</td><td>34.8%</td><td>183</td><td>51%</td></tr>
+<tr><td>MA2060_RULES</td><td>51.1%</td><td>1.223</td><td>40.9%</td><td>688</td><td>35%</td></tr>
+<tr><td>MA_CROSS</td><td>43.1%</td><td>1.090</td><td>46.3%</td><td>163</td><td>41%</td></tr>
+<tr><td>等权买入持有 EW_BH</td><td>55.6%</td><td>1.520</td><td>32.6%</td><td>0</td><td>—</td></tr>
+<tr><td>SPY 买入持有</td><td>17.3%</td><td>1.078</td><td>18.8%</td><td>0</td><td>—</td></tr>
+</table>
+<p><b>结论：</b>20/60 规则交易 688 次、胜率 35%，Sharpe 低于等权持有；宇宙是当前上市的 bStock 名单，存在幸存者偏差，等权持有本身就跑出 55%。均线只适合作过滤，不适合作为主信号。同时验证了 1h 版本。</p>
+<p class="src">提交 0cd412af（改用 Backtrader，移除自写 <code>cmd/ma2060bt</code>）、28de52a3 · 报告：<code>docs/research/2026-10-16-ma2060-backtrader-{1d,1h}.md</code></p>
+</article>
+
+<div class="day">2026-10-15</div>
+
+<article data-v="no">
+<h2>Kell 价格周期扫描分（美股） <span class="tag t-no">无正向 edge</span><span class="dom">美股 · 排序</span></h2>
+<p class="k">对生产用 <code>stockengine.ClassifyCycle</code> 评分做 IC 检验：77 个 bStock 标的、2022-08 ~ 2026-09、1020 个日期，目标为 β×SPY 残差收益，信号滞后 1 日。</p>
+<ul>
+<li>10 日残差 Spearman IC = <b>−0.014</b>（NW t −1.91）；5 / 20 日同为负（t −2.3 / −2.8）。</li>
+<li>LongSetup 标的比其余低 0.84% / 10 日（t −3.31）；Top-10 超额 −21%/年，扣 10bp 成本后 −25%。</li>
+<li>相位事件：“买点”相位最差（wedge_pop ≈ 0%，ema_crossback +0.11%）；uptrend +1.07%、exhaustion_extension +1.71% 最好——在该宇宙里是动量有效，不是回踩入场。</li>
+</ul>
+<p><b>结论：</b>当前扫描排名未经证实，任何改造都要先过 <code>cmd/cycleic</code>。</p>
+<p class="src">工具：<code>cmd/cycleic</code> · 报告：<code>docs/research/2026-10-15-kell-cycle-ic.md</code></p>
+</article>
+
+<article data-v="ok">
+<h2>动量类信号 IC（mom12_1 / rs63 / trend_rs / ext10 / sma200_mom） <span class="tag t-ok">动量有支持</span><span class="dom">美股 · 排序</span></h2>
+<table>
+<tr><th>信号</th><th>10d IC</th><th>NW t</th><th>备注</th></tr>
+<tr><td>mom12_1</td><td>+0.045</td><td>2.36</td><td>非重叠 t 2.13，5 年全为正，换手 15%</td></tr>
+<tr><td><b>sma200_mom</b></td><td>+0.049</td><td>2.59</td><td>先站上 SMA200 再按 12-1 排序；20d IC +0.066；换手 19%</td></tr>
+<tr><td>trend_mom</td><td>+0.045</td><td>2.69</td><td>2022 年为负，换手 43%</td></tr>
+<tr><td>trend_rs</td><td>+0.030</td><td>1.82</td><td>不显著</td></tr>
+<tr><td>rs63</td><td>+0.025</td><td>1.43</td><td>与 ret63 截面等价</td></tr>
+<tr><td>ext10</td><td>+0.016</td><td>—</td><td>不显著</td></tr>
+</table>
+<p><b>结论：</b>12-1 动量是唯一显著、跨年稳定的信号；趋势过滤版略好但与朴素版差异在噪声内。Top-N 组合 +35 ~ 40%/年的超额含幸存者偏差，只信 IC 符号与一致性，不信收益水平。</p>
+<p class="src">报告：<code>docs/research/2026-10-15-{momentum-signals,trend-momentum}-ic.md</code></p>
+</article>
+
+<div class="day">2026-10-13 ~ 10-15</div>
+
+<article data-v="part">
+<h2>加密开仓 / 平仓规则回测（决策记录重放） <span class="tag t-part">差异多在噪声内</span><span class="dom">加密 · 执行规则</span></h2>
+<p class="k">信号来源：decision_records，约 420 个（2026-09-12 ~ 10-12，60 分钟去重）；每笔 σ ≈ 1R，sumR 标准误约 20R。</p>
+<ul>
+<li><b>重叠约束是关键：</b>不限制同币同向单仓时，市价入场与“纯 SL/TP”出场看起来好很多（+17R / +57R）；加上现实约束后差异缩回噪声，之前的结论被推翻。现为默认。</li>
+<li>市价 vs 限价入场：约持平；因此 10-12 修复了 <code>limit_entry_enabled=false</code> 时仍按限价的问题（cd81a9b1），上线 1–2 周后需用该工具复盘。</li>
+<li>出场：最一致（仍弱）的信号是<b>过早保本档</b>（breakeven_arm_r 0.75）在市价入场的两个半段都有害。</li>
+<li>quick 模式时间止损（4h）：全部强制 quick 时 −1.1R vs −9.5R，回撤减半；实际只有约 7 个信号用到，影响很小，<b>保留</b>。</li>
+<li>AI 平仓 vs 程序规则：25 笔历史 ai_close 从真实入场回放——实际 −9.1R，按程序规则持有 −12.4R，纯 SL/TP −14.9R；19/25 笔 AI 平仓更好。se≈3.5R，偏弱，但没有理由限制 AI 平仓。</li>
+</ul>
+<p><b>结论：</b>真正的问题是入场 edge（strategy_health NO_EDGE，PF≈1.0），不是出场。</p>
+<p class="src">提交 41382354（<code>scripts/backtest</code>）· 记忆：backtest-findings-2026-10</p>
+</article>
+
+<article data-v="no">
+<h2>信号过滤器（meta-labeling） <span class="tag t-no">无可部署过滤器</span><span class="dom">加密 · AI 信号</span></h2>
+<p>420 个信号 × 67 个入场时特征（Structured Signal JSON），标签 = 模拟 R。walk-forward logit / ridge / HGB 样本外 AUC 仅 <b>0.43–0.54</b>。一个 logit 前 50% 切分看似显著（p=0.007），但在多重检验后失效，换标签后翻转；严格嵌套 walk-forward（特征选择只用过去数据）p≈0.5。<code>btc_beta</code>（低 beta 更好）只在事后挑选时有效。</p>
+<p><b>结论：</b>此样本量下没有可部署的统计过滤。累计 ~1000+ 信号后用嵌套流程重测。</p>
+<p class="src">记忆：backtest-findings-2026-10</p>
+</article>
+
+<div class="day">2026-10-07</div>
+
+<article data-v="no">
+<h2>Quant Trading Vault 策略族（每 5 分钟跑规则、AI 开仓） <span class="tag t-no">0/6 族通过</span><span class="dom">加密 + 股票永续</span></h2>
+<p>6 个策略族代表 × 加密 1h/4h + Binance TradFi 股票永续 15m/1h，计入成本与资金费。无一通过；唯一零成本下通过的是股票 15m RSI 均值回归，每单位换手仅约 1.5bp edge，无法交易。股票永续 2026-01-28 才上线，样本短。</p>
+<p><b>结论：</b>不接入 nofx 信号层；至多把低换手的加密趋势特征作为 shadow-only 输入。</p>
+<p class="src">仓库（nofx 外）：<code>~/workspace/quant-vault-research/</code>（REPORT.md、wf_harness.py）</p>
+</article>
+
+</div>
+</div>
+
+<script>
+(function(){
+  var arts=[].slice.call(document.querySelectorAll('article'));
+  var days=[].slice.call(document.querySelectorAll('.day'));
+  var n=function(v){return arts.filter(function(a){return a.dataset.v===v}).length};
+  document.getElementById('sum').innerHTML=
+    '<div><b>'+arts.length+'</b><span>已记录的思路</span></div>'+
+    '<div><b>'+n('no')+'</b><span>无优势</span></div>'+
+    '<div><b>'+n('part')+'</b><span>有信号但不足以上线</span></div>'+
+    '<div><b>'+n('ok')+'</b><span>已采用 / 有支持</span></div>'+
+    '<div><b>'+n('run')+'</b><span>进行中</span></div>';
+  document.getElementById('bar').addEventListener('click',function(e){
+    var b=e.target.closest('button');if(!b)return;
+    [].forEach.call(this.children,function(x){x.classList.toggle('on',x===b)});
+    var f=b.dataset.f;
+    arts.forEach(function(a){a.classList.toggle('hide',f!=='all'&&a.dataset.v!==f)});
+    days.forEach(function(d){
+      var el=d.nextElementSibling,any=false;
+      while(el&&!el.classList.contains('day')){if(el.tagName==='ARTICLE'&&!el.classList.contains('hide'))any=true;el=el.nextElementSibling}
+      d.classList.toggle('hide',!any);
+    });
+  });
+})();
+</script>
+</body>
+</html>

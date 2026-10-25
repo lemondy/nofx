@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { t, type Language } from '../../i18n/translations'
 import { toast } from 'sonner'
+import { Lock } from 'lucide-react'
+import { Button } from '../ui'
 import { WebCryptoEnvironmentCheck } from '../common/WebCryptoEnvironmentCheck'
 
 const DEFAULT_LENGTH = 64
@@ -178,18 +180,19 @@ export function TwoStageKeyModal({
     if (!isOpen) return null
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#EFECE1]">
-        <div className="bg-[#ECE8DB] p-8 rounded-xl max-w-lg w-full mx-4 border border-nofx-line shadow-lg">
-          <div className="text-center mb-6">
-            <h2 className="text-xl font-bold text-[#1E1E1A] mb-2">
-              🔐 {t('twoStageKey.title', language)}
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)]">
+        <div className="mx-4 w-full max-w-lg rounded-lg border border-line bg-surface p-5 shadow-[var(--shadow)]">
+          <div className="mb-4 text-center">
+            <h2 className="mb-1 flex items-center justify-center gap-2 text-base font-semibold text-fg">
+              <Lock size={16} className="text-brand" />
+              {t('twoStageKey.title', language)}
               {contextLabel && (
-                <span className="text-[#3A3A32] text-base font-normal ml-2">
+                <span className="ml-1 text-[13px] font-normal text-fg-3">
                   ({contextLabel})
                 </span>
               )}
             </h2>
-            <p className="text-[#3A3A32] text-sm">
+            <p className="text-[13px] text-fg-3">
               {stage === 1
                 ? t('twoStageKey.stage1Description', language, {
                     length: expectedPart1Length,
@@ -200,15 +203,15 @@ export function TwoStageKeyModal({
             </p>
           </div>
 
-          <div className="mb-6">
+          <div className="mb-4">
             <WebCryptoEnvironmentCheck language={language} variant="compact" />
           </div>
 
           {/* Stage 1 */}
           {stage === 1 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <label className="block text-[#3A3A32] text-sm mb-2">
+                <label className="mb-1 block text-xs font-medium text-fg-3">
                   {t('twoStageKey.stage1InputLabel', language)} (
                   {expectedPart1Length} {t('twoStageKey.characters', language)})
                 </label>
@@ -218,60 +221,57 @@ export function TwoStageKeyModal({
                   value={part1}
                   onChange={(e) => setPart1(e.target.value)}
                   placeholder="0x1234..."
-                  className="w-full bg-[#E4E0D0] border border-[#A69E86] rounded-lg px-4 py-3 text-[#1E1E1A] font-mono text-sm focus:border-nofx-gold focus:outline-none"
+                  className="num h-8 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-fg outline-none hover:border-line-strong focus:border-brand focus:ring-1 focus:ring-brand/40"
                   maxLength={expectedPart1Length + 2} // +2 for optional 0x prefix
                   disabled={processing}
                 />
               </div>
 
-              {error && <div className="text-nofx-danger text-sm">{error}</div>}
+              {error && <div className="text-[13px] text-down">{error}</div>}
 
-              <div className="flex gap-3">
-                <button
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
                   onClick={handleStage1Next}
                   disabled={
                     (part1.startsWith('0x') ? part1.slice(2) : part1).length <
                       expectedPart1Length || processing
                   }
-                  className="flex-1 bg-nofx-gold hover:bg-[#C9A227] disabled:bg-[#B3AB92] text-white font-medium py-3 px-4 rounded-lg transition-colors"
+                  className="flex-1"
                 >
                   {processing
                     ? t('twoStageKey.processing', language)
                     : t('twoStageKey.nextButton', language)}
-                </button>
-                <button
-                  onClick={onCancel}
-                  disabled={processing}
-                  className="px-6 py-3 text-[#3A3A32] hover:text-[#1E1E1A] border border-[#A69E86] rounded-lg transition-colors"
-                >
+                </Button>
+                <Button onClick={onCancel} disabled={processing}>
                   {t('twoStageKey.cancelButton', language)}
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {/* Transition Message */}
           {stage === 2 && clipboardStatus !== 'idle' && (
-            <div className="mb-4 p-4 rounded-lg bg-nofx-gold/10 border border-nofx-gold/40">
+            <div className="mb-3 rounded-md border border-brand/30 bg-brand-soft p-3">
               {clipboardStatus === 'copied' && (
-                <div className="text-[#1E1E1A]">
+                <div className="text-fg">
                   <div className="font-medium">
                     {t('twoStageKey.obfuscationCopied', language)}
                   </div>
-                  <div className="text-sm mt-1">
+                  <div className="mt-1 text-[13px]">
                     {t('twoStageKey.obfuscationInstruction', language)}
                   </div>
                 </div>
               )}
               {clipboardStatus === 'failed' && manualObfuscationValue && (
-                <div className="text-[#8A6D1F]">
+                <div className="text-brand">
                   <div className="font-medium">
                     {t('twoStageKey.obfuscationManual', language)}
                   </div>
-                  <div className="text-xs mt-2 p-2 bg-[#E4E0D0] rounded font-mono break-all border">
+                  <div className="num mt-2 break-all rounded-md border border-line bg-surface-2 p-2 text-xs">
                     {manualObfuscationValue}
                   </div>
-                  <div className="text-sm mt-1">
+                  <div className="mt-1 text-[13px]">
                     {t('twoStageKey.obfuscationInstruction', language)}
                   </div>
                 </div>
@@ -281,9 +281,9 @@ export function TwoStageKeyModal({
 
           {/* Stage 2 */}
           {stage === 2 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <label className="block text-[#3A3A32] text-sm mb-2">
+                <label className="mb-1 block text-xs font-medium text-fg-3">
                   {t('twoStageKey.stage2InputLabel', language)} (
                   {expectedPart2Length} {t('twoStageKey.characters', language)})
                 </label>
@@ -293,30 +293,29 @@ export function TwoStageKeyModal({
                   value={part2}
                   onChange={(e) => setPart2(e.target.value)}
                   placeholder="...5678"
-                  className="w-full bg-[#E4E0D0] border border-[#A69E86] rounded-lg px-4 py-3 text-[#1E1E1A] font-mono text-sm focus:border-nofx-gold focus:outline-none"
+                  className="num h-8 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-fg outline-none hover:border-line-strong focus:border-brand focus:ring-1 focus:ring-brand/40"
                   maxLength={expectedPart2Length + 2}
                 />
               </div>
 
-              {error && <div className="text-nofx-danger text-sm">{error}</div>}
+              {error && <div className="text-[13px] text-down">{error}</div>}
 
-              <div className="flex gap-3">
-                <button
+              <div className="flex gap-2">
+                <Button
+                  variant="up"
                   onClick={handleStage2Complete}
                   disabled={
                     (part2.startsWith('0x') ? part2.slice(2) : part2).length <
                     expectedPart2Length
                   }
-                  className="flex-1 bg-nofx-success hover:bg-[#256944] disabled:bg-[#B3AB92] text-white font-medium py-3 px-4 rounded-lg transition-colors"
+                  className="flex-1"
                 >
-                  🔒 {t('twoStageKey.encryptButton', language)}
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="px-6 py-3 text-[#3A3A32] hover:text-[#1E1E1A] border border-[#A69E86] rounded-lg transition-colors"
-                >
+                  <Lock size={14} />
+                  {t('twoStageKey.encryptButton', language)}
+                </Button>
+                <Button onClick={handleReset}>
                   {t('twoStageKey.backButton', language)}
-                </button>
+                </Button>
               </div>
             </div>
           )}

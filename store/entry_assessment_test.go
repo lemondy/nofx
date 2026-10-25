@@ -27,7 +27,7 @@ func TestEntryAssessmentBucketStats(t *testing.T) {
 		}
 	}
 	journal := []TradeJournalDB{
-		{TraderID: "T1", Symbol: "NEARUSDT", Side: "LONG", EntryTime: now.Add(-2*time.Hour + 30*time.Minute).UnixMilli(), RealizedPnL: 1.2, PnLPct: 6.0},
+		{TraderID: "T1", Symbol: "NEARUSDT", Side: "LONG", EntryTime: now.Add(-2*time.Hour + 30*time.Minute).UnixMilli(), RealizedPnL: 1.2, PnLPct: 6.0, AIManaged: func() *bool { b := true; return &b }()}, // legacy join requires AI ownership (review 2026-10-08 H)
 	}
 	for _, j := range journal {
 		if err := st.EntryAssessment().db.Create(&j).Error; err != nil {

@@ -40,6 +40,19 @@ vi.mock('../components/strategy/GridConfigEditor', () => ({
   GridConfigEditor: () => null,
   defaultGridConfig: {},
 }))
+vi.mock('../components/strategy/StockConfigEditor', () => ({
+  StockConfigEditor: ({ config }: any) => (
+    <pre data-testid="stock-editor">{JSON.stringify(config)}</pre>
+  ),
+  defaultStockConfig: {
+    symbols: [],
+    sessions: { regular: true },
+    paper_trading: true,
+  },
+}))
+vi.mock('../components/strategy/VersionsPanel', () => ({
+  VersionsPanel: () => <div data-testid="versions-panel" />,
+}))
 vi.mock('../components/strategy/TokenEstimateBar', () => ({
   TokenEstimateBar: () => null,
 }))
@@ -249,4 +262,43 @@ test('save advances only its own version and retains newer drafts on external re
   expect(writes[1].config.language).toBe('zh')
   await screen.findByText(/本地草稿已保留/)
   expect(screen.getByDisplayValue('Newer local draft')).toBeInTheDocument()
+})
+
+test('selecting US stocks shows StockConfigEditor with paper-on defaults and hides crypto sections', async () => {
+  installFetch()
+  render(<StrategyStudioPage />)
+  await screen.findByText('Saved Custom')
+  // ai_trading: crypto sections visible, stock editor absent
+  expect(screen.getByText('coinSource')).toBeInTheDocument()
+  expect(screen.getByText('riskControl')).toBeInTheDocument()
+  expect(screen.queryByTestId('stock-editor')).not.toBeInTheDocument()
+  // crypto strategies keep the prompt preview / AI test tabs
+  expect(screen.getByText('promptPreview')).toBeInTheDocument()
+  expect(screen.getByText('aiTestRun')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByTestId('strategy-type-us-stock'))
+
+  // us_stock prompts are built at run time: the crypto-engine tabs are hidden
+  expect(screen.queryByText('promptPreview')).not.toBeInTheDocument()
+  expect(screen.queryByText('aiTestRun')).not.toBeInTheDocument()
+  expect(screen.getByText('stockPromptRuntimeNote')).toBeInTheDocument()
+  expect(screen.getByTestId('versions-panel')).toBeInTheDocument()
+
+  expect(screen.getByTestId('stock-editor')).toHaveTextContent(
+    '"paper_trading":true'
+  )
+  expect(screen.getByTestId('stock-editor')).toHaveTextContent('"symbols":[]')
+  expect(screen.getByText('stockConfig')).toBeInTheDocument()
+  for (const hidden of [
+    'coinSource',
+    'indicators',
+    'riskControl',
+    'promptSections',
+    'customPrompt',
+    'gridConfig',
+  ]) {
+    expect(screen.queryByText(hidden)).not.toBeInTheDocument()
+  }
+  // publish settings stay available for every strategy type
+  expect(screen.getByText('publishSettings')).toBeInTheDocument()
 })

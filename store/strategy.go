@@ -103,7 +103,8 @@ func (Strategy) TableName() string { return "strategies" }
 
 // StrategyConfig strategy configuration details (JSON structure)
 type StrategyConfig struct {
-	// Strategy type: "ai_trading" (default) or "grid_trading"
+	// Strategy type: "ai_trading" (default), "grid_trading" or "us_stock"
+	// (US equities via Binance spot bStock pairs, see StockConfig).
 	StrategyType string `json:"strategy_type,omitempty"`
 
 	// language setting: "zh" for Chinese, "en" for English
@@ -139,7 +140,91 @@ type StrategyConfig struct {
 
 	// Grid trading configuration (only used when StrategyType == "grid_trading")
 	GridConfig *GridStrategyConfig `json:"grid_config,omitempty"`
+
+	// US-stock configuration (only used when StrategyType == "us_stock").
+	StockConfig *StockConfig `json:"stock_config,omitempty"`
 }
+
+// StrategyTypeUSStock selects the US-equity strategy: long-only spot trading
+// of Binance bStock pairs (AAPLBUSDT, SPYBUSDT, ...), driven by its own run
+// cycle (design: docs/architecture/US_STOCK_BSTOCK_DESIGN_2026-10-09.md).
+const StrategyTypeUSStock = "us_stock"
+
+// StockConfig is the us_stock strategy configuration. Zero values mean "use
+// the preset default" (see StockPresetSwing / StockPresetPosition); the
+// resolvers live next to Validate.
+type StockConfig struct {
+	// Symbols: Binance spot bStock pairs to trade, e.g. "AAPLBUSDT". In hybrid
+	// mode they are always included; scan mode ignores them.
+	Symbols []string `json:"symbols"`
+	// SymbolSource: "manual" (default; trade Symbols), "scan" (only the top
+	// ScanTopN long setups of Kell's price-cycle scan over every listed bStock
+	// pair, plus held names; Symbols ignored) or "hybrid" (Symbols always, plus
+	// the top ScanTopN scanner picks and held names).
+	SymbolSource string   `json:"symbol_source,omitempty"`
+	ScanTopN     int      `json:"scan_top_n,omitempty"`   // scan mode; 0 = default 10, max 50
+	ScanExclude  []string `json:"scan_exclude,omitempty"` // pairs the scanner never picks
+	// ScanRank: scan/hybrid ranking — "kell" (default; Kell cycle long setups
+	// by score) or "momentum" (names above SMA200 ranked by 12-1 momentum).
+	ScanRank string `json:"scan_rank,omitempty"`
+	// Preset: "swing" (default; days–weeks, 1d trend / 1h entry, decisions
+	// hourly at 09:45, 10:30 … 15:30 ET) or "position" (weeks–months, 1w trend
+	// / 1d entry, one decision at 15:30 ET).
+	Preset string `json:"preset,omitempty"`
+	// DecisionTimes overrides the preset's decision slots: "HH:MM" America/New_York
+	// on trading days (e.g. ["09:45","12:30","15:30"] for the old three-a-day
+	// rhythm). Invalid entries are dropped; empty/all-invalid = preset default.
+	DecisionTimes []string `json:"decision_times,omitempty"`
+	// Sessions in which NEW exposure (open/add) may be taken. Exits and
+	// stop management run in every session. Default: regular only.
+	Sessions StockSessions `json:"sessions"`
+	// DataFallbackYahoo: when a timeframe has too few closed bStock bars,
+	// use the underlying's Yahoo Finance series for that timeframe. nil = true.
+	DataFallbackYahoo *bool `json:"data_fallback_yahoo,omitempty"`
+	// MaxDivergencePct: block opens when |bStock − underlying| / underlying
+	// exceeds this percent. 0 = default 1.0; negative = check disabled.
+	MaxDivergencePct float64 `json:"max_divergence_pct,omitempty"`
+	// Position limits, percent of account equity. 0 = default.
+	MaxPositionPct      float64 `json:"max_position_pct,omitempty"`       // default 20
+	MaxTotalExposurePct float64 `json:"max_total_exposure_pct,omitempty"` // default 80
+	MaxPositions        int     `json:"max_positions,omitempty"`          // default 5
+	// RiskPerTradePct: loss at the stop, percent of equity. 0 = default 1.0.
+	RiskPerTradePct float64 `json:"risk_per_trade_pct,omitempty"`
+	// Stop distance band in ATR(1d) multiples. 0 = preset default
+	// (swing 1.5–3.0, position 2.0–4.0).
+	StopATRMin float64 `json:"stop_atr_min,omitempty"`
+	StopATRMax float64 `json:"stop_atr_max,omitempty"`
+	// PaperTrading: run data, decisions and risk checks but place no orders.
+	// nil = true (first launch is paper by default — user decision 2026-10-09).
+	PaperTrading *bool `json:"paper_trading,omitempty"`
+	// RegimeScaler: market-state position scaler. "" / "off" = disabled
+	// (default); "basket_vol" scales the risk budget, per-symbol cap and total
+	// exposure cap of NEW entries by s = clip(target_vol / σ_basket, floor, 1),
+	// σ_basket being the annualized volatility of the equal-weight top-10
+	// momentum basket over the last 21 sessions (backtest: 2026-10-17-regime-
+	// overlay-backtrader-1d.md).
+	RegimeScaler string `json:"regime_scaler,omitempty"`
+	// RegimeTargetVolPct: target annualized basket volatility in percent.
+	// 0 = default 40; valid 10–150.
+	RegimeTargetVolPct float64 `json:"regime_target_vol_pct,omitempty"`
+	// RegimeFloor: lower bound of the scale s. 0 = default 0.25; valid 0.05–1.
+	RegimeFloor float64 `json:"regime_floor,omitempty"`
+	// RegimeTrim: trim held program-owned positions when s falls (by at least
+	// the 0.20 band from the last applied scale). nil = true.
+	RegimeTrim *bool `json:"regime_trim,omitempty"`
+}
+
+// StockSessions toggles the US sessions in which opens/adds are allowed.
+type StockSessions struct {
+	Regular    *bool `json:"regular,omitempty"`     // 09:30–16:00 ET; nil = true
+	PreMarket  bool  `json:"pre_market,omitempty"`  // 04:00–09:30 ET
+	AfterHours bool  `json:"after_hours,omitempty"` // 16:00–20:00 ET
+}
+
+const (
+	StockPresetSwing    = "swing"
+	StockPresetPosition = "position"
+)
 
 // GridStrategyConfig grid trading specific configuration
 type GridStrategyConfig struct {
@@ -218,6 +303,13 @@ type CoinSourceConfig struct {
 	UsePiggyDash       bool   `json:"use_piggy_dash"`
 	PiggyDashLimit     int    `json:"piggy_dash_limit,omitempty"`
 	PiggyDashDirection string `json:"piggy_dash_direction,omitempty"` // "", "breakout", "breakdown"
+	// Minimum breakout-engine grade a signal needs to enter the piggy_dash
+	// pool: "weak" | "medium" | "strong"; empty = default "medium" (see
+	// EffectivePiggyDashMinGrade). Backtest (data/breakout_backtest.json, 1104
+	// signals, 24h net mean): weak 897 signals, 31.9% win, -0.73%; medium 189,
+	// 48.2%, +1.30%; strong 18, 88.9%, +2.22%. Default raised from weak at
+	// review 2026-10-11.
+	PiggyDashMinGrade string `json:"piggy_dash_min_grade,omitempty"`
 	// whether to use the "short scan" source (做空扫描: top 24h gainers ranked
 	// by short-suitability score computed from Binance indicators)
 	UseShortScan bool `json:"use_short_scan"`
@@ -239,6 +331,11 @@ type CoinSourceConfig struct {
 	// Cap on EXTRA history-pool symbols analyzed per scan (each costs ~6
 	// fapi calls every 5 min). 0 = built-in default (30).
 	ShortScanHistoryMax int `json:"short_scan_history_max,omitempty"`
+	// Short-scan pool quality floor: candidates scoring below this short
+	// score (0-100) are kept out of the pool. 0 = built-in default (55,
+	// review 2026-10-07 S1). Applied every cycle; a strategy save reloads
+	// the traders using it, so changes take effect without a restart.
+	ShortScanMinScore float64 `json:"short_scan_min_score,omitempty"`
 	// whether to use Hyperliquid All coins (all available perp pairs)
 	UseHyperAll bool `json:"use_hyper_all"`
 	// whether to use Hyperliquid Main coins (top N by 24h volume)
@@ -246,6 +343,22 @@ type CoinSourceConfig struct {
 	// Hyperliquid Main maximum count (default 20)
 	HyperMainLimit int `json:"hyper_main_limit,omitempty"`
 	// Note: API URLs are now built automatically using NofxOSAPIKey from IndicatorConfig
+}
+
+// DefaultShortScanMinScore is the built-in short-scan pool quality floor
+// applied when the per-strategy short_scan_min_score is unset (0).
+const DefaultShortScanMinScore = 55.0
+
+// EffectiveShortScanMinScore returns the configured short-scan quality floor,
+// falling back to DefaultShortScanMinScore when unset and capping at 100.
+func (c *CoinSourceConfig) EffectiveShortScanMinScore() float64 {
+	if c.ShortScanMinScore <= 0 {
+		return DefaultShortScanMinScore
+	}
+	if c.ShortScanMinScore > 100 {
+		return 100
+	}
+	return c.ShortScanMinScore
 }
 
 // DefaultMinOIValueMillions is the built-in OI-value floor applied when the
@@ -262,6 +375,22 @@ func (c *CoinSourceConfig) EffectiveMinOIMillions() float64 {
 	return c.MinOIValueMillions
 }
 
+// DefaultPiggyDashMinGrade is the built-in piggy_dash grade floor applied when
+// the per-strategy piggy_dash_min_grade is unset or unrecognised.
+const DefaultPiggyDashMinGrade = "medium"
+
+// EffectivePiggyDashMinGrade returns the configured piggy_dash grade floor
+// (lower-cased), falling back to DefaultPiggyDashMinGrade when unset or when
+// the value is not one of weak / medium / strong.
+func (c *CoinSourceConfig) EffectivePiggyDashMinGrade() string {
+	switch g := strings.ToLower(c.PiggyDashMinGrade); g {
+	case "weak", "medium", "strong":
+		return g
+	default:
+		return DefaultPiggyDashMinGrade
+	}
+}
+
 // IndicatorConfig indicator configuration
 type IndicatorConfig struct {
 	// K-line configuration
@@ -269,14 +398,16 @@ type IndicatorConfig struct {
 	// raw kline data (OHLCV) - always enabled, required for AI analysis
 	EnableRawKlines bool `json:"enable_raw_klines"`
 	// technical indicator switches
-	EnableEMA         bool `json:"enable_ema"`
-	EnableMACD        bool `json:"enable_macd"`
-	EnableRSI         bool `json:"enable_rsi"`
-	EnableATR         bool `json:"enable_atr"`
-	EnableBOLL        bool `json:"enable_boll"` // Bollinger Bands
-	EnableVolume      bool `json:"enable_volume"`
-	EnableOI          bool `json:"enable_oi"`           // open interest
-	EnableFundingRate bool `json:"enable_funding_rate"` // funding rate
+	EnableEMA            bool `json:"enable_ema"`
+	EnableMACD           bool `json:"enable_macd"`
+	EnableRSI            bool `json:"enable_rsi"`
+	EnableATR            bool `json:"enable_atr"`
+	EnableBOLL           bool `json:"enable_boll"`                      // Bollinger Bands
+	EnableLiquiditySweep bool `json:"enable_liquidity_sweep,omitempty"` // experimental reference evidence; default false
+	EnableFactorEnsemble bool `json:"enable_factor_ensemble,omitempty"` // experimental reference evidence; default false
+	EnableVolume         bool `json:"enable_volume"`
+	EnableOI             bool `json:"enable_oi"`           // open interest
+	EnableFundingRate    bool `json:"enable_funding_rate"` // funding rate
 	// EMA period configuration
 	EMAPeriods []int `json:"ema_periods,omitempty"` // default [20, 50]
 	// RSI period configuration
@@ -484,6 +615,19 @@ type RiskControlConfig struct {
 	// Simulated on the 09-17→09-24 cohort: arming at 0.5R ≈ +6.4R vs
 	// actual with zero winners scratched. (CODE ENFORCED when >0)
 	BreakevenArmR float64 `json:"breakeven_arm_r"`
+	// TPMaxR: take-profit cap in R (initial risk = |entry − stop_loss| of the
+	// open decision). The planned TP is clamped to the CLOSER of itself and
+	// entry ± TPMaxR × R before the order is routed (market or limit), so the
+	// exchange TP leg and the recorded TP both carry the capped price. Backtest
+	// 2026-10-11 (242 live trades replayed with the live exit rules): a 2R cap
+	// lifts expectancy by +0.024R/trade (paired 95% CI [+0.001, +0.049]),
+	// positive in both halves of every subset — the median planned TP is 2.6R
+	// and 79% of plans exceed 2R, but price rarely gets there. 0 = no cap
+	// (default); negative = no cap; values in (0, 1) are invalid (a cap below
+	// 1R would contradict min_risk_reward_ratio) and are treated as no cap.
+	// The capped plan must still satisfy min_risk_reward_ratio, else the open
+	// is rejected. Crypto USDT-M futures opens only. (CODE ENFORCED when ≥1)
+	TPMaxR float64 `json:"tp_max_r"`
 
 	// TpTrimAtR / TPFullAtR: R-based TP-ladder tiers — 2026-09-29 unit
 	// unification. The legacy tp_trim_profit_pct / tp_full_profit_pct price
@@ -523,9 +667,10 @@ type RiskControlConfig struct {
 	TpTrimYieldsToLock *bool `json:"tp_trim_yields_to_lock,omitempty"`
 	// EarlyCloseMinHours: AI-initiated closes before this many hours of hold
 	// time are blocked unless the 1h timeframe shows ≥2 closed candles against
-	// the position direction (trend-change evidence). Exchange SL/TP triggers
-	// and the drawdown-protect close bypass it by construction (neither is an
-	// AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
+	// the position direction (trend-change evidence), or profit reaches 0.5R
+	// (1.5% directional price profit without an opening-risk anchor). Exchange
+	// SL/TP triggers and the drawdown-protect close bypass it by construction
+	// (neither is an AI close decision). 0 = default 4h; negative = disabled. (CODE ENFORCED)
 	EarlyCloseMinHours int `json:"early_close_min_hours"`
 	// MaxEntrySlippageBps: the maximum ADVERSE fill slippage a MARKET open
 	// may realize vs its pre-trade checked price (F21c, 2026-10-01 review:
@@ -546,6 +691,37 @@ type RiskControlConfig struct {
 	// EMA20 are blocked (EMA20_STRETCH); the retest-anchor path is exempt.
 	// 0 = default 12; negative = off.
 	LongMaxEMA20DistPct float64 `json:"long_max_ema20_dist_pct"`
+	// ---- Anti-chase symmetric entry gates (Opus analysis of 273 live trades,
+	// 2026-10-11): entries far extended from the 1h EMA20, entries into an
+	// exhausted directional 1h RSI, entries after a big 4h move in the trade
+	// direction, and counter-trend entries far on the wrong side of the 1h
+	// EMA20 all lost heavily. Filtered set (all four gates) actual +0.003R vs
+	// rejected set -0.241R over the 273 trades. All four are symmetric
+	// (long/short mirror), measured from the gate's entry price, exempt for
+	// US-equity (bstock) symbols, and fail OPEN on missing data. ----
+	// ChaseMaxEMA20_1hPct: block an entry whose price is more than this many
+	// percent beyond the 1h EMA20 IN the trade direction (long: entry above
+	// the EMA20 by > X%; short: entry below it by > X%) -> CHASE_EMA20_1H_x_GT_y.
+	// Evidence: >8% in the trade direction -> next-4h -4.8%, win rate 32%.
+	// Unit: percent. 0 = default 6; negative = off. (CODE ENFORCED)
+	ChaseMaxEMA20_1hPct float64 `json:"chase_max_ema20_1h_pct"`
+	// CounterMaxEMA20_1hPct: block an entry whose price is more than this many
+	// percent on the WRONG side of the 1h EMA20 (long: entry below the EMA20 by
+	// > X% = knife-catching; short: entry above it by > X% = fading a pump)
+	// -> COUNTER_EMA20_1H_x_GT_y. Evidence: wrong side by > 2% -> next-4h -5.3%.
+	// Unit: percent. 0 = default 3; negative = off. (CODE ENFORCED)
+	CounterMaxEMA20_1hPct float64 `json:"counter_max_ema20_1h_pct"`
+	// EntryRSI1hMax: directional 1h RSI14 exhaustion cap. Long: block when the
+	// 1h RSI14 >= X; short: block when it <= 100-X -> RSI1H_EXHAUSTED_x.
+	// Evidence: directional RSI1h > 80 -> next-4h -2.25%.
+	// Unit: RSI points (0-100). 0 = default 78; negative = off. (CODE ENFORCED)
+	EntryRSI1hMax float64 `json:"entry_rsi1h_max"`
+	// ChaseMaxMove4hPct: block an entry after the price already moved more than
+	// this many percent over the last 4h IN the trade direction (long: +X% up;
+	// short: X% down) -> CHASE_MOVE4H_x_GT_y. Evidence: 4h move > 8% in the
+	// trade direction -> next-4h -3.1%.
+	// Unit: percent. 0 = default 6; negative = off. (CODE ENFORCED)
+	ChaseMaxMove4hPct float64 `json:"chase_max_move4h_pct"`
 	// BTCFilterLong: nil/true = altcoin longs need coin 24h return ≥ BTC's
 	// and BTC 4h closes not declining (BTC_WEAK_LONG).
 	BTCFilterLong *bool `json:"btc_filter_long,omitempty"`
@@ -758,6 +934,46 @@ func (r RiskControlConfig) EffectiveLongMaxEMA20DistPct() float64 {
 		return DefaultLongMaxEMA20DistPct
 	}
 	return r.LongMaxEMA20DistPct
+}
+
+// Anti-chase gate defaults (Opus analysis 2026-10-11, 273 live trades; see the
+// field docs on RiskControlConfig for the evidence numbers).
+const (
+	DefaultChaseMaxEMA20_1hPct   = 6.0
+	DefaultCounterMaxEMA20_1hPct = 3.0
+	DefaultEntryRSI1hMax         = 78.0
+	DefaultChaseMaxMove4hPct     = 6.0
+)
+
+// antiChaseKnob resolves a 0=default / negative=off(0) / positive=value knob.
+func antiChaseKnob(v, def float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+// EffectiveChaseMaxEMA20_1hPct: 0/unset -> default 6 (%), negative -> 0 (off).
+func (r RiskControlConfig) EffectiveChaseMaxEMA20_1hPct() float64 {
+	return antiChaseKnob(r.ChaseMaxEMA20_1hPct, DefaultChaseMaxEMA20_1hPct)
+}
+
+// EffectiveCounterMaxEMA20_1hPct: 0/unset -> default 3 (%), negative -> 0 (off).
+func (r RiskControlConfig) EffectiveCounterMaxEMA20_1hPct() float64 {
+	return antiChaseKnob(r.CounterMaxEMA20_1hPct, DefaultCounterMaxEMA20_1hPct)
+}
+
+// EffectiveEntryRSI1hMax: 0/unset -> default 78, negative -> 0 (off).
+func (r RiskControlConfig) EffectiveEntryRSI1hMax() float64 {
+	return antiChaseKnob(r.EntryRSI1hMax, DefaultEntryRSI1hMax)
+}
+
+// EffectiveChaseMaxMove4hPct: 0/unset -> default 6 (%), negative -> 0 (off).
+func (r RiskControlConfig) EffectiveChaseMaxMove4hPct() float64 {
+	return antiChaseKnob(r.ChaseMaxMove4hPct, DefaultChaseMaxMove4hPct)
 }
 
 // EffectiveBTCFilterLong: nil/true = altcoin LONGs require the coin's 24h
@@ -1520,6 +1736,15 @@ func (r RiskControlConfig) EffectiveEntryRoundTripCostBps() float64 {
 		return r.EntryRoundTripCostBps
 	}
 	return 20
+}
+
+// EffectiveTPMaxR returns the take-profit cap in R, or 0 for "no cap"
+// (unset, negative, or the invalid (0, 1) range).
+func (r RiskControlConfig) EffectiveTPMaxR() float64 {
+	if r.TPMaxR < 1 {
+		return 0
+	}
+	return r.TPMaxR
 }
 
 func (r RiskControlConfig) EffectiveRiskPerTradePct() float64 {

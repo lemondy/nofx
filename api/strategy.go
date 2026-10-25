@@ -21,6 +21,27 @@ import (
 func validateStrategyConfig(config *store.StrategyConfig) []string {
 	var warnings []string
 
+	// US-stock strategies have their own config; the crypto NofxOS checks
+	// below do not apply. Hard errors are rejected earlier by
+	// StrategyConfig.Validate — what is reported here is non-fatal.
+	if config.StrategyType == store.StrategyTypeUSStock {
+		sc := config.StockConfig
+		if err := sc.Validate(); err != nil {
+			warnings = append(warnings, "US stock config invalid: "+err.Error())
+			return warnings
+		}
+		if !sc.IsPaper() {
+			warnings = append(warnings, "US stock strategy is in LIVE mode: orders will be placed on the Binance spot account.")
+		}
+		if sc.AllowPreMarket() || sc.AllowAfterHours() {
+			warnings = append(warnings, "Pre-market / after-hours opens are enabled: bStock liquidity is thin and may diverge from the underlying stock.")
+		}
+		if sc.EffectiveMaxDivergencePct() < 0 {
+			warnings = append(warnings, "Divergence guard is disabled: opens will not be blocked when bStock deviates from the underlying stock.")
+		}
+		return warnings
+	}
+
 	// Validate NofxOS API key if any NofxOS feature is enabled
 	if (config.Indicators.EnableQuantData || config.Indicators.EnableOIRanking ||
 		config.Indicators.EnableNetFlowRanking || config.Indicators.EnablePriceRanking) &&

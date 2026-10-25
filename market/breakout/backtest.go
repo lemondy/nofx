@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"time"
@@ -23,11 +24,14 @@ const (
 	// (below the 50..90 cutoff search range) so threshold tuning can see
 	// would-be trades of candidates LOOSER than the current threshold (F15).
 	btReplayScoreFloor = 45.0
-	btWarmupBars       = 260  // bars before the first scored bar (windows + levels)
-	btMinSample        = 40   // TRAIN-set minimum signals for a cutoff to be selectable
-	btVerifySample     = 15   // TEST-set minimum signals for a change to verify
-	btTrainSplit       = 0.7  // temporal walk-forward split (train share)
-	btCostRoundTrip    = 0.20 // % net cost per trade: 2×5bps taker fee + 2×5bps slippage
+	btWarmupBars       = 260 // bars before the first scored bar (windows + levels)
+	// Minimums count non-overlapping per-symbol trades. With 30 symbols and
+	// ~14 days (at most ~13 trades/symbol before the split), even after warmup
+	// and purge the 70/30 split can support 40 train / 15 test trades.
+	btMinSample     = 40   // TRAIN-set minimum trades for a cutoff to be selectable
+	btVerifySample  = 15   // TEST-set minimum trades for a change to verify
+	btTrainSplit    = 0.7  // temporal walk-forward split (train share)
+	btCostRoundTrip = 0.20 // % net cost per trade: 2×5bps taker fee + 2×5bps slippage
 )
 
 // BTSignal is one historical signal with forward outcomes.
@@ -65,14 +69,14 @@ type BacktestSummary struct {
 	// E2/A2 (QUANT_REVIEW 09-22): outcomes are NET of btCostRoundTrip, and
 	// parameter changes come from a temporal walk-forward split — cutoffs
 	// selected on the TRAIN segment must verify on the held-out TEST segment
-	// (bucket edge positive AND above the test-wide average) or they are
-	// rejected, not applied.
+	// on non-overlapping per-symbol trades (t >= 2, edge positive AND above
+	// the independent test baseline and incumbent) or they are rejected.
 	CandidateParams  *TunableParams `json:"candidate_params,omitempty"`
 	Applied          bool           `json:"applied"`
 	EvaluationScope  string         `json:"evaluation_scope"`
 	CostRoundTripPct float64        `json:"cost_round_trip_pct"`
-	TrainSignals     int            `json:"train_signals"`
-	TestSignals      int            `json:"test_signals"`
+	TrainSignals     int            `json:"train_signals"` // raw post-purge signals; cutoff trade n is in diagnostics
+	TestSignals      int            `json:"test_signals"`  // raw signals, retained for JSON compatibility
 	Verified         []string       `json:"verified,omitempty"`
 	Rejected         []string       `json:"rejected,omitempty"`
 }
@@ -144,14 +148,14 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 		// P1 fix (2026-09-26 review) — point-in-time levels: the old shape
 		// built levels ONCE from the FULL future daily/1h history, so early
 		// signals saw highs/lows/VPVR that had not formed yet (lookahead
-		// bias). Levels now rebuild at most once per UTC day from data
+		// bias). Levels now rebuild at most once per UTC hour from data
 		// SLICED to the signal time; a signal can never see a future bar.
 		if len(k15) <= btWarmupBars+btForwardBars24h {
 			logger.Warnf("Backtest %s: insufficient closed candles (%d)", sym, len(k15))
 			continue
 		}
 		now0 := time.UnixMilli(k15[btWarmupBars].OpenTime).Add(15 * time.Minute)
-		currentDay := now0.UTC().Truncate(time.Hour)
+		currentHour := now0.UTC().Truncate(time.Hour)
 		levels := buildLevels(sliceClosed(d1, now0, 24*time.Hour), sliceClosed(k1h, now0, time.Hour))
 
 		end := len(k15) - btForwardBars24h
@@ -165,8 +169,8 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			series := k15[:i+1]
 			barTime := time.UnixMilli(series[len(series)-1].OpenTime)
 			sigTime := barTime.Add(15 * time.Minute)
-			if day := sigTime.UTC().Truncate(time.Hour); day != currentDay {
-				currentDay = day
+			if hour := sigTime.UTC().Truncate(time.Hour); hour != currentHour {
+				currentHour = hour
 				levels = buildLevels(sliceClosed(d1, sigTime, 24*time.Hour), sliceClosed(k1h, sigTime, time.Hour))
 			}
 			levelsHere := levels
@@ -395,13 +399,14 @@ func TuneFromBacktest(symbols []string) (*BacktestSummary, error) {
 	// already optimal" — reporting success here let the scheduler write the
 	// 7-day marker on an empty run and silence tuning for a week. The
 	// summary is still persisted (observability), the error propagates.
-	if len(signals) < btMinSample {
-		summary.Changes = []string{fmt.Sprintf("STARVED: %d signals < %d minimum — no evaluation possible", len(signals), btMinSample)}
+	tradeN := len(independentTrades(signals, btReplayScoreFloor))
+	if tradeN < btMinSample {
+		summary.Changes = []string{fmt.Sprintf("STARVED: %d independent trades < %d minimum — no evaluation possible", tradeN, btMinSample)}
 		if err := persistBacktestSummary(summary); err != nil {
 			return nil, err
 		}
-		logger.Warnf("🐷 Backtest tuning STARVED: %d signals < %d minimum — retry scheduled, parameters untouched", len(signals), btMinSample)
-		return nil, fmt.Errorf("%w: %d signals < %d minimum", ErrStarved, len(signals), btMinSample)
+		logger.Warnf("🐷 Backtest tuning STARVED: %d independent trades < %d minimum — retry scheduled, parameters untouched", tradeN, btMinSample)
+		return nil, fmt.Errorf("%w: %d independent trades < %d minimum", ErrStarved, tradeN, btMinSample)
 	}
 
 	params := GetParams()
@@ -427,8 +432,8 @@ func tuneWalkForward(signals []BTSignal) ([]string, []string, []string, int, int
 	return changes, verified, rejected, trainN, testN
 }
 func proposeWalkForward(signals []BTSignal) (changes, verified, rejected []string, trainN, testN int, candidate *TunableParams) {
-	if len(signals) < btMinSample {
-		logger.Infof("🐷 Backtest tuning skipped: %d signals < %d minimum", len(signals), btMinSample)
+	if n := len(independentTrades(signals, btReplayScoreFloor)); n < btMinSample {
+		logger.Infof("🐷 Backtest tuning skipped: %d independent trades < %d minimum", n, btMinSample)
 		return nil, nil, nil, 0, 0, nil
 	}
 	sorted := append([]BTSignal(nil), signals...)
@@ -452,8 +457,10 @@ func proposeWalkForward(signals []BTSignal) (changes, verified, rejected []strin
 		}
 		pruned = append(pruned, s)
 	}
-	if len(pruned) < btMinSample || len(test) < btVerifySample {
-		logger.Infof("🐷 Backtest tuning skipped after purge: %d/%d train (≥%d) / %d test (≥%d)", len(pruned), len(train), btMinSample, len(test), btVerifySample)
+	trainTrades := len(independentTrades(pruned, btReplayScoreFloor))
+	testTrades := len(independentTrades(test, btReplayScoreFloor))
+	if trainTrades < btMinSample || testTrades < btVerifySample {
+		logger.Infof("🐷 Backtest tuning skipped after purge: %d train independent trades (≥%d) / %d test independent trades (≥%d)", trainTrades, btMinSample, testTrades, btVerifySample)
 		return nil, nil, nil, len(pruned), len(test), nil
 	}
 	train = pruned
@@ -463,7 +470,7 @@ func proposeWalkForward(signals []BTSignal) (changes, verified, rejected []strin
 	next := prev
 
 	// 1. Grade thresholds: best 24h NET edge on TRAIN, then verify on TEST.
-	testOverall := avgRet(test)
+	testOverall, _ := cutoffEdge(test, btReplayScoreFloor)
 	strongCutoff := bestCutoff(train, 72, 90, 5, btMinSample)
 	mediumCutoff := 0.0
 	if strongCutoff > 0 {
@@ -473,32 +480,32 @@ func proposeWalkForward(signals []BTSignal) (changes, verified, rejected []strin
 		if cutoff <= 0 {
 			return false
 		}
-		sum, n := 0.0, 0
-		for _, s := range test {
-			if s.Score >= cutoff {
-				sum += s.Ret24h
-				n++
-			}
-		}
+		trades := independentTrades(test, cutoff)
+		n := len(trades)
+		edge := avgRet(trades)
+		t := tradeTStatistic(trades)
 		if n < btVerifySample {
-			rejected = append(rejected, fmt.Sprintf("%s %.0f: test n=%d < %d", name, cutoff, n, btVerifySample))
+			rejected = append(rejected, fmt.Sprintf("%s %.0f: test n=%d < %d (t=%.2f)", name, cutoff, n, btVerifySample, t))
 			return false
 		}
-		edge := sum / float64(n)
+		if !(t >= 2) {
+			rejected = append(rejected, fmt.Sprintf("%s %.0f: test t=%.2f < 2 (n=%d, edge %+.2f%%) failed significance", name, cutoff, t, n, edge))
+			return false
+		}
 		incumbentCutoff := prev.StrongThreshold
 		if name == "medium_threshold" {
 			incumbentCutoff = prev.MediumThreshold
 		}
 		incumbentEdge, incumbentN := cutoffEdge(test, incumbentCutoff)
 		if incumbentN < btVerifySample || edge <= incumbentEdge+1e-9 {
-			rejected = append(rejected, fmt.Sprintf("%s %.0f: proxy does not outperform incumbent %.0f (edge %.2f%% vs %.2f%%, incumbent n=%d)", name, cutoff, incumbentCutoff, edge, incumbentEdge, incumbentN))
+			rejected = append(rejected, fmt.Sprintf("%s %.0f: proxy does not outperform incumbent %.0f (edge %.2f%% vs %.2f%%, incumbent n=%d, n=%d, t=%.2f)", name, cutoff, incumbentCutoff, edge, incumbentEdge, incumbentN, n, t))
 			return false
 		}
 		if edge <= 0 || edge <= testOverall {
-			rejected = append(rejected, fmt.Sprintf("%s %.0f: test edge %.2f%% (overall %.2f%%) failed verification", name, cutoff, edge, testOverall))
+			rejected = append(rejected, fmt.Sprintf("%s %.0f: test edge %.2f%% (overall %.2f%%, n=%d, t=%.2f) failed verification", name, cutoff, edge, testOverall, n, t))
 			return false
 		}
-		verified = append(verified, fmt.Sprintf("%s %.0f verified: test edge %+.2f%% vs overall %+.2f%% (n=%d)", name, cutoff, edge, testOverall, n))
+		verified = append(verified, fmt.Sprintf("%s %.0f verified: test edge %+.2f%% vs overall %+.2f%% (n=%d, t=%.2f)", name, cutoff, edge, testOverall, n, t))
 		return true
 	}
 	if strongCutoff > 0 && strongCutoff != prev.StrongThreshold && verify("strong_threshold", strongCutoff) {
@@ -553,8 +560,58 @@ func prevValue(key string, prev TunableParams) float64 {
 	return 0
 }
 
+// independentTrades selects a one-position-per-symbol policy with a fixed
+// 24h holding period. Filter by cutoff BEFORE thinning; rejected/low-score
+// signals do not reset the clock. Sorting a copy leaves callers' data intact.
+// This removes per-symbol label overlap, NOT cross-symbol correlation (many
+// symbols move with BTC in the same hours). The t statistic remains optimistic
+// and these results must remain research-only.
+func independentTrades(signals []BTSignal, cutoff float64) []BTSignal {
+	eligible := make([]BTSignal, 0, len(signals))
+	for _, s := range signals {
+		if s.Score >= cutoff {
+			eligible = append(eligible, s)
+		}
+	}
+	sort.SliceStable(eligible, func(i, j int) bool { return eligible[i].Time.Before(eligible[j].Time) })
+	lastKept := make(map[string]time.Time)
+	horizon := time.Duration(btForwardBars24h) * 15 * time.Minute
+	trades := make([]BTSignal, 0, len(eligible))
+	for _, s := range eligible {
+		if last, ok := lastKept[s.Symbol]; ok && s.Time.Before(last.Add(horizon)) {
+			continue
+		}
+		trades = append(trades, s)
+		lastKept[s.Symbol] = s.Time
+	}
+	return trades
+}
+
+// tradeTStatistic tests the mean net Ret24h against zero, using sample
+// variance (n-1). Constant positive/negative returns have +/- infinite t;
+// fewer than two trades or constant zero returns provide no significance.
+func tradeTStatistic(trades []BTSignal) float64 {
+	n := len(trades)
+	if n < 2 {
+		return 0
+	}
+	mean := avgRet(trades)
+	ss := 0.0
+	for _, s := range trades {
+		d := s.Ret24h - mean
+		ss += d * d
+	}
+	if ss == 0 {
+		if mean == 0 {
+			return 0
+		}
+		return math.Inf(int(math.Copysign(1, mean)))
+	}
+	return mean / math.Sqrt(ss/float64(n-1)/float64(n))
+}
+
 // bestCutoff sweeps candidate cutoffs and returns the one with the best mean
-// 24h forward return among signals at or above the cutoff (n ≥ minSamples).
+// 24h forward return among independent trades (n ≥ minSamples).
 // Returns 0 when no cutoff qualifies.
 func bestCutoff(signals []BTSignal, lo, hi, step, minSamples int) float64 {
 	type cut struct {
@@ -564,21 +621,12 @@ func bestCutoff(signals []BTSignal, lo, hi, step, minSamples int) float64 {
 	}
 	var best *cut
 	for c := float64(lo); c <= float64(hi); c += float64(step) {
-		var sum float64
-		n := 0
-		for _, s := range signals {
-			if s.Score >= c {
-				sum += s.Ret24h
-				n++
-			}
-		}
+		edge, n := cutoffEdge(signals, c)
 		if n < minSamples {
 			continue
 		}
-		edge := sum / float64(n)
 		if best == nil || edge > best.edge {
-			b, _ := c, 0
-			best = &cut{cutoff: b, edge: edge, n: n}
+			best = &cut{cutoff: c, edge: edge, n: n}
 		}
 	}
 	if best == nil {
@@ -614,17 +662,8 @@ func LoadBacktestSummary() (*BacktestSummary, error) {
 }
 
 func cutoffEdge(signals []BTSignal, cutoff float64) (float64, int) {
-	sum, n := 0.0, 0
-	for _, s := range signals {
-		if s.Score >= cutoff {
-			sum += s.Ret24h
-			n++
-		}
-	}
-	if n == 0 {
-		return 0, 0
-	}
-	return sum / float64(n), n
+	trades := independentTrades(signals, cutoff)
+	return avgRet(trades), len(trades)
 }
 func persistBacktestSummary(s *BacktestSummary) error {
 	data, err := json.MarshalIndent(s, "", "  ")

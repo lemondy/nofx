@@ -64,11 +64,14 @@ func TestFix05ScannersIgnoreFormingCandles(t *testing.T) {
 func TestFix05CorrelatedHourlySamplesAreNotIndependent(t *testing.T) {
 	var samples []shortSample
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 300; i++ {
-		samples = append(samples, shortSample{TS: start.Add(time.Duration(i) * time.Hour).UnixMilli(), Components: map[string]float64{"structure": float64(i)}, Outcome: float64(i)})
+	for hour := 0; hour < 300; hour++ {
+		for symbol := 0; symbol < 10; symbol++ {
+			samples = append(samples, shortSample{TS: start.Add(time.Duration(hour) * time.Hour).UnixMilli(), Symbol: strconv.Itoa(symbol), Components: map[string]float64{"structure": float64(symbol)}, Outcome: float64(hour + symbol)})
+		}
 	}
-	if _, ok := updateShortWeights(samples, DefaultShortWeights(), shortTunerEta); ok {
-		t.Fatal("300 overlapping hourly labels bypassed 30 independent-block minimum")
+	_, stats, ok := updateShortWeightsWithDiagnostics(samples, DefaultShortWeights(), shortTunerEta)
+	if ok || stats["structure"].N == 0 || stats["structure"].N >= shortTunerMinComponentN {
+		t.Fatal("300 overlapping hours bypassed 30 independent-block minimum")
 	}
 }
 
@@ -138,11 +141,7 @@ func TestFix05EnabledWeightResearchStillCannotPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(48 * time.Hour)
-	var samples []shortSample
-	for i := 0; i < 40; i++ {
-		ts := now.Add(time.Duration(i-41) * 48 * time.Hour).UnixMilli()
-		samples = append(samples, shortSample{TS: ts, LabelAt: ts + 24*time.Hour.Milliseconds(), LabelVersion: 2, Symbol: "XUSDT", Price: 100, Evaluated: true, Outcome: float64(i), Components: map[string]float64{"structure": float64(i)}})
-	}
+	samples := reviewRankICSamples(now.Add(-82*24*time.Hour), 40, 10)
 	if err := writeSamples(samples); err != nil {
 		t.Fatal(err)
 	}
@@ -158,5 +157,16 @@ func TestFix05EnabledWeightResearchStillCannotPublish(t *testing.T) {
 	var proposal ShortWeightProposal
 	if json.Unmarshal(data, &proposal) != nil || proposal.Applied || len(proposal.Candidate) != 9 {
 		t.Fatalf("invalid research proposal: %s", data)
+	}
+	if len(proposal.Diagnostics) != 9 || proposal.Diagnostics["structure"].N != 40 || proposal.EvaluationScope != "cross_sectional_rank_ic_24h_close_not_sl_tp_research_only" {
+		t.Fatalf("missing rank IC diagnostics or label caveat: %s", data)
+	}
+	RunShortTuner(now)
+	repeated, err := os.ReadFile(shortWeightProposalPath)
+	if err != nil || string(repeated) != string(data) {
+		t.Fatal("repeated proposal compounded weights or changed diagnostics")
+	}
+	if GetParams().ShortWeightsValidated || GetParams().ShortTunerLastTunedMs != p.ShortTunerLastTunedMs {
+		t.Fatal("research promoted weights or advanced the live cursor")
 	}
 }

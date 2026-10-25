@@ -100,11 +100,11 @@ export function ConfirmDialogProvider({
         <AlertDialogContent>
           <div className="flex flex-col gap-5 text-center">
             {state.title && (
-              <AlertDialogTitle className="text-xl">
+              <AlertDialogTitle className="text-base font-semibold">
                 {state.title}
               </AlertDialogTitle>
             )}
-            <AlertDialogDescription className="text-[var(--text-primary)] text-base font-medium">
+            <AlertDialogDescription className="text-[13px] font-normal text-fg-2">
               {state.message}
             </AlertDialogDescription>
           </div>

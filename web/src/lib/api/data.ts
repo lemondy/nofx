@@ -7,10 +7,35 @@ import type {
   CompetitionData,
   PositionHistoryResponse,
   RiskStatus,
+  USStockSymbol,
+  USStockScanReport,
 } from '../../types'
 import { API_BASE, httpClient } from './helpers'
 
 export const dataApi = {
+  // Binance bStock spot pairs available to the us_stock strategy. Silent:
+  // callers fall back to free-text entry when the endpoint is unavailable.
+  async getUSStockSymbols(): Promise<USStockSymbol[]> {
+    const result = await httpClient.request<{ symbols: USStockSymbol[] }>(
+      `${API_BASE}/usstock/symbols`,
+      { silent: true }
+    )
+    if (!result.success) throw new Error('Failed to fetch US stock symbols')
+    const symbols = result.data?.symbols
+    return Array.isArray(symbols) ? symbols : []
+  },
+
+  // Latest price-cycle ranking of all listed bStock pairs (read-only; the
+  // backend rescans every ~30 min). Silent: the editor renders its own error.
+  async getUSStockScan(): Promise<USStockScanReport> {
+    const result = await httpClient.request<USStockScanReport>(
+      `${API_BASE}/usstock/scan`,
+      { silent: true }
+    )
+    if (!result.success) throw new Error('Failed to fetch US stock scan')
+    return result.data!
+  },
+
   async getStatus(traderId?: string, silent?: boolean): Promise<SystemStatus> {
     const url = traderId
       ? `${API_BASE}/status?trader_id=${traderId}`

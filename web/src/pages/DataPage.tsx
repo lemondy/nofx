@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLanguage } from '../contexts/LanguageContext'
 import { t } from '../i18n/translations'
+import { Loader2 } from 'lucide-react'
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardBody,
+  Change,
+  Segmented,
+  Tabs,
+} from '../components/ui'
 
 // Vergex trending data (https://vergex.trade/trending), proxied through
 // the NOFX backend (/api/trending/*) with a short server-side cache.
@@ -208,10 +219,10 @@ function fmtRate4(v: number | undefined): string {
   return `${v.toFixed(4)}%`
 }
 
-function pctColor(v: number | undefined): string {
+function pctColorCls(v: number | undefined): string {
   if (v === undefined || v === null || !Number.isFinite(v) || v === 0)
-    return '#6E6E60'
-  return v > 0 ? '#2E7D4F' : '#C0392B'
+    return 'text-fg-3'
+  return v > 0 ? 'text-up' : 'text-down'
 }
 
 const VERGEX_BASE = 'https://vergex.trade'
@@ -376,19 +387,14 @@ function Pagination({
 }) {
   return (
     <div className="flex items-center justify-between pt-3 flex-wrap gap-2">
-      <div className="text-xs" style={{ color: '#6E6E60' }}>
+      <div className="num text-xs text-fg-3">
         {t('dataPage.totalRows', language, { count: total })}
       </div>
       <div className="flex items-center gap-2">
         <select
           value={pageSize}
           onChange={(e) => onPageSize(Number(e.target.value))}
-          className="px-2 py-1 rounded-lg text-xs"
-          style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
-          }}
+          className="h-7 rounded-md border border-line bg-surface-2 px-2 text-xs text-fg outline-none hover:border-line-strong focus:border-brand"
         >
           {PAGE_SIZES.map((s) => (
             <option key={s} value={s}>
@@ -396,35 +402,25 @@ function Pagination({
             </option>
           ))}
         </select>
-        <button
-          type="button"
+        <Button
+          size="sm"
           disabled={page <= 1}
           onClick={() => onPage(page - 1)}
-          className="px-3 py-1 rounded-lg text-xs disabled:opacity-40"
-          style={{
-            background: '#E9E4D6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
-          }}
+          aria-label="previous page"
         >
           ‹
-        </button>
-        <span className="text-xs px-2" style={{ color: '#7A7A6C' }}>
+        </Button>
+        <span className="num px-1 text-xs text-fg-3">
           {page} / {totalPages}
         </span>
-        <button
-          type="button"
+        <Button
+          size="sm"
           disabled={page >= totalPages}
           onClick={() => onPage(page + 1)}
-          className="px-3 py-1 rounded-lg text-xs disabled:opacity-40"
-          style={{
-            background: '#E9E4D6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
-          }}
+          aria-label="next page"
         >
           ›
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -432,19 +428,8 @@ function Pagination({
 
 function RankBadge({ rank }: { rank?: number }) {
   if (!rank) return null
-  const color =
-    rank === 1
-      ? '#B8912A'
-      : rank === 2
-        ? '#C0C4CC'
-        : rank === 3
-          ? '#CD7F32'
-          : '#6E6E60'
   return (
-    <span
-      className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold shrink-0"
-      style={{ color }}
-    >
+    <span className="num inline-block min-w-5 text-xs font-medium text-fg-3">
       {rank}
     </span>
   )
@@ -453,12 +438,8 @@ function RankBadge({ rank }: { rank?: number }) {
 function LoadingRow({ cols }: { cols: number }) {
   return (
     <tr>
-      <td
-        colSpan={cols}
-        className="py-10 text-center text-sm"
-        style={{ color: '#6E6E60' }}
-      >
-        <span className="inline-block animate-spin mr-2">⏳</span>
+      <td colSpan={cols} className="py-8 text-center text-sm text-fg-3">
+        <Loader2 className="mr-2 inline-block h-4 w-4 animate-spin align-[-3px]" />
         Loading...
       </td>
     </tr>
@@ -477,22 +458,16 @@ function PredictionTable({
   const paged = usePaged(rows, 10)
   return (
     <>
-      <table className="w-full text-xs rank-table">
+      <table className="w-full border-collapse text-[13px]">
         <tbody>
           {paged.paged.map((row, i) => (
             <TableRow key={`${row.symbol ?? row.title}-${i}`}>
               <Td>
-                <span
-                  className="font-semibold line-clamp-1"
-                  style={{ color: '#1E1E1A' }}
-                >
+                <span className="line-clamp-1 whitespace-normal font-semibold text-fg">
                   {row.title ?? row.symbol}
                 </span>
                 {row.signal && (
-                  <span
-                    className="ml-2 text-[10px]"
-                    style={{ color: '#6E6E60' }}
-                  >
+                  <span className="ml-2 text-[11px] text-fg-3">
                     {row.signal}
                   </span>
                 )}
@@ -543,101 +518,86 @@ function FeaturedCard({
     : null
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
-      <div
-        className="text-sm font-semibold mb-3 flex items-center gap-2"
-        style={{ color: accent }}
-      >
-        {t(titleKey, language)}
-        {sessionLabel && (
-          <span
-            className="text-[10px] font-normal px-2 py-0.5 rounded-full"
-            style={{
-              background:
-                session?.session === 'open'
-                  ? 'rgba(46, 125, 79, 0.1)'
-                  : 'rgba(132, 142, 156, 0.1)',
-              color: session?.session === 'open' ? '#2E7D4F' : '#6E6E60',
-            }}
-          >
-            {sessionLabel}
+    <Card dense>
+      <CardHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: accent }}
+            />
+            {t(titleKey, language)}
           </span>
-        )}
-      </div>
-      {!data ? (
-        <div className="text-xs py-4 text-center" style={{ color: '#6E6E60' }}>
-          Loading...
-        </div>
-      ) : (
-        <>
-          {tableRows.length > 0 ? (
-            <PredictionTable rows={tableRows} language={language} />
-          ) : assets.length === 0 ? (
-            <div
-              className="text-xs py-4 text-center"
-              style={{ color: '#6E6E60' }}
+        }
+        actions={
+          sessionLabel ? (
+            <Badge
+              variant={session?.session === 'open' ? 'up' : 'neutral'}
+              size="xs"
             >
-              {t('dataPage.noData', language)}
-            </div>
-          ) : (
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {assets.map((a, i) => (
-                <div
-                  key={`${a.symbol}-${i}`}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg"
-                  style={{ background: '#F2EFE6' }}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <RankBadge rank={i + 1} />
-                    <span
-                      className="text-xs font-semibold truncate"
-                      style={{ color: '#1E1E1A' }}
-                    >
-                      {a.symbol}
-                    </span>
-                    {a.signal && (
-                      <span
-                        className="text-[10px] truncate"
-                        style={{ color: '#6E6E60' }}
-                      >
-                        {a.signal}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    {a.price !== undefined && (
-                      <span
-                        className="text-xs font-mono"
-                        style={{ color: '#1E1E1A' }}
-                      >
-                        {typeof a.price === 'string'
-                          ? a.price
-                          : fmtPrice(a.price)}
-                      </span>
-                    )}
-                    <span
-                      className="text-xs w-20 text-right"
-                      style={{
-                        color: pctColor(
-                          a.change
-                            ? parseFloat(a.change.replace(/[^0-9.+-]/g, ''))
-                            : a.change_pct
-                        ),
-                      }}
-                    >
-                      {a.change ?? fmtPctDirect(a.change_pct)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+              {sessionLabel}
+            </Badge>
+          ) : undefined
+        }
+      />
+      <CardBody>
+        {!data ? (
+          <div className="py-4 text-center text-xs text-fg-3">Loading...</div>
+        ) : tableRows.length > 0 ? (
+          <PredictionTable rows={tableRows} language={language} />
+        ) : assets.length === 0 ? (
+          <div className="py-4 text-center text-xs text-fg-3">
+            {t('dataPage.noData', language)}
+          </div>
+        ) : (
+          <div className="max-h-72 overflow-y-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <tbody>
+                {assets.map((a, i) => {
+                  const pct = a.change
+                    ? parseFloat(a.change.replace(/[^0-9.+-]/g, ''))
+                    : a.change_pct
+                  return (
+                    <TableRow key={`${a.symbol}-${i}`}>
+                      <Td>
+                        <RankBadge rank={i + 1} />
+                      </Td>
+                      <Td>
+                        <span className="font-semibold text-fg">
+                          {a.symbol}
+                        </span>
+                        {a.signal && (
+                          <span className="ml-2 text-[11px] text-fg-3">
+                            {a.signal}
+                          </span>
+                        )}
+                      </Td>
+                      <Td right>
+                        {a.price !== undefined
+                          ? typeof a.price === 'string'
+                            ? a.price
+                            : fmtPrice(a.price)
+                          : ''}
+                      </Td>
+                      <Td right>
+                        {a.change && Number.isFinite(pct) ? (
+                          <span className={pctColorCls(pct)}>{a.change}</span>
+                        ) : a.change ? (
+                          <span className="text-fg-3">{a.change}</span>
+                        ) : (
+                          <Change value={a.change_pct} />
+                        )}
+                      </Td>
+                    </TableRow>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   )
 }
 
@@ -670,11 +630,8 @@ function TwoSidedTable<T extends GenericRow>({
 
   if (!top && !low) {
     return (
-      <div
-        className="p-4 rounded-xl"
-        style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-      >
-        <table className="w-full rank-table">
+      <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
+        <table className="w-full border-collapse text-[13px]">
           <tbody>
             <LoadingRow cols={cols} />
           </tbody>
@@ -686,15 +643,12 @@ function TwoSidedTable<T extends GenericRow>({
   const rankAt = (i: number) => (paged.page - 1) * paged.pageSize + i + 1
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
       {/* Inflow side */}
-      <div className="text-xs font-semibold mb-2" style={{ color: '#2E7D4F' }}>
-        ▲ {t('dataPage.topInflow', language)}
+      <div className="mb-2 flex items-center gap-2">
+        <Badge variant="up">▲ {t('dataPage.topInflow', language)}</Badge>
       </div>
-      <table className="w-full text-xs rank-table">
+      <table className="w-full border-collapse text-[13px]">
         <thead>{renderHeader(true)}</thead>
         <tbody>
           {paged.paged.map((row, i) => (
@@ -703,13 +657,10 @@ function TwoSidedTable<T extends GenericRow>({
         </tbody>
       </table>
       {/* Outflow side */}
-      <div
-        className="text-xs font-semibold mb-2 mt-5"
-        style={{ color: '#C0392B' }}
-      >
-        ▼ {t('dataPage.bottomOutflow', language)}
+      <div className="mb-2 mt-4 flex items-center gap-2">
+        <Badge variant="down">▼ {t('dataPage.bottomOutflow', language)}</Badge>
       </div>
-      <table className="w-full text-xs rank-table">
+      <table className="w-full border-collapse text-[13px]">
         <thead>{renderHeader(false)}</thead>
         <tbody>
           {lowSlice.map((row, i) => (
@@ -731,14 +682,17 @@ function TwoSidedTable<T extends GenericRow>({
 }
 
 function TableRow({ children }: { children: ReactNode }) {
-  return <tr className="transition-colors">{children}</tr>
+  return (
+    <tr className="h-[34px] border-b border-line transition-colors last:border-b-0 hover:bg-surface-hover">
+      {children}
+    </tr>
+  )
 }
 
 function Th({ children, right }: { children: ReactNode; right?: boolean }) {
   return (
     <th
-      className={`py-2 px-2 font-medium text-[10px] uppercase tracking-wide ${right ? 'text-right' : 'text-left'}`}
-      style={{ color: '#6E6E60' }}
+      className={`sticky top-0 h-8 whitespace-nowrap bg-surface-2 px-3 py-0 text-xs font-medium normal-case tracking-normal text-fg-3 ${right ? 'text-right' : 'text-left'}`}
     >
       {children}
     </th>
@@ -756,8 +710,7 @@ function Td({
 }) {
   return (
     <td
-      className={`py-2 px-2 ${right ? 'text-right' : 'text-left'} ${mono ? 'font-mono' : ''}`}
-      style={{ color: '#1E1E1A' }}
+      className={`whitespace-nowrap px-3 py-0 text-[13px] text-fg ${right ? 'text-right' : 'text-left'} ${mono || right ? 'num' : ''}`}
     >
       {children}
     </td>
@@ -778,7 +731,7 @@ function DepthListTable({
   const paged = usePaged(rows, defaultPageSize)
   return (
     <>
-      <table className="w-full text-xs rank-table">
+      <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
             <Th>#</Th>
@@ -804,7 +757,7 @@ function DepthListTable({
                 {fmtUsd(row.ask_volume)}
               </Td>
               <Td right mono>
-                <span style={{ color: pctColor(row.delta) }}>
+                <span className={pctColorCls(row.delta)}>
                   {fmtUsd(row.delta)}
                 </span>
               </Td>
@@ -812,7 +765,7 @@ function DepthListTable({
                 {fmtPrice(row.price)}
               </Td>
               <Td right>
-                <span style={{ color: pctColor(row.price_delta_percent) }}>
+                <span className={pctColorCls(row.price_delta_percent)}>
                   {fmtPctDirect(row.price_delta_percent)}
                 </span>
               </Td>
@@ -844,34 +797,25 @@ function DepthTable({
   const spot = data?.spot || []
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
       {!data ? (
-        <table className="w-full rank-table">
+        <table className="w-full border-collapse text-[13px]">
           <tbody>
             <LoadingRow cols={7} />
           </tbody>
         </table>
       ) : (
         <>
-          <div
-            className="text-xs font-semibold mb-2"
-            style={{ color: '#5E7A5E' }}
-          >
-            {t('dataPage.futuresDepth', language)}
+          <div className="mb-2 flex items-center gap-2">
+            <Badge variant="info">{t('dataPage.futuresDepth', language)}</Badge>
           </div>
           <DepthListTable
             rows={future}
             language={language}
             defaultPageSize={10}
           />
-          <div
-            className="text-xs font-semibold mb-2 mt-5"
-            style={{ color: '#A78BFA' }}
-          >
-            {t('dataPage.spotDepth', language)}
+          <div className="mb-2 mt-4 flex items-center gap-2">
+            <Badge variant="ai">{t('dataPage.spotDepth', language)}</Badge>
           </div>
           <DepthListTable
             rows={spot}
@@ -914,42 +858,34 @@ function HLTable({
   const paged = usePaged(sorted, 20)
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t('dataPage.searchSymbol', language)}
-          className="px-3 py-1.5 rounded-lg text-xs w-48"
-          style={{
-            background: '#F2EFE6',
-            border: '1px solid #C0B9A2',
-            color: '#1E1E1A',
-          }}
+          className="h-8 w-48 rounded-md border border-line bg-surface-2 px-3 text-[13px] text-fg outline-none placeholder:text-fg-3 hover:border-line-strong focus:border-brand focus:ring-1 focus:ring-brand/40"
         />
         {data?.generatedAt && (
-          <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+          <span className="text-[11px] text-fg-3">
             {new Date(data.generatedAt).toLocaleTimeString()}
           </span>
         )}
       </div>
       {!data ? (
-        <table className="w-full rank-table">
+        <table className="w-full border-collapse text-[13px]">
           <tbody>
             <LoadingRow cols={8} />
           </tbody>
         </table>
       ) : sorted.length === 0 ? (
-        <div className="text-xs py-6 text-center" style={{ color: '#6E6E60' }}>
+        <div className="text-xs py-6 text-center text-fg-3">
           {t('dataPage.noData', language)}
         </div>
       ) : (
         <>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs rank-table">
+            <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <Th>#</Th>
@@ -971,16 +907,8 @@ function HLTable({
                       />
                     </Td>
                     <Td>
-                      <span
-                        className="font-semibold"
-                        style={{ color: '#1E1E1A' }}
-                      >
-                        {row.base}
-                      </span>
-                      <span
-                        className="ml-1 text-[10px]"
-                        style={{ color: '#6E6E60' }}
-                      >
+                      <span className="font-semibold text-fg">{row.base}</span>
+                      <span className="ml-1 text-[11px] text-fg-3">
                         /{row.quote}
                       </span>
                     </Td>
@@ -988,12 +916,12 @@ function HLTable({
                       {fmtPrice(row.lastPrice)}
                     </Td>
                     <Td right>
-                      <span style={{ color: pctColor(row.change24hPct) }}>
+                      <span className={pctColorCls(row.change24hPct)}>
                         {fmtPctDirect(row.change24hPct)}
                       </span>
                     </Td>
                     <Td right>
-                      <span style={{ color: pctColor(row.funding8h) }}>
+                      <span className={pctColorCls(row.funding8h)}>
                         {(row.funding8h * 100).toFixed(4)}%
                       </span>
                     </Td>
@@ -1056,12 +984,8 @@ function FlowBar({ value, max }: { value: number; max: number }) {
   const pct = max > 0 ? Math.min(100, (Math.abs(value) / max) * 100) : 0
   return (
     <span
-      className="absolute right-0 top-1/2 -translate-y-1/2 h-4 rounded"
-      style={{
-        width: `${Math.max(2, pct)}%`,
-        background:
-          value >= 0 ? 'rgba(46, 125, 79, 0.15)' : 'rgba(192, 57, 43, 0.15)',
-      }}
+      className={`absolute right-0 top-1/2 h-4 -translate-y-1/2 rounded-sm ${value >= 0 ? 'bg-up-soft' : 'bg-down-soft'}`}
+      style={{ width: `${Math.max(2, pct)}%` }}
     />
   )
 }
@@ -1116,27 +1040,23 @@ function FlowTable({
         <RankBadge rank={globalRank} />
       </Td>
       <Td>
-        <span className="font-semibold" style={{ color: '#1E1E1A' }}>
-          {r.symbol}
-        </span>
+        <span className="font-semibold text-fg">{r.symbol}</span>
         {r.marketType === 'hip3_perp' && (
-          <span className="ml-1.5 text-[10px]" style={{ color: '#6E6E60' }}>
-            HIP-3
-          </span>
+          <span className="ml-1.5 text-[11px] text-fg-3">HIP-3</span>
         )}
       </Td>
       <Td right mono>
         {fmtPrice(r.latestPrice)}
       </Td>
       <Td right>
-        <span style={{ color: pctColor(r.priceChangePct) }}>
+        <span className={pctColorCls(r.priceChangePct)}>
           {fmtPctDirect(r.priceChangePct)}
         </span>
       </Td>
       <Td right mono>
         <span className="relative inline-block min-w-24 px-1 py-0.5">
           <FlowBar value={r.netFlow} max={maxFlow} />
-          <span className="relative" style={{ color: pctColor(r.netFlow) }}>
+          <span className={`relative ${pctColorCls(r.netFlow)}`}>
             {fmtUsd(r.netFlow)}
           </span>
         </span>
@@ -1155,20 +1075,14 @@ function FlowTable({
   )
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
       {!flowData ? (
         failed ? (
-          <div
-            className="py-10 text-center text-sm"
-            style={{ color: '#6E6E60' }}
-          >
+          <div className="py-10 text-center text-sm text-fg-3">
             {t('dataPage.flowUnavailable', language)}
           </div>
         ) : (
-          <table className="w-full rank-table">
+          <table className="w-full border-collapse text-[13px]">
             <tbody>
               <LoadingRow cols={5} />
             </tbody>
@@ -1176,13 +1090,10 @@ function FlowTable({
         )
       ) : (
         <>
-          <div
-            className="text-xs font-semibold mb-2"
-            style={{ color: '#2E7D4F' }}
-          >
-            ▲ {t('dataPage.topInflow', language)}
+          <div className="mb-2 flex items-center gap-2">
+            <Badge variant="up">▲ {t('dataPage.topInflow', language)}</Badge>
           </div>
-          <table className="w-full text-xs rank-table">
+          <table className="w-full border-collapse text-[13px]">
             <thead>{header}</thead>
             <tbody>
               {paged.paged.map((row, i) => (
@@ -1192,13 +1103,12 @@ function FlowTable({
               ))}
             </tbody>
           </table>
-          <div
-            className="text-xs font-semibold mb-2 mt-5"
-            style={{ color: '#C0392B' }}
-          >
-            ▼ {t('dataPage.bottomOutflow', language)}
+          <div className="mb-2 mt-4 flex items-center gap-2">
+            <Badge variant="down">
+              ▼ {t('dataPage.bottomOutflow', language)}
+            </Badge>
           </div>
-          <table className="w-full text-xs rank-table">
+          <table className="w-full border-collapse text-[13px]">
             <thead>{header}</thead>
             <tbody>
               {lowSlice.map((row, i) => (
@@ -1270,48 +1180,26 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
   )
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Tab bar + duration selector */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-1 flex-wrap">
-          {CRYPTO_TABS.map((ct) => (
-            <button
-              key={ct.key}
-              type="button"
-              onClick={() => setTab(ct.key)}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={{
-                background:
-                  tab === ct.key ? 'rgba(184, 145, 42, 0.15)' : 'transparent',
-                color: tab === ct.key ? '#B8912A' : '#6E6E60',
-                border:
-                  tab === ct.key
-                    ? '1px solid rgba(184, 145, 42, 0.4)'
-                    : '1px solid transparent',
-              }}
-            >
-              {t(ct.labelKey, language)}
-            </button>
-          ))}
-        </div>
+      <div className="flex items-center justify-between flex-wrap gap-2 border-b border-line">
+        <Tabs
+          className="border-b-0"
+          items={CRYPTO_TABS.map((ct) => ({
+            key: ct.key,
+            label: t(ct.labelKey, language),
+          }))}
+          value={tab}
+          onChange={(k) => setTab(k)}
+        />
         {tabDef.hasDuration && (
-          <div className="flex items-center gap-1">
-            {durations.map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDuration(d)}
-                className="px-2.5 py-1 rounded-lg text-[11px] font-mono transition-all"
-                style={{
-                  background: duration === d ? '#C0B9A2' : 'transparent',
-                  color: duration === d ? '#1E1E1A' : '#6E6E60',
-                  border: '1px solid #C0B9A2',
-                }}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            size="sm"
+            className="mb-1"
+            items={durations.map((d) => ({ key: d, label: d }))}
+            value={duration}
+            onChange={(k) => setDuration(k)}
+          />
         )}
       </div>
 
@@ -1352,10 +1240,10 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                   {fmtUsd(r.current_oi)}
                 </Td>
                 <Td right mono>
-                  <span style={{ color: pctColor(r.oi_delta_percent) }}>
+                  <span className={pctColorCls(r.oi_delta_percent)}>
                     {fmtPctDirect(r.oi_delta_percent)}
                   </span>
-                  <span className="ml-1" style={{ color: '#6E6E60' }}>
+                  <span className="ml-1 text-fg-3">
                     ({fmtUsd(r.oi_delta_value)})
                   </span>
                 </Td>
@@ -1363,7 +1251,7 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                   {fmtPrice(r.price)}
                 </Td>
                 <Td right>
-                  <span style={{ color: pctColor(r.price_delta_percent) }}>
+                  <span className={pctColorCls(r.price_delta_percent)}>
                     {fmtPctDirect(r.price_delta_percent)}
                   </span>
                 </Td>
@@ -1396,7 +1284,7 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                 </Td>
                 <Td mono>{r.symbol}</Td>
                 <Td right mono>
-                  <span style={{ color: pctColor(r.funding_rate) }}>
+                  <span className={pctColorCls(r.funding_rate)}>
                     {/* funding_rate is already in percent units upstream */}
                     {fmtRate4(r.funding_rate)}
                   </span>
@@ -1408,7 +1296,7 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                   {fmtPrice(r.index_price)}
                 </Td>
                 <Td right>
-                  <span style={{ color: pctColor(r.price_delta_percent) }}>
+                  <span className={pctColorCls(r.price_delta_percent)}>
                     {fmtPctDirect(r.price_delta_percent)}
                   </span>
                 </Td>
@@ -1444,17 +1332,17 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                   {fmtPrice(r.price)}
                 </Td>
                 <Td right>
-                  <span style={{ color: pctColor(r.price_delta) }}>
+                  <span className={pctColorCls(r.price_delta)}>
                     {fmtPct(r.price_delta)}
                   </span>
                 </Td>
                 <Td right mono>
-                  <span style={{ color: pctColor(r.future_flow) }}>
+                  <span className={pctColorCls(r.future_flow)}>
                     {fmtUsd(r.future_flow)}
                   </span>
                 </Td>
                 <Td right mono>
-                  <span style={{ color: pctColor(r.oi_delta_value) }}>
+                  <span className={pctColorCls(r.oi_delta_value)}>
                     {fmtUsd(r.oi_delta_value)}
                   </span>
                 </Td>
@@ -1470,30 +1358,15 @@ function CryptoSection({ language }: { language: 'en' | 'zh' | 'id' }) {
 function HLSection({ language }: { language: 'en' | 'zh' | 'id' }) {
   const [category, setCategory] = useState<string>('crypto')
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-1 flex-wrap">
-        {HL_CATEGORIES.map((hc) => (
-          <button
-            key={hc.key}
-            type="button"
-            onClick={() => setCategory(hc.key)}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-            style={{
-              background:
-                category === hc.key
-                  ? 'rgba(96, 165, 250, 0.15)'
-                  : 'transparent',
-              color: category === hc.key ? '#5E7A5E' : '#6E6E60',
-              border:
-                category === hc.key
-                  ? '1px solid rgba(96, 165, 250, 0.4)'
-                  : '1px solid transparent',
-            }}
-          >
-            {t(hc.labelKey, language)}
-          </button>
-        ))}
-      </div>
+    <div className="space-y-3">
+      <Segmented
+        items={HL_CATEGORIES.map((hc) => ({
+          key: hc.key,
+          label: t(hc.labelKey, language),
+        }))}
+        value={category}
+        onChange={(k) => setCategory(k)}
+      />
       <HLTable category={category} language={language} />
     </div>
   )
@@ -1521,24 +1394,30 @@ interface BreakoutRow {
 function gradeColor(grade: string): string {
   switch (grade) {
     case 'strong':
-      return '#2E7D4F'
+      return 'text-up'
     case 'medium':
-      return '#B8912A'
-    case 'weak':
-      return '#6E6E60'
+      return 'text-brand'
     default:
-      return '#8A8A7C'
+      return 'text-fg-3'
   }
 }
+
+type BadgeVariant = 'up' | 'down' | 'brand' | 'info' | 'neutral'
 
 function directionBadge(
   dir: string,
   language: 'en' | 'zh' | 'id'
-): { label: string; color: string } {
+): { label: string; variant: BadgeVariant } {
   if (dir === 'breakout') {
-    return { label: language === 'zh' ? '突破' : 'Breakout', color: '#2E7D4F' }
+    return {
+      label: language === 'zh' ? '突破' : 'Breakout',
+      variant: 'up',
+    }
   }
-  return { label: language === 'zh' ? '跌破' : 'Breakdown', color: '#C0392B' }
+  return {
+    label: language === 'zh' ? '跌破' : 'Breakdown',
+    variant: 'down',
+  }
 }
 
 function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
@@ -1556,63 +1435,53 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
   const paged = usePaged(sorted, 10)
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: '#EC4899' }}>
-            🐷 {t('dataPage.breakoutRanking', language)}
+          <span className="text-sm font-semibold text-fg">
+            {t('dataPage.breakoutRanking', language)}
           </span>
           {data?.generated_at && (
-            <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+            <span className="num text-xs text-fg-3">
               {new Date(data.generated_at).toLocaleTimeString()}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
           {rows.length > 0 && rows[0].regime && (
-            <span
-              className="text-[10px] px-2 py-0.5 rounded-full"
-              style={{
-                background:
-                  rows[0].regime === 'btc_bull'
-                    ? 'rgba(46, 125, 79, 0.1)'
-                    : rows[0].regime === 'btc_bear'
-                      ? 'rgba(192, 57, 43, 0.1)'
-                      : 'rgba(132, 142, 156, 0.1)',
-                color:
-                  rows[0].regime === 'btc_bull'
-                    ? '#2E7D4F'
-                    : rows[0].regime === 'btc_bear'
-                      ? '#C0392B'
-                      : '#6E6E60',
-              }}
+            <Badge
+              size="xs"
+              variant={
+                rows[0].regime === 'btc_bull'
+                  ? 'up'
+                  : rows[0].regime === 'btc_bear'
+                    ? 'down'
+                    : 'neutral'
+              }
             >
               {t(`dataPage.regime_${rows[0].regime}`, language)}
-            </span>
+            </Badge>
           )}
-          <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+          <span className="text-xs text-fg-3">
             {t('dataPage.breakoutNote', language)}
           </span>
         </div>
       </div>
 
       {!data ? (
-        <table className="w-full rank-table">
+        <table className="w-full border-collapse text-[13px]">
           <tbody>
             <LoadingRow cols={9} />
           </tbody>
         </table>
       ) : data.warming_up || sorted.length === 0 ? (
-        <div className="text-xs py-6 text-center" style={{ color: '#6E6E60' }}>
+        <div className="text-xs py-6 text-center text-fg-3">
           {t('dataPage.noData', language)}
         </div>
       ) : (
         <>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs rank-table">
+            <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <Th>#</Th>
@@ -1638,74 +1507,55 @@ function BreakoutSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                       </Td>
                       <Td mono>{row.symbol}</Td>
                       <Td>
-                        <span
-                          className="px-2 py-0.5 rounded text-[10px] font-bold"
-                          style={{
-                            background: `${badge.color}22`,
-                            color: badge.color,
-                          }}
-                        >
+                        <Badge variant={badge.variant} size="xs">
                           {badge.label}
-                        </span>
+                        </Badge>
                         {row.resonance && (
-                          <span
-                            className="ml-1.5 px-1.5 py-0.5 rounded text-[10px]"
-                            style={{
-                              background: 'rgba(184, 145, 42, 0.15)',
-                              color: '#B8912A',
-                            }}
+                          <Badge
+                            variant="brand"
+                            size="xs"
+                            className="ml-1.5"
                             title={t('dataPage.resonance', language)}
                           >
                             ⚡
-                          </span>
+                          </Badge>
                         )}
                       </Td>
                       <Td right mono>
                         <span
-                          className="font-bold"
-                          style={{ color: gradeColor(row.grade) }}
+                          className={`font-semibold ${gradeColor(row.grade)}`}
                         >
                           {row.score.toFixed(1)}
                         </span>
                       </Td>
                       <Td right>
-                        <span style={{ color: gradeColor(row.grade) }}>
+                        <span className={gradeColor(row.grade)}>
                           {t(`dataPage.grade_${row.grade}`, language)}
                         </span>
                       </Td>
                       <Td right>
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[10px]"
-                          style={{
-                            background:
-                              row.pattern === 'retest_hold'
-                                ? 'rgba(46, 125, 79, 0.15)'
-                                : row.pattern === 'breakout'
-                                  ? 'rgba(96, 165, 250, 0.12)'
-                                  : 'rgba(132, 142, 156, 0.1)',
-                            color:
-                              row.pattern === 'retest_hold'
-                                ? '#2E7D4F'
-                                : row.pattern === 'breakout'
-                                  ? '#5E7A5E'
-                                  : '#6E6E60',
-                          }}
+                        <Badge
+                          size="xs"
+                          variant={
+                            row.pattern === 'retest_hold'
+                              ? 'up'
+                              : row.pattern === 'breakout'
+                                ? 'info'
+                                : 'neutral'
+                          }
                         >
                           {t(
                             `dataPage.pattern_${row.pattern || 'approach'}`,
                             language
                           )}
-                        </span>
+                        </Badge>
                       </Td>
                       <Td right mono>
                         {row.percentile?.toFixed(0) ?? '-'}
                       </Td>
                       <Td right mono>
                         {row.level > 0 ? row.level.toFixed(4) : '-'}
-                        <span
-                          className="ml-1 text-[9px]"
-                          style={{ color: '#6E6E60' }}
-                        >
+                        <span className="ml-1 text-[9px] text-fg-3">
                           {row.level_source}
                         </span>
                       </Td>
@@ -1755,20 +1605,20 @@ interface ShortScanRow {
 function shortUniverseBadge(
   universe: string | undefined,
   language: 'en' | 'zh' | 'id'
-): { label: string; color: string } {
+): { label: string; variant: BadgeVariant } {
   if (universe === 'near_high') {
     return {
       label: t('dataPage.universe_near_high', language),
-      color: '#C0392B',
+      variant: 'down',
     }
   }
   if (universe === 'hist_gainer') {
     return {
       label: t('dataPage.universe_hist_gainer', language),
-      color: '#B8860B',
+      variant: 'brand',
     }
   }
-  return { label: t('dataPage.universe_gainer', language), color: '#2E7D4F' }
+  return { label: t('dataPage.universe_gainer', language), variant: 'up' }
 }
 
 function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
@@ -1786,50 +1636,43 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
 
   const confirmChip = (label: string, on: boolean) =>
     on ? (
-      <span
-        key={label}
-        className="px-1.5 py-0.5 rounded text-[10px] mr-1"
-        style={{ background: 'rgba(192, 57, 43, 0.12)', color: '#C0392B' }}
-      >
+      <Badge key={label} variant="down" size="xs" className="mr-1">
         {label}
-      </span>
+      </Badge>
     ) : null
 
   return (
-    <div
-      className="p-4 rounded-xl"
-      style={{ background: '#ECE8DB', border: '1px solid #C0B9A2' }}
-    >
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface p-3">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: '#C0392B' }}>
-            🩸 {t('dataPage.shortScanRanking', language)}
+          <span className="text-sm font-semibold text-fg">
+            {t('dataPage.shortScanRanking', language)}
           </span>
           {data?.generated_at && (
-            <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+            <span className="text-[11px] text-fg-3">
               {new Date(data.generated_at).toLocaleTimeString()}
             </span>
           )}
         </div>
-        <span className="text-[10px]" style={{ color: '#6E6E60' }}>
+        <span className="text-[11px] text-fg-3">
           {t('dataPage.shortScanNote', language)}
         </span>
       </div>
 
       {!data ? (
-        <table className="w-full rank-table">
+        <table className="w-full border-collapse text-[13px]">
           <tbody>
             <LoadingRow cols={9} />
           </tbody>
         </table>
       ) : sorted.length === 0 ? (
-        <div className="text-xs py-6 text-center" style={{ color: '#6E6E60' }}>
+        <div className="text-xs py-6 text-center text-fg-3">
           {t('dataPage.noData', language)}
         </div>
       ) : (
         <>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs rank-table">
+            <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <Th>#</Th>
@@ -1874,23 +1717,19 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                       </Td>
                       <Td mono>{row.symbol}</Td>
                       <Td>
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[10px]"
-                          style={{ background: `${u.color}22`, color: u.color }}
-                        >
+                        <Badge variant={u.variant} size="xs">
                           {u.label}
-                        </span>
+                        </Badge>
                       </Td>
                       <Td right mono>
                         <span
-                          className="font-bold"
-                          style={{ color: gradeColor(row.grade) }}
+                          className={`font-semibold ${gradeColor(row.grade)}`}
                         >
                           {row.score.toFixed(1)}
                         </span>
                       </Td>
                       <Td right>
-                        <span style={{ color: gradeColor(row.grade) }}>
+                        <span className={gradeColor(row.grade)}>
                           {t(`dataPage.grade_${row.grade}`, language)}
                         </span>
                       </Td>
@@ -1898,22 +1737,16 @@ function ShortScanSection({ language }: { language: 'en' | 'zh' | 'id' }) {
                         {chips.length > 0 ? (
                           chips
                         ) : (
-                          <span
-                            className="text-[10px]"
-                            style={{ color: '#8A8A7C' }}
-                          >
-                            -
-                          </span>
+                          <span className="text-[11px] text-fg-3">-</span>
                         )}
                       </Td>
                       <Td right mono>
                         <span
-                          style={{
-                            color:
-                              row.funding_annualized_pct >= 30
-                                ? '#C0392B'
-                                : '#1E1E1A',
-                          }}
+                          className={
+                            row.funding_annualized_pct >= 30
+                              ? 'text-down'
+                              : 'text-fg'
+                          }
                         >
                           {row.funding_annualized_pct.toFixed(1)}%
                         </span>
@@ -1960,102 +1793,43 @@ export function DataPage() {
   useVergexRelaySync()
 
   return (
-    <div className="w-full min-h-[calc(100vh-64px)] px-4 md:px-8 py-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="w-full min-h-[calc(100vh-52px)] px-4 md:px-6 py-4">
+      <div className="max-w-7xl mx-auto space-y-4">
         {/* Page title + top-level section switch */}
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <h2 className="text-xl font-bold" style={{ color: '#1E1E1A' }}>
+          <h2 className="text-xl font-semibold text-fg">
             {t('dataCenter', language)}
           </h2>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSection('crypto')}
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={{
-                background:
-                  section === 'crypto'
-                    ? 'rgba(184, 145, 42, 0.15)'
-                    : 'transparent',
-                color: section === 'crypto' ? '#B8912A' : '#6E6E60',
-                border:
-                  section === 'crypto'
-                    ? '1px solid rgba(184, 145, 42, 0.4)'
-                    : '1px solid #C0B9A2',
-              }}
-            >
-              {t('dataPage.cryptoTrending', language)}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSection('hl')}
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={{
-                background:
-                  section === 'hl' ? 'rgba(96, 165, 250, 0.15)' : 'transparent',
-                color: section === 'hl' ? '#5E7A5E' : '#6E6E60',
-                border:
-                  section === 'hl'
-                    ? '1px solid rgba(96, 165, 250, 0.4)'
-                    : '1px solid #C0B9A2',
-              }}
-            >
-              {t('dataPage.hlUniverse', language)}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSection('breakout')}
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={{
-                background:
-                  section === 'breakout'
-                    ? 'rgba(236, 72, 153, 0.15)'
-                    : 'transparent',
-                color: section === 'breakout' ? '#EC4899' : '#6E6E60',
-                border:
-                  section === 'breakout'
-                    ? '1px solid rgba(236, 72, 153, 0.4)'
-                    : '1px solid #C0B9A2',
-              }}
-            >
-              🐷 {t('dataPage.breakoutRanking', language)}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSection('shortscan')}
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={{
-                background:
-                  section === 'shortscan'
-                    ? 'rgba(192, 57, 43, 0.15)'
-                    : 'transparent',
-                color: section === 'shortscan' ? '#C0392B' : '#6E6E60',
-                border:
-                  section === 'shortscan'
-                    ? '1px solid rgba(192, 57, 43, 0.4)'
-                    : '1px solid #C0B9A2',
-              }}
-            >
-              🩸 {t('dataPage.shortScanRanking', language)}
-            </button>
-          </div>
         </div>
-
         {/* Featured picks */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-3">
           <FeaturedCard
             cacheKey="ai500"
             titleKey="dataPage.ai500"
-            accent="#2E7D4F"
+            accent="var(--up)"
             language={language}
           />
           <FeaturedCard
             cacheKey="prediction"
             titleKey="dataPage.prediction"
-            accent="#5E7A5E"
+            accent="var(--info)"
             language={language}
           />
         </div>
+
+        <Tabs
+          items={[
+            { key: 'crypto', label: t('dataPage.cryptoTrending', language) },
+            { key: 'hl', label: t('dataPage.hlUniverse', language) },
+            { key: 'breakout', label: t('dataPage.breakoutRanking', language) },
+            {
+              key: 'shortscan',
+              label: t('dataPage.shortScanRanking', language),
+            },
+          ]}
+          value={section}
+          onChange={(k) => setSection(k)}
+        />
 
         {/* Data sections */}
         {section === 'crypto' ? (
@@ -2068,10 +1842,7 @@ export function DataPage() {
           <BreakoutSection language={language} />
         )}
 
-        <div
-          className="text-center text-[10px] pb-4"
-          style={{ color: '#8A8A7C' }}
-        >
+        <div className="text-center text-[11px] pb-4 text-fg-3">
           {t('dataPage.sourceNote', language)}
         </div>
       </div>

@@ -1,0 +1,10 @@
+{
+  "started_at_utc": "2026-10-24T11:49:32.968785+00:00",
+  "source_sha256": "9f70ca075c16542d2098515ba16d34b2befa96138fd5c34e4c7557dd84546fc6",
+  "preregistration_sha256": "2f56d19caea8230272884a7efdbbab56e57b3296e082b6239be17caf9f5b8064",
+  "requested_out": "/Users/zhangyun/workspace/nofx/data/regime_study/out",
+  "actual_out": "/Users/zhangyun/workspace/nofx/.claude/worktrees/regime-study/artifacts/regime_study/out",
+  "out_reason": "OS sandbox: Operation not permitted for requested directory",
+  "wall_seconds": 285.83,
+  "completed": true
+}

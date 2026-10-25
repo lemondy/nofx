@@ -20,18 +20,20 @@ export function ModelStepIndicator({
               style={{
                 background:
                   index < currentStep
-                    ? '#2E7D4F'
+                    ? 'var(--up)'
                     : index === currentStep
-                      ? '#8B5CF6'
-                      : '#C0B9A2',
-                color: index <= currentStep ? '#000' : '#6E6E60',
+                      ? 'var(--ai)'
+                      : 'var(--line)',
+                color: index <= currentStep ? 'var(--brand-fg)' : 'var(--fg-3)',
               }}
             >
               {index < currentStep ? <Check className="w-4 h-4" /> : index + 1}
             </div>
             <span
               className="text-xs font-medium hidden sm:block"
-              style={{ color: index === currentStep ? '#1E1E1A' : '#6E6E60' }}
+              style={{
+                color: index === currentStep ? 'var(--fg)' : 'var(--fg-3)',
+              }}
             >
               {label}
             </span>
@@ -40,7 +42,7 @@ export function ModelStepIndicator({
             <div
               className="w-8 h-0.5 mx-1"
               style={{
-                background: index < currentStep ? '#2E7D4F' : '#C0B9A2',
+                background: index < currentStep ? 'var(--up)' : 'var(--line)',
               }}
             />
           )}

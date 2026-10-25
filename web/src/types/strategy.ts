@@ -39,8 +39,8 @@ export interface PromptSectionsConfig {
 }
 
 export interface StrategyConfig {
-  // Strategy type: "ai_trading" (default) or "grid_trading"
-  strategy_type?: 'ai_trading' | 'grid_trading'
+  // Strategy type: "ai_trading" (default), "grid_trading" or "us_stock"
+  strategy_type?: 'ai_trading' | 'grid_trading' | 'us_stock'
   // Language setting: "zh" for Chinese, "en" for English
   // Determines the language used for data formatting and prompt generation
   language?: 'zh' | 'en'
@@ -54,6 +54,130 @@ export interface StrategyConfig {
   prompt_sections?: PromptSectionsConfig
   // Grid trading configuration (only used when strategy_type is 'grid_trading')
   grid_config?: GridStrategyConfig
+  // US-stock (Binance bStock spot) configuration (only used when strategy_type is 'us_stock')
+  stock_config?: StockConfig
+}
+
+// US-stock strategy configuration; mirrors Go store.StockConfig JSON tags.
+// Numeric 0 / omitted = use the preset default (see StockConfigEditor placeholders).
+export interface StockSessions {
+  // 09:30-16:00 ET; omitted = true
+  regular?: boolean
+  // 04:00-09:30 ET
+  pre_market?: boolean
+  // 16:00-20:00 ET
+  after_hours?: boolean
+}
+
+export interface StockConfig {
+  // Binance spot bStock pairs, e.g. "AAPLBUSDT" (no cap). Required (>=1) for
+  // symbol_source "manual"/"hybrid"; ignored when "scan".
+  symbols: string[]
+  // Candidate selection: "manual" (default) = trade only the symbols above;
+  // "scan" = every ~30 min rank all listed bStock pairs by daily
+  // price-cycle score and feed the top N long setups to the AI (the symbols
+  // above are ignored); "hybrid" = the manual symbols above are always fed
+  // on top of the top N long setups (manual names don't consume Top-N
+  // slots). Held positions are included in every mode.
+  symbol_source?: 'manual' | 'scan' | 'hybrid'
+  // scan/hybrid: how many long setups the AI sees (1-50; 0/omitted = 10)
+  scan_top_n?: number
+  // scan/hybrid: pairs the scanner must never pick
+  scan_exclude?: string[]
+  // scan/hybrid: candidate ranking; omitted = "kell" (price-cycle long-setup
+  // score). "momentum" = only stocks above the 200-day SMA, ranked by 12-1
+  // momentum (past 12 months excluding the most recent month).
+  scan_rank?: 'kell' | 'momentum'
+  // Regime position scaler; '' / omitted / "off" = disabled. "basket_vol"
+  // scales the new-open risk budget, the per-symbol cap and the total
+  // exposure cap by target vol ÷ realized vol (top-10 momentum basket,
+  // 21-day annualized), clamped to [regime_floor, 1].
+  regime_scaler?: 'off' | 'basket_vol'
+  // basket_vol: target annualized volatility in % (10-150; 0/omitted = 40)
+  regime_target_vol_pct?: number
+  // basket_vol: lower clamp of the scale factor (0.05-1; 0/omitted = 0.25)
+  regime_floor?: number
+  // basket_vol: when the factor drops ≥0.20 vs the last applied value, trim
+  // program positions proportionally in the regular session (manual
+  // positions untouched); omitted = true
+  regime_trim?: boolean
+  // "swing" (default) | "position"
+  preset?: 'swing' | 'position'
+  sessions: StockSessions
+  // Use Yahoo underlying data when bStock klines are too short; omitted = true
+  data_fallback_yahoo?: boolean
+  // Divergence guard in percent; 0 = default 1.0, negative = disabled
+  max_divergence_pct?: number
+  max_position_pct?: number
+  max_total_exposure_pct?: number
+  max_positions?: number
+  risk_per_trade_pct?: number
+  stop_atr_min?: number
+  stop_atr_max?: number
+  // Paper trading (no orders); omitted = true
+  paper_trading?: boolean
+}
+
+// One row of GET /api/usstock/symbols
+export interface USStockSymbol {
+  symbol: string // "AAPLBUSDT"
+  underlying: string // "AAPL"
+  base_asset: string // "AAPLB"
+}
+
+// Oliver Kell cycle-of-price-action phases on daily bars (scan classification)
+export type USStockCyclePhase =
+  | 'reversal_extension'
+  | 'wedge_pop'
+  | 'ema_crossback'
+  | 'base_n_break'
+  | 'base_forming'
+  | 'uptrend'
+  | 'exhaustion_extension'
+  | 'wedge_drop'
+  | 'downtrend'
+  | 'neutral'
+  | 'insufficient_data'
+
+// One ranked row of GET /api/usstock/scan (long setups first, score desc)
+export interface USStockScanResult {
+  symbol: string // "NVDABUSDT"
+  underlying: string // "NVDA"
+  source: string // data provider for the bars, e.g. "yahoo"
+  cycle: {
+    phase: USStockCyclePhase
+    // true = long setup; score is only meaningful then
+    long_setup: boolean
+    score: number // 0-100 long-setup score
+    ext10_atr?: number // (close − EMA10) / ATR14
+    dist20_atr?: number // (close − EMA20) / ATR14
+    rs63_pct?: number // 63-bar return minus SPY's, %
+    vol_ratio?: number // signal-bar volume vs average
+    above_sma50?: boolean
+    sma50_above_200?: boolean
+    bars?: number // daily bars available
+    notes?: string[]
+  }
+  // 12-1 trend-momentum block (omitted by backends predating the feature)
+  momentum?: {
+    // false when there are not enough bars for a full 12-1 window
+    valid: boolean
+    // 12-1 return in % (past 12 months excluding the most recent month)
+    mom12_1_pct: number
+    // close is above the 200-day SMA
+    above_sma200: boolean
+  }
+}
+
+// Response of GET /api/usstock/scan — the latest scanner ranking
+export interface USStockScanReport {
+  // true when no report exists yet and a scan was just started
+  scanning: boolean
+  // ISO timestamp of the last finished scan; null when no report yet
+  generated_at: string | null
+  results: USStockScanResult[]
+  // pairs not scanned, keyed by symbol with the reason
+  skipped: Record<string, string>
 }
 
 // Grid trading specific configuration
@@ -113,6 +237,8 @@ export interface CoinSourceConfig {
   use_piggy_dash: boolean
   piggy_dash_limit?: number
   piggy_dash_direction?: string // '', 'breakout', 'breakdown'
+  // 猪猪冲刺最低信号等级：'weak' | 'medium' | 'strong'；缺省 = medium（低于此等级的信号不进候选池）
+  piggy_dash_min_grade?: string
   // 做空扫描: top 24h gainers ranked by short-suitability score (Binance-derived)
   use_short_scan: boolean
   short_scan_limit?: number
@@ -122,6 +248,8 @@ export interface CoinSourceConfig {
   short_scan_history_days?: number
   // 历史涨幅池每轮额外分析上限（个）；0/缺省 = 默认 30
   short_scan_history_max?: number
+  // 做空扫描入池最低分（0-100）；0/缺省 = 默认 55，低于此分的候选不进入候选池
+  short_scan_min_score?: number
   // 候选币最低 OI 持仓价值（百万 USD），低于则跳过；0/缺省 = 默认 15M
   min_oi_value_millions?: number
   // Note: API URLs are now built automatically using nofxos_api_key from IndicatorConfig
@@ -225,6 +353,14 @@ export interface RiskControlConfig {
   time_stop_hours?: number
   // 暴涨延伸做多确认门：4h 趋势窗口涨幅 ≥ N% 时做多需回踩确认；0 = 默认 20，负数 = 禁用
   pump_guard_4h_pct?: number
+  // 防追高门：入场价顺交易方向偏离 1h EMA20 超过 N% 拒绝开仓；0 = 默认 6，负数 = 禁用
+  chase_max_ema20_1h_pct?: number
+  // 逆势入场门：入场价在 1h EMA20 错误一侧超过 N% 拒绝开仓；0 = 默认 3，负数 = 禁用
+  counter_max_ema20_1h_pct?: number
+  // RSI 极端门：1h RSI ≥ N 拒绝做多、≤ 100−N 拒绝做空；0 = 默认 78，负数 = 禁用
+  entry_rsi1h_max?: number
+  // 防追高门：最近 4h 顺交易方向涨跌超过 N% 拒绝开仓；0 = 默认 6，负数 = 禁用
+  chase_max_move4h_pct?: number
   // TP ladder on leveraged PnL%: at ≥ this the program trims 1/3 (0 = default 10, negative = off) (CODE ENFORCED)
   tp_trim_profit_pct?: number
   // At ≥ this PnL% the program closes the rest (0 = default 25, negative = off) (CODE ENFORCED)
@@ -284,6 +420,9 @@ export interface RiskControlConfig {
   // as a trend-runner under the trailing stop (0 = default 0.5, negative =
   // full close; collapses to full close when trailing_stop_enabled is off).
   tp_close_fraction?: number
+  // 止盈上限(R):计划止盈超过「入场价 ± N × 初始风险」时按此截断
+  // (0 / 负数 = 不设上限;(0,1) 无效,按不设上限处理) (CODE ENFORCED)
+  tp_max_r?: number
   // Hard-block opens when the vendor-vs-live price diverges beyond this %
   // (0 = default 1, negative = disabled) (CODE ENFORCED)
   max_vendor_divergence_pct?: number
@@ -312,6 +451,13 @@ export interface StrategyVersionStats {
   profit_factor: number
   avg_r: number
   r_count: number
+  // review 2026-10-09 I (optional: older servers omit them)
+  excluded_manual?: number
+  excluded_unattributed?: number
+  low_sample?: boolean
+  win_rate_lo?: number
+  win_rate_hi?: number
+  crossed_version?: number
 }
 
 export interface StrategyConfigVersion {

@@ -15,16 +15,18 @@ type DecisionStore struct {
 
 // DecisionRecordDB internal GORM model for decision_records table
 type DecisionRecordDB struct {
-	ID                  int64     `gorm:"primaryKey;autoIncrement"`
-	TraderID            string    `gorm:"column:trader_id;not null;index:idx_decision_records_trader_time"`
-	CycleNumber         int       `gorm:"column:cycle_number;not null"`
-	Timestamp           time.Time `gorm:"not null;index:idx_decision_records_trader_time,sort:desc;index:idx_decision_records_timestamp,sort:desc"`
-	SystemPrompt        string    `gorm:"column:system_prompt;default:''"`
-	InputPrompt         string    `gorm:"column:input_prompt;default:''"`
-	CoTTrace            string    `gorm:"column:cot_trace;default:''"`
-	DecisionJSON        string    `gorm:"column:decision_json;default:''"`
-	RawResponse         string    `gorm:"column:raw_response;default:''"`
-	CandidateCoins      string    `gorm:"column:candidate_coins;default:''"`
+	ID             int64     `gorm:"primaryKey;autoIncrement"`
+	TraderID       string    `gorm:"column:trader_id;not null;index:idx_decision_records_trader_time"`
+	CycleNumber    int       `gorm:"column:cycle_number;not null"`
+	Timestamp      time.Time `gorm:"not null;index:idx_decision_records_trader_time,sort:desc;index:idx_decision_records_timestamp,sort:desc"`
+	SystemPrompt   string    `gorm:"column:system_prompt;default:''"`
+	InputPrompt    string    `gorm:"column:input_prompt;default:''"`
+	CoTTrace       string    `gorm:"column:cot_trace;default:''"`
+	DecisionJSON   string    `gorm:"column:decision_json;default:''"`
+	RawResponse    string    `gorm:"column:raw_response;default:''"`
+	CandidateCoins string    `gorm:"column:candidate_coins;default:''"`
+	// 2026-10-10 per-candidate block reasons (JSON []CandidateVerdict).
+	CandidateVerdicts   string    `gorm:"column:candidate_verdicts;type:text;default:''"`
 	ExecutionLog        string    `gorm:"column:execution_log;default:''"`
 	Decisions           string    `gorm:"column:decisions;default:'[]'"`
 	Success             bool      `gorm:"default:false"`
@@ -37,6 +39,17 @@ type DecisionRecordDB struct {
 func (DecisionRecordDB) TableName() string { return "decision_records" }
 
 // DecisionRecord decision record (external API struct)
+// CandidateVerdict is one candidate's outcome for a cycle (2026-10-10
+// per-candidate block reasons). Status: "evaluated" | "blocked" | "filtered" |
+// "held" (an open position, evaluated in the positions section).
+type CandidateVerdict struct {
+	Symbol      string   `json:"symbol"`
+	Status      string   `json:"status"`
+	LongFailed  []string `json:"long_failed,omitempty"`
+	ShortFailed []string `json:"short_failed,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+}
+
 type DecisionRecord struct {
 	ID                  int64              `json:"id"`
 	TraderID            string             `json:"trader_id"`
@@ -48,6 +61,7 @@ type DecisionRecord struct {
 	DecisionJSON        string             `json:"decision_json"`
 	RawResponse         string             `json:"raw_response"` // Raw AI response for debugging
 	CandidateCoins      []string           `json:"candidate_coins"`
+	CandidateVerdicts   []CandidateVerdict `json:"candidate_verdicts,omitempty"` // 2026-10-10 per-candidate block reasons
 	ExecutionLog        []string           `json:"execution_log"`
 	Success             bool               `json:"success"`
 	ErrorMessage        string             `json:"error_message"`
@@ -82,19 +96,23 @@ type PositionSnapshot struct {
 
 // DecisionAction decision action
 type DecisionAction struct {
-	Action     string    `json:"action"`
-	Symbol     string    `json:"symbol"`
-	Quantity   float64   `json:"quantity"`
-	Leverage   int       `json:"leverage"`
-	Price      float64   `json:"price"`
-	StopLoss   float64   `json:"stop_loss,omitempty"`   // Stop loss price
-	TakeProfit float64   `json:"take_profit,omitempty"` // Take profit price
-	Confidence int       `json:"confidence,omitempty"`  // AI confidence (0-100)
-	Reasoning  string    `json:"reasoning,omitempty"`   // Brief reasoning
-	OrderID    int64     `json:"order_id"`
-	Timestamp  time.Time `json:"timestamp"`
-	Success    bool      `json:"success"`
-	Error      string    `json:"error"`
+	Action     string  `json:"action"`
+	Symbol     string  `json:"symbol"`
+	Quantity   float64 `json:"quantity"`
+	Leverage   int     `json:"leverage"`
+	Price      float64 `json:"price"`
+	StopLoss   float64 `json:"stop_loss,omitempty"`   // Stop loss price
+	TakeProfit float64 `json:"take_profit,omitempty"` // Take profit price
+	Confidence int     `json:"confidence,omitempty"`  // AI confidence (0-100)
+	Reasoning  string  `json:"reasoning,omitempty"`   // Brief reasoning
+	OrderID    int64   `json:"order_id"`
+	// EntryOrderID: exchange id (string) of the order an OPEN action placed —
+	// limit or market. OrderID stays 0 for limit entries, so the quality
+	// buckets join assessment→position on this field (review 2026-10-08 H).
+	EntryOrderID string    `json:"entry_order_id,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+	Success      bool      `json:"success"`
+	Error        string    `json:"error"`
 	// EntryPath tags the entry context for path-attribution stats (user
 	// 09-13: rally-window limit shorts vs bb_ride market shorts must be
 	// separately measurable): e.g. "15m:down", "15m:rally", "bb_ride".
@@ -148,6 +166,9 @@ func (db *DecisionRecordDB) toRecord() *DecisionRecord {
 		ConfigHash:          db.ConfigHash,
 	}
 	json.Unmarshal([]byte(db.CandidateCoins), &record.CandidateCoins)
+	if db.CandidateVerdicts != "" {
+		json.Unmarshal([]byte(db.CandidateVerdicts), &record.CandidateVerdicts)
+	}
 	json.Unmarshal([]byte(db.ExecutionLog), &record.ExecutionLog)
 	json.Unmarshal([]byte(db.Decisions), &record.Decisions)
 	return record
@@ -163,6 +184,11 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 
 	// Serialize arrays to JSON
 	candidateCoinsJSON, _ := json.Marshal(record.CandidateCoins)
+	candidateVerdictsJSON := ""
+	if len(record.CandidateVerdicts) > 0 {
+		b, _ := json.Marshal(record.CandidateVerdicts)
+		candidateVerdictsJSON = string(b)
+	}
 	executionLogJSON, _ := json.Marshal(record.ExecutionLog)
 	decisionsJSON, _ := json.Marshal(record.Decisions)
 
@@ -176,6 +202,7 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 		DecisionJSON:        record.DecisionJSON,
 		RawResponse:         record.RawResponse,
 		CandidateCoins:      string(candidateCoinsJSON),
+		CandidateVerdicts:   candidateVerdictsJSON,
 		ExecutionLog:        string(executionLogJSON),
 		Decisions:           string(decisionsJSON),
 		Success:             record.Success,
@@ -347,4 +374,17 @@ func (s *DecisionStore) GetLastCycleNumber(traderID string) (int, error) {
 		return 0, nil
 	}
 	return *cycleNumber, nil
+}
+
+// CandidatePoolRecord contains only the columns needed by shadow overlap research.
+type CandidatePoolRecord struct {
+	Timestamp      time.Time
+	CandidateCoins string
+}
+
+// GetCandidatePoolsBetween loads every trader's candidate arrays in one query.
+func (s *DecisionStore) GetCandidatePoolsBetween(start, end time.Time) ([]CandidatePoolRecord, error) {
+	var rows []CandidatePoolRecord
+	err := s.db.Model(&DecisionRecordDB{}).Select("timestamp, candidate_coins").Where("timestamp >= ? AND timestamp <= ?", start.UTC(), end.UTC()).Order("timestamp ASC").Find(&rows).Error
+	return rows, err
 }

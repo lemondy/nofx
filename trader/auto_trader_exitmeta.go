@@ -17,6 +17,7 @@
 package trader
 
 import (
+	"errors"
 	"math"
 	"nofx/logger"
 	"nofx/market"
@@ -38,10 +39,27 @@ const exitClassifyWindow = 60 * time.Minute
 // (GetKlinesRange pages at 1500 bars; a 4h hold is one page).
 const (
 	exitBackfillPerCycle    = 3
+	exitBackfillScanLimit   = exitBackfillPerCycle * 10 // look past rows waiting for retry
+	exitReplayMaxFailures   = 8
 	exitReplayMaxAgeDays    = 30 // beyond this the 1m history is not worth fetching
 	exitReplaySentinel      = -1.0
 	exitPriceMatchTolerance = 0.005 // exit fill within 0.5% of the recorded level
 )
+
+var klinesRangeFn = market.GetKlinesRange
+
+var exitReplayBackoffs = [...]time.Duration{
+	5 * time.Minute,
+	15 * time.Minute,
+	time.Hour,
+	4 * time.Hour,
+	12 * time.Hour,
+}
+
+type exitReplayRetry struct {
+	failures    int
+	nextAttempt time.Time
+}
 
 type closeIntent struct {
 	reason string
@@ -202,14 +220,19 @@ func (at *AutoTrader) classifyRecentExitReasons() {
 
 func (at *AutoTrader) backfillExitExcursions() {
 	// market.GetKlinesRange is Binance-fapi-only — wrong prices for any other
-	// exchange deployment, so the replay stays binance-only by construction.
-	if at.exchange != "binance" {
+	// exchange deployment; paper uses the same public Binance futures prices.
+	if !isBinanceFuturesLike(at.exchange) {
 		return
 	}
-	rows, err := at.store.Position().GetClosedMissingExcursions(at.id, exitBackfillPerCycle)
+	// Serialize replay passes as well as protecting the retry map so concurrent
+	// callers cannot spend the same row's retry budget twice.
+	at.exitReplayMu.Lock()
+	defer at.exitReplayMu.Unlock()
+	rows, err := at.store.Position().GetClosedMissingExcursions(at.id, exitBackfillScanLimit)
 	if err != nil {
 		return
 	}
+	requests := 0
 	for _, row := range rows {
 		side := strings.ToLower(row.Side)
 		entry := time.UnixMilli(row.EntryTime)
@@ -218,13 +241,57 @@ func (at *AutoTrader) backfillExitExcursions() {
 			continue
 		}
 		if exit.Sub(entry) > exitReplayMaxAgeDays*24*time.Hour {
-			at.store.Position().UpdateExitExcursions(row.ID, exitReplaySentinel, exitReplaySentinel, exitReplaySentinel, exitReplaySentinel)
+			at.markExitReplayUnavailable(row.ID)
 			continue
 		}
-		bars, err := market.GetKlinesRange(row.Symbol, "1m", entry, exit)
+		if exit.Sub(entry) < time.Minute {
+			if at.markExitReplayUnavailable(row.ID) {
+				logger.Infof("📉 [%s] MAE/MFE replay unavailable for %s #%d: 持仓不足 1 分钟，1m K 线无法回放", at.name, row.Symbol, row.ID)
+			}
+			continue
+		}
+		retry := at.exitReplayRetries[row.ID]
+		if retry.failures >= exitReplayMaxFailures {
+			// A failed sentinel write must not restart API requests or repeat
+			// the exhaustion warning. Only retry persistence on later cycles.
+			at.markExitReplayUnavailable(row.ID)
+			continue
+		}
+		if time.Now().Before(retry.nextAttempt) {
+			continue
+		}
+		if requests >= exitBackfillPerCycle {
+			break
+		}
+		requests++
+		bars, err := klinesRangeFn(row.Symbol, "1m", entry, exit)
+		if errors.Is(err, market.ErrInvalidSymbol) {
+			if at.markExitReplayUnavailable(row.ID) {
+				logger.Infof("📉 [%s] MAE/MFE replay unavailable for %s #%d: Binance 无效符号 (-1121): %v", at.name, row.Symbol, row.ID, err)
+			}
+			continue
+		}
 		if err != nil || len(bars) == 0 {
-			// Transient (proxy/API) — retried next cycle by the mae_pct=0 filter.
-			logger.Infof("📉 [%s] MAE/MFE replay deferred for %s #%d: %v", at.name, row.Symbol, row.ID, err)
+			if err == nil {
+				err = errors.New("no 1m klines returned")
+			}
+			retry.failures++
+			if at.exitReplayRetries == nil {
+				at.exitReplayRetries = make(map[int64]exitReplayRetry)
+			}
+			if retry.failures >= exitReplayMaxFailures {
+				at.exitReplayRetries[row.ID] = retry
+				logger.Warnf("📉 [%s] MAE/MFE replay abandoned for %s #%d: 第 %d 次失败，不再重试: %v", at.name, row.Symbol, row.ID, retry.failures, err)
+				at.markExitReplayUnavailable(row.ID)
+				continue
+			}
+			backoffIndex := min(retry.failures, len(exitReplayBackoffs)) - 1
+			retry.nextAttempt = time.Now().Add(exitReplayBackoffs[backoffIndex])
+			at.exitReplayRetries[row.ID] = retry
+			// Once the 12h tier is reached, only exhaustion merits another log.
+			if retry.failures <= len(exitReplayBackoffs) {
+				logger.Infof("📉 [%s] MAE/MFE replay deferred for %s #%d: 第 %d 次失败，下次最早 %s: %v", at.name, row.Symbol, row.ID, retry.failures, retry.nextAttempt.Format("15:04"), err)
+			}
 			continue
 		}
 		maePct, mfePct := computeExitExcursions(bars, side, row.EntryPrice)
@@ -234,10 +301,21 @@ func (at *AutoTrader) backfillExitExcursions() {
 			mfeR = excursionR(mfePct, row.EntryPrice, row.InitialStopLoss)
 		}
 		if err := at.store.Position().UpdateExitExcursions(row.ID, maePct, mfePct, maeR, mfeR); err == nil {
+			delete(at.exitReplayRetries, row.ID)
 			logger.Infof("📉 [%s] %s %s #%d replayed: MAE %.2f%% (%.2fR) / MFE %.2f%% (%.2fR) over %d 1m bars",
 				at.name, row.Symbol, side, row.ID, maePct, maeR, mfePct, mfeR, len(bars))
 		}
 	}
+}
+
+// markExitReplayUnavailable is called with exitReplayMu held. Keep retry
+// state until the sentinel is persisted, then release the per-row memory.
+func (at *AutoTrader) markExitReplayUnavailable(id int64) bool {
+	if err := at.store.Position().UpdateExitExcursions(id, exitReplaySentinel, exitReplaySentinel, exitReplaySentinel, exitReplaySentinel); err != nil {
+		return false
+	}
+	delete(at.exitReplayRetries, id)
+	return true
 }
 
 // closePositionReasoned marks the intent then market-closes the position —

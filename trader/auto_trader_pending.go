@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"nofx/kernel"
@@ -8,10 +9,13 @@ import (
 	"nofx/market"
 	"nofx/store"
 	notify "nofx/telegram/notify"
+	"nofx/trader/binance"
 	"nofx/trader/types"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/adshao/go-binance/v2/common"
 )
 
 // pendingEntry tracks one placed limit-entry order through its lifecycle:
@@ -37,6 +41,16 @@ type pendingEntry struct {
 	ExecutedQty    float64 // cumulative observed fill, independent of verified coverage
 	ProtectedQty   float64 // executed size already carrying SL/TP (partial-fill watermark)
 	ExitMode       string  // exit template carried to the position on fill (trend|range|quick; '' = trend)
+
+	// UNKNOWN-submit risk retention (2026-10-21, area2 #1 residual). Memory-only
+	// (a restart falls back to the computed pending risk from the shadow row).
+	// HeldRiskUSD is the stop-risk the exposure gate reserved for this entry
+	// before its submit went UNKNOWN; it stays booked until the entry resolves
+	// (dropped = never landed; real order ID = ordinary pending/position risk).
+	// HeldInCycle marks that the per-cycle reservation counters still carry it,
+	// so the pending-risk loop must not count the entry a second time.
+	HeldRiskUSD float64
+	HeldInCycle bool
 }
 
 func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
@@ -44,12 +58,15 @@ func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
 func (at *AutoTrader) setPendingEntry(pe *pendingEntry) {
 	registerAccountTrader(at)
 	at.pendingEntriesMu.Lock()
-	defer at.pendingEntriesMu.Unlock()
 	if at.pendingEntries == nil {
 		at.pendingEntries = make(map[string]*pendingEntry)
 	}
 	at.pendingEntries[pendingEntryKey(pe.Symbol, pe.Side)] = pe
 	at.persistPendingEntry(pe)
+	at.pendingEntriesMu.Unlock()
+	// Startup recovery also comes through this registration point. Retain
+	// ownership until cancellation AND any executed slice's protection verify.
+	at.cancelExcludedPending(pe)
 }
 
 func (at *AutoTrader) dropPendingEntry(symbol, side string) {
@@ -196,6 +213,9 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	if err := at.entryExecutionBlocked(decision.Symbol, side); err != nil {
 		return err
 	}
+	if err := at.unknownSubmitBlocks(decision.Symbol, side); err != nil {
+		return err
+	}
 	logger.Infof("  📌 Open %s (LIMIT): %s @ %.6g", side, decision.Symbol, decision.Price)
 
 	grid, ok := at.trader.(interface {
@@ -272,7 +292,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 				// resting order here — otherwise it would survive next to
 				// the fresh market position.
 				if old := at.getPendingEntry(decision.Symbol, side); old != nil {
-					if err := at.cancelPending(old); err != nil {
+					if err := at.cancelPendingForReplacement(old); err != nil {
 						return fmt.Errorf("cannot cancel replaced limit entry for %s %s: %w", old.Symbol, old.Side, err)
 					}
 					logger.Infof("  🔄 Cancelled replaced pending limit entry for %s (@ %.6g)", old.Symbol, old.Price)
@@ -326,6 +346,9 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	}
 
 	// All risk gates anchor at the LIMIT price — the exact fill price.
+	if err := at.entryDataStaleBlock(decision, marketData); err != nil {
+		return err
+	}
 	floorATR, capATR := at.stopBandATRs(decision.Symbol, marketData)
 	if err := at.validateOpenRisk(decision, decision.Price, floorATR, capATR); err != nil {
 		return err
@@ -368,7 +391,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 
 	// Replace only this side; an opposite-side limit entry remains owned.
 	if old := at.getPendingEntry(decision.Symbol, side); old != nil {
-		if err := at.cancelPending(old); err != nil {
+		if err := at.cancelPendingForReplacement(old); err != nil {
 			return fmt.Errorf("cannot cancel replaced limit entry for %s %s: %w", old.Symbol, old.Side, err)
 		}
 		logger.Infof("  🔄 Replaced pending limit entry for %s (@ %.6g)", old.Symbol, old.Price)
@@ -389,6 +412,11 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		ClientID:     at.entryClientID(),
 	})
 	if err != nil {
+		err = at.trackUnknownSubmit(err, side, pendingEntry{
+			Symbol: decision.Symbol, Price: decision.Price, Quantity: quantity,
+			StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
+			Leverage: decision.Leverage, ExitMode: decision.ExitMode,
+		})
 		return fmt.Errorf("failed to place limit entry: %w", err)
 	}
 	placedQuantity := res.Quantity
@@ -405,10 +433,132 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		Leverage: decision.Leverage, OrderID: res.OrderID, PlacedAt: time.Now(),
 		ExitMode: decision.ExitMode,
 	})
-	actionRecord.OrderID = 0 // string order id lives in the pending state
+	actionRecord.OrderID = 0                // string order id lives in the pending state
+	actionRecord.EntryOrderID = res.OrderID // quality-bucket exact join (review 2026-10-08 H)
 	logger.Infof("  ✓ Limit entry placed: %s %s %.6g @ %.6g (order %s), SL %.6g / TP %.6g",
 		decision.Symbol, side, placedQuantity, decision.Price, res.OrderID, decision.StopLoss, decision.TakeProfit)
 	return nil
+}
+
+// ============================================================================
+// UNKNOWN entry submits (2026-10-20 review area2 #1)
+//
+// binance.ErrSubmitUnknown: the entry POST may have been accepted but neither
+// the response nor the 3s client-ID lookup answered. Treating it as a plain
+// failure abandoned a possibly live order (a filled market entry ran with no
+// SL/AI ownership; a resting limit could fill next to a newer entry). The
+// submit is now tracked as a pending entry keyed by "client:<clientOrderId>":
+// it keeps occupying the pending slot/risk accounting, blocks same-side
+// entries, is re-queried by client ID every pending pass, and — once the
+// exchange answers — swaps in the real order ID and continues through the
+// ordinary fill / protection / expiry lifecycle. The shadow row carries the
+// reference too, so a restart re-claims it (status checks accept the prefix).
+// ============================================================================
+
+func isUnknownEntryRef(orderID string) bool {
+	return strings.HasPrefix(orderID, binance.ClientOrderRefPrefix)
+}
+
+// trackUnknownSubmit registers the plan of an entry whose submit state is
+// UNKNOWN and returns the error to surface to the caller. Errors that are not
+// ErrSubmitUnknown are returned unchanged and nothing is registered.
+func (at *AutoTrader) trackUnknownSubmit(err error, side string, plan pendingEntry) error {
+	var unknown *binance.SubmitUnknownError
+	if err == nil || !errors.As(err, &unknown) || unknown.ClientOrderID == "" {
+		return err
+	}
+	plan.Side = side
+	plan.OrderID = binance.ClientOrderRefPrefix + unknown.ClientOrderID
+	plan.PlacedAt = time.Now()
+	at.setPendingEntry(&plan)
+	logger.Warnf("⚠️ [%s] %s %s entry submit state UNKNOWN (clientOrderId=%s) — tracked as pending, re-queried by client ID each pass; same-side entries blocked",
+		at.name, plan.Symbol, side, unknown.ClientOrderID)
+	notify.Notify("ALERT", at.name, fmt.Sprintf(
+		"<b>⚠️ 入场单状态未知 %s %s</b>\n<i>提交响应丢失且查回失败(clientOrderId %s)。已按 client ID 持续查回,同方向入场暂停;若已成交将自动补挂保护。</i>",
+		notify.Escape(plan.Symbol), side, notify.Escape(unknown.ClientOrderID)))
+	return fmt.Errorf("%w — tracked for client-ID reconciliation, not resubmitted", err)
+}
+
+// unknownSubmitBlocks refuses a new entry while an UNKNOWN submit on the same
+// symbol+side is still unresolved.
+func (at *AutoTrader) unknownSubmitBlocks(symbol, side string) error {
+	if pe := at.getPendingEntry(symbol, side); pe != nil && isUnknownEntryRef(pe.OrderID) {
+		return fmt.Errorf("entry blocked: previous %s %s entry submit is still UNKNOWN (%s) — awaiting exchange reconciliation", symbol, side, pe.OrderID)
+	}
+	return nil
+}
+
+// resolveUnknownEntry re-queries an UNKNOWN submit by client ID. true = the
+// exchange answered and pe now carries the real order ID. A definitive
+// "order does not exist" persisting for two passes and two minutes means the
+// POST never landed: the tracking entry is dropped.
+func (at *AutoTrader) resolveUnknownEntry(pe *pendingEntry) bool {
+	if !isUnknownEntryRef(pe.OrderID) {
+		return true
+	}
+	status, err := at.trader.GetOrderStatus(pe.Symbol, pe.OrderID)
+	if err != nil {
+		var apiErr *common.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == -2013 {
+			pe.Cycles++
+			if pe.Cycles >= 2 && time.Since(pe.PlacedAt) >= 2*time.Minute {
+				at.dropPendingEntry(pe.Symbol, pe.Side)
+				logger.Warnf("📌 [%s] UNKNOWN entry %s %s (%s): exchange reports no such order after %d passes — submit never landed, tracking dropped",
+					at.name, pe.Symbol, pe.Side, pe.OrderID, pe.Cycles)
+				return false
+			}
+		}
+		logger.Infof("📌 [%s] UNKNOWN entry %s %s (%s) still unresolved: %v", at.name, pe.Symbol, pe.Side, pe.OrderID, err)
+		return false
+	}
+	realID, ok := orderIDString(status)
+	if !ok {
+		return false
+	}
+	logger.Warnf("📌 [%s] UNKNOWN entry %s %s resolved by client ID: %s → order %s (status %v)", at.name, pe.Symbol, pe.Side, pe.OrderID, realID, status["status"])
+	pe.OrderID = realID
+	// The real order now carries its own pending/position risk accounting.
+	pe.HeldRiskUSD = 0
+	at.persistPendingEntry(pe)
+	return true
+}
+
+// holdUnknownSubmitReservation is the failure-branch hook of the decision
+// loop: when an open's error is an UNKNOWN submit (the order may be live on
+// the exchange) its stop-risk reservation must NOT be given back. The cycle
+// counters keep it for the rest of this batch, and the tracked pending entry
+// remembers the amount (HeldRiskUSD) so the pending-risk accounting keeps
+// charging it after the counters reset, until the entry resolves. Returns true
+// when the reservation was retained (caller skips the release).
+func (at *AutoTrader) holdUnknownSubmitReservation(err error, d *kernel.Decision) bool {
+	if err == nil || d == nil || d.CycleReservedRiskUSD <= 0 || !errors.Is(err, binance.ErrSubmitUnknown) {
+		return false
+	}
+	side := "long"
+	if strings.Contains(d.Action, "short") {
+		side = "short"
+	}
+	if pe := at.getPendingEntry(d.Symbol, side); pe != nil && isUnknownEntryRef(pe.OrderID) {
+		pe.HeldRiskUSD = d.CycleReservedRiskUSD
+		pe.HeldInCycle = true
+	}
+	logger.Warnf("🛡️ [%s] %s %s submit UNKNOWN — stop-risk reservation %.2f USDT retained until the exchange answers",
+		at.name, d.Symbol, d.Action, d.CycleReservedRiskUSD)
+	return true
+}
+
+// settleHeldReservations runs when a decision batch ends (still under the
+// account execution lock, before the per-cycle counters can reset): held
+// entries are handed over from the cycle counters to the pending-risk
+// accounting, so the next cycle neither loses nor double-counts them.
+func (at *AutoTrader) settleHeldReservations() {
+	at.pendingEntriesMu.RLock()
+	defer at.pendingEntriesMu.RUnlock()
+	for _, pe := range at.pendingEntries {
+		if pe != nil {
+			pe.HeldInCycle = false
+		}
+	}
 }
 
 // snapshotPendingKeys returns the symbol+side keys currently holding a resting
@@ -467,14 +617,20 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 		return
 	}
 
-	maxCycles := 3
-	if at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles > 0 {
-		maxCycles = at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles
-	}
+	maxCycles := at.limitEntryMaxCycles()
 	lifetime := limitEntryLifetime(maxCycles, at.config.ScanInterval)
 
 	for _, sym := range symbols {
 		pe := snapshot[sym]
+		if isUnknownEntryRef(pe.OrderID) && !at.resolveUnknownEntry(pe) {
+			continue
+		}
+		// Exclusion is a configuration veto, not a market-direction wobble:
+		// enforce it on the fast protection pass too, before any status/data
+		// failure can leave the remaining entry risk resting unchecked.
+		if at.cancelExcludedPending(pe) {
+			continue
+		}
 		status, err := at.trader.GetOrderStatus(pe.Symbol, pe.OrderID)
 		if err != nil {
 			logger.Infof("📌 [%s] Limit entry %s status check failed: %v", at.name, pe.Symbol, err)
@@ -628,11 +784,35 @@ func (at *AutoTrader) reportFilledRR(pe *pendingEntry, fillPrice float64) {
 
 // cancelPending cancels the exchange order and drops the pending state.
 func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
+	_, err := at.cancelPendingWithExecuted(pe)
+	return err
+}
+
+// review 2026-10-11: a cancel can race a fill after the position check;
+// that slice now owns the position, so neither limit nor market replacement
+// may add another entry. Other cancellation callers keep their prior behavior.
+func (at *AutoTrader) cancelPendingForReplacement(pe *pendingEntry) error {
+	executed, err := at.cancelPendingWithExecuted(pe)
+	if err != nil {
+		return err
+	}
+	if executed > 0 {
+		err := fmt.Errorf("old limit entry filled during replacement — new entry aborted; position now owned by the filled slice (%s %s, executed %.6g)", pe.Symbol, pe.Side, executed)
+		logger.Warnf("%v", err)
+		return err
+	}
+	return nil
+}
+
+func (at *AutoTrader) cancelPendingWithExecuted(pe *pendingEntry) (float64, error) {
+	if isUnknownEntryRef(pe.OrderID) && !at.resolveUnknownEntry(pe) {
+		return pe.ExecutedQty, fmt.Errorf("entry submit still UNKNOWN (%s) — cannot cancel or replace until the exchange answers", pe.OrderID)
+	}
 	grid, ok := at.trader.(interface {
 		CancelOrder(symbol, orderID string) error
 	})
 	if !ok {
-		return fmt.Errorf("exchange does not support order cancellation")
+		return pe.ExecutedQty, fmt.Errorf("exchange does not support order cancellation")
 	}
 	cancelErr := grid.CancelOrder(pe.Symbol, pe.OrderID)
 	if cancelErr != nil {
@@ -642,24 +822,34 @@ func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
 	// status poll and this cancel succeeding. Re-query once and protect any
 	// executed slice BEFORE dropping the plan (protectExecutedSlice is
 	// idempotent on the watermark). On Binance a cancel of a fully-filled
-	// order errors → early return above → the FILLED branch handles it.
+	// order can error; the terminal receipt and verified coverage still
+	// determine the final cancellation result.
 	status, err := at.trader.GetOrderStatus(pe.Symbol, pe.OrderID)
 	if err != nil {
-		return fmt.Errorf("cancel accepted, final fill unknown: %w", err)
+		return pe.ExecutedQty, fmt.Errorf("cancel accepted, final fill unknown: %w", err)
 	}
+	executed := math.Max(pe.ExecutedQty, statusFloat(status, "executedQty"))
 	at.protectExecutedSlice(pe, status)
 	st, _ := status["status"].(string)
 	switch strings.ToUpper(st) {
 	case "CANCELED", "EXPIRED", "REJECTED", "FILLED":
 	default:
-		return fmt.Errorf("cancel not terminal: %s", st)
+		return executed, fmt.Errorf("cancel not terminal: %s", st)
 	}
 	if !pendingProtectionComplete(pe, status) {
-		return fmt.Errorf("cancel accepted, residual protection incomplete")
+		return executed, fmt.Errorf("cancel accepted, residual protection incomplete")
 	}
 	at.dropPendingEntry(pe.Symbol, pe.Side)
 	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>限价单终态已确认 %s</b>\n已成交 %.6g，残量保护已核验", notify.Escape(pe.Symbol), statusFloat(status, "executedQty")))
-	return nil
+	return executed, nil
+}
+
+// review 2026-10-08 D: live and shadow entries share the configured cycle limit.
+func (at *AutoTrader) limitEntryMaxCycles() int {
+	if at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles > 0 {
+		return at.config.StrategyConfig.RiskControl.LimitEntryMaxCycles
+	}
+	return 3
 }
 
 // limitEntryLifetime resolves a limit order's unfilled lifetime: the older
@@ -728,16 +918,23 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 		return 0
 	}
 	newSL, newTP := pe.StopLoss, pe.TakeProfit
+	recordedSL := at.GetRecordedStopLoss(pe.Symbol, pe.Side)
+	// review 2026-10-11: later fills must extend coverage without undoing
+	// breakeven/trailing/AI tightening; the opening-risk anchor stays the plan.
+	if recordedSL > 0 && !math.IsNaN(recordedSL) && !math.IsInf(recordedSL, 0) &&
+		(newSL <= 0 || (pe.Side == "long" && recordedSL > newSL) || (pe.Side == "short" && recordedSL < newSL)) {
+		newSL = recordedSL
+	}
 	if newSL <= 0 || newTP <= 0 {
 		return 0
 	}
 	at.markAIManaged(pe.Symbol, pe.Side, pe.OrderID)
 	posKey := pe.Symbol + "_" + pe.Side
-	if at.GetRecordedStopLoss(pe.Symbol, pe.Side) <= 0 {
+	if recordedSL <= 0 {
 		// First slice of this entry: the 1R anchor and the recorded stop are
 		// the REAL opening risk (actual fill), not the plan's limit price.
 		at.SetRecordedStopLoss(pe.Symbol, pe.Side, newSL)
-		at.SetInitialStopLoss(pe.Symbol, pe.Side, newSL)
+		at.SetInitialStopLoss(pe.Symbol, pe.Side, pe.StopLoss)
 		at.SetExitMode(pe.Symbol, pe.Side, pe.ExitMode)
 		at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 		at.ClearPeakPnLCache(pe.Symbol, pe.Side)
@@ -754,10 +951,18 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 	// watermark and report the slice protected with no profit leg. Duplicate
 	// placement on retry is prevented by the retry-safe leg skip inside
 	// placeProtectiveOrders.
-	slErr, tpErr := at.placeProtectiveOrders(&kernel.Decision{
+	// 2026-10-20 review area2 #7: executed is CUMULATIVE entry quantity, so a
+	// split TP that already filled no longer rests on the exchange and would be
+	// re-armed against the runner. Subtract what the position has already shed.
+	tpDone, tpDoneErr := at.pendingTPRealized(pe, executed, previouslyProtected)
+	if tpDoneErr != nil {
+		logger.Infof("⚠️ [%s] partial-fill protection for %s %s deferred: cannot tell how much TP already filled (%v) — watermark NOT advanced, retried next cycle", at.name, pe.Symbol, pe.Side, tpDoneErr)
+		return 0
+	}
+	slErr, tpErr := at.placeProtectiveOrdersTPDone(&kernel.Decision{
 		Symbol: pe.Symbol, Action: "open_" + pe.Side,
 		StopLoss: newSL, TakeProfit: newTP, ExitMode: pe.ExitMode,
-	}, positionSide, slice, pe.Price, avg)
+	}, positionSide, slice, pe.Price, avg, tpDone)
 	if slErr != nil || tpErr != nil {
 		logger.Infof("⚠️ [%s] partial-fill protection FAILED for %s %s (SL: %v, TP: %v) — watermark NOT advanced, retried next cycle", at.name, pe.Symbol, pe.Side, slErr, tpErr)
 		return 0
@@ -773,6 +978,36 @@ func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]i
 		"<b>📌 部分成交保护 %s</b>\n<i>已成交 %.6g @ %.6g,SL/TP 保留原始结构价位(%.6g / %.6g)</i>",
 		notify.Escape(pe.Symbol), executed, avg, newSL, newTP))
 	return newSL
+}
+
+// pendingTPRealized estimates how much of the cumulative executed entry has
+// already been closed by earlier reductions (take-profit legs, trims): the
+// executed quantity minus the live position size. It is only consulted once a
+// previous slice was protected (previouslyProtected > 0) — on a first fill a
+// not-yet-visible position must never read as "already closed". An
+// over-estimate (manual/other reductions) only means fewer new TP quantity,
+// never a duplicate sell. A failed fresh read is returned as an error so the
+// caller defers placement instead of guessing.
+func (at *AutoTrader) pendingTPRealized(pe *pendingEntry, executed, previouslyProtected float64) (float64, error) {
+	if previouslyProtected <= 0 {
+		return 0, nil
+	}
+	at.invalidateExecutionCache()
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return 0, err
+	}
+	held := 0.0
+	for _, pos := range positions {
+		if pos["symbol"] != pe.Symbol || pos["side"] != pe.Side {
+			continue
+		}
+		if amt, ok := pos["positionAmt"].(float64); ok {
+			held = math.Abs(amt)
+		}
+		break
+	}
+	return math.Max(0, executed-held), nil
 }
 
 func pendingProtectionComplete(pe *pendingEntry, status map[string]interface{}) bool {

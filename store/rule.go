@@ -34,6 +34,10 @@ type TradingRuleDB struct {
 	Enabled     bool   `gorm:"column:enabled;default:true" json:"enabled"`
 	HitCount    int64  `gorm:"column:hit_count;default:0" json:"hit_count"` // times this rule fired
 	BlockCount  int64  `gorm:"column:block_count;default:0" json:"block_count"`
+	// review 2026-10-09 K: server-computed verification (JSON of
+	// kernel.RuleVerification) and when it was computed. Never client-supplied.
+	VerifiedStats string `gorm:"column:verified_stats;type:text;default:''" json:"verified_stats"`
+	VerifiedAt    int64  `gorm:"column:verified_at;default:0" json:"verified_at"`
 
 	CreatedAt int64 `gorm:"column:created_at;default:0" json:"created_at"`
 	UpdatedAt int64 `gorm:"column:updated_at;default:0" json:"updated_at"`
@@ -75,7 +79,7 @@ func (s *RuleStore) initTables() error {
 		var tableExists int64
 		s.db.Raw(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'trading_rules'`).Scan(&tableExists)
 		if tableExists > 0 {
-			return nil
+			return ensureColumns(s.db, &TradingRuleDB{}, &RuleCheckLogDB{})
 		}
 	}
 	if err := s.db.AutoMigrate(&TradingRuleDB{}); err != nil {
@@ -99,6 +103,12 @@ type RuleInput struct {
 	Source      string `json:"source"`       // manual|ai_review (defaults to manual)
 	SourceStats string `json:"source_stats"` // supporting stats from AI extraction
 	Enabled     *bool  `json:"enabled"`
+	// SupportingTrades: the model's claimed supporting-trade count (informational;
+	// code verification is authoritative — review 2026-10-09 K).
+	SupportingTrades int `json:"supporting_trades"`
+	// VerifiedStats/VerifiedAt are set by the server only (json:"-").
+	VerifiedStats string `json:"-"`
+	VerifiedAt    int64  `json:"-"`
 }
 
 // ListRules returns all rules for a trader
@@ -148,10 +158,47 @@ func (s *RuleStore) CreateRule(traderID string, input *RuleInput) (*TradingRuleD
 	if input.SourceStats != "" {
 		rule.SourceStats = input.SourceStats
 	}
+	if input.VerifiedStats != "" {
+		rule.VerifiedStats = input.VerifiedStats
+		rule.VerifiedAt = input.VerifiedAt
+	}
 	if err := s.db.Create(rule).Error; err != nil {
 		return nil, err
 	}
 	return rule, nil
+}
+
+// SetVerification stores a server-computed verification summary on a rule.
+func (s *RuleStore) SetVerification(traderID string, id int64, statsJSON string, at int64) error {
+	return s.db.Model(&TradingRuleDB{}).Where("trader_id = ? AND id = ?", traderID, id).
+		Updates(map[string]interface{}{"verified_stats": statsJSON, "verified_at": at}).Error
+}
+
+// RuleTriggerStat per-rule recent trigger statistics.
+type RuleTriggerStat struct {
+	RuleID   int64
+	Triggers int64
+	LastAtMs int64
+}
+
+// TriggerStats counts rule_check_logs rows per rule since sinceMs, plus the
+// all-time last trigger time, in one grouped query (review 2026-10-09 K).
+func (s *RuleStore) TriggerStats(traderID string, sinceMs int64) (map[int64]RuleTriggerStat, error) {
+	var rows []struct {
+		RuleID   int64
+		Triggers int64
+		LastAt   int64
+	}
+	if err := s.db.Model(&RuleCheckLogDB{}).
+		Select("rule_id, SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS triggers, MAX(created_at) AS last_at", sinceMs).
+		Where("trader_id = ?", traderID).Group("rule_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[int64]RuleTriggerStat, len(rows))
+	for _, r := range rows {
+		out[r.RuleID] = RuleTriggerStat{RuleID: r.RuleID, Triggers: r.Triggers, LastAtMs: r.LastAt}
+	}
+	return out, nil
 }
 
 // UpdateRule updates an existing rule

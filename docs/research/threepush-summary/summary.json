@@ -1,0 +1,24 @@
+{
+  "version": "2026-10-24-v2",
+  "calibration": {
+    "passed": true,
+    "complete_large_panels": true,
+    "null_reject_families": 0,
+    "null_train_rejections": 0,
+    "null_hold_confirmations": 0,
+    "planted_medium_detected": true,
+    "criterion": "10 fixed large panels; <=3 with any train BH rejection; hold<=max(1,train*.25); matched edge estimable; planted H2_edge same-key train+hold",
+    "reason": "passed"
+  },
+  "tests": 21384,
+  "train_fdr": 0,
+  "holdout_confirmed": 0,
+  "effective_default": 0,
+  "effective_keys": [],
+  "sufficient_tests": 6630,
+  "default_train_fdr": 0,
+  "default_holdout_confirmed": 0,
+  "artifact_directory": "/Users/zhangyun/workspace/nofx/.claude/worktrees/threepush/artifacts/threepush/out_v2",
+  "candidate_sha256": "1bce83d7b6919d2244cf1edfa4cae8708e564483fbd3246b1f0c68209f524c32",
+  "holdout_disclosure": "v1保留窗已被看过；v2按修正定义评估一次，不是全新独立保留样本"
+}

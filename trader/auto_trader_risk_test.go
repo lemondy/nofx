@@ -152,7 +152,8 @@ func TestApplyHardRiskGates(t *testing.T) {
 	at.SetRecordedStopLoss("BRUSDT", "short", 0.32)
 
 	ctx := &kernel.Context{
-		MarketDataMap: map[string]*market.Data{"BRUSDT": uptrend1dData()},
+		CandidateCoins: []kernel.CandidateCoin{{Symbol: "BRUSDT"}},
+		MarketDataMap:  map[string]*market.Data{"BRUSDT": uptrend1dData()},
 		Positions: []kernel.PositionInfo{
 			{Symbol: "BRUSDT", Side: "short", MarkPrice: 0.30},
 		},
@@ -191,10 +192,10 @@ func TestApplyHardRiskGates(t *testing.T) {
 
 func TestApplyHardRiskGatesBlocksLowConfidenceOpen(t *testing.T) {
 	at := riskTestTrader(store.RiskControlConfig{MinConfidence: 70, MaxNetDirectionalRiskPct: -1})
-	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, MarketDataMap: map[string]*market.Data{}}
+	ctx := &kernel.Context{Account: kernel.AccountInfo{TotalEquity: 1000}, MarketDataMap: map[string]*market.Data{}, CandidateCoins: []kernel.CandidateCoin{{Symbol: "LOWUSDT"}, {Symbol: "OKUSDT"}}}
 	got := at.applyHardRiskGates([]kernel.Decision{
 		{Action: "open_long", Symbol: "LOWUSDT", Confidence: 69},
-		{Action: "open_short", Symbol: "OKUSDT", Confidence: 70},
+		{Action: "open_short", Symbol: "OKUSDT", Price: 100, Confidence: 70},
 		{Action: "wait", Symbol: "LOWUSDT", Confidence: 0},
 	}, ctx)
 	if len(got) != 2 || got[0].Symbol != "OKUSDT" || got[1].Action != "wait" {
@@ -295,7 +296,8 @@ func TestEntryTimingGate(t *testing.T) {
 
 	mkGate := func(trend string) *kernel.Context {
 		return &kernel.Context{
-			MarketDataMap: map[string]*market.Data{"ZECUSDT": sub(trend)},
+			CandidateCoins: []kernel.CandidateCoin{{Symbol: "ZECUSDT"}},
+			MarketDataMap:  map[string]*market.Data{"ZECUSDT": sub(trend)},
 		}
 	}
 

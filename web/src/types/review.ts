@@ -97,8 +97,25 @@ export interface TradingRule {
   enabled: boolean
   hit_count: number
   block_count: number
+  verified_stats?: string // JSON of RuleVerification (server-computed)
+  verified_at?: number
+  triggers_30d?: number
+  last_triggered_at?: number
+  review_due?: boolean
   created_at: number
   updated_at: number
+}
+
+// review 2026-10-09 K: server-side historical verification of a rule
+export interface RuleVerification {
+  status: 'supported' | 'weak' | 'contradicted' | 'unverifiable' | 'soft'
+  matched: number
+  wins: number
+  net_pnl: number
+  baseline_win_rate: number
+  baseline_net_per_trade: number
+  population: number
+  reason?: string
 }
 
 export interface RuleCondition {
@@ -117,6 +134,7 @@ export interface RuleInput {
   tags?: string
   source?: string
   source_stats?: string
+  supporting_trades?: number
   enabled?: boolean
 }
 
@@ -154,6 +172,7 @@ export interface RuleCheckResult {
 export interface RuleProposal extends RuleInput {
   name: string
   rule_type: 'hard' | 'soft'
+  verification?: RuleVerification
 }
 
 // ===== AI review =====

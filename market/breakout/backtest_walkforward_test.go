@@ -92,7 +92,7 @@ func TestTuneWalkForwardVerifiesOnHoldout(t *testing.T) {
 				ret = hiEdge
 			}
 			out[i] = BTSignal{
-				Time:   t0.Add(time.Duration(startIdx+i) * time.Hour),
+				Time:   t0.Add(time.Duration(startIdx+i) * 24 * time.Hour),
 				Symbol: "TESTUSDT",
 				Score:  score,
 				Ret24h: ret,
@@ -101,7 +101,7 @@ func TestTuneWalkForwardVerifiesOnHoldout(t *testing.T) {
 		return out
 	}
 	t0 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	// train: 60 signals, half at 85 with +2% edge, half at 60 with 0%.
+	// train: 60 independent trades, 2/3 at 85 with +2% edge, 1/3 at 60 with 0%.
 	train := mk(60, 0, 2.0, 0.0, t0)
 	// test: 30 signals, the 85-bucket now LOSES (−3%) while the 60-bucket is +0.1%.
 	test := mk(30, 100, -3.0, 0.1, t0)
@@ -126,8 +126,8 @@ func TestTuneWalkForwardVerifiesOnHoldout(t *testing.T) {
 		t.Fatalf("expected a rejected strong_threshold change, got %v", rejected)
 	}
 
-	// Now the honest case: the 85-bucket keeps its edge out-of-sample →
-	// the change verifies and is applied.
+	// Now the 85-bucket keeps its edge out-of-sample, but equals the incumbent
+	// proxy: that still cannot authorize a change or live publication.
 	test = mk(30, 100, 3.0, 0.1, t0)
 	signals = append(train, test...)
 	prev := GetParams()
@@ -141,6 +141,9 @@ func TestTuneWalkForwardVerifiesOnHoldout(t *testing.T) {
 	}
 	if foundStrong {
 		t.Fatalf("equal incumbent proxy must not verify, changes=%v", changes)
+	}
+	if !strings.Contains(strings.Join(rejected, "\n"), "does not outperform incumbent") {
+		t.Fatalf("positive holdout must exercise incumbent comparison, got %v", rejected)
 	}
 	if GetParams().StrongThreshold != prev.StrongThreshold {
 		t.Fatal("research proxy changed live parameters")
