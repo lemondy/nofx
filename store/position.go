@@ -112,6 +112,10 @@ type TraderPosition struct {
 	ExitTime           int64   `gorm:"column:exit_time;index:idx_positions_exit" json:"exit_time"` // Unix milliseconds UTC, 0 means not set
 	RealizedPnL        float64 `gorm:"column:realized_pnl;default:0" json:"realized_pnl"`
 	Fee                float64 `gorm:"column:fee;default:0" json:"fee"`
+	// Query-only attribution: never persist funding into the fill-derived ledger.
+	FundingFee         float64 `gorm:"-" json:"funding_fee"` // Signed: positive is income.
+	NetPnL             float64 `gorm:"-" json:"net_pnl"`     // realized_pnl - fee + funding_fee.
+	FundingUnallocated bool    `gorm:"-" json:"funding_unallocated"`
 	Leverage           int     `gorm:"column:leverage;default:1" json:"leverage"`
 	Status             string  `gorm:"column:status;default:OPEN;index:idx_positions_status" json:"status"`
 	CloseReason        string  `gorm:"column:close_reason;default:''" json:"close_reason"`
@@ -582,6 +586,9 @@ func (s *PositionStore) GetClosedPositions(traderID string, limit int) ([]*Trade
 		if pos.EntryQuantity == 0 {
 			pos.EntryQuantity = pos.Quantity
 		}
+	}
+	if _, err := s.allocateFunding(positions); err != nil {
+		return nil, err
 	}
 	return positions, nil
 }
