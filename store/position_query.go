@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"math"
+	"nofx/logger"
 	"strings"
 	"time"
 
@@ -582,7 +583,10 @@ func (s *PositionStore) allocateFunding(positions []*TraderPosition) (fundingSum
 	}
 	rows, err := NewAccountIncomeStore(s.db).fundingBetween(keys(exchanges), keys(symbols), keys(kinds), minStart, maxEnd)
 	if err != nil {
-		return sum, fmt.Errorf("failed to load funding income: %w", err)
+		// Funding is an enrichment: without it NetPnL stays realized − fee
+		// (initialised above). Never fail the position history over it.
+		logger.Warnf("funding allocation skipped (income unavailable): %v", err)
+		return sum, nil
 	}
 	if len(rows) == 0 {
 		return sum, nil
@@ -593,7 +597,8 @@ func (s *PositionStore) allocateFunding(positions []*TraderPosition) (fundingSum
 	if err := s.db.Select("id", "exchange_id", "exchange_type", "symbol", "entry_time", "exit_time").
 		Where("exchange_id IN ? AND symbol IN ? AND entry_time <= ? AND (exit_time = 0 OR exit_time >= ?)",
 			keys(exchanges), keys(symbols), maxEnd, minStart).Find(&peers).Error; err != nil {
-		return sum, fmt.Errorf("failed to load peer positions: %w", err)
+		logger.Warnf("funding allocation skipped (peer positions unavailable): %v", err)
+		return sum, nil
 	}
 	mine := map[int64]*TraderPosition{}
 	for _, p := range eligible {
