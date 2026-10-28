@@ -12,6 +12,7 @@ import (
 	"nofx/trader/types"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -203,7 +204,7 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 		return nil, fmt.Errorf("position size too small, rounded to 0 (original: %.8f → formatted: %s). Suggest increasing position amount or selecting a lower-priced coin", quantity, quantityStr)
 	}
 
-	// Check minimum notional value (Binance requires at least 10 USDT)
+	// Check the exchange MIN_NOTIONAL from the shared rules cache.
 	if err := t.CheckMinNotional(symbol, quantityFloat); err != nil {
 		return nil, err
 	}
@@ -264,7 +265,7 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		return nil, fmt.Errorf("position size too small, rounded to 0 (original: %.8f → formatted: %s). Suggest increasing position amount or selecting a lower-priced coin", quantity, quantityStr)
 	}
 
-	// Check minimum notional value (Binance requires at least 10 USDT)
+	// Check the exchange MIN_NOTIONAL from the shared rules cache.
 	if err := t.CheckMinNotional(symbol, quantityFloat); err != nil {
 		return nil, err
 	}
@@ -326,7 +327,7 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 	}
 
 	// Format quantity
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
+	quantityStr, err := t.formatReduceQuantity(symbol, quantity)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +401,7 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 	}
 
 	// Format quantity
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
+	quantityStr, err := t.formatReduceQuantity(symbol, quantity)
 	if err != nil {
 		return nil, err
 	}
@@ -1071,7 +1072,10 @@ func (t *FuturesTrader) PlaceLimitOrder(req *types.LimitOrderRequest) (*types.Li
 
 func validateOrderNotional(symbol string, quantity, price, minNotional float64) error {
 	notional := quantity * price
-	if notional < minNotional {
+	if !positiveFinite(quantity) || !positiveFinite(price) || !positiveFinite(minNotional) || !positiveFinite(notional) {
+		return fmt.Errorf("MIN_NOTIONAL: %s invalid quantity, price or minimum", symbol)
+	}
+	if notional+math.Max(1e-12, minNotional*1e-12) < minNotional {
 		return fmt.Errorf("MIN_NOTIONAL: %s order amount %.2f USDT is below minimum %.2f USDT (quantity=%.8f, price=%.8f)",
 			symbol, notional, minNotional, quantity, price)
 	}
@@ -1287,6 +1291,167 @@ func (t *FuturesTrader) stopWorkingType(symbol string) futures.WorkingType {
 	return futures.WorkingTypeContractPrice
 }
 
+// Stop-trigger reference prices (review 2026-10-28 #2). Trailing candidates
+// are computed off the MARK stream while the exchange evaluates the trigger on
+// the symbol's workingType; a candidate between the two prices is rejected
+// with -2021 (or, on the -4130 path, after the old protection was cancelled).
+// The state is public market data, so it is shared per endpoint like the
+// exchange-rule snapshot. Nothing here polls REST on its own.
+const (
+	stopRefMaxAge               = 20 * time.Second
+	stopImmediateTriggerBackoff = 30 * time.Second
+)
+
+type stopRefSample struct {
+	mark, last     float64
+	markAt, lastAt time.Time
+}
+
+type stopBackoffEntry struct {
+	price float64
+	until time.Time
+}
+
+type stopRefState struct {
+	mu      sync.Mutex
+	refs    map[string]stopRefSample
+	backoff map[string]stopBackoffEntry
+}
+
+var sharedStopRefs = struct {
+	sync.Mutex
+	m map[string]*stopRefState
+}{m: make(map[string]*stopRefState)}
+
+func (t *FuturesTrader) stopRefs() *stopRefState {
+	sharedStopRefs.Lock()
+	defer sharedStopRefs.Unlock()
+	st := sharedStopRefs.m[t.client.BaseURL]
+	if st == nil {
+		st = &stopRefState{refs: map[string]stopRefSample{}, backoff: map[string]stopBackoffEntry{}}
+		sharedStopRefs.m[t.client.BaseURL] = st
+	}
+	return st
+}
+
+// ObserveStopMarkPrice records the MARK price the trailing/profit rules used.
+func (t *FuturesTrader) ObserveStopMarkPrice(symbol string, price float64) {
+	t.observeStopPrice(symbol, price, true)
+}
+
+func (t *FuturesTrader) observeStopPrice(symbol string, price float64, isMark bool) {
+	if symbol == "" || !positiveFinite(price) {
+		return
+	}
+	st := t.stopRefs()
+	now := t.now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	s := st.refs[symbol]
+	if isMark {
+		s.mark, s.markAt = price, now
+	} else {
+		s.last, s.lastAt = price, now
+	}
+	st.refs[symbol] = s
+}
+
+func (t *FuturesTrader) freshStopRefs(symbol string) (mark, last float64) {
+	st := t.stopRefs()
+	now := t.now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	s := st.refs[symbol]
+	if s.mark > 0 && now.Sub(s.markAt) >= 0 && now.Sub(s.markAt) <= stopRefMaxAge {
+		mark = s.mark
+	}
+	if s.last > 0 && now.Sub(s.lastAt) >= 0 && now.Sub(s.lastAt) <= stopRefMaxAge {
+		last = s.last
+	}
+	return mark, last
+}
+
+// stopTriggerPreflight runs BEFORE any exchange call (and therefore before the
+// -4130 branch cancels the old protection). It only ever rejects when a fresh
+// reference price proves the trigger would fire immediately, or when the same
+// (or a more aggressive) candidate was just rejected with -2021. Unknown
+// prices never block: the exchange stays the final judge.
+func (t *FuturesTrader) stopTriggerPreflight(symbol string, long bool, workingType futures.WorkingType, stop float64) error {
+	key := symbol + "|" + stopSideKey(long)
+	st := t.stopRefs()
+	now := t.now()
+	st.mu.Lock()
+	if b, ok := st.backoff[key]; ok {
+		if !now.Before(b.until) {
+			delete(st.backoff, key)
+		} else if (long && stop >= b.price) || (!long && stop <= b.price) {
+			st.mu.Unlock()
+			return fmt.Errorf("stop preflight: %s trigger %.8g was rejected as immediately triggering; retry backoff until %s", symbol, b.price, b.until.Format("15:04:05"))
+		}
+	}
+	st.mu.Unlock()
+
+	mark, last := t.freshStopRefs(symbol)
+	if workingType == futures.WorkingTypeContractPrice && last <= 0 && mark > 0 {
+		// One targeted ticker read per stop move that already carries a fresh
+		// MARK (trailing/profit rules), never on a polling loop.
+		if _, err := t.GetMarketPrice(symbol); err == nil {
+			mark, last = t.freshStopRefs(symbol)
+		}
+	}
+	ref, refName := 0.0, ""
+	switch {
+	case workingType == futures.WorkingTypeMarkPrice && mark > 0:
+		ref, refName = mark, "MARK_PRICE"
+	case workingType != futures.WorkingTypeMarkPrice && last > 0:
+		ref, refName = last, "CONTRACT_PRICE"
+	case mark > 0 && last > 0:
+		// Exact price for the working type unavailable: use the one that is
+		// less favourable to the stop (long: lower, short: higher).
+		ref, refName = mark, "MARK_PRICE(conservative)"
+		if (long && last < mark) || (!long && last > mark) {
+			ref = last
+			refName = "LAST_PRICE(conservative)"
+		}
+	case mark > 0:
+		ref, refName = mark, "MARK_PRICE(only known)"
+	case last > 0:
+		ref, refName = last, "LAST_PRICE(only known)"
+	}
+	if ref <= 0 {
+		return nil
+	}
+	if (long && stop >= ref) || (!long && stop <= ref) {
+		return fmt.Errorf("stop preflight: %s %s stop trigger %.8g would trigger immediately against %s %.8g; existing protection untouched", symbol, stopSideKey(long), stop, refName, ref)
+	}
+	return nil
+}
+
+// isImmediateTriggerError reports Binance -2021 ("Order would immediately
+// trigger"): the trigger is already on the wrong side of the working-type price.
+func isImmediateTriggerError(err error) bool {
+	var apiErr *common.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == -2021
+}
+
+func stopSideKey(long bool) string {
+	if long {
+		return "LONG"
+	}
+	return "SHORT"
+}
+
+// noteImmediateTrigger starts the per-symbol/side retry backoff after -2021.
+func (t *FuturesTrader) noteImmediateTrigger(symbol string, long bool, stop float64, err error) {
+	if !isImmediateTriggerError(err) {
+		return
+	}
+	st := t.stopRefs()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.backoff[symbol+"|"+stopSideKey(long)] = stopBackoffEntry{price: stop, until: t.now().Add(stopImmediateTriggerBackoff)}
+}
+
 // SetStopLoss sets stop-loss order using new Algo Order API
 // Binance has migrated stop orders to Algo Order system (error -4120 STOP_ORDER_SWITCH_ALGO)
 func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
@@ -1314,6 +1479,12 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 	if ferr != nil {
 		return fmt.Errorf("failed to set stop-loss: %w", ferr)
 	}
+	triggerPrice, _ := strconv.ParseFloat(priceStr, 64)
+	if triggerPrice > 0 {
+		if perr := t.stopTriggerPreflight(symbol, positionSide == "LONG", workingType, triggerPrice); perr != nil {
+			return perr
+		}
+	}
 	_, err := t.client.NewCreateAlgoOrderService().
 		Symbol(symbol).
 		Side(side).
@@ -1326,6 +1497,7 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Do(context.Background())
 
 	t.noteFilterFailure(symbol, err)
+	t.noteImmediateTrigger(symbol, positionSide == "LONG", triggerPrice, err)
 	if err != nil && isStaleProtectiveOrder(err) {
 		// -4130: an open GTE+closePosition algo in this direction already
 		// exists (MUBARAKUSDT 09-29: the watchdog's naked-position fallback
@@ -1363,6 +1535,7 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 			ClientAlgoId(getBrOrderID()).
 			Do(context.Background()); err2 != nil {
 			t.noteFilterFailure(symbol, err2)
+			t.noteImmediateTrigger(symbol, positionSide == "LONG", triggerPrice, err2)
 			for _, old := range originals {
 				_, restoreErr := t.client.NewCreateAlgoOrderService().Symbol(symbol).Side(side).PositionSide(posSide).Type(futures.AlgoOrderTypeStopMarket).TriggerPrice(strconv.FormatFloat(old.StopPrice, 'f', -1, 64)).WorkingType(workingType).ClosePosition(true).ClientAlgoId(getBrOrderID()).Do(context.Background())
 				if restoreErr != nil {
@@ -1431,7 +1604,7 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		TriggerPrice(priceStr).
 		WorkingType(futures.WorkingTypeContractPrice)
 	if quantity > 0 {
-		qtyStr, qerr := t.FormatQuantity(symbol, quantity)
+		qtyStr, qerr := t.formatReduceQuantity(symbol, quantity)
 		qty, _ := strconv.ParseFloat(qtyStr, 64)
 		if qerr != nil || qty <= 0 {
 			// review 2026-10-28 #6: an explicit quantity that cannot be
