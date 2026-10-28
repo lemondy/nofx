@@ -1691,7 +1691,8 @@ func (at *AutoTrader) watchdogTPQty(symbol, side string) float64 {
 		return 0
 	}
 	if mode := at.ExitModeFor(symbol, side); mode != "" {
-		if q := qty * tpFractionForMode(mode, at.effectiveTPCloseFraction()); q > 0 {
+		// review 2026-10-28 #3/#6: same lot-grid quantized share as placement.
+		if q := at.quantizedTPQty(symbol, qty, tpFractionForMode(mode, at.effectiveTPCloseFraction())); q > 0 {
 			return q
 		}
 	}
@@ -1722,6 +1723,7 @@ func (at *AutoTrader) processProtectionWatchdog() {
 		}
 	}
 	at.clearProtectionFaults(live)
+	at.pruneTPLedger(live) // review 2026-10-28 #5: split-TP evidence dies with the position
 	// P2-7: one GetOpenOrders per unique SYMBOL for the whole pass — hedge
 	// mode produces LONG+SHORT rows for the same symbol and the old per-row
 	// call doubled the request on exactly those. Failed fetches are cached
@@ -1805,27 +1807,77 @@ func (at *AutoTrader) processProtectionWatchdog() {
 				continue
 			}
 		}
-		tpQty := qty
+		// review 2026-10-28 #3/#6: the TP target is the lot-grid quantized share
+		// of the LIVE remainder (same helper as placement), so a rounding tail
+		// is never "missing" and a TP sized for an earlier, larger position is
+		// detected and re-armed below.
+		tpFrac := 1.0
 		if mode := at.ExitModeFor(symbol, side); mode != "" {
-			tpQty *= tpFractionForMode(mode, at.effectiveTPCloseFraction())
+			tpFrac = tpFractionForMode(mode, at.effectiveTPCloseFraction())
 		}
+		tpQty := at.quantizedTPQty(symbol, qty, tpFrac)
+		lotStep, _ := quantityStepOf(at.trader, symbol)
+		tpTol := tpCoverageTolerance(at.trader, symbol, tpQty)
+		tpCover := 0.0
+		if tp > 0 {
+			tpCover = protectiveCoverage(orders, positionSide, "TP", tp)
+		}
+		// review 2026-10-28 #5: the runner flag follows EXECUTION, not
+		// placement. A split TP that vanished while the position shrank by its
+		// size has filled — the remainder is the runner and must not get a
+		// fresh TP carved out of it. A TP that merely vanished (cancelled,
+		// expired) leaves the flag clear, so the repair below re-arms it.
+		if !at.tpRunnerDone(key) && at.tpLegFilled(key, qty, tpCover, lotStep) {
+			at.markTPRunner(key)
+			at.dropTPLedger(key)
+			logger.Infof("🏃 [%s] %s %s split TP filled (leg gone, position shrank) — remainder is the runner, no TP re-arm", at.name, symbol, side)
+		}
+		tpArmable := !at.tpRunnerDone(key) && tp > 0 &&
+			((side == "long" && tp > mark) || (side == "short" && tp < mark))
 		wantSL := !enoughProtection(orders, positionSide, "SL", sl, qty)
-		wantTP := !at.tpRunnerDone(key) && tp > 0 &&
-			((side == "long" && tp > mark) || (side == "short" && tp < mark)) &&
-			!enoughProtection(orders, positionSide, "TP", tp, tpQty)
+		wantTP := tpArmable && tpCover+tpTol < tpQty
+		// review 2026-10-28 #3: a TP LARGER than the target (sized for a bigger
+		// position, or a whole-position closePosition leg when only a share is
+		// intended) would sell the runner at the target. Retire it and re-arm at
+		// the target size. closePosition legs are right when the target IS the
+		// whole position, so they only count as oversized for a split share.
+		tpOversized := tpArmable && tpQty > 0 && !wantTP && at.canRetireTPLegs() &&
+			((tpFrac < 1 && tpCover > tpQty+tpTol) || (tpFrac >= 1 && !math.IsInf(tpCover, 0) && tpCover > tpQty+tpTol))
+		if tpOversized {
+			if err := at.cancelTakeProfitForSideChecked(symbol, side); err != nil {
+				logger.Warnf("⚠️ [%s] %s %s oversized TP (%.6g vs target %.6g) could not be retired: %v — left in place", at.name, symbol, side, tpCover, tpQty, err)
+				tpOversized = false
+			} else {
+				wantTP = true
+				logger.Infof("🔧 [%s] %s %s TP sized %.6g exceeds the target %.6g for the live remainder — retired, re-arming at target", at.name, symbol, side, tpCover, tpQty)
+			}
+		}
 		var slErr error
 		if wantSL {
 			slErr = ensureProtectiveCoverage(at.trader, symbol, positionSide, "SL", sl, qty)
 		}
+		var tpErr error
 		if wantTP {
-			if err := ensureProtectiveCoverage(at.trader, symbol, positionSide, "TP", tp, tpQty); err != nil {
-				logger.Warnf("TP recovery %s %s: %v", symbol, side, err)
+			if tpErr = ensureProtectiveCoverage(at.trader, symbol, positionSide, "TP", tp, tpQty); tpErr != nil {
+				logger.Warnf("TP recovery %s %s: %v", symbol, side, tpErr)
 			}
 		}
 		if wantSL || wantTP {
-			verifiedSL, _ := at.verifyProtectiveLegs(&kernel.Decision{Symbol: symbol, StopLoss: sl, TakeProfit: tp}, positionSide, wantSL, wantTP, qty, tpQty)
+			verifiedSL, verifiedTP := at.verifyProtectiveLegs(&kernel.Decision{Symbol: symbol, StopLoss: sl, TakeProfit: tp}, positionSide, wantSL, wantTP, qty, tpQty)
 			if slErr == nil {
 				slErr = verifiedSL
+			}
+			if tpErr == nil {
+				tpErr = verifiedTP
+			}
+		}
+		if tpArmable && tpFrac < 1 && partialTPShare(tpQty, qty) {
+			if wantTP && tpErr == nil {
+				at.recordTPLedger(key, qty, tpQty)
+			} else if !wantTP && !math.IsInf(tpCover, 0) && tpCover > 0 {
+				if _, known := at.getTPLedger(key); !known {
+					at.recordTPLedger(key, qty, tpCover) // adopt a resting split TP (e.g. after a restart)
+				}
 			}
 		}
 		if slErr != nil {
