@@ -129,6 +129,21 @@ func (at *AutoTrader) stampEntryPath(record *store.DecisionAction, data *market.
 // through this dispatch. Market-default strategies (limit_entry_enabled=
 // false) are exempt: market IS their default path.
 func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.DecisionAction, isLong bool) (*kernel.Decision, error) {
+	// review 2026-10-28 #13: market-default mode has no exception path for
+	// a direction explicitly blocked by the extended-pump gate.
+	if gs := at.cycleGateStates[market.Normalize(d.Symbol)]; gs != nil && (at.config.StrategyConfig == nil || !at.config.StrategyConfig.RiskControl.LimitEntryEnabled) {
+		allowed, failed := gs.LongAllowed, gs.LongFailed
+		if !isLong {
+			allowed, failed = gs.ShortAllowed, gs.ShortFailed
+		}
+		if !allowed {
+			for _, code := range failed {
+				if code == "EXTENDED_PUMP_UNCONFIRMED" {
+					return d, fmt.Errorf("entry blocked: %s", code)
+				}
+			}
+		}
+	}
 	if at.config.StrategyConfig == nil {
 		return d, nil
 	}
@@ -291,6 +306,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	}
 	// Calculate quantity with adjusted position size
 	quantity := actualPositionSize / marketData.CurrentPrice
+	// review 2026-10-28 #9: final price/quantity must fit the shared account budget.
+	quantity, err = at.finalizeOpenRisk(decision, marketData.CurrentPrice, quantity)
+	if err != nil {
+		return err
+	}
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 
@@ -385,6 +405,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	if tpErr != nil {
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
 	}
+	// review 2026-10-28 #9: confirmed protected fills replace cycle reservations.
+	at.setCycleReservation(decision, 0)
 	return nil
 }
 
@@ -577,6 +599,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	}
 	// Calculate quantity with adjusted position size
 	quantity := actualPositionSize / marketData.CurrentPrice
+	// review 2026-10-28 #9: final price/quantity must fit the shared account budget.
+	quantity, err = at.finalizeOpenRisk(decision, marketData.CurrentPrice, quantity)
+	if err != nil {
+		return err
+	}
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 
@@ -660,6 +687,8 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	if tpErr != nil {
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
 	}
+	// review 2026-10-28 #9: confirmed protected fills replace cycle reservations.
+	at.setCycleReservation(decision, 0)
 	return nil
 }
 

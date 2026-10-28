@@ -45,8 +45,8 @@ func TestOneHAgainstCandles(t *testing.T) {
 		t.Fatalf("doji must break the streak: got %d, want 1", got)
 	}
 
-	if got := oneHAgainstCandles(nil, "long"); got != 0 {
-		t.Fatalf("nil data must yield 0, got %d", got)
+	if got := oneHAgainstCandles(nil, "long"); got != -1 {
+		t.Fatalf("nil data must yield unknown (-1), got %d", got)
 	}
 }
 

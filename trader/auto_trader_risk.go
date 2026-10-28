@@ -10,6 +10,7 @@ import (
 	notify "nofx/telegram/notify"
 	"nofx/trader/binance"
 	"nofx/trader/types"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -536,8 +537,8 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 
 // isBTCETH checks if a symbol is BTC or ETH
 func isBTCETH(symbol string) bool {
-	symbol = strings.ToUpper(symbol)
-	return strings.HasPrefix(symbol, "BTC") || strings.HasPrefix(symbol, "ETH")
+	// review 2026-10-28 #11: prefix lookalikes remain in the altcoin tier.
+	return thinRiskMajor(symbol)
 }
 
 // enforcePositionValueRatio checks and enforces position value ratio limits (CODE ENFORCED)
@@ -1083,8 +1084,13 @@ func marginExceedsBudget(usedMargin, newMargin, equity, budgetFrac float64) bool
 // budget. excludeKey is the same-side entry being replaced; an opposite-side
 // order on the same symbol still reserves margin.
 func (at *AutoTrader) pendingMarginReserved(excludeKey string) float64 {
+	return pendingMarginReservedSnapshot(at.accountPendingEntries(), excludeKey)
+}
+
+// review 2026-10-28 #2: grid batches reuse their initial reservations plus submitted orders.
+func pendingMarginReservedSnapshot(pending map[string]*pendingEntry, excludeKey string) float64 {
 	total := 0.0
-	for key, pe := range at.accountPendingEntries() {
+	for key, pe := range pending {
 		if key == "unknown" {
 			return math.Inf(1)
 		}
@@ -1112,17 +1118,25 @@ func (at *AutoTrader) marginBudgetBlocksOpen(symbol, side string, newSizeUSD, ne
 	if at.config.StrategyConfig == nil || newSizeUSD <= 0 || newLeverage <= 0 || equity <= 0 {
 		return false, ""
 	}
-	budget := at.config.StrategyConfig.RiskControl.MaxMarginUsage
-	if budget <= 0 {
-		budget = 0.9
-	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return true, "margin budget: account positions unknown"
 	}
-	newMargin := newSizeUSD / newLeverage
 	pending := at.pendingMarginReserved(pendingEntryKey(symbol, side))
-	used := usedMarginOf(positions) + pending
+	return at.marginBudgetBlocksSnapshot(newSizeUSD, newLeverage, equity, usedMarginOf(positions), pending)
+}
+
+// review 2026-10-28 #2: share margin admission without fetching positions per grid level.
+func (at *AutoTrader) marginBudgetBlocksSnapshot(newSizeUSD, newLeverage, equity, usedMargin, pending float64) (bool, string) {
+	if at.config.StrategyConfig == nil || newSizeUSD <= 0 || newLeverage <= 0 || equity <= 0 {
+		return false, ""
+	}
+	budget := at.config.StrategyConfig.RiskControl.MaxMarginUsage
+	if budget <= 0 {
+		budget = 0.9
+	}
+	newMargin := newSizeUSD / newLeverage
+	used := usedMargin + pending
 	if !marginExceedsBudget(used, newMargin, equity, budget) {
 		return false, ""
 	}
@@ -1176,12 +1190,13 @@ func (at *AutoTrader) earlyCloseProfitBypass(symbol, side string, entryPrice, ma
 // bullish candles). The forming bar is excluded. This is the trend-change
 // evidence the early-close gate wants: the 1h rhythm itself turning.
 func oneHAgainstCandles(data *market.Data, side string) int {
+	// review 2026-10-28 #12: -1 means unknown, not zero reversal evidence.
 	if data == nil {
-		return 0
+		return -1
 	}
 	tf, ok := data.TimeframeData["1h"]
 	if !ok || tf == nil || len(tf.Klines) < 2 {
-		return 0
+		return -1
 	}
 	bars := tf.Klines[:len(tf.Klines)-1] // drop the forming bar — closed candles only
 	n := 0
@@ -1236,8 +1251,8 @@ func (at *AutoTrader) earlyCloseBlocksClose(symbol, side string, entryPrice, mar
 		return false, ""
 	}
 	evidence := oneHAgainstCandles(data, side)
-	if evidence >= 2 {
-		return false, "" // 1h trend-change candles present — exit allowed
+	if evidence < 0 || evidence >= 2 {
+		return false, "" // unknown data or sufficient reversal evidence — exit allowed
 	}
 	return true, fmt.Sprintf(
 		"early-close lock: held %.1fh < %dh and 1h shows only %d against-direction closed candle(s) (need ≥2 trend-change candles); SL/TP and drawdown-protect paths unaffected",
@@ -2090,6 +2105,58 @@ func finestSubHourTrend(data *market.Data) (string, string) {
 // (kernel.UnprotectedStopWorstCasePct). The new trade's risk uses the
 // gate-priced entry (limit anchor when live) and the decision's stop.
 func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx float64, ctx *kernel.Context) (bool, string, float64) {
+	if ctx == nil || at.config.StrategyConfig == nil {
+		return true, "account risk context unavailable", 0
+	}
+	equity := ctx.Account.TotalEquity
+	if equity <= 0 && isBinanceFuturesLike(at.exchange) {
+		return true, "cannot verify Binance symbol stop-risk without positive account equity", 0
+	}
+	if equity <= 0 || entryPx <= 0 || d.StopLoss <= 0 {
+		return false, "", 0
+	}
+	candidateRisk := at.candidateStopRiskUSD(d, entryPx, equity)
+	blocked, reason := at.accountRiskExposureSnapshotBlocks(d, candidateRisk, ctx, at.accountPendingEntries(), true)
+	return blocked, reason, candidateRisk
+}
+
+// review 2026-10-28 #2: share account breakers and exposure admission using
+// the batch's initial reservations plus its successfully submitted entries.
+func (at *AutoTrader) accountRiskAdmissionBlocks(d *kernel.Decision, risk float64, ctx *kernel.Context, pending map[string]*pendingEntry, replacingPending bool) (bool, string) {
+	if ctx == nil || at.config.StrategyConfig == nil {
+		return true, "account risk context unavailable"
+	}
+	// review 2026-10-28 #2: retain the non-futures snapshot compatibility;
+	// live grid/final paths require verified positive equity before this call.
+	if ctx.Account.TotalEquity <= 0 && !isBinanceFuturesLike(at.exchange) {
+		return false, ""
+	}
+	if reason := at.accountOpenHaltReason(ctx.Account.TotalEquity); reason != "" {
+		return true, reason
+	}
+	return at.accountRiskExposureSnapshotBlocks(d, risk, ctx, pending, replacingPending)
+}
+
+func (at *AutoTrader) accountOpenHaltReason(equity float64) string {
+	if equity <= 0 || math.IsNaN(equity) || math.IsInf(equity, 0) {
+		return "account equity unavailable"
+	}
+	rc := at.config.StrategyConfig.RiskControl
+	if halt := at.dailyLossHaltBlocks(rc, equity); halt != "" {
+		return "daily loss halt (" + halt + ")"
+	}
+	if rc.AccountMaxDrawdownPct > 0 && at.initialBalance > 0 {
+		drawdownPct := (at.initialBalance - equity) / at.initialBalance * 100
+		if drawdownPct >= rc.AccountMaxDrawdownPct {
+			return fmt.Sprintf("account drawdown %.2f%% ≥ cap %.1f%% — reduce-only mode", drawdownPct, rc.AccountMaxDrawdownPct)
+		}
+	}
+	return ""
+}
+
+// review 2026-10-28 #9: exact candidate risk and one pending snapshot also
+// support sizing to the remaining budget without repeated database reads.
+func (at *AutoTrader) accountRiskExposureSnapshotBlocks(d *kernel.Decision, candidateRisk float64, ctx *kernel.Context, pending map[string]*pendingEntry, replacingPending bool) (bool, string) {
 	rc := at.config.StrategyConfig.RiskControl
 	capPct := rc.EffectiveMaxAccountRiskPct()
 	symbolCapPct := rc.RiskPerTradePct
@@ -2097,11 +2164,8 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		symbolCapPct = 1.5
 	}
 	equity := ctx.Account.TotalEquity
-	if equity <= 0 && isBinanceFuturesLike(at.exchange) {
-		return true, "cannot verify Binance symbol stop-risk without positive account equity", 0
-	}
-	if equity <= 0 || entryPx <= 0 || d.StopLoss <= 0 {
-		return false, "", 0 // unpriceable → other gates (mandatory SL) handle it
+	if equity <= 0 || math.IsNaN(candidateRisk) || math.IsInf(candidateRisk, 0) || candidateRisk < 0 {
+		return true, "account stop-risk unavailable"
 	}
 	totalRisk := 0.0
 	symbolRisk := 0.0
@@ -2142,11 +2206,11 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		side = "short"
 	}
 	excludeKey := pendingEntryKey(d.Symbol, side)
-	for key, pe := range at.accountPendingEntries() {
+	for key, pe := range pending {
 		if key == "unknown" {
-			return true, "account pending reservations unknown", 0
+			return true, "account pending reservations unknown"
 		}
-		if key == excludeKey || pe == nil {
+		if (replacingPending && key == excludeKey) || pe == nil {
 			continue
 		}
 		risk := pendingEntryStopRisk(pe)
@@ -2169,7 +2233,6 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 	// the reservation into the candidate AND re-booked it: 20→60→140), never
 	// charges risk for candidates a later gate rejects.
 	// The clamp (see candidateStopRiskUSD) evaluates the CLAMPED candidate.
-	candidateRisk := at.candidateStopRiskUSD(d, entryPx, equity)
 	reserved := at.cycleRiskReservedUSD
 	symbolReserved := at.cycleSymbolRiskReservedUSD[market.Normalize(d.Symbol)]
 	existingPct := totalRisk / equity * 100
@@ -2177,7 +2240,7 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 	reservedPct := reserved / equity * 100
 	if capPct > 0 && existingPct+candidatePct+reservedPct > capPct {
 		return true, fmt.Sprintf("open stop-risk would exceed max_account_risk_pct %.1f%% of equity %.2f: existing %.2f%% + candidate %.2f%% + reserved-this-cycle %.2f%%%s",
-			capPct, equity, existingPct, candidatePct, reservedPct, unprotectedSuffix(unprotected)), candidateRisk
+			capPct, equity, existingPct, candidatePct, reservedPct, unprotectedSuffix(unprotected))
 	}
 	// Gross risk limits the size of a full stop-out; net directional risk
 	// separately limits correlated one-way concentration. Only FILLED opposite
@@ -2205,14 +2268,14 @@ func (at *AutoTrader) accountRiskExposureBlocks(d *kernel.Decision, entryPx floa
 		netPct := (netPotential - hedgeFilled) / equity * 100
 		if netPct > netCapPct+1e-9 {
 			return true, fmt.Sprintf("open would exceed max_net_directional_risk_pct %.1f%% of equity %.2f: worst-case %s %.2f USDT - filled opposite hedge %.2f USDT = %.2f%% net (unfilled orders do not hedge)",
-				netCapPct, equity, side, netPotential, hedgeFilled, netPct), candidateRisk
+				netCapPct, equity, side, netPotential, hedgeFilled, netPct)
 		}
 	}
 	if isBinanceFuturesLike(at.exchange) && (symbolRisk+candidateRisk+symbolReserved)/equity*100 > symbolCapPct+1e-9 {
 		return true, fmt.Sprintf("%s gross long+short stop-risk would exceed %.2f%% of equity %.2f: existing %.2f + candidate %.2f + reserved-this-cycle %.2f USDT",
-			d.Symbol, symbolCapPct, equity, symbolRisk, candidateRisk, symbolReserved), candidateRisk
+			d.Symbol, symbolCapPct, equity, symbolRisk, candidateRisk, symbolReserved)
 	}
-	return false, "", candidateRisk
+	return false, ""
 }
 
 // entryReferencePrice is the program-determined price a new open will
@@ -2278,8 +2341,12 @@ func pendingEntryStopRisk(pe *pendingEntry) float64 {
 	}
 	remaining := math.Max(0, pe.Quantity-pe.ProtectedQty)
 	risk := 0.0
-	if pe.Price > 0 && pe.StopLoss > 0 {
-		risk = remaining * math.Abs(pe.Price-pe.StopLoss)
+	if pe.Price > 0 {
+		// review 2026-10-28 #2: stopless grid reservations still carry risk.
+		risk = remaining * pe.Price * kernel.UnprotectedStopWorstCasePct / 100
+		if pe.StopLoss > 0 {
+			risk = remaining * math.Abs(pe.Price-pe.StopLoss)
+		}
 	}
 	if pe.HeldRiskUSD > 0 && pe.Quantity > 0 {
 		risk = math.Max(risk, pe.HeldRiskUSD*remaining/pe.Quantity)
@@ -2304,6 +2371,88 @@ func (at *AutoTrader) releaseCycleReservation(d *kernel.Decision) {
 		sym := market.Normalize(d.Symbol)
 		at.cycleSymbolRiskReservedUSD[sym] = math.Max(0, at.cycleSymbolRiskReservedUSD[sym]-amt)
 	}
+}
+
+// review 2026-10-28 #9: replace all counters together when final sizing
+// changes, so the original proposal is not charged alongside its replacement.
+func (at *AutoTrader) setCycleReservation(d *kernel.Decision, risk float64) {
+	delta := risk - d.CycleReservedRiskUSD
+	at.cycleRiskReservedUSD = math.Max(0, at.cycleRiskReservedUSD+delta)
+	if strings.Contains(d.Action, "short") {
+		at.cycleShortRiskReservedUSD = math.Max(0, at.cycleShortRiskReservedUSD+delta)
+	} else {
+		at.cycleLongRiskReservedUSD = math.Max(0, at.cycleLongRiskReservedUSD+delta)
+	}
+	if at.cycleSymbolRiskReservedUSD == nil {
+		at.cycleSymbolRiskReservedUSD = make(map[string]float64)
+	}
+	symbol := market.Normalize(d.Symbol)
+	at.cycleSymbolRiskReservedUSD[symbol] = math.Max(0, at.cycleSymbolRiskReservedUSD[symbol]+delta)
+	d.CycleReservedRiskUSD = risk
+}
+
+// review 2026-10-28 #9: reprice final market quantity against fresh account
+// exposure, then round down using the adapter's exchange quantity rules.
+func (at *AutoTrader) finalizeOpenRisk(d *kernel.Decision, entry, quantity float64) (float64, error) {
+	if at.config.StrategyConfig == nil {
+		return quantity, nil
+	}
+	if entry <= 0 || quantity <= 0 || d.StopLoss <= 0 || math.IsNaN(entry+quantity+d.StopLoss) || math.IsInf(entry+quantity+d.StopLoss, 0) {
+		return 0, fmt.Errorf("final entry stop-risk unavailable")
+	}
+	ctx := &kernel.Context{}
+	if err := at.refreshExecutionAccount(ctx); err != nil {
+		return 0, err
+	}
+	if halt := at.accountOpenHaltReason(ctx.Account.TotalEquity); halt != "" {
+		return 0, fmt.Errorf("entry blocked: %s", halt)
+	}
+	pending := at.accountPendingEntries()
+	oldRisk := d.CycleReservedRiskUSD
+	at.setCycleReservation(d, 0)
+	admitted := false
+	defer func() {
+		if !admitted {
+			at.setCycleReservation(d, oldRisk)
+		}
+	}()
+	distance := math.Abs(entry - d.StopLoss)
+	risk := quantity * distance
+	if blocked, reason := at.accountRiskExposureSnapshotBlocks(d, risk, ctx, pending, false); blocked {
+		if noRoom, _ := at.accountRiskExposureSnapshotBlocks(d, 0, ctx, pending, false); noRoom || distance <= 0 {
+			return 0, fmt.Errorf("entry blocked: %s", reason)
+		}
+		lo, hi := 0.0, risk
+		for i := 0; i < 60; i++ {
+			mid := lo + (hi-lo)/2
+			if blocked, _ := at.accountRiskExposureSnapshotBlocks(d, mid, ctx, pending, false); blocked {
+				hi = mid
+			} else {
+				lo = mid
+			}
+		}
+		quantity = lo / distance
+		logger.Infof("  ⚠️ [RISK CONTROL] %s final entry size reduced to %.2f USDT: %s", d.Symbol, quantity*entry, reason)
+	}
+	formatted, err := at.trader.FormatQuantity(d.Symbol, quantity)
+	if err != nil {
+		return 0, fmt.Errorf("final entry quantity: %w", err)
+	}
+	finalQty, err := strconv.ParseFloat(formatted, 64)
+	if err != nil || finalQty <= 0 || math.IsNaN(finalQty) || math.IsInf(finalQty, 0) || finalQty > quantity+1e-12 {
+		return 0, fmt.Errorf("final entry quantity invalid or rounded up: %q", formatted)
+	}
+	if err := at.enforceMinPositionSize(finalQty * entry); err != nil {
+		return 0, err
+	}
+	risk = finalQty * distance
+	if blocked, reason := at.accountRiskExposureSnapshotBlocks(d, risk, ctx, pending, false); blocked {
+		return 0, fmt.Errorf("entry blocked after quantity rounding: %s", reason)
+	}
+	d.PositionSizeUSD = finalQty * entry
+	at.setCycleReservation(d, risk)
+	admitted = true
+	return finalQty, nil
 }
 
 // repriceCycleReservation re-books an open's cycle stop-risk reservation after
@@ -2489,7 +2638,10 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 	if at.dailyHaltDay == today && at.dailyHaltReason != "" {
 		return at.dailyHaltReason
 	}
-	if reason, ok := at.inheritDailyHalt(today); ok {
+	if reason, ok, err := at.readDailyHalt(today); err != nil {
+		// review 2026-10-28 #12: unknown latch state must not reopen risk.
+		return "DAILY_HALT_UNAVAILABLE: " + err.Error()
+	} else if ok {
 		at.dailyHaltDay, at.dailyHaltReason = today, reason
 		return reason
 	}
@@ -2519,24 +2671,31 @@ func (at *AutoTrader) dailyLossHaltBlocks(rc store.RiskControlConfig, equity flo
 	return ""
 }
 
-// inheritDailyHalt reads today's durable daily-loss latch (set by this or a
-// previous instance on the same account), so a reload/restart after the
-// trigger stays halted for the rest of the UTC day.
-func (at *AutoTrader) inheritDailyHalt(day string) (string, bool) {
+// review 2026-10-28 #12: shared read-only latch query for execution and dashboard.
+// Callers hold executionMutex when reading the in-memory latch.
+func (at *AutoTrader) readDailyHalt(day string) (string, bool, error) {
+	if at.dailyHaltDay == day && at.dailyHaltReason != "" {
+		return at.dailyHaltReason, true, nil
+	}
+	return at.readDurableDailyHalt(day)
+}
+
+// review 2026-10-28 #12: dashboard callers release the account lock before SQL.
+func (at *AutoTrader) readDurableDailyHalt(day string) (string, bool, error) {
 	if at.store == nil {
-		return "", false
+		return "", false, nil
 	}
 	haltedAt, found, err := at.store.RiskState().DayHalt(at.dailyBaselineKey(), day)
 	if err != nil || !found {
-		return "", false
+		return "", false, err
 	}
-	return fmt.Sprintf("daily-loss halt latched at %s UTC — opens halted until next UTC day", haltedAt.UTC().Format("15:04")), true
+	return fmt.Sprintf("daily-loss halt latched at %s UTC — opens halted until next UTC day", haltedAt.UTC().Format("15:04")), true, nil
 }
 
 // absoluteBanCode reports whether a kernel ban code has NO exception path on
 // the MARKET entry style either — the documented absolute contracts. Codes
 // with sanctioned exception/mirror paths are deliberately NOT listed here for
-// market opens: EXTENDED_PUMP_UNCONFIRMED → marketExceptionGate, MICRO_TREND_*
+// market opens: MICRO_TREND_*
 // → execution timing re-derivation, RR_MAX_*/MIN_SIZE_DEAD_ZONE →
 // validateOpenRisk / min-size re-check, STOP_PLAN_* → designed ATR-band
 // fallback, LIMIT_ANCHOR_SUPPRESSED → market-anchored fail-closed at the
@@ -2722,7 +2881,7 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		//     no-exception contracts). MICRO_TREND_*/RR_MAX_*/MIN_SIZE_DEAD_ZONE
 		//     keep their executor-mirrored live checks (timing re-derivation,
 		//     validateOpenRisk, min-size re-check); EXTENDED_PUMP_UNCONFIRMED
-		//     keeps its sanctioned market-exception path (marketExceptionGate);
+		//     is mirrored for disallowed market directions (review 2026-10-28 #13);
 		//     STOP_PLAN_* keeps the designed ATR-band fallback; a market open
 		//     within the cycle entry pool but with NO gate state keeps the
 		//     existing marketExceptionGate semantics (missing-gate fail-closed
@@ -2749,8 +2908,9 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 				// buys at the live price the gate evaluated. They are not
 				// absoluteBanCode: the pending recheck would cancel resting
 				// pullback limits that buy at their anchor (review 2026-10-11).
+				// review 2026-10-28 #13: market defaults must mirror the pump ban.
 				for _, code := range failed {
-					if absoluteBanCode(code) || kernel.IsAntiChaseCode(code) {
+					if absoluteBanCode(code) || kernel.IsAntiChaseCode(code) || code == "EXTENDED_PUMP_UNCONFIRMED" {
 						blockCode = code
 						break
 					}
