@@ -155,10 +155,16 @@ func measureMarketRegime(data *market.Data, cutoff time.Time) regimeMeasurement 
 	}
 
 	k1, k4 := barsToKlines(b1), barsToKlines(b4)
-	a1, s1, ok1 := emaRegimeEvidence(k1)
-	a4, s4, ok4 := emaRegimeEvidence(k4)
+	// EMA and ATR warm up on the full closed history when the series carries
+	// it, so the regime does not depend on the display count (review
+	// 2026-10-28 #17). Minimum-bar checks and the percentile population stay
+	// on the visible window; ADX/Bollinger are unchanged.
+	w1, _ := alignedIndicatorBars(data.TimeframeData["1h"], b1)
+	w4, _ := alignedIndicatorBars(data.TimeframeData["4h"], b4)
+	a1, s1, ok1 := emaRegimeEvidenceWarm(k1, barsToKlines(w1))
+	a4, s4, ok4 := emaRegimeEvidenceWarm(k4, barsToKlines(w4))
 	adx1, adx4 := wilderADX(k1, 14), wilderADX(k4, 14)
-	atrPct, atrOK := atrPercentile(k1, 14)
+	atrPct, atrOK := atrPercentileWarm(k1, barsToKlines(w1), 14)
 	bbWidth, bbPct, bbChange, bbOK := bollingerWidthEvidence(k1, 20, regimeSlopeLookback)
 	if !ok1 || !ok4 || math.IsNaN(adx1) || math.IsNaN(adx4) || !atrOK || !bbOK {
 		return regimeMeasurement{state: r}
@@ -243,9 +249,16 @@ func closedKlinesAt(tfData *market.TimeframeSeriesData, cutoff time.Time, dur ti
 }
 
 func emaRegimeEvidence(bars []market.Kline) (string, float64, bool) {
-	if len(bars) < 50+regimeSlopeLookback {
+	return emaRegimeEvidenceWarm(bars, bars)
+}
+
+// emaRegimeEvidenceWarm gates on the visible bars (`display`) exactly as
+// before but computes the EMAs on `warm`, whose tail is `display`.
+func emaRegimeEvidenceWarm(display, warm []market.Kline) (string, float64, bool) {
+	if len(display) < 50+regimeSlopeLookback || len(warm) < len(display) {
 		return "UNKNOWN", 0, false
 	}
+	bars := warm
 	fast := market.ExportCalculateEMA(bars, 20)
 	slow := market.ExportCalculateEMA(bars, 50)
 	previousFast := market.ExportCalculateEMA(bars[:len(bars)-regimeSlopeLookback], 20)
@@ -263,15 +276,26 @@ func emaRegimeEvidence(bars []market.Kline) (string, float64, bool) {
 }
 
 func atrPercentile(bars []market.Kline, period int) (float64, bool) {
-	series := wilderATRSeries(bars, period)
-	if len(series) < 6 {
+	return atrPercentileWarm(bars, bars, period)
+}
+
+// atrPercentileWarm ranks the current ATR% within the visible bars' ATR%
+// history (the population is `display`), valuing each with the ATR series
+// warmed on `warm`, whose tail is `display`.
+func atrPercentileWarm(display, warm []market.Kline, period int) (float64, bool) {
+	if len(warm) < len(display) {
 		return 0, false
 	}
-	values := make([]float64, 0, len(series))
-	for i, atr := range series {
-		barIdx := i + period
-		if barIdx < len(bars) && bars[barIdx].Close > 0 {
-			values = append(values, atr/bars[barIdx].Close*100)
+	series := wilderATRSeries(warm, period)
+	off := len(warm) - len(display) // display bar d is warm bar off+d
+	if len(display) < period+1 || len(series) < 6 {
+		return 0, false
+	}
+	values := make([]float64, 0, len(display))
+	for d := period; d < len(display); d++ {
+		si := off + d - period // series[i] is the ATR settled at bar i+period
+		if si >= 0 && si < len(series) && display[d].Close > 0 {
+			values = append(values, series[si]/display[d].Close*100)
 		}
 	}
 	if len(values) < 6 {

@@ -2519,19 +2519,33 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	}
 
 	// ── Indicators: self-computed from the CLOSED bars only — independent of
-	// the strategy's prompt-display switches. ──
-	kb := barsToKlines(klines)
+	// the strategy's prompt-display switches. EMA/MACD/ATR/RSI warm up on the
+	// full closed history (indBars), never on the display window: a ~59-bar
+	// EMA50 is SMA-seeded with 9 recursion steps and its trend label would
+	// change with the configured display count (review 2026-10-28 #17).
+	// Everything that DESCRIBES the visible window (swing structure, volume
+	// averages, the ATR-percentile population) keeps using `klines`.
+	indBars, _ := alignedIndicatorBars(tfData, klines)
+	nInd := len(indBars)
+	off := nInd - n // display bar d is indicator bar off+d
+	kb := barsToKlines(indBars)
+	cInd := make([]float64, nInd)
+	for i, k := range indBars {
+		cInd[i] = k.Close
+	}
 	atr := wilderATR(kb, 14)
 	if atr > 0 && last.Close > 0 {
 		sig.ATRPct = atr / last.Close * 100
 		// Percentile of the current ATR% within this TF's own ATR history —
 		// separates "this coin always moves like this" from "unusual vol".
+		// Population = the visible window's bars (as before), valued with the
+		// warmed ATR series.
 		if series := wilderATRSeries(kb, 14); len(series) > 5 {
-			atrPcts := make([]float64, 0, len(series))
-			for i, a := range series {
-				barIdx := i + 14 // series[i] is the ATR settled at bar i+period
-				if barIdx < len(klines) && klines[barIdx].Close > 0 {
-					atrPcts = append(atrPcts, a/klines[barIdx].Close*100)
+			atrPcts := make([]float64, 0, n)
+			for d := 14; d < n; d++ {
+				si := off + d - 14 // series[i] is the ATR settled at bar i+period
+				if si >= 0 && si < len(series) && klines[d].Close > 0 {
+					atrPcts = append(atrPcts, series[si]/klines[d].Close*100)
 				}
 			}
 			if len(atrPcts) > 5 {
@@ -2570,11 +2584,12 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 
 	// Adaptive EMA periods: a 20/50 pair needs 50+ bars — with thinner
 	// history fall back to shorter pairs so the trend is never "unknown".
+	// Keyed off the full indicator history, not the display window.
 	fastP, slowP := 20, 50
-	if n < 50 {
+	if nInd < 50 {
 		fastP, slowP = 10, 20
 	}
-	if n < 25 {
+	if nInd < 25 {
 		fastP, slowP = 6, 12
 	}
 	fast := market.ExportCalculateEMA(kb, fastP)
@@ -2622,7 +2637,7 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	}
 	// StochRSI (14,14,3,3) on the closed bars: stochastic of the Wilder RSI
 	// series, %K smoothed 3, %D = 3-SMA of %K. >80 overbought / <20 oversold.
-	if k, d, ok := stochRSI(c, 14, 14, 3, 3); ok {
+	if k, d, ok := stochRSI(cInd, 14, 14, 3, 3); ok {
 		sig.StochRSIK = &k
 		sig.StochRSID = &d
 	}
@@ -2881,35 +2896,23 @@ func barsToKlines(k []market.KlineBar) []market.Kline {
 	return out
 }
 
-// wilderATR computes Wilder-smoothed ATR on closed bars.
+// wilderATR is the last value of wilderATRSeries: the same TR[1]-seeded
+// Wilder ATR as market.calculateATR (review 2026-10-28 #18 — the old scalar
+// seeded with bar 0's High-Low and disagreed by up to 60% on thin history).
+// 0 = unknown (fewer than period+1 bars); callers treat it as missing.
 func wilderATR(bars []market.Kline, period int) float64 {
-	n := len(bars)
-	if n == 0 {
+	series := wilderATRSeries(bars, period)
+	if len(series) == 0 {
 		return 0
 	}
-	tr := make([]float64, n)
-	tr[0] = bars[0].High - bars[0].Low
-	for i := 1; i < n; i++ {
-		pc := bars[i-1].Close
-		tr[i] = math.Max(bars[i].High-bars[i].Low,
-			math.Max(math.Abs(bars[i].High-pc), math.Abs(bars[i].Low-pc)))
-	}
-	a := tr[0]
-	for i := 1; i < n; i++ {
-		if i < period {
-			a = a + (tr[i]-a)/float64(i+1)
-		} else {
-			a = (a*float64(period-1) + tr[i]) / float64(period)
-		}
-	}
-	return a
+	return series[len(series)-1]
 }
 
 // wilderATRSeries returns the Wilder-smoothed ATR series; entry i corresponds
 // to bar i+period (the first complete window lands at bar `period`).
 func wilderATRSeries(bars []market.Kline, period int) []float64 {
 	n := len(bars)
-	if n < period+1 {
+	if period < 1 || n < period+1 {
 		return nil
 	}
 	tr := make([]float64, n)
@@ -3123,16 +3126,23 @@ func rolling1hChangePct(data *market.Data, now time.Time) float64 {
 	if bestTf == "" {
 		return data.PriceChange1h
 	}
-	barsBack := int(time.Hour / bestDur)
-	if barsBack < 1 {
-		barsBack = 1
+	// "Rolling 60m" = live price vs the close at or before now-60m, located
+	// by timestamp (never by bar count, which drifts when the feed has a gap
+	// or lags). A matched bar more than one bar-length before the target means
+	// the history does not reach it: fall back rather than quote a stale base.
+	target := now.Add(-time.Hour)
+	kl := ClosedKlines(data.TimeframeData[bestTf], now, bestDur)
+	for i := len(kl) - 1; i >= 0; i-- {
+		closeAt := time.UnixMilli(kl[i].Time).Add(bestDur)
+		if closeAt.After(target) {
+			continue
+		}
+		if target.Sub(closeAt) >= bestDur || kl[i].Close <= 0 {
+			break
+		}
+		return (data.CurrentPrice/kl[i].Close - 1) * 100
 	}
-	closes := closedCloses(data.TimeframeData[bestTf], now, bestDur)
-	idx := len(closes) - 1 - barsBack
-	if idx < 0 || closes[idx] <= 0 {
-		return data.PriceChange1h
-	}
-	return (data.CurrentPrice/closes[idx] - 1) * 100
+	return data.PriceChange1h
 }
 
 // closedCloses returns the closes of bars fully closed at `now`.
@@ -3152,6 +3162,41 @@ func ClosedKlines(tfData *market.TimeframeSeriesData, now time.Time, dur time.Du
 		kl = kl[:len(kl)-1]
 	}
 	return kl
+}
+
+// alignedIndicatorBars returns the bars indicators should warm up on, given
+// the already-closed display bars. When the series carries the full fetched
+// history (IndicatorKlines) and the closed display bars are a suffix-aligned
+// slice of it, the result is that history cut at the last closed display bar
+// and ok is true. Otherwise (old snapshots, hand-built data, mismatched
+// windows) it returns `closed` unchanged with ok=false — today's behaviour.
+func alignedIndicatorBars(tfData *market.TimeframeSeriesData, closed []market.KlineBar) ([]market.KlineBar, bool) {
+	if tfData == nil || len(closed) == 0 || len(tfData.IndicatorKlines) <= len(closed) {
+		return closed, false
+	}
+	full := tfData.IndicatorKlines
+	lastT := closed[len(closed)-1].Time
+	for idx := len(full) - 1; idx >= 0 && full[idx].Time >= lastT; idx-- {
+		if full[idx].Time != lastT {
+			continue
+		}
+		if start := idx + 1 - len(closed); start >= 0 && full[start].Time == closed[0].Time {
+			return full[:idx+1], true
+		}
+		break
+	}
+	return closed, false
+}
+
+// closedIndicatorBars is alignedIndicatorBars for a snapshot clock: the bars
+// closed at `now`, warmed by the full history when available. Every consumer
+// that recomputes EMA/ATR outside computeTFSignal goes through it so they all
+// agree with TFSignal.EMASlow.
+func closedIndicatorBars(tfData *market.TimeframeSeriesData, now time.Time, dur time.Duration) ([]market.KlineBar, bool) {
+	if tfData == nil {
+		return nil, false
+	}
+	return alignedIndicatorBars(tfData, ClosedKlines(tfData, now, dur))
 }
 
 // btcCorrelation computes Pearson correlation and beta of hourly returns
