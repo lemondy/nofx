@@ -442,6 +442,11 @@ func (at *AutoTrader) ensureBreakevenBeforeAutomatedTrim(symbol, side string, en
 		return fmt.Errorf("position is not profitable at mark %.6g", markPrice)
 	}
 	if err := at.moveStopExchange(symbol, side, entryPrice, snapshotQty...); err != nil {
+		// review 2026-10-28 #1: a tighter exchange stop already secures
+		// breakeven; moveStopExchange synced the recorded stop to it.
+		if _, kept := keptTighterStop(err); kept {
+			return nil
+		}
 		return err
 	}
 	at.SetRecordedStopLoss(symbol, side, entryPrice)
@@ -1429,6 +1434,12 @@ func (at *AutoTrader) executeAdjustStopLossWithRecord(decision *kernel.Decision,
 		logger.Infof("⚠️ [%s] adjust_stop_loss %s: entry price unavailable from exchange data — breakeven gate skipped (tighten-only still enforced)", at.name, decision.Symbol)
 	}
 	if err := at.moveStopExchange(decision.Symbol, side, decision.StopLoss); err != nil {
+		// review 2026-10-28 #1: the exchange already holds a tighter stop —
+		// the AI's intent (tighten) is satisfied; memory was synced to it.
+		if kept, ok := keptTighterStop(err); ok {
+			logger.Infof("🔧 [%s] AI stop-loss adjust %s %s → %.6g skipped: exchange stop %.6g is already tighter", at.name, decision.Symbol, side, decision.StopLoss, kept)
+			return nil
+		}
 		return err
 	}
 	at.SetRecordedStopLoss(decision.Symbol, side, decision.StopLoss)

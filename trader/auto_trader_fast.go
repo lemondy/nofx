@@ -148,7 +148,10 @@ func (at *AutoTrader) processFastMove(pos map[string]interface{}, mark, atrPct f
 		}
 		if tighter && legal {
 			if err := at.moveStopExchange(symbol, side, target, qty); err != nil {
-				logger.Warnf("[RISK CONTROL] %s fast favorable stop failed: %v", symbol, err)
+				// review 2026-10-28 #1: a kept tighter exchange stop is not a failure.
+				if _, kept := keptTighterStop(err); !kept {
+					logger.Warnf("[RISK CONTROL] %s fast favorable stop failed: %v", symbol, err)
+				}
 			} else {
 				at.SetRecordedStopLoss(symbol, side, target)
 			}
