@@ -50,7 +50,7 @@ uv pip install --python .venv/bin/python -r scripts/backtest/requirements.txt
 
 通用参数：`--db` 默认 `<repo>/data/data.db`，`--cache` 默认 `data/backtest_cache`，`--signals` 默认 `<cache>/signals.json`，`--trader` / `--trader-id` 可选择策略。回测命令的 `--engine` 只接受 `backtrader`。
 
-成交参数：`--commission 0.0005` 表示每次成交收取 0.05%；默认对所有订单使用同一费率，包括限价单，不区分 maker/taker。`--slippage 0.0003` 表示市价/止损默认滑点 0.03%；限价单不额外滑点。`--limit-valid-min 45` 为从原始信号时间起算的限价有效期。这些都使用原生 broker 配置；费用根据实际成交价格和实际数量收取。
+成交参数：`--commission 0.0005` 表示每次成交收取 0.05%；默认对所有订单使用同一费率，包括限价单，不区分 maker/taker。`--slippage 0.0003` 表示市价/止损默认滑点 0.03%；限价单不额外滑点。`--limit-valid-min 45` 为从原始信号时间起算的限价有效期。`--limit-fill` 选择限价成交模式：`through`（默认）要求价格穿过限价至少 1 个 tick 才成交，`touch` 为触价即成交的旧行为；穿价阈值优先取信号/品种的 tick 字段，缺省按该限价的 0.01% 近似（无交易所 tick 数据时的保守近似）。这些都使用原生 broker 配置；费用根据实际成交价格和实际数量收取（同根止损的估算出场费除外，见下）。
 
 ## 数据来源
 
@@ -65,12 +65,12 @@ uv pip install --python .venv/bin/python -r scripts/backtest/requirements.txt
 
 信号去重沿用原来的方法：同币同向连续限价决策间隔小于 `--dedupe-min`（默认 60 分钟），且期间无实盘成交，合并为一个信号。模拟只提交首次决策的订单，不使用 `sl_last` / `tp_last` / 实际 `fill_px` 来重建未来状态。合并后的撤单/改价过程没有重放。
 
-缓存先用 1m，再接不重叠的 5m 数据。适配器把时间戳转换为 **K 线收盘时间**（分别加 1/5 分钟），所有时间为 UTC；找不到信号分钟、OHLC 不合法或数据重叠会跳过。`fetch` 复用 `HTTPS_PROXY`，请求间隔至少 1 秒，权重高时退避。
+缓存先用 1m，再接不重叠的 5m 数据。5m 段起点取最后一根 1m 的**收盘时刻**（open+1m）向上取整到 5m 边界，`fetch` 会用 1m 把缺口补满到该边界（每信号最多补 4 根），保证拼接后无时间空洞；`load_bars` 发现空洞（5m 段晚于最后一根 1m 收盘）会直接报错并提示重新 fetch，不返回带洞数据——空洞内的 SL 触发不可见，结果恒偏乐观。旧缓存（本修复前抓取）需重新运行一次 `fetch` 补齐。适配器把时间戳转换为 **K 线收盘时间**（分别加 1/5 分钟），所有时间为 UTC；找不到信号分钟、OHLC 不合法或数据重叠会跳过。`fetch` 复用 `HTTPS_PROXY`，请求间隔至少 1 秒，权重高时退避。
 
 ## Backtrader 执行口径
 
-- 不启用 cheat-on-close/open。信号分钟收盘后提交开仓订单，市价单最早在下一根开盘成交；限价单由 broker 按 OHLC 和有效期撮合，实盘未成交的信号也可能在模拟中成交。
-- 开仓成交的通知到达后，策略根据实际成交价和原始止损计算初始风险，创建保护订单。保护订单从后续 K 线开始执行；开仓成交所在 K 线内的 SL/TP 触发无法回溯执行。
+- 不启用 cheat-on-close/open。信号分钟收盘后提交开仓订单，市价单最早在下一根开盘成交；限价单由 broker 按 OHLC 和有效期撮合。限价默认要求**穿价至少 1 个 tick** 才成交（`--limit-fill through`，保守口径，降低对实盘未成交信号的过度成交）；`--limit-fill touch` 保留触价即成交的旧行为。出入场限价单（含 TP/减仓档）都适用该模式。
+- 开仓成交的通知到达后，策略根据实际成交价和原始止损计算初始风险，创建保护订单。保护订单从后续 K 线开始执行；若入场成交所在根的区间已穿过 SL，按同根「先止损」约定保守记为 SL 出场：按 SL 价结算净盈亏，出场手续费按 SL 价名义金额估算（broker 无法回溯撮合同一根），`how=sl`、`open=false`。开仓根内的 TP 触发不回溯（忽略它只会更保守）。
 - 原始止损使用原生 Stop，止盈/减仓使用原生 Limit，关联为 OCO。减仓成交后，用剩余数量重建保护订单，防止旧订单超额平仓形成反向仓位。同根触及多档时先撮合近档，其余档最早在后续 K 线上重挂。
 - 保本、盈利锁、ATR 追踪和峰值回撤根据已经收盘的 K 线更新 Stop 价格；新价从下一根生效。不会在同一根先观察最高价，再假定已在该根低价路径上成交。跳空成交、同根已有订单的处理顺序均由 Backtrader 决定。
 - quick 时间止损和 horizon 到点后提交原生 Market 平仓，最早在下一根可用 K 线开盘成交。数据结束仍有持仓则标记 `open`，用 broker 账户价值盯市，只收取已发生成交的费用，不伪造最后一笔平仓。
@@ -108,7 +108,7 @@ uv run --no-project --with numpy --with scikit-learn python -m scripts.backtest 
 
 历史 AI 决策是已记录的信号，回测不会重新调用 AI 生成历史决策。当前策略配置的基线只是对历史信号重放当前规则，不代表当时实际采用的配置。
 
-OHLC 无法确定 K 线内部事件顺序，混合 1m/5m 精度也不同。缓存不含成交量，因此未启用成交量约束或部分成交模型；这里只模拟订单规则中的主动部分减仓。未建模资金费率、合约保证金/清算、交易所最小数量和精度、AI 主动平仓、组合最大仓位数、共享资金或历史改价链。结果应作为规则研究，不能当作实盘账户收益。
+OHLC 无法确定 K 线内部事件顺序，混合 1m/5m 精度也不同；为此采用保守约定：入场成交根穿过 SL 按先止损结算（见上），同根触及多档先撮合近档。缓存不含成交量，因此未启用成交量约束或部分成交模型；这里只模拟订单规则中的主动部分减仓。未建模资金费率、合约保证金/清算、交易所最小数量和精度、AI 主动平仓、组合最大仓位数、共享资金或历史改价链。结果应作为规则研究，不能当作实盘账户收益。
 
 Backtrader 参考：[订单执行](https://www.backtrader.com/docu/order-creation-execution/order-creation-execution/)、[OCO](https://www.backtrader.com/docu/order-creation-execution/oco/oco/)、[手续费](https://www.backtrader.com/docu/commission-schemes/commission-schemes/)、[滑点](https://www.backtrader.com/docu/slippage/slippage/)。
 
