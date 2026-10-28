@@ -4,11 +4,17 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"nofx/logger"
 	"nofx/security"
 )
+
+// Read once for the process; unset, zero and invalid values leave requests unlimited.
+var llmMaxInflight = sync.OnceValue(func() int {
+	return getEnvInt("NOFX_LLM_MAX_INFLIGHT", 0)
+})
 
 // Config client configuration (centralized management of all configurations)
 type Config struct {
