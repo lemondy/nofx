@@ -1862,6 +1862,18 @@ func (at *AutoTrader) processProtectionWatchdog() {
 				logger.Infof("🔧 [%s] %s %s TP sized %.6g exceeds the target %.6g for the live remainder — retired, re-arming at target", at.name, symbol, side, tpCover, tpQty)
 			}
 		}
+		// A split TP SHORT of the target (a leg sized before the lot step was
+		// known, or for a smaller position) is re-armed whole, not topped up:
+		// an adapter that replaces a side's TP on placement (paper) would swap
+		// the resting leg for the small top-up and the next pass would swap it
+		// back — a loop. One leg at the target size converges everywhere.
+		if wantTP && !tpOversized && tpFrac < 1 && tpCover > 0 && !math.IsInf(tpCover, 0) && at.canRetireTPLegs() {
+			if err := at.cancelTakeProfitForSideChecked(symbol, side); err != nil {
+				logger.Warnf("⚠️ [%s] %s %s short TP (%.6g vs target %.6g) could not be retired: %v — topping up instead", at.name, symbol, side, tpCover, tpQty, err)
+			} else {
+				logger.Infof("🔧 [%s] %s %s TP sized %.6g is short of the target %.6g — retired, re-arming at target", at.name, symbol, side, tpCover, tpQty)
+			}
+		}
 		var slErr error
 		if wantSL {
 			slErr = ensureProtectiveCoverage(at.trader, symbol, positionSide, "SL", sl, qty)
