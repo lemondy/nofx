@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 
-from . import entry, exitsim, fetch, mldataset, params, signals
+from . import backtrader_adapter, entry, exitsim, fetch, mldataset, params, signals
 from .backtrader_adapter import BacktraderUnavailable, _backtrader
 from .klines import default_cache_dir
 
@@ -31,6 +31,8 @@ def _add_execution(p, with_limit=False):
     p.add_argument("--engine", choices=["backtrader"], default="backtrader", help="使用 Backtrader 原生 broker")
     p.add_argument("--commission", type=float, default=exitsim.TAKER, help="每次成交手续费率，0.0005=0.05%%")
     p.add_argument("--slippage", type=float, default=exitsim.SLIP, help="市价/止损滑点率，0.0003=0.03%%")
+    p.add_argument("--limit-fill", choices=("through", "touch"), default="through",
+                   help="限价成交模式: through=需穿过限价至少 1 tick(保守,默认); touch=触价即成交(旧行为)")
     if with_limit:
         p.add_argument("--limit-valid-min", type=float, default=45, help="从信号时间起算的限价有效期(分钟)")
 
@@ -41,7 +43,9 @@ def _execution(a):
         raise ValueError("手续费和滑点必须是非负有限数")
     if hasattr(a, "limit_valid_min") and (not math.isfinite(a.limit_valid_min) or a.limit_valid_min <= 0):
         raise ValueError("限价有效期必须大于 0")
-    print(f"engine=backtrader version={bt.__version__} commission={a.commission} slippage={a.slippage}")
+    backtrader_adapter.LIMIT_FILL_DEFAULT = a.limit_fill
+    print(f"engine=backtrader version={bt.__version__} commission={a.commission} slippage={a.slippage} "
+          f"limit_fill={a.limit_fill}")
     print("收盘提交订单，下一根起撮合；独立信号 R 研究，非组合资金回测；open 仅盯市、不收未成交的平仓费。")
 
 
