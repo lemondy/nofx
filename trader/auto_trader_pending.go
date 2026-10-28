@@ -27,7 +27,10 @@ import (
 // ExecutedQty/ProtectedQty watermark) happen only under the account
 // execution mutex (cycle, protection monitor, Stop sweep, reconcile).
 type pendingEntry struct {
-	RecoveryReason string // durable abort state; cleared only after terminal order and flat position
+	State          string
+	ClientOrderID  string
+	OriginalR      float64 // immutable planned entry-to-stop distance
+	RecoveryReason string  // durable abort state; cleared only after terminal order and flat position
 	Symbol         string
 	Side           string // "long" / "short"
 	Price          float64
@@ -55,18 +58,23 @@ type pendingEntry struct {
 
 func pendingEntryKey(symbol, side string) string { return symbol + "|" + side }
 
-func (at *AutoTrader) setPendingEntry(pe *pendingEntry) {
+func (at *AutoTrader) rememberPendingEntry(pe *pendingEntry) {
 	registerAccountTrader(at)
 	at.pendingEntriesMu.Lock()
 	if at.pendingEntries == nil {
 		at.pendingEntries = make(map[string]*pendingEntry)
 	}
 	at.pendingEntries[pendingEntryKey(pe.Symbol, pe.Side)] = pe
-	at.persistPendingEntry(pe)
 	at.pendingEntriesMu.Unlock()
+}
+
+func (at *AutoTrader) setPendingEntry(pe *pendingEntry) error {
+	at.rememberPendingEntry(pe)
+	err := at.persistPendingEntry(pe)
 	// Startup recovery also comes through this registration point. Retain
 	// ownership until cancellation AND any executed slice's protection verify.
 	at.cancelExcludedPending(pe)
+	return err
 }
 
 func (at *AutoTrader) dropPendingEntry(symbol, side string) {
@@ -84,13 +92,16 @@ func (at *AutoTrader) dropPendingEntry(symbol, side string) {
 
 // persistPendingEntry is the write-through half of the pending state: the row
 // is what a restart uses to re-claim the resting order (expiry management +
-// protective placement on fill). A failed write means the entry could rest
-// unowned after a restart — the startup tag-scan catches it as a fallback.
-func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) {
+// protective placement on fill). Entry submission requires a successful write
+// before POST; a failed acknowledgement update leaves that submitting row intact.
+func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) error {
 	if at.store == nil {
-		return
+		return nil
 	}
 	err := at.store.PendingEntry().Upsert(&store.PendingEntryDB{
+		State:          pe.State,
+		ClientOrderID:  pe.ClientOrderID,
+		OriginalR:      pe.OriginalR,
 		TraderID:       at.id,
 		RecoveryReason: pe.RecoveryReason,
 		Symbol:         pe.Symbol,
@@ -107,9 +118,10 @@ func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) {
 		ExecutedQty:    pe.ExecutedQty,
 	})
 	if err != nil {
-		logger.Infof("⚠️ [%s] persist pending entry %s (order %s) failed: %v — restart would orphan it until the tag-scan drops it",
+		logger.Errorf("⚠️ [%s] persist pending entry %s (order %s) failed: %v — recovery must retain the last durable intent",
 			at.name, pe.Symbol, pe.OrderID, err)
 	}
+	return err
 }
 
 func (at *AutoTrader) getPendingEntry(symbol, side string) *pendingEntry {
@@ -402,6 +414,28 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	if side == "short" {
 		sideStr, posSideStr = "SELL", "SHORT"
 	}
+	clientTag := at.entryClientID()
+	plan := &pendingEntry{
+		State: "pending", OriginalR: math.Abs(decision.Price - decision.StopLoss),
+		Symbol: decision.Symbol, Side: side, Price: decision.Price, Quantity: quantity,
+		StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit, Leverage: decision.Leverage,
+		PlacedAt: time.Now(), ExitMode: decision.ExitMode,
+	}
+	// Write-ahead intent (review 2026-10-28 vf): persist the complete plan under
+	// a stable client order ID BEFORE the POST, so a crash after the exchange
+	// accepts the order (or a failed acknowledgement write) still leaves a row
+	// that restart reconciliation resolves by client ID. Client-ID lookups exist
+	// on the Binance adapter only; other venues keep the post-ACK write.
+	writeAhead := at.exchange == "binance" && at.store != nil
+	if writeAhead {
+		plan.State = "submitting"
+		plan.ClientOrderID = binance.BrIDPrefix + clientTag
+		plan.OrderID = binance.ClientOrderRefPrefix + plan.ClientOrderID
+		if err := at.persistPendingEntry(plan); err != nil {
+			return fmt.Errorf("limit entry intent persistence failed (order not submitted): %w", err)
+		}
+		at.rememberPendingEntry(plan)
+	}
 	res, err := grid.PlaceLimitOrder(&types.LimitOrderRequest{
 		Symbol:       decision.Symbol,
 		Side:         sideStr,
@@ -409,15 +443,26 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		Price:        decision.Price,
 		Quantity:     quantity,
 		Leverage:     decision.Leverage,
-		ClientID:     at.entryClientID(),
+		ClientID:     clientTag,
 	})
 	if err != nil {
-		err = at.trackUnknownSubmit(err, side, pendingEntry{
-			Symbol: decision.Symbol, Price: decision.Price, Quantity: quantity,
-			StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
-			Leverage: decision.Leverage, ExitMode: decision.ExitMode,
-		})
+		if writeAhead {
+			var unknown *binance.SubmitUnknownError
+			if !errors.As(err, &unknown) {
+				// A classified rejection: the adapter already ruled out an
+				// accepted order, so the intent is void.
+				at.dropPendingEntry(decision.Symbol, side)
+			}
+		}
+		// SubmitUnknown keeps the (already persisted) intent tracked by client ID.
+		err = at.trackUnknownSubmit(err, side, *plan)
 		return fmt.Errorf("failed to place limit entry: %w", err)
+	}
+	if res == nil || res.OrderID == "" {
+		if !writeAhead {
+			return fmt.Errorf("limit entry acknowledgement missing order ID")
+		}
+		return fmt.Errorf("limit entry acknowledgement missing order ID; submitting intent retained for client-ID reconciliation")
 	}
 	placedQuantity := res.Quantity
 	if placedQuantity <= 0 {
@@ -427,12 +472,13 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	}
 	actionRecord.Quantity = placedQuantity
 
-	at.setPendingEntry(&pendingEntry{
-		Symbol: decision.Symbol, Side: side, Price: decision.Price,
-		Quantity: placedQuantity, StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit,
-		Leverage: decision.Leverage, OrderID: res.OrderID, PlacedAt: time.Now(),
-		ExitMode: decision.ExitMode,
-	})
+	plan.State, plan.OrderID, plan.Quantity = "pending", res.OrderID, placedQuantity
+	if err := at.setPendingEntry(plan); err != nil {
+		// The submitting row (full plan + client ID) is still durable on the
+		// write-ahead path, so a restart resolves this order by client ID.
+		logger.Warnf("⚠️ [%s] limit entry %s accepted (order %s) but the pending-row update failed: %v — recovery will resolve it by client ID",
+			at.name, decision.Symbol, res.OrderID, err)
+	}
 	actionRecord.OrderID = 0                // string order id lives in the pending state
 	actionRecord.EntryOrderID = res.OrderID // quality-bucket exact join (review 2026-10-08 H)
 	logger.Infof("  ✓ Limit entry placed: %s %s %.6g @ %.6g (order %s), SL %.6g / TP %.6g",
@@ -468,6 +514,7 @@ func (at *AutoTrader) trackUnknownSubmit(err error, side string, plan pendingEnt
 		return err
 	}
 	plan.Side = side
+	plan.ClientOrderID = unknown.ClientOrderID
 	plan.OrderID = binance.ClientOrderRefPrefix + unknown.ClientOrderID
 	plan.PlacedAt = time.Now()
 	at.setPendingEntry(&plan)
@@ -517,6 +564,7 @@ func (at *AutoTrader) resolveUnknownEntry(pe *pendingEntry) bool {
 	}
 	logger.Warnf("📌 [%s] UNKNOWN entry %s %s resolved by client ID: %s → order %s (status %v)", at.name, pe.Symbol, pe.Side, pe.OrderID, realID, status["status"])
 	pe.OrderID = realID
+	pe.State = "pending"
 	// The real order now carries its own pending/position risk accounting.
 	pe.HeldRiskUSD = 0
 	at.persistPendingEntry(pe)

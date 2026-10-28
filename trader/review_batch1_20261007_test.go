@@ -1,11 +1,8 @@
 package trader
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -164,10 +161,6 @@ func TestB1MoveStopExchangeTightenOnly(t *testing.T) {
 	}
 }
 
-type batch1MarketTransport func(*http.Request) (*http.Response, error)
-
-func (f batch1MarketTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 // review 2026-10-07 B1-2: exercise the entire cycle with in-memory candle responses.
 func TestB1BreakevenTrailingSameCycle(t *testing.T) {
 	for _, tc := range []struct {
@@ -184,50 +177,51 @@ func TestB1BreakevenTrailingSameCycle(t *testing.T) {
 		{"armed_tightening", "long", 1, 95, 101, 108, 0.5, 0, -1, []float64{106.92}, 106.92},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			previous := http.DefaultTransport
-			defer func() { http.DefaultTransport = previous }()
-			candleRequests := 0
-			http.DefaultTransport = batch1MarketTransport(func(r *http.Request) (*http.Response, error) {
-				var payload interface{}
-				if r.URL.Host == "api.coinank.com" && r.URL.Path == "/api/kline/list/open" {
-					candleRequests++
-					duration := market.TimeframeDuration(r.URL.Query().Get("interval")).Milliseconds()
+			// 2026-10-28: the CoinAnk client now captures http.DefaultTransport at
+			// package init (pubcache.Wrap), so swapping the default transport no
+			// longer reaches it. Inject the closed candles through marketDataFn.
+			marketReads := 0
+			marketData := func(string) (*market.Data, error) {
+				marketReads++
+				now := time.Now()
+				series := map[string]*market.TimeframeSeriesData{}
+				for _, tf := range []string{"15m", "1h", "4h", "1d"} {
+					duration := market.TimeframeDuration(tf).Milliseconds()
 					if duration <= 0 {
-						return nil, fmt.Errorf("unexpected candle interval: %s", r.URL.RawQuery)
+						return nil, fmt.Errorf("unexpected candle interval: %s", tf)
 					}
-					rows := make([][]float64, 100)
-					last := time.Now().UnixMilli()/duration*duration - duration
+					last := now.UnixMilli()/duration*duration - duration
 					width := tc.mark * tc.atr / 100
-					for i := range rows {
-						start := last - int64(99-i)*duration
+					bars := make([]market.KlineBar, 100)
+					for i := range bars {
 						closePrice := tc.mark + float64(i%2)*0.01
 						if i == 99 {
 							closePrice = tc.mark
 						}
-						rows[i] = []float64{float64(start), float64(start + duration - 1), closePrice, closePrice, closePrice + width/2, closePrice - width/2, 100, 100, 10}
+						bars[i] = market.KlineBar{
+							Time: last - int64(99-i)*duration, Open: closePrice, Close: closePrice,
+							High: closePrice + width/2, Low: closePrice - width/2, Volume: 100,
+						}
 					}
-					payload = map[string]interface{}{"success": true, "data": rows}
-				} else {
-					// These optional OI/funding lookups also stay entirely in memory.
-					return nil, fmt.Errorf("optional market data disabled in batch1 fixture: %s", r.URL.Path)
+					series[tf] = &market.TimeframeSeriesData{Timeframe: tf, Klines: bars}
 				}
-				body, err := json.Marshal(payload)
-				if err != nil {
-					return nil, err
-				}
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body))), Request: r}, nil
-			})
+				return &market.Data{
+					Symbol: "XUSDT", CurrentPrice: tc.mark, TimeframeData: series,
+					SampledAt: now, StaleTimeframes: market.StaleTimeframes("XUSDT", series, now),
+				}, nil
+			}
 			at, m := newBatch1RiskTrader(tc.side, tc.qty, tc.mark, store.RiskControlConfig{
 				TrailingStopEnabled: true, BreakevenArmR: tc.armR, ProfitLockAtR: tc.lockR,
 			})
 			at.exchange = "binance"
+			at.marketDataFn = marketData
 			at.SetInitialStopLoss("XUSDT", tc.side, tc.initial)
 			at.SetRecordedStopLoss("XUSDT", tc.side, tc.current)
 			// The trim is already consumed; only stop management is under test.
 			at.r1TrimDone["XUSDT_"+tc.side] = true
 			at.processVolTargetAndTrailing()
-			if candleRequests != 4 {
-				t.Fatalf("cycle did not read the mocked candles: requests=%d", candleRequests)
+			if marketReads == 0 {
+				t.Fatal("cycle did not read the injected candles")
 			}
 			if len(m.stopPrices) != len(tc.wantPrices) {
 				t.Fatalf("stop submissions=%v, want %v", m.stopPrices, tc.wantPrices)
