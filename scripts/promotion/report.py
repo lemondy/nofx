@@ -28,12 +28,18 @@ from scripts.promotion.create_pair import main_repo_root
 UTC = timezone.utc
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAVEAT = (
-    "一周样本统计功效有限：ready 只表示未发现比对照差，不是已证明更优；"
+    "ready 要求至少 30 个配对日、两侧各 50 笔平仓，且 USDT/日配对差 CI95 下界通过非劣效；"
+    "非劣效不等于已证明更优；"
     "上线前仍需人工确认并保持小仓位/可回滚"
 )
 PNL_BASIS = "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）"
 AUDIT_MIN_WINDOW_PERIODS = 20
 AUDIT_BENCHMARK = "BTCUSDT 买入持有（UTC 日收盘，对数收益）"
+MIN_PAIRED_DAYS = 30
+MIN_CLOSED_TRADES = 50
+# One cent per day limits the tolerated expected paper-account loss to 0.30
+# USDT over 30 days. Never compare this absolute amount to return ratios.
+NONINFERIORITY_MARGIN = 0.01  # USDT/day
 
 
 def as_utc(value: str | datetime) -> datetime:
@@ -284,10 +290,25 @@ def paired_daily_comparison(candidate: dict, control: dict, as_of: datetime) -> 
     diffs = [row["diff"] for row in sequence]
     estimate, n = mean(diffs), len(diffs)
     se = cluster_se([(value - estimate) / n for value in diffs]) if n >= 10 and estimate is not None else None
+    def daily_pnl(stats):
+        curve = stats["daily_equity"]
+        return {row["date"]: finite(row["equity"] - previous["equity"])
+                for previous, row in zip(curve, curve[1:])
+                if as_utc(row["date"]) - as_utc(previous["date"]) == timedelta(days=1)}
+
+    cand_pnl, ctrl_pnl = daily_pnl(candidate), daily_pnl(control)
+    pnl_diffs = [finite(cand_pnl[row["date"]] - ctrl_pnl[row["date"]]) for row in sequence
+                 if cand_pnl.get(row["date"]) is not None and ctrl_pnl.get(row["date"]) is not None]
+    pnl_diffs = [value for value in pnl_diffs if value is not None]
+    pnl_mean, pnl_n = mean(pnl_diffs), len(pnl_diffs)
+    pnl_se = cluster_se([(value - pnl_mean) / pnl_n for value in pnl_diffs]) if pnl_n >= 10 else None
     c_return, b_return = candidate["period_return"], control["period_return"]
     aligned_c = finite(math.prod(1 + row["candidate_return"] for row in sequence) - 1) if n else None
     aligned_b = finite(math.prod(1 + row["control_return"] for row in sequence) - 1) if n else None
     return {"n_days": n, "mean_diff": estimate, "cluster_se": se, "ci95": ci95(estimate, se),
+            "pnl_usdt": {"n_days": pnl_n, "mean_diff": pnl_mean, "cluster_se": pnl_se,
+                         "ci95": ci95(pnl_mean, pnl_se), "unit": "USDT/day",
+                         "noninferiority_margin": NONINFERIORITY_MARGIN},
             "cumulative_return_diff": finite(c_return - b_return) if c_return is not None and b_return is not None else None,
             "aligned_candidate_return": aligned_c, "aligned_control_return": aligned_b,
             "aligned_cumulative_return_diff": finite(aligned_c - aligned_b) if aligned_c is not None and aligned_b is not None else None,
@@ -338,9 +359,17 @@ def decide_verdict(elapsed_days: float, min_days: float, min_trades: int,
     insufficient, performance = [], []
     if elapsed_days < min_days:
         insufficient.append(f"已运行 {elapsed_days:.2f} 天，少于要求的 {min_days:g} 天")
+    required_trades = max(min_trades, MIN_CLOSED_TRADES)
     for title, stats in (("候选", candidate), ("对照", control)):
-        if stats["n"] < min_trades:
-            insufficient.append(f"{title}已平仓 {stats['n']} 笔，少于要求的 {min_trades} 笔")
+        if stats["n"] < required_trades:
+            insufficient.append(f"{title}已平仓 {stats['n']} 笔，少于要求的 {required_trades} 笔")
+    pnl_paired = paired.get("pnl_usdt", {})
+    if min(paired.get("n_days", 0), pnl_paired.get("n_days", 0)) < MIN_PAIRED_DAYS:
+        insufficient.append(f"完整 USDT 配对日不足 {MIN_PAIRED_DAYS} 日")
+    interval = pnl_paired.get("ci95")
+    lower = finite(interval[0]) if interval and len(interval) == 2 else None
+    if lower is None or lower <= -NONINFERIORITY_MARGIN:
+        performance.append(f"USDT/日配对差 CI95 下界不可计算或不大于 {-NONINFERIORITY_MARGIN:g}，未通过非劣效")
     pnl = finite(candidate["net_pnl_usdt"])
     if pnl is None or pnl <= 0:
         performance.append("候选净盈亏不可计算或不大于 0 USDT")
@@ -424,6 +453,9 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
                   "rates": "胜率、收益率、MaxDD 均为小数比例，非百分数",
                   "equity": "UTC 日末最后快照，观测区间内缺日向前填充；MaxDD 基于日末权益；期间收益率以首个实际快照为基准",
                   "daily_comparison": "完整 UTC 日收益取交集，不含当天；日为聚类，SE=sqrt(G/(G-1)*sum(influence^2))；G<10 不给 SE/CI",
+                  "noninferiority": f"相同配对日的日末权益增量差（USDT/日）CI95 下界 > {-NONINFERIORITY_MARGIN:g}；"
+                                    f"配对日 >= {MIN_PAIRED_DAYS}，两侧平仓各 >= max(min_trades, {MIN_CLOSED_TRADES})；"
+                                    "权益增量含浮盈亏，外部资金流会影响结果，比较账户需保持资金口径一致",
                   "weekly_r": "两侧有效 R 笔数均达 min_trades 后，按退出时间的 UTC 周一聚类；交易加权 avgR 差；联合周<3 不给 SE/CI",
                   "ci": "近似正态 95% CI = 均值差 +/- 1.96*聚类 SE",
                   "open_positions": "当前 status=OPEN 的持仓数，包含 started_at 前入场的持仓",
@@ -510,7 +542,8 @@ def summary(report: dict) -> str:
 
     lines = [f"模拟盘晋升报告 {report['generated_at']} | pairs={len(report['pairs'])}"]
     for item in report["pairs"]:
-        lines.append(f"[{item['id']}] {item['verdict']} | 已运行 {item['elapsed_days']:.2f} 天")
+        verdict = "insufficient（样本不足）" if item['verdict'] == 'insufficient' else item['verdict']
+        lines.append(f"[{item['id']}] {verdict} | 已运行 {item['elapsed_days']:.2f} 天")
         for role, label in (("candidate", "候选"), ("control", "对照"), ("live", "正式参照")):
             if role in item:
                 stats = item[role]
@@ -523,6 +556,9 @@ def summary(report: dict) -> str:
         lines.append(f"  配对日={paired['n_days']}, 日收益差均值={number(paired['mean_diff'], True)}, "
                      f"SE={number(paired['cluster_se'], True)}, CI95={paired['ci95']}, "
                      f"累计收益差={number(paired['cumulative_return_diff'], True)}")
+        pnl = paired['pnl_usdt']
+        lines.append(f"  日盈亏配对差={number(pnl['mean_diff'])} USDT/日, CI95={pnl['ci95']}, "
+                     f"非劣效要求下界 > {-NONINFERIORITY_MARGIN:g} USDT/日")
         weekly = item["weekly_avg_r"]
         lines.append(f"  avgR差={number(weekly['mean_diff'])}, 聚类周={weekly['n_weeks']}, "
                      f"SE={number(weekly['cluster_se'])}, CI95={weekly['ci95']}")

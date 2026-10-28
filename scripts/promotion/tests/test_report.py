@@ -6,6 +6,7 @@ import io
 import json
 import math
 import os
+import random
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -142,6 +143,12 @@ class CalculationTests(unittest.TestCase):
         self.assertAlmostEqual(result["ci95"][1], 0.055 + 1.96 * expected_se)
         self.assertAlmostEqual(result["cumulative_return_diff"], equities[-1] / 100 - 1)
         self.assertAlmostEqual(result["aligned_cumulative_return_diff"], equities[-1] / 100 - 1)
+        dollar_diffs = [b - a for a, b in zip(equities, equities[1:])]
+        dollar_mean = sum(dollar_diffs) / 10
+        dollar_se = math.sqrt(sum((x - dollar_mean)**2 for x in dollar_diffs) / 90)
+        self.assertEqual(result["pnl_usdt"]["unit"], "USDT/day")
+        self.assertAlmostEqual(result["pnl_usdt"]["mean_diff"], dollar_mean)
+        self.assertAlmostEqual(result["pnl_usdt"]["ci95"][0], dollar_mean - 1.96 * dollar_se)
 
     def test_daily_small_sample_alignment_and_unfinished_day(self):
         cand = promotion.equity_statistics(snapshots([100, 110, 121, 133.1]), START, NOW)
@@ -185,13 +192,16 @@ class CalculationTests(unittest.TestCase):
         self.assertIn("有效 R", insufficient["note"])
 
     def test_verdict_boundaries_all_unmet_reasons_and_missing_metrics(self):
-        cand = {"n": 20, "net_pnl_usdt": 1, "period_return": 0.1}
-        ctrl = {"n": 20, "period_return": 0.1}
+        cand = {"n": 50, "net_pnl_usdt": 1, "period_return": 0.1}
+        ctrl = {"n": 50, "period_return": 0.1}
+        def paired(diff):
+            return {"mean_diff": diff, "n_days": 30,
+                    "pnl_usdt": {"n_days": 30, "ci95": [0, 0.02]}}
         for days, c, b, diff, expected in (
             (7, cand, ctrl, 0, "ready"),
             (6.999, cand, ctrl, 0, "insufficient"),
-            (7, {**cand, "n": 19}, ctrl, 0, "insufficient"),
-            (7, cand, {**ctrl, "n": 19}, 0, "insufficient"),
+            (7, {**cand, "n": 49}, ctrl, 0, "insufficient"),
+            (7, cand, {**ctrl, "n": 49}, 0, "insufficient"),
             (7, {**cand, "net_pnl_usdt": 0}, ctrl, 0, "hold"),
             (7, {**cand, "net_pnl_usdt": -1}, ctrl, 0, "hold"),
             (7, cand, {**ctrl, "period_return": 0.2}, 0, "hold"),
@@ -201,14 +211,45 @@ class CalculationTests(unittest.TestCase):
             (7, {**cand, "net_pnl_usdt": float("nan")}, ctrl, 0, "hold"),
         ):
             with self.subTest(expected=expected, days=days, c=c, b=b, diff=diff):
-                verdict, reasons = promotion.decide_verdict(days, 7, 20, c, b, {"mean_diff": diff})
+                verdict, reasons = promotion.decide_verdict(days, 7, 20, c, b, paired(diff))
                 self.assertEqual(verdict, expected)
                 self.assertEqual(bool(reasons), expected != "ready")
         verdict, reasons = promotion.decide_verdict(6, 7, 20,
             {"n": 0, "net_pnl_usdt": -1, "period_return": None},
             {"n": 0, "period_return": None}, {"mean_diff": None})
         self.assertEqual(verdict, "insufficient")
-        self.assertEqual(len(reasons), 6)
+        self.assertEqual(len(reasons), 8)
+
+    def test_noninferiority_uses_ci_strict_boundary_and_sample_floors(self):
+        cand = {"n": 50, "net_pnl_usdt": 100, "period_return": 0.2}
+        ctrl = {"n": 50, "period_return": 0.1}
+        for lower, expected in ((None, "hold"), (-0.02, "hold"),
+                                (-promotion.NONINFERIORITY_MARGIN, "hold"), (-0.009, "ready")):
+            p = {"mean_diff": 0.01, "n_days": 30,
+                 "pnl_usdt": {"n_days": 30, "ci95": None if lower is None else [lower, 1]}}
+            self.assertEqual(promotion.decide_verdict(40, 7, 20, cand, ctrl, p)[0], expected)
+            self.assertEqual(promotion.decide_verdict(40, 7, 51, cand, ctrl, p)[0], "insufficient")
+            p["pnl_usdt"]["n_days"] = 29
+            self.assertEqual(promotion.decide_verdict(40, 7, 20, cand, ctrl, p)[0], "insufficient")
+
+    def test_same_distribution_paired_noise_rarely_ready(self):
+        # Calibration at a declared noise scale; noninferiority alone is not a
+        # test of superiority and does not promise a universal false-ready rate.
+        rng = random.Random(20261028)
+        ready = 0
+        now = START + timedelta(days=61)
+        for _ in range(200):
+            candidates, controls = [1000.0], [1000.0]
+            for _ in range(60):
+                candidates.append(candidates[-1] + rng.gauss(0, 1))
+                controls.append(controls[-1] + rng.gauss(0, 1))
+            c = promotion.equity_statistics(snapshots(candidates), START, now)
+            b = promotion.equity_statistics(snapshots(controls), START, now)
+            c.update(n=50, net_pnl_usdt=candidates[-1] - candidates[0])
+            b.update(n=50)
+            p = promotion.paired_daily_comparison(c, b, now)
+            ready += promotion.decide_verdict(61, 7, 20, c, b, p)[0] == "ready"
+        self.assertLessEqual(ready / 200, 0.05)
 
 
 class SQLiteReportTests(unittest.TestCase):
@@ -221,7 +262,7 @@ class SQLiteReportTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             connection.executescript(SCHEMA)
 
-    def populate(self, trader_id, n=20, pnl=3, daily_gain=1):
+    def populate(self, trader_id, n=20, pnl=3, daily_gain=1, days=14):
         with sqlite3.connect(self.db) as connection:
             for i in range(n):
                 end = START + timedelta(days=1, minutes=i)
@@ -230,28 +271,28 @@ class SQLiteReportTests(unittest.TestCase):
                     "realized_pnl,fee,initial_stop_loss,entry_price,quantity) VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (trader_id, "BTCUSDT", "CLOSED", int(START.timestamp() * 1000),
                      int(end.timestamp() * 1000), pnl, 1, 99, 100, 2))
-            for row in snapshots([100 + daily_gain * i for i in range(14)]):
+            for row in snapshots([100 + daily_gain * i for i in range(days)]):
                 connection.execute("INSERT INTO trader_equity_snapshots (trader_id,timestamp,total_equity) VALUES (?,?,?)",
                                    (trader_id, row["timestamp"], row["total_equity"]))
 
     def test_end_to_end_three_verdicts_and_optional_live(self):
-        self.populate("candidate", daily_gain=2)
-        self.populate("control", daily_gain=1)
-        self.populate("losing", pnl=0, daily_gain=-1)
+        self.populate("candidate", n=50, daily_gain=2, days=40)
+        self.populate("control", n=50, daily_gain=1, days=40)
+        self.populate("losing", n=50, pnl=0, daily_gain=-1, days=40)
         self.populate("few", n=3)
         self.populate("live", n=1, pnl=11, daily_gain=3)
         result = promotion.build_report([
             pair(id="ready", live_trader_id="live"),
             pair(id="hold", candidate_trader_id="losing"),
             pair(id="insufficient", candidate_trader_id="few"),
-        ], self.db, NOW)
+        ], self.db, START + timedelta(days=40, hours=12))
         self.assertEqual([item["verdict"] for item in result["pairs"]], ["ready", "hold", "insufficient"])
         ready, hold, insufficient = result["pairs"]
-        self.assertEqual(ready["candidate"]["net_pnl_usdt"], 40)
+        self.assertEqual(ready["candidate"]["net_pnl_usdt"], 100)
         self.assertEqual(ready["live"]["net_pnl_usdt"], 10)
         self.assertEqual(ready["live"]["n"], 1)
-        self.assertEqual(ready["paired_daily"]["n_days"], 13)
-        self.assertEqual(ready["elapsed_days"], 14.5)
+        self.assertEqual(ready["paired_daily"]["n_days"], 39)
+        self.assertEqual(ready["elapsed_days"], 40.5)
         self.assertEqual(ready["reasons"], [])
         self.assertGreaterEqual(len(hold["reasons"]), 3)
         self.assertTrue(any("3 笔" in reason for reason in insufficient["reasons"]))
