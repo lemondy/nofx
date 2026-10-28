@@ -300,7 +300,8 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	sortedDecisions := sortDecisionsByPriority(aiDecision.Decisions)
 	// Market-entry strategies (limit_entry_enabled=false): belt and braces on top
 	// of the prompt — any open_*_limit the model still emits becomes a market open.
-	sortedDecisions = at.forceMarketEntries(sortedDecisions)
+	originalActions := make(map[string]string)
+	sortedDecisions = at.forceMarketEntries(sortedDecisions, originalActions)
 
 	logger.Info("🔄 Execution order (optimized): Close positions first → Open positions later")
 	for i, d := range sortedDecisions {
@@ -538,7 +539,7 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	// all-wait cycles stay silent to keep the chat signal-dense.
 	if cotHasActionable(aiDecision.Decisions) {
 		summaries := make([]notify.DecisionSummary, 0, len(aiDecision.Decisions))
-		for _, s := range at.buildCoTSummaries(aiDecision.Decisions, record.Decisions) {
+		for _, s := range at.buildCoTSummaries(aiDecision.Decisions, record.Decisions, originalActions) {
 			s.Detail = cotClamp(s.Detail, 120)
 			s.ErrText = cotClamp(s.ErrText, 200)
 			summaries = append(summaries, s)

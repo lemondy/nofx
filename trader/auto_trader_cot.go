@@ -30,11 +30,17 @@ func cotHasActionable(decisions []kernel.Decision) bool {
 // outcomes: executed entries get ✓ (or ✗ with the error), hold/wait stays
 // passive (•), and an actionable decision that never reached execution was
 // filtered by a gate — flagged as such instead of silently vanishing.
-func (at *AutoTrader) buildCoTSummaries(proposed []kernel.Decision, executed []store.DecisionAction) []notify.DecisionSummary {
+func (at *AutoTrader) buildCoTSummaries(proposed []kernel.Decision, executed []store.DecisionAction, originalActions ...map[string]string) []notify.DecisionSummary {
 	byKey := make(map[string]*store.DecisionAction, len(executed))
 	for i := range executed {
 		a := &executed[i]
-		byKey[a.Symbol+"|"+a.Action] = a
+		action := a.Action
+		if len(originalActions) > 0 {
+			if original := originalActions[0][a.Symbol+"|"+action]; original != "" {
+				action = original
+			}
+		}
+		byKey[a.Symbol+"|"+action] = a
 	}
 
 	summaries := make([]notify.DecisionSummary, 0, len(proposed))
@@ -54,10 +60,20 @@ func (at *AutoTrader) buildCoTSummaries(proposed []kernel.Decision, executed []s
 				s.ErrText = "未执行"
 			}
 		} else if isActionableAction(d.Action) {
+			// Filter reasons are stored under the rewritten execution action.
+			lookup := d
+			if len(originalActions) > 0 {
+				for key, original := range originalActions[0] {
+					if original == d.Action && strings.HasPrefix(key, d.Symbol+"|") {
+						lookup.Action = strings.TrimPrefix(key, d.Symbol+"|")
+						break
+					}
+				}
+			}
 			// 10-01: state the WHICH as well as the THAT — the bare
 			// "被闸门过滤" forced a manual log dig every time (LITUSDT
 			// open_long_limit with no visible cause).
-			if reason := at.popFilterReason(d); reason != "" {
+			if reason := at.popFilterReason(lookup); reason != "" {
 				s.ErrText = "被闸门过滤(" + reason + ")，未执行"
 			} else {
 				s.ErrText = "被闸门过滤，未执行"
