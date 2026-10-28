@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 
 	"nofx/mcp"
 )
@@ -236,7 +237,8 @@ func (c *ClaudeClient) ParseMCPResponse(body []byte) (string, error) {
 // response envelope.
 func (c *ClaudeClient) ParseMCPResponseFull(body []byte) (*mcp.LLMResponse, error) {
 	var raw struct {
-		Content []struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type  string          `json:"type"`
 			Text  string          `json:"text,omitempty"`
 			ID    string          `json:"id,omitempty"`
@@ -293,6 +295,13 @@ func (c *ClaudeClient) ParseMCPResponseFull(body []byte) (*mcp.LLMResponse, erro
 				},
 			})
 		}
+	}
+	if raw.StopReason == "max_tokens" {
+		chars := 0
+		for _, block := range raw.Content {
+			chars += utf8.RuneCountInString(block.Text)
+		}
+		c.Log.Warnf("⚠️ [%s] Response TRUNCATED by max_tokens (stop_reason=max_tokens, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.", c.String(), chars)
 	}
 	return result, nil
 }
