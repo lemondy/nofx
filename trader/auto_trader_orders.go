@@ -11,6 +11,7 @@ import (
 	"nofx/trader/types"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -129,6 +130,21 @@ func (at *AutoTrader) stampEntryPath(record *store.DecisionAction, data *market.
 // through this dispatch. Market-default strategies (limit_entry_enabled=
 // false) are exempt: market IS their default path.
 func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.DecisionAction, isLong bool) (*kernel.Decision, error) {
+	// review 2026-10-28 #13: market-default mode has no exception path for
+	// a direction explicitly blocked by the extended-pump gate.
+	if gs := at.cycleGateStates[market.Normalize(d.Symbol)]; gs != nil && (at.config.StrategyConfig == nil || !at.config.StrategyConfig.RiskControl.LimitEntryEnabled) {
+		allowed, failed := gs.LongAllowed, gs.LongFailed
+		if !isLong {
+			allowed, failed = gs.ShortAllowed, gs.ShortFailed
+		}
+		if !allowed {
+			for _, code := range failed {
+				if code == "EXTENDED_PUMP_UNCONFIRMED" {
+					return d, fmt.Errorf("entry blocked: %s", code)
+				}
+			}
+		}
+	}
 	if at.config.StrategyConfig == nil {
 		return d, nil
 	}
@@ -291,6 +307,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	}
 	// Calculate quantity with adjusted position size
 	quantity := actualPositionSize / marketData.CurrentPrice
+	// review 2026-10-28 #9: final price/quantity must fit the shared account budget.
+	quantity, err = at.finalizeOpenRisk(decision, marketData.CurrentPrice, quantity)
+	if err != nil {
+		return err
+	}
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 
@@ -385,6 +406,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	if tpErr != nil {
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
 	}
+	// review 2026-10-28 #9: confirmed protected fills replace cycle reservations.
+	at.setCycleReservation(decision, 0)
 	return nil
 }
 
@@ -577,6 +600,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	}
 	// Calculate quantity with adjusted position size
 	quantity := actualPositionSize / marketData.CurrentPrice
+	// review 2026-10-28 #9: final price/quantity must fit the shared account budget.
+	quantity, err = at.finalizeOpenRisk(decision, marketData.CurrentPrice, quantity)
+	if err != nil {
+		return err
+	}
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 
@@ -660,6 +688,8 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	if tpErr != nil {
 		return fmt.Errorf("❌ [PROTECTION] %s %s opened @ %.6g, SL verified, TP placement FAILED: %w — watchdog will retry", decision.Action, decision.Symbol, fillPrice, tpErr)
 	}
+	// review 2026-10-28 #9: confirmed protected fills replace cycle reservations.
+	at.setCycleReservation(decision, 0)
 	return nil
 }
 
@@ -756,9 +786,16 @@ func (at *AutoTrader) placeProtectiveOrdersTPDone(decision *kernel.Decision, pos
 	if mode == "" {
 		mode = kernel.ExitModeTrend
 	}
-	tpQty := quantity * tpFractionForMode(mode, at.effectiveTPCloseFraction())
+	// review 2026-10-28 #3/#6: the split-TP quantity sits on the symbol's lot
+	// grid (the very grid the adapter floors to), so the planned quantity, the
+	// coverage check and the placed order are the SAME number — a rounding
+	// tail can no longer read as "missing protection".
+	tpQty := at.quantizedTPQty(decision.Symbol, quantity, tpFractionForMode(mode, at.effectiveTPCloseFraction()))
 	if tpDone > 0 {
 		tpQty = math.Max(0, tpQty-tpDone)
+		if step, _ := quantityStepOf(at.trader, decision.Symbol); step > 0 {
+			tpQty = math.Floor(tpQty/step+1e-9) * step
+		}
 	}
 	tpNeeded := decision.TakeProfit > 0 && (tpDone <= 0 || tpQty > math.Max(1e-9, quantity*1e-6))
 	if decision.StopLoss > 0 {
@@ -792,12 +829,193 @@ func (at *AutoTrader) placeProtectiveOrdersTPDone(decision *kernel.Decision, pos
 		slErr = at.initialStopFastFailure(decision.Symbol, strings.ToLower(positionSide), decision.StopLoss, quantity, slErr)
 	}
 	if tpErr == nil && decision.TakeProfit > 0 {
-		if tpQty < quantity {
-			at.markTPRunner(decision.Symbol + "_" + strings.ToLower(positionSide))
+		posKey := decision.Symbol + "_" + strings.ToLower(positionSide)
+		// review 2026-10-28 #5: "a split TP is RESTING" is not "the runner has
+		// taken over". The old unconditional mark here made the watchdog skip
+		// re-arming a split TP that was later cancelled/lost. The runner flag
+		// is now set only on evidence the TP leg actually executed: price
+		// travelled the TP distance (rule 5), the watchdog saw the leg vanish
+		// while the position shrank by its size (tpLedger), or — here — the
+		// pending path already knows earlier slices shed the whole TP share.
+		held := quantity - tpDone
+		if tpDone > 0 && !tpNeeded {
+			at.markTPRunner(posKey)
+			at.dropTPLedger(posKey)
+		} else if tpNeeded && partialTPShare(tpQty, held) {
+			at.recordTPLedger(posKey, held, tpQty)
+		} else {
+			at.dropTPLedger(posKey)
 		}
 		at.recordOpenTakeProfit(decision.Symbol, strings.ToLower(positionSide), decision.TakeProfit)
 	}
 	return
+}
+
+// partialTPShare: the TP leg covers strictly less than the position (a runner
+// remains). tpQty and held are both lot-grid values, so any real difference is
+// at least one step — only float noise is excluded.
+func partialTPShare(tpQty, held float64) bool {
+	return held > 0 && tpQty > 0 && tpQty < held-math.Max(1e-9, held*1e-6)
+}
+
+// quantityStepOf returns the symbol's lot step / minQty from the adapter's
+// cached exchange rules (0,0 when the adapter has no such hook or the rules are
+// unavailable — callers then keep the raw float quantity). No extra REST: the
+// Binance adapter reads the same rules cache every order already uses.
+func quantityStepOf(t Trader, symbol string) (step, minQty float64) {
+	if t == nil {
+		return 0, 0
+	}
+	q, ok := t.(interface {
+		QuantityRules(string) (float64, float64, error)
+	})
+	if !ok {
+		return 0, 0
+	}
+	s, m, err := q.QuantityRules(symbol)
+	if err != nil || s <= 0 || math.IsNaN(s) || math.IsInf(s, 0) {
+		return 0, 0
+	}
+	if m < 0 || math.IsNaN(m) || math.IsInf(m, 0) {
+		m = 0
+	}
+	return s, m
+}
+
+// quantizeTPQty is the single definition of a split-TP size (review 2026-10-28
+// #3/#6): posQty*frac rounded to the nearest lot step, never below one step
+// (or minQty) and never above posQty. frac >= 1 is the whole position. With no
+// step available the raw product is returned unchanged.
+func quantizeTPQty(posQty, frac, step, minQty float64) float64 {
+	if posQty <= 0 || math.IsNaN(posQty) || math.IsInf(posQty, 0) {
+		return 0
+	}
+	if frac >= 1 {
+		return posQty
+	}
+	target := posQty * frac
+	if step <= 0 {
+		return target
+	}
+	q := math.Floor(target/step+0.5+1e-9) * step
+	floor := step
+	if minQty > floor {
+		floor = math.Ceil(minQty/step-1e-9) * step
+	}
+	if q < floor {
+		q = floor
+	}
+	if q > posQty {
+		q = posQty
+	}
+	return q
+}
+
+func (at *AutoTrader) quantizedTPQty(symbol string, posQty, frac float64) float64 {
+	step, minQty := quantityStepOf(at.trader, symbol)
+	return quantizeTPQty(posQty, frac, step, minQty)
+}
+
+// tpCoverageTolerance: a TP shortfall smaller than one lot step is a rounding
+// tail, not missing protection (the adapter can neither place nor need it).
+func tpCoverageTolerance(t Trader, symbol string, quantity float64) float64 {
+	tol := math.Max(1e-9, quantity*1e-6)
+	if step, _ := quantityStepOf(t, symbol); step > 0 {
+		tol = math.Max(tol, step*(1-1e-6))
+	}
+	return tol
+}
+
+// tpLedger remembers, per live position, the split-TP leg the program placed:
+// the position size at that moment and the leg's quantity. It is the evidence
+// behind "the TP leg filled" (leg gone AND position shrank by ~its size), which
+// is what lets the runner flag follow execution instead of placement (review
+// 2026-10-28 #5). Memory-only, like the runner flag itself. It lives outside
+// the AutoTrader struct (keyed by trader pointer) so it needs no struct change.
+type tpLedgerEntry struct {
+	posQty, tpQty float64
+}
+
+type tpLedgerStore struct {
+	mu sync.Mutex
+	m  map[string]tpLedgerEntry
+}
+
+var tpLedgers sync.Map // *AutoTrader -> *tpLedgerStore
+
+func (at *AutoTrader) tpLedgerStore() *tpLedgerStore {
+	if v, ok := tpLedgers.Load(at); ok {
+		return v.(*tpLedgerStore)
+	}
+	v, _ := tpLedgers.LoadOrStore(at, &tpLedgerStore{m: map[string]tpLedgerEntry{}})
+	return v.(*tpLedgerStore)
+}
+
+func (at *AutoTrader) recordTPLedger(posKey string, posQty, tpQty float64) {
+	if posQty <= 0 || tpQty <= 0 {
+		return
+	}
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	l.m[posKey] = tpLedgerEntry{posQty: posQty, tpQty: tpQty}
+	l.mu.Unlock()
+}
+
+func (at *AutoTrader) dropTPLedger(posKey string) {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	delete(l.m, posKey)
+	l.mu.Unlock()
+}
+
+func (at *AutoTrader) getTPLedger(posKey string) (tpLedgerEntry, bool) {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[posKey]
+	return e, ok
+}
+
+// noteTPLedgerReduction books a NON-TP reduction (1R trim, vol reduce) against
+// the ledger's position size so it is never mistaken for the TP leg filling.
+func (at *AutoTrader) noteTPLedgerReduction(posKey string, reduced float64) {
+	if reduced <= 0 {
+		return
+	}
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	if e, ok := l.m[posKey]; ok {
+		e.posQty = math.Max(0, e.posQty-reduced)
+		l.m[posKey] = e
+	}
+	l.mu.Unlock()
+}
+
+// pruneTPLedger drops entries of positions that are no longer live.
+func (at *AutoTrader) pruneTPLedger(live map[string]bool) {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	for k := range l.m {
+		if !live[k] {
+			delete(l.m, k)
+		}
+	}
+	l.mu.Unlock()
+}
+
+// tpLegFilled: the recorded split-TP leg no longer rests on the exchange
+// (tpCover below its planned size by more than a lot step) while the position
+// has shrunk by about that leg's size since it was placed.
+func (at *AutoTrader) tpLegFilled(posKey string, qtyNow, tpCover, step float64) bool {
+	e, ok := at.getTPLedger(posKey)
+	if !ok || e.tpQty <= 0 {
+		return false
+	}
+	tol := math.Max(step, math.Max(1e-9, e.tpQty*1e-6))
+	if tpCover+tol >= e.tpQty {
+		return false // the leg is still there
+	}
+	return e.posQty-qtyNow >= e.tpQty-tol
 }
 
 func protectiveOrderMatches(o types.OpenOrder, side, kind string, price float64) bool {
@@ -848,7 +1066,14 @@ func ensureProtectiveCoverage(t Trader, symbol, side, kind string, price, quanti
 		return fmt.Errorf("%s coverage unknown: %w", kind, err)
 	}
 	missing := quantity - protectiveCoverage(orders, side, kind, price)
-	if missing <= math.Max(1e-9, quantity*1e-6) {
+	tol := math.Max(1e-9, quantity*1e-6)
+	if kind == "TP" {
+		// review 2026-10-28 #6: a sub-step TP tail is not "missing" — chasing it
+		// used to fail the lot filter and (in the adapter) degrade to a
+		// whole-position closePosition TP.
+		tol = tpCoverageTolerance(t, symbol, quantity)
+	}
+	if missing <= tol {
 		return nil
 	}
 	if kind == "SL" {
@@ -932,7 +1157,7 @@ func (at *AutoTrader) verifyProtectiveLegs(decision *kernel.Decision, positionSi
 			if wantSL && protectiveCoverage(orders, positionSide, "SL", decision.StopLoss)+math.Max(1e-9, quantities[0]*1e-6) < quantities[0] {
 				slErr = fmt.Errorf("SL coverage unconfirmed")
 			}
-			if wantTP && protectiveCoverage(orders, positionSide, "TP", decision.TakeProfit)+math.Max(1e-9, quantities[1]*1e-6) < quantities[1] {
+			if wantTP && protectiveCoverage(orders, positionSide, "TP", decision.TakeProfit)+tpCoverageTolerance(at.trader, decision.Symbol, quantities[1]) < quantities[1] {
 				tpErr = fmt.Errorf("TP coverage unconfirmed")
 			}
 		} else {

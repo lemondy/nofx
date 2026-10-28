@@ -1053,14 +1053,30 @@ func (at *AutoTrader) unmarkAIManagedIfEntry(symbol, side, orderID string) bool 
 	return false
 }
 
-// isAIManaged reports whether the position belongs to the automation. A
-// missing store reads as AI-managed (degrade to old behavior rather than
-// dropping protection on everything during store outages).
+// review 2026-10-28 #12: unknown ownership must keep existing positions
+// protected. Successful true/false reads are cached per trader/symbol/side.
 func (at *AutoTrader) isAIManaged(symbol, side string) bool {
+	managed, known := at.aiManagedStatus(symbol, side)
+	return !known || managed
+}
+
+func (at *AutoTrader) aiManagedStatus(symbol, side string) (bool, bool) {
 	if at.store == nil {
-		return true
+		return true, true
 	}
-	return at.store.AIManaged().IsMarked(at.id, symbol, strings.ToLower(side))
+	symbol, side = market.Normalize(symbol), strings.ToLower(side)
+	managed, err := at.store.AIManaged().IsMarkedWithError(at.id, symbol, side)
+	if err == nil {
+		return managed, true
+	}
+	managed, known := at.store.AIManaged().LastKnownMarked(at.id, symbol, side)
+	// review 2026-10-28 #12: the existing notification mutex deduplicates
+	// simultaneous watchdog, dashboard and execution lookup failures.
+	if _, push := at.gateNotifyRecord("ownership:"+symbol+"_"+side, time.Now()); push {
+		logger.Warnf("🤖 [%s] AI-managed lookup failed %s %s: %v (cached=%v)", at.name, symbol, side, err, known)
+		notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 仓位归属查询失败 %s %s</b>\n已知归属沿用缓存；未知仓位继续保护并阻止新增风险\n%s", notify.Escape(symbol), notify.Escape(side), notify.Escape(err.Error())))
+	}
+	return managed, known
 }
 
 // setFilterReason records why an actionable proposal was dropped by an

@@ -23,6 +23,8 @@ type RiskStatus struct {
 	DailyLossPct    float64 `json:"daily_loss_pct"`
 	DailyLossCapPct float64 `json:"daily_loss_cap_pct"` // 0 = disabled
 	DailyHalted     bool    `json:"daily_halted"`
+	// review 2026-10-28 #12: a failed latch read must be visible as unknown.
+	DailyHaltUnknown bool `json:"daily_halt_unknown"`
 
 	// Account drawdown breaker (vs initial balance).
 	InitialBalance       float64 `json:"initial_balance"`
@@ -91,12 +93,15 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 			out.LossStreakMax = lossStreakDefaultN
 		}
 	}
-	today := time.Now().UTC().Format("2006-01-02")
+	today := dailyRiskNow().UTC().Format("2006-01-02")
 	// review 2026-10-07 B2-E: day anchors and pending fields are written under executionMutex.
 	// Snapshot under the same lock, then release it before exchange or durable reads.
 	mu := at.executionMutex()
 	mu.Lock()
 	dayStartDay, dayStartEquity := at.dayStartDay, at.dayStartEquity
+	// review 2026-10-28 #12: snapshot the executor latch under its lock;
+	// the shared durable query below stays outside the account lock.
+	haltDay, haltReason := at.dailyHaltDay, at.dailyHaltReason
 	out.Pending = []PendingStatus{}
 	at.pendingEntriesMu.RLock()
 	for _, pe := range at.pendingEntries {
@@ -110,6 +115,12 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	}
 	at.pendingEntriesMu.RUnlock()
 	mu.Unlock()
+	if haltDay == today && haltReason != "" {
+		out.DailyHalted = true
+	} else {
+		_, halted, err := at.readDurableDailyHalt(today)
+		out.DailyHalted, out.DailyHaltUnknown = halted, err != nil
+	}
 	if dayStartDay == today && dayStartEquity > 0 {
 		out.DayStartEquity = dayStartEquity
 	} else if baseline, ok := at.inheritDailyBaseline(today); ok {
@@ -117,8 +128,9 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	}
 	if out.DayStartEquity > 0 && out.Equity > 0 {
 		out.DailyLossPct = (out.DayStartEquity - out.Equity) / out.DayStartEquity * 100
-		out.DailyHalted = out.DailyLossCapPct > 0 && out.DailyLossPct >= out.DailyLossCapPct
 	}
+	// review 2026-10-28 #12: show an exceeded cap even before execution latches it.
+	out.DailyHalted = out.DailyHalted || (out.DailyLossCapPct > 0 && out.DailyLossPct >= out.DailyLossCapPct)
 	if out.InitialBalance > 0 && out.Equity > 0 {
 		out.AccountDrawdownPct = (out.InitialBalance - out.Equity) / out.InitialBalance * 100
 		out.AccountBreakerActive = out.AccountDrawdownCap > 0 && out.AccountDrawdownPct >= out.AccountDrawdownCap
