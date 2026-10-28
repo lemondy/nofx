@@ -3,12 +3,14 @@ package kernel
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/provider/nofxos"
 	"nofx/store"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -551,11 +553,26 @@ func extractDecisions(response string) ([]Decision, error) {
 	s := removeInvisibleRunes(response)
 	s = sanitizePlaceholders(s)
 	s = strings.TrimSpace(s)
-	s = fixMissingQuotes(s)
+	// Punctuation repair tracks string state, so it runs on the extracted
+	// payload only: an unpaired quote in the reasoning prose would otherwise
+	// invert the state for the final block (review 2026-10-28 #15).
 
 	var jsonPart string
-	if match := reDecisionTag.FindStringSubmatch(s); match != nil && len(match) > 1 {
-		inner := match[1]
+	matches := reDecisionTag.FindAllStringSubmatchIndex(s, -1)
+	lastOpen := strings.LastIndex(s, "<decision>")
+	// A trailing unclosed block supersedes any earlier complete draft too.
+	if lastOpen >= 0 && (len(matches) == 0 || lastOpen >= matches[len(matches)-1][1]) {
+		// Only salvage completed objects from INSIDE the final payload. Never
+		// search earlier reasoning/drafts when the final block is truncated.
+		payload := fixMissingQuotes(s[lastOpen+len("<decision>"):])
+		if salvaged := salvageTruncatedDecisionArray(payload); len(salvaged) > 0 {
+			logger.Infof("⚠️  <decision> not closed; salvaged %d complete decisions from the final payload", len(salvaged))
+			return salvaged, nil
+		}
+		return nil, fmt.Errorf("<decision> tag opened but not closed (truncated or malformed final decision block); refusing to search the full text for a decision array")
+	} else if len(matches) > 0 {
+		match := matches[len(matches)-1]
+		inner := s[match[2]:match[3]]
 		// A reasoning section that literally mentions "<decision>" must not
 		// widen the payload: the final block is the one after the LAST open tag.
 		if i := strings.LastIndex(inner, "<decision>"); i >= 0 {
@@ -563,19 +580,6 @@ func extractDecisions(response string) ([]Decision, error) {
 		}
 		jsonPart = strings.TrimSpace(inner)
 		logger.Infof("✓ Extracted JSON using <decision> tag")
-	} else if strings.Contains(s, "<decision>") {
-		// review 2026-10-20 area4 #3: once the model opened <decision> the
-		// payload boundary is fixed. A missing </decision> means the final
-		// block was truncated; falling back to a full-text array search would
-		// pick up a draft array abandoned inside <reasoning> (e.g. a discarded
-		// close_long) and could execute it. Reject instead.
-		// Only salvage completed objects from INSIDE the final payload.
-		payload := s[strings.LastIndex(s, "<decision>")+len("<decision>"):]
-		if salvaged := salvageTruncatedDecisionArray(payload); len(salvaged) > 0 {
-			logger.Infof("⚠️  <decision> not closed; salvaged %d complete decisions from the final payload", len(salvaged))
-			return salvaged, nil
-		}
-		return nil, fmt.Errorf("<decision> tag opened but not closed (truncated or malformed final decision block); refusing to search the full text for a decision array")
 	} else {
 		jsonPart = s
 		logger.Infof("⚠️  <decision> tag not found, searching JSON in full text")
@@ -583,21 +587,20 @@ func extractDecisions(response string) ([]Decision, error) {
 
 	jsonPart = fixMissingQuotes(jsonPart)
 
-	if m := reJSONFence.FindStringSubmatch(jsonPart); m != nil && len(m) > 1 {
-		jsonContent := strings.TrimSpace(m[1])
-		jsonContent = compactArrayOpen(jsonContent)
-		jsonContent = fixMissingQuotes(jsonContent)
-		if err := validateJSONFormat(jsonContent); err != nil {
-			return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
+	jsonContent, contentStart := "", -1
+	if fences := reJSONFence.FindAllStringSubmatchIndex(jsonPart, -1); len(fences) > 0 {
+		last := fences[len(fences)-1]
+		jsonContent, contentStart = jsonPart[last[2]:last[3]], last[2]
+	}
+	if arrays := reJSONArray.FindAllStringIndex(jsonPart, -1); len(arrays) > 0 {
+		last := arrays[len(arrays)-1]
+		// A later bare array also supersedes an earlier fenced draft.
+		if last[0] >= contentStart {
+			jsonContent = jsonPart[last[0]:last[1]]
 		}
-		var decisions []Decision
-		if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-			return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
-		}
-		return decisions, nil
 	}
 
-	jsonContent := strings.TrimSpace(reJSONArray.FindString(jsonPart))
+	jsonContent = strings.TrimSpace(jsonContent)
 	if jsonContent == "" {
 		// Max-token truncation amputates the tail of the decision array: the
 		// model has usually already emitted several complete decision objects
@@ -637,8 +640,8 @@ func extractDecisions(response string) ([]Decision, error) {
 		return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
 	}
 
-	var decisions []Decision
-	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
+	decisions, err := decodeDecisionArray(normalizeDecisionNumbers(jsonContent))
+	if err != nil {
 		return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
 	}
 
@@ -655,28 +658,216 @@ func sanitizePlaceholders(s string) string {
 	return s
 }
 
+// fixMissingQuotes repairs structural punctuation while preserving every byte
+// inside ASCII-quoted JSON strings, including escapes and Chinese quotation marks.
 func fixMissingQuotes(jsonStr string) string {
-	jsonStr = strings.ReplaceAll(jsonStr, "\u201c", "\"")
-	jsonStr = strings.ReplaceAll(jsonStr, "\u201d", "\"")
-	jsonStr = strings.ReplaceAll(jsonStr, "\u2018", "'")
-	jsonStr = strings.ReplaceAll(jsonStr, "\u2019", "'")
+	var b strings.Builder
+	b.Grow(len(jsonStr))
+	var quote rune
+	escaped := false
+	for i, r := range jsonStr {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == quote {
+				quote = 0
+				b.WriteByte('"')
+				continue
+			}
+			_, size := utf8.DecodeRuneInString(jsonStr[i:])
+			b.WriteString(jsonStr[i : i+size])
+			continue
+		}
+		switch r {
+		case '"':
+			quote = '"'
+		case '“', '”':
+			quote, r = '”', '"'
+		case '‘', '’':
+			quote, r = '’', '"'
+		case '［', '【', '〔':
+			r = '['
+		case '］', '】', '〕':
+			r = ']'
+		case '｛':
+			r = '{'
+		case '｝':
+			r = '}'
+		case '：':
+			r = ':'
+		case '，', '、':
+			r = ','
+		case '　':
+			r = ' '
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
-	jsonStr = strings.ReplaceAll(jsonStr, "［", "[")
-	jsonStr = strings.ReplaceAll(jsonStr, "］", "]")
-	jsonStr = strings.ReplaceAll(jsonStr, "｛", "{")
-	jsonStr = strings.ReplaceAll(jsonStr, "｝", "}")
-	jsonStr = strings.ReplaceAll(jsonStr, "：", ":")
-	jsonStr = strings.ReplaceAll(jsonStr, "，", ",")
+// normalizeDecisionNumbers repairs non-JSON numeric tokens only in object value
+// positions. Quoted reasoning and numeric strings are left untouched.
+func normalizeDecisionNumbers(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString, escaped, afterColon := false, false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if afterColon && !isJSONWhitespace(c) {
+			afterColon = false
+			replaced := false
+			for _, token := range []string{"NaN", "Infinity", "+Infinity", "-Infinity"} {
+				end := i + len(token)
+				if strings.HasPrefix(s[i:], token) && (end == len(s) || isJSONWhitespace(s[end]) || strings.ContainsRune(",}]", rune(s[end]))) {
+					b.WriteString("null")
+					i = end - 1
+					replaced = true
+					break
+				}
+			}
+			if replaced || (c == '+' && i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9') {
+				continue
+			}
+		}
+		if c == '"' {
+			inString = true
+		} else if c == ':' {
+			afterColon = true
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
 
-	jsonStr = strings.ReplaceAll(jsonStr, "【", "[")
-	jsonStr = strings.ReplaceAll(jsonStr, "】", "]")
-	jsonStr = strings.ReplaceAll(jsonStr, "〔", "[")
-	jsonStr = strings.ReplaceAll(jsonStr, "〕", "]")
-	jsonStr = strings.ReplaceAll(jsonStr, "、", ",")
+func isJSONWhitespace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
 
-	jsonStr = strings.ReplaceAll(jsonStr, "　", " ")
+// decodeDecisionArray isolates type errors to one object. Syntax errors that
+// prevent splitting the array, or rejection of every object, still fail a cycle.
+func decodeDecisionArray(s string) ([]Decision, error) {
+	var objects []json.RawMessage
+	if err := json.Unmarshal([]byte(s), &objects); err != nil {
+		return nil, err
+	}
+	decisions := make([]Decision, 0, len(objects))
+	var firstErr error
+	for i, raw := range objects {
+		d, err := decodeDecisionObject(raw)
+		if err == nil {
+			decisions = append(decisions, d)
+			continue
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		var identity struct {
+			Symbol string `json:"symbol"`
+		}
+		_ = json.Unmarshal(raw, &identity)
+		snippet := []rune(string(raw))
+		if len(snippet) > 240 {
+			snippet = append(snippet[:240], '…')
+		}
+		logger.Warnf("⚠️  [DecisionDecodeRejected] decision[%d] symbol=%q dropped: %v; raw=%q", i, identity.Symbol, err, string(snippet))
+	}
+	if len(objects) > 0 && len(decisions) == 0 {
+		return nil, fmt.Errorf("all %d decision objects failed to decode: %w", len(objects), firstErr)
+	}
+	return decisions, nil
+}
 
-	return jsonStr
+func decodeDecisionObject(raw json.RawMessage) (Decision, error) {
+	if !strings.HasPrefix(strings.TrimSpace(string(raw)), "{") {
+		return Decision{}, fmt.Errorf("decision must be an object")
+	}
+	// Preserve the strict decoder's exact behavior for already-valid objects
+	// (including duplicate/case-insensitive keys and large integer values).
+	var d Decision
+	if err := json.Unmarshal(raw, &d); err == nil {
+		return d, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return Decision{}, err
+	}
+	if fields == nil {
+		return Decision{}, fmt.Errorf("decision must be an object")
+	}
+	for name, value := range fields {
+		integer := false
+		switch strings.ToLower(name) {
+		case "leverage", "level_index", "confidence", "entry_quality", "management_quality", "tp_option":
+			integer = true
+		case "position_size_usd", "stop_loss", "take_profit", "price", "quantity", "risk_usd", "close_fraction":
+		default:
+			continue
+		}
+		normalized, err := coerceDecisionNumber(value, integer, name)
+		if err != nil {
+			return Decision{}, fmt.Errorf("field %s: %w", name, err)
+		}
+		fields[name] = normalized
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return Decision{}, err
+	}
+	d = Decision{}
+	err = json.Unmarshal(normalized, &d)
+	return d, err
+}
+
+func coerceDecisionNumber(raw json.RawMessage, integer bool, field string) (json.RawMessage, error) {
+	s := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(s, `"`) {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		s = strings.TrimSpace(s)
+	}
+	if s == "" || s == "null" {
+		return json.RawMessage("null"), nil
+	}
+	if integer {
+		// Preserve exact well-formed integers, including values above 2^53.
+		if n, err := strconv.ParseInt(s, 10, strconv.IntSize); err == nil {
+			return json.RawMessage(strconv.FormatInt(n, 10)), nil
+		}
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil, err
+	}
+	if math.IsNaN(n) || math.IsInf(n, 0) {
+		return json.RawMessage("null"), nil
+	}
+	if integer {
+		// math.Round uses half away from zero; ParseInt checks overflow before
+		// the value can reach the downstream int field.
+		rounded := strconv.FormatFloat(math.Round(n), 'f', 0, 64)
+		if _, err := strconv.ParseInt(rounded, 10, strconv.IntSize); err != nil {
+			return nil, err
+		}
+		if math.Round(n) != n {
+			logger.Warnf("⚠️  [DecisionNumericRound] field %s rounded %s to %s (half away from zero)", field, raw, rounded)
+		}
+		return json.RawMessage(rounded), nil
+	}
+	return json.RawMessage(strconv.FormatFloat(n, 'g', -1, 64)), nil
 }
 
 func validateJSONFormat(jsonStr string) error {
