@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -772,11 +773,14 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 		return "", newAPIStatusError(resp, string(body), "API error")
 	}
 
-	return ParseSSEStream(resp.Body, onChunk, func() {
+	return parseSSEStream(resp.Body, onChunk, func() {
 		select {
 		case resetCh <- struct{}{}:
 		default:
 		}
+	}, func(_ string, chars int) {
+		client.Log.Warnf("⚠️ [Provider: %s, Model: %s] Response TRUNCATED by max_tokens (finish_reason=length, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.",
+			client.Provider, req.Model, chars)
 	})
 }
 
@@ -786,8 +790,21 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 // (useful for resetting idle-timeout watchdogs).
 // Returns the complete accumulated text.
 func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string, error) {
+	return parseSSEStream(body, onChunk, onLine, func(model string, chars int) {
+		logger.Warnf("⚠️ [Model: %s] Response TRUNCATED by max_tokens (finish_reason=length, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.", model, chars)
+	})
+}
+
+func parseSSEStream(body io.Reader, onChunk func(string), onLine func(), onTruncated func(string, int)) (string, error) {
 	var accumulated strings.Builder
 	var reasoning strings.Builder
+	model, receivedChars := "unknown", 0
+	truncated := false
+	defer func() {
+		if truncated && onTruncated != nil {
+			onTruncated(model, receivedChars)
+		}
+	}()
 	scanner := bufio.NewScanner(body)
 
 	for scanner.Scan() {
@@ -805,6 +822,7 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		}
 
 		var chunk struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
 					Content          string `json:"content"`
@@ -821,6 +839,9 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed chunks
 		}
+		if chunk.Model != "" {
+			model = chunk.Model
+		}
 
 		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
 			fmt.Printf("📊 [TokenUsage] prompt=%d, completion=%d, total=%d\n",
@@ -830,6 +851,11 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		if len(chunk.Choices) == 0 {
 			continue
 		}
+		if fr := chunk.Choices[0].FinishReason; fr != nil && *fr == "length" {
+			truncated = true
+		}
+		receivedChars += utf8.RuneCountInString(chunk.Choices[0].Delta.Content) +
+			utf8.RuneCountInString(chunk.Choices[0].Delta.ReasoningContent)
 
 		delta := chunk.Choices[0].Delta.Content
 		if delta != "" {
@@ -977,11 +1003,14 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 		return "", newAPIStatusError(resp, truncate(string(body), 200), "API error")
 	}
 
-	return ParseSSEStream(resp.Body, nil, func() {
+	return parseSSEStream(resp.Body, nil, func() {
 		select {
 		case resetCh <- struct{}{}:
 		default:
 		}
+	}, func(_ string, chars int) {
+		client.Log.Warnf("⚠️ [%s] Response TRUNCATED by max_tokens (finish_reason=length, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.",
+			client.String(), chars)
 	})
 }
 

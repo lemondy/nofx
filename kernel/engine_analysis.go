@@ -471,12 +471,6 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	correctLimitAnchors(decisions, limitAnchors, LimitAnchorTolerancePct)
 	// Stop-plan compliance (round-4 review R4-1): snap stop_loss to the plan.
 	correctStopLossToPlan(decisions, gateStates, StopPlanTolerancePct)
-	// TP menu (user directive 09-29): point the gate state at the CHOSEN
-	// option before the snap.
-	resolveTakeProfitOptions(decisions, gateStates)
-	// Reward-side symmetry (2026-09-27 external review P0).
-	correctTakeProfitToPlan(decisions, gateStates, StopPlanTolerancePct)
-
 	// review 2026-10-07 B1-6: validate per decision. One bad decision (amount
 	// too small, invalid action) must not discard valid closes / stop moves
 	// for other symbols. A rejected decision is replaced by a non-executing
@@ -486,8 +480,18 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	rejected := 0
 	var firstErr error
 	for i := range decisions {
+		norm := market.Normalize(decisions[i].Symbol)
+		// Menu choices belong to this decision. Compute and snap against a
+		// private gate copy so rejected opens and other decisions for the
+		// same symbol cannot rewrite the shared cycle snapshot.
+		decisionGates := make(map[string]*GateState, 1)
+		if gs := gateStates[norm]; gs != nil {
+			copyGS := *gs
+			decisionGates[norm] = &copyGS
+		}
+		resolveTakeProfitOptions(decisions[i:i+1], decisionGates)
+		correctTakeProfitToPlan(decisions[i:i+1], decisionGates, StopPlanTolerancePct)
 		d := decisions[i]
-		norm := market.Normalize(d.Symbol)
 		hasPos := positionSymbols[norm]
 		verr := validateDecision(&d, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, hasPos, gateStates[norm])
 		if verr == nil {
