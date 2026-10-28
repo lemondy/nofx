@@ -26,8 +26,21 @@ func RegimeLine(data *market.Data, tf string, now time.Time) float64 {
 	if data == nil || market.TimeframeDuration(tf) <= 0 {
 		return 0
 	}
+	// Closed-bar judgement uses the snapshot's sampling clock, not the
+	// execution clock: a bar forming at sample time must stay forming (review
+	// 2026-10-28 #23).
+	now = snapshotNow(data, now)
 	td := data.TimeframeData[tf]
-	if td == nil || len(td.Klines) == 0 || len(td.EMA50Values) == 0 {
+	if td == nil || len(td.Klines) == 0 {
+		return 0
+	}
+	// Same warm-up source as computeTFSignal's EMASlow, so the two agree.
+	if ind, warm := closedIndicatorBars(td, now, market.TimeframeDuration(tf)); warm && len(ind) >= 50 {
+		if v := market.ExportCalculateEMA(barsToKlines(ind), 50); v > 0 {
+			return v
+		}
+	}
+	if len(td.EMA50Values) == 0 {
 		return 0
 	}
 	j := len(ClosedKlines(td, now, market.TimeframeDuration(tf))) - 1
@@ -58,6 +71,7 @@ func ExecutionMicroTrend(data *market.Data, now time.Time) (string, string) {
 	if data == nil || data.CurrentPrice <= 0 {
 		return "", ""
 	}
+	now = snapshotNow(data, now) // sampling clock, review 2026-10-28 #23
 	tfs := make(map[string]*TFSignal)
 	for _, tf := range []string{"15m", "30m"} {
 		if td := data.TimeframeData[tf]; td != nil && len(td.Klines) >= 10 {

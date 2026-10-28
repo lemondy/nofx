@@ -80,6 +80,14 @@ type TimeframeSeriesData struct {
 	BOLLUpper  []float64 `json:"boll_upper"`  // Upper band
 	BOLLMiddle []float64 `json:"boll_middle"` // Middle band (SMA)
 	BOLLLower  []float64 `json:"boll_lower"`  // Lower band
+	// IndicatorKlines is the full fetched history (a superset of Klines whose
+	// tail is Klines), kept ONLY as indicator warm-up for the kernel: EMA50 on
+	// the ~60-bar display window is SMA-seeded and barely converged (review
+	// 2026-10-28 #17). Never serialized, so it cannot reach prompts, JSON or
+	// persistence. nil when the display window already is the full history or
+	// when the data was built by hand/decoded; consumers then fall back to
+	// Klines.
+	IndicatorKlines []KlineBar `json:"-"`
 }
 
 // OIData Open Interest data

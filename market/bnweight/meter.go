@@ -39,8 +39,8 @@ type Priority int
 
 const (
 	// Critical: order placement/cancel/algo orders and the position/account
-	// reads protection depends on. Never delayed, never dropped (even during
-	// a 429/418 cooldown).
+	// reads protection depends on. Exempt from the IP-weight guard and 429/418
+	// cooldown; data/funding request limits still apply.
 	Critical Priority = iota
 	// Normal: trader market data, order sync, API handlers. Delayed at high
 	// weight, rejected fast during a cooldown.
@@ -74,6 +74,9 @@ const (
 	maxGuardWait   = 60 * time.Second
 	eventRetention = 5 * time.Minute // data/fundingRate pools are 5-minute windows
 	summaryEvery   = 60 * time.Second
+
+	fundingRateRequestLimit = 500
+	dataRequestLimit        = 1000
 )
 
 type prioKey struct{}
@@ -93,18 +96,22 @@ func priorityFrom(ctx context.Context, def Priority) Priority {
 	return def
 }
 
-// ErrCooldown matches (errors.Is) the error returned for Low/Normal requests
-// rejected while a 429/418 cooldown is active.
+// ErrCooldown matches (errors.Is) requests rejected during a 429/418 cooldown
+// or when a data/funding request limit cannot clear within maxGuardWait.
 var ErrCooldown = errors.New("bnweight: binance rate-limit cooldown active")
 
 // CooldownError is the concrete error behind ErrCooldown.
 type CooldownError struct {
 	Until    time.Time
-	Status   int // 429 or 418 that started the cooldown
+	Status   int // 429 or 418 that started the cooldown; 0 for a local request limit
 	Priority Priority
 }
 
 func (e *CooldownError) Error() string {
+	if e.Status == 0 {
+		return fmt.Sprintf("bnweight: local request limit active until %s, %s request rejected",
+			e.Until.Format(time.RFC3339Nano), e.Priority)
+	}
 	return fmt.Sprintf("bnweight: binance rate-limit cooldown active until %s (HTTP %d), %s request rejected",
 		e.Until.Format(time.RFC3339), e.Status, e.Priority)
 }
@@ -254,13 +261,12 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	prio := priorityFrom(req.Context(), t.prio)
 	endpoint, weight, bucket := Classify(req.Method, req.URL.Path, req.URL.Query())
-	if err := t.m.admit(req.Context(), prio); err != nil {
+	if err := t.m.admit(req.Context(), prio, endpoint, weight, bucket); err != nil {
 		if req.Body != nil {
 			req.Body.Close()
 		}
 		return nil, err
 	}
-	t.m.record(prio, endpoint, weight, bucket)
 	resp, err := t.base.RoundTrip(req)
 	if err == nil {
 		t.m.observe(resp, prio, endpoint)
@@ -312,27 +318,40 @@ func (m *Meter) threshold(p Priority) int {
 	return m.NormalThreshold
 }
 
-// admit implements the guard. Critical always passes. Low/Normal fail fast
-// with ErrCooldown during a cooldown and otherwise wait (at most maxGuardWait
-// in total) until the next minute boundary when the minute's weight is high.
-func (m *Meter) admit(ctx context.Context, prio Priority) error {
-	if prio == Critical {
-		return nil
-	}
+// admit checks and records a reservation atomically. Critical bypasses the IP
+// guard and global cooldown. Low/Normal retain the IP guard's bounded wait and
+// eventual pass-through. All priorities must also fit their data/funding pool;
+// if that pool cannot clear within the same wait budget, return ErrCooldown.
+func (m *Meter) admit(ctx context.Context, prio Priority, endpoint string, weight int, bucket Bucket) error {
 	waited := time.Duration(0)
 	for {
-		now := m.now()
 		m.mu.Lock()
-		if now.Before(m.cooldownUntil) {
+		now := m.now()
+		if prio != Critical && now.Before(m.cooldownUntil) {
 			err := &CooldownError{Until: m.cooldownUntil, Status: m.cooldownStatus, Priority: prio}
 			m.mu.Unlock()
 			return err
 		}
+		m.trimLocked(now)
+		bucketUsed, bucketLimit, bucketUntil := m.bucketUsageLocked(bucket)
+		bucketBlocked := bucketLimit > 0 && bucketUsed >= bucketLimit
 		used := m.effectiveUsedLocked(now)
 		thr := m.threshold(prio)
-		if used < thr {
+		ipBlocked := prio != Critical && used >= thr && waited < maxGuardWait
+		if !ipBlocked && !bucketBlocked {
+			m.recordLocked(now, prio, endpoint, weight, bucket)
 			m.mu.Unlock()
 			return nil
+		}
+		if bucketBlocked {
+			if err := ctx.Err(); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+			if bucketUntil.Sub(now) > maxGuardWait-waited {
+				m.mu.Unlock()
+				return &CooldownError{Until: bucketUntil, Priority: prio}
+			}
 		}
 		logIt := now.Sub(m.holdLogged[prio]) >= 30*time.Second
 		if logIt {
@@ -340,15 +359,26 @@ func (m *Meter) admit(ctx context.Context, prio Priority) error {
 		}
 		m.mu.Unlock()
 
-		if waited >= maxGuardWait {
-			return nil // never starve a caller forever; Binance still enforces the hard limit
+		var until time.Time
+		if bucketBlocked {
+			until = bucketUntil
 		}
-		wait := now.Truncate(time.Minute).Add(time.Minute).Sub(now) + m.jitter()
+		if ipBlocked {
+			minuteEnd := now.Truncate(time.Minute).Add(time.Minute)
+			if minuteEnd.After(until) {
+				until = minuteEnd
+			}
+		}
+		wait := until.Sub(now) + m.jitter()
 		if wait > maxGuardWait-waited {
 			wait = maxGuardWait - waited
 		}
 		if logIt {
-			logger.Infof("⏳ Binance weight guard: used≈%d ≥ %d, holding %s requests %s until the next minute", used, thr, prio, wait.Round(100*time.Millisecond))
+			if bucketBlocked {
+				logger.Infof("⏳ Binance %s guard: used=%d ≥ %d, holding %s requests %s", bucket, bucketUsed, bucketLimit, prio, wait.Round(100*time.Millisecond))
+			} else {
+				logger.Infof("⏳ Binance weight guard: used≈%d ≥ %d, holding %s requests %s until the next minute", used, thr, prio, wait.Round(100*time.Millisecond))
+			}
 		}
 		if err := m.sleep(ctx, wait); err != nil {
 			return err
@@ -357,16 +387,34 @@ func (m *Meter) admit(ctx context.Context, prio Priority) error {
 	}
 }
 
-func (m *Meter) record(prio Priority, endpoint string, weight int, bucket Bucket) {
-	now := m.now()
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// bucketUsageLocked uses the same retained events as Snapshot. Events exactly
+// eventRetention old still count, so capacity returns one nanosecond later.
+func (m *Meter) bucketUsageLocked(bucket Bucket) (used, limit int, until time.Time) {
+	switch bucket {
+	case BucketFundingRate:
+		limit = fundingRateRequestLimit
+	case BucketData:
+		limit = dataRequestLimit
+	default:
+		return
+	}
+	for _, e := range m.events {
+		if e.bucket == bucket {
+			used++
+			if until.IsZero() {
+				until = e.t.Add(eventRetention).Add(time.Nanosecond)
+			}
+		}
+	}
+	return
+}
+
+func (m *Meter) recordLocked(now time.Time, prio Priority, endpoint string, weight int, bucket Bucket) {
 	m.rollOwnLocked(now)
 	if bucket == BucketIP1M {
 		m.ownWeight += weight
 	}
 	m.events = append(m.events, event{t: now, endpoint: endpoint, weight: weight, prio: prio, bucket: bucket})
-	m.trimLocked(now)
 	if int(prio) >= 0 && int(prio) < len(m.total) {
 		tp := &m.total[prio]
 		tp.Requests++

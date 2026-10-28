@@ -91,9 +91,12 @@ func GetSymbolLotFilter(symbol string) SymbolLotFilter {
 }
 
 // MinTradableNotional is the smallest notional this symbol can actually
-// trade: max(MIN_NOTIONAL, minQty×price rounded UP to the step grid).
-// For QNTUSDT (step 0.1, minQty 0.1, price 260) that is 26U — the floor the
-// strategy-level check was missing.
+// trade: max(MIN_NOTIONAL, minQty×price) with the implied quantity rounded
+// UP to the step grid — including the quantity MIN_NOTIONAL implies
+// (review 2026-10-28 A5: step 0.1, notional 5, price 26 quotes qty 0.19,
+// which orders round DOWN to 0.1 = 2.6U and get rejected; the placeable
+// floor is 0.2 → 5.2U). For QNTUSDT (step 0.1, minQty 0.1, price 260) that
+// is 26U — the floor the strategy-level check was missing.
 func (f SymbolLotFilter) MinTradableNotional(price float64) float64 {
 	if price <= 0 {
 		return f.MinNotional
@@ -103,9 +106,19 @@ func (f SymbolLotFilter) MinTradableNotional(price float64) float64 {
 		minNotional = math.Max(minNotional, f.MinQty*price)
 	}
 	// Align up to the step grid so the quoted floor is actually placeable.
-	if f.StepSize > 0 && f.MinQty > 0 {
-		steps := math.Ceil(f.MinQty/f.StepSize - 1e-9)
-		minNotional = math.Max(minNotional, steps*f.StepSize*price)
+	if f.StepSize > 0 {
+		q := math.Max(f.MinQty, f.MinNotional/price)
+		if q > 0 {
+			steps := math.Ceil(q/f.StepSize - 1e-9)
+			aligned := steps * f.StepSize
+			// Float error can leave steps×step×price a hair under the
+			// exchange floor (fine-grained 0.001 grids); buy one more
+			// step so the quoted floor never dips below MIN_NOTIONAL.
+			if aligned*price < f.MinNotional {
+				aligned += f.StepSize
+			}
+			minNotional = math.Max(minNotional, aligned*price)
+		}
 	}
 	return minNotional
 }
