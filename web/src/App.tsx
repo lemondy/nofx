@@ -56,7 +56,6 @@ import type {
   AccountInfo,
   Position,
   DecisionRecord,
-  Statistics,
   TraderInfo,
   Exchange,
 } from './types'
@@ -361,18 +360,6 @@ function App() {
         if (retryCount >= 5) return // next refreshInterval tick retries anyway
         setTimeout(() => revalidate({ retryCount }), 1000 * retryCount)
       },
-    }
-  )
-
-  const { data: stats } = useSWR<Statistics>(
-    currentPage === 'trader' && selectedTraderId
-      ? `statistics-${selectedTraderId}`
-      : null,
-    () => api.getStatistics(selectedTraderId, true),
-    {
-      refreshInterval: 30000, // 30秒刷新（统计数据更新频率较低）
-      revalidateOnFocus: false,
-      dedupingInterval: 20000,
     }
   )
 
@@ -693,7 +680,6 @@ function App() {
                 decisionsFailed={!!decisionsError}
                 decisionsLimit={decisionsLimit}
                 onDecisionsLimitChange={setDecisionsLimit}
-                stats={stats}
                 lastUpdate={lastUpdate}
                 language={language}
                 traders={traders}

@@ -385,11 +385,16 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
           comparison = (a.realized_pnl || 0) - (b.realized_pnl || 0)
           break
         case 'pnl_pct': {
-          const aPrice = a.entry_price || 1
-          const bPrice = b.entry_price || 1
-          const aPct = (((a.exit_price || 0) - aPrice) / aPrice) * 100
-          const bPct = (((b.exit_price || 0) - bPrice) / bPrice) * 100
-          comparison = aPct - bPct
+          // 价格收益率按方向取反：空头盈利时 (exit−entry)/entry 为负，
+          // 与行渲染处（isLong ? exit−entry : entry−exit）保持一致（review A5）
+          const pricePct = (p: HistoricalPosition): number => {
+            const entry = p.entry_price || 0
+            const exit = p.exit_price || 0
+            if (entry <= 0) return 0
+            const isLong = (p.side || '').toUpperCase() === 'LONG'
+            return ((isLong ? exit - entry : entry - exit) / entry) * 100
+          }
+          comparison = pricePct(a) - pricePct(b)
           break
         }
       }
@@ -452,8 +457,9 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
     )
   }
 
+  // 合计与行内、stats 卡同口径：净额 Σ(realized_pnl − fee)，不能用毛额（review A4）
   const totalFilteredPnl = filteredAndSortedPositions.reduce(
-    (sum, p) => sum + (p.realized_pnl || 0),
+    (sum, p) => sum + (p.realized_pnl || 0) - (p.fee || 0),
     0
   )
 
@@ -602,17 +608,13 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
           />
           <StatCard
             title={t('positionHistory.netPnL', language)}
+            // 后端 stats.total_pnl 已是净额（Σ(realized_pnl − fee)），
+            // 这里直接显示，不能再减一次 total_fee（会双重扣手续费，review A1）
             value={
-              ((stats.total_pnl || 0) - (stats.total_fee || 0) >= 0
-                ? '+'
-                : '') +
-              formatNumber((stats.total_pnl || 0) - (stats.total_fee || 0))
+              ((stats.total_pnl || 0) >= 0 ? '+' : '') +
+              formatNumber(stats.total_pnl || 0)
             }
-            color={
-              (stats.total_pnl || 0) - (stats.total_fee || 0) >= 0
-                ? 'var(--up)'
-                : 'var(--down)'
-            }
+            color={(stats.total_pnl || 0) >= 0 ? 'var(--up)' : 'var(--down)'}
             subtitle={t('positionHistory.netPnLDesc', language)}
             language={language}
           />

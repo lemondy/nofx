@@ -1002,8 +1002,11 @@ export const translations = {
       totalLoss: 'Total Loss',
       plRatio: 'P/L Ratio',
       plRatioDesc: 'Avg Win / Avg Loss',
-      sharpeRatio: 'Sharpe Ratio',
-      sharpeRatioDesc: 'Risk-adjusted Return',
+      // 后端算的是每笔净盈亏金额的 mean/std（未年化、金额口径），
+      // 不是收益率 Sharpe——名称与口径对齐（review A10）
+      sharpeRatio: 'Per-trade P&L ratio (mean/std)',
+      sharpeRatioDesc:
+        'mean / std of per-trade net PnL — not annualized, not a return-based Sharpe',
       maxDrawdown: 'Max Drawdown',
       avgWin: 'Avg Win',
       avgLoss: 'Avg Loss',
@@ -1378,7 +1381,9 @@ export const translations = {
       value: 'Value',
       lev: 'Lev.',
       uPnL: 'uPnL',
-      pnlPct: 'PnL%',
+      pnlPct: 'ROE% (on margin)',
+      pnlPctHint:
+        'Unrealized PnL ÷ margin used × 100 (return on margin, not the price move %)',
       orders: 'Orders',
       ordersHint:
         'Resting exchange orders on this position (SL / TP / entry limit) — live from the exchange',
@@ -1618,7 +1623,7 @@ export const translations = {
       colEntry: 'Entry',
       colExit: 'Exit',
       colLeverage: 'Lev',
-      colPnL: 'PnL (USDT)',
+      colPnL: 'PnL (net, USDT)',
       colPnlPct: 'Return',
       colTime: 'Entry → Exit',
       colPlan: 'Planned SL/TP',
@@ -2704,8 +2709,10 @@ export const translations = {
       totalLoss: '总亏损',
       plRatio: '盈亏比',
       plRatioDesc: '平均盈利 / 平均亏损',
-      sharpeRatio: '夏普比率',
-      sharpeRatioDesc: '风险调整收益',
+      // 后端算的是每笔净盈亏金额的 mean/std（未年化、金额口径），
+      // 不是收益率 Sharpe——名称与口径对齐（review A10）
+      sharpeRatio: '每笔盈亏稳定度（均值/标准差）',
+      sharpeRatioDesc: '每笔净盈亏的均值/标准差，未年化、非收益率口径',
       maxDrawdown: '最大回撤',
       avgWin: '平均盈利',
       avgLoss: '平均亏损',
@@ -3073,7 +3080,9 @@ export const translations = {
       value: '价值',
       lev: '杠杆',
       uPnL: '未实现盈亏',
-      pnlPct: '盈亏%',
+      pnlPct: 'ROE%（按保证金）',
+      pnlPctHint:
+        '未实现盈亏 ÷ 占用保证金 × 100（按保证金的收益率，非价格涨跌幅）',
       orders: '挂单',
       ordersHint: '该仓在交易所挂着的单(止损/止盈/入场限价,交易所实查)',
       ordersMissing: '无挂单——该仓没有交易所侧止损/止盈保护腿',
@@ -3297,7 +3306,7 @@ export const translations = {
       colEntry: '开仓价',
       colExit: '平仓价',
       colLeverage: '杠杆',
-      colPnL: '盈亏 (USDT)',
+      colPnL: '净盈亏 (USDT)',
       colPnlPct: '收益率',
       colTime: '开仓 → 平仓',
       colPlan: '计划止损/止盈',
@@ -4340,8 +4349,9 @@ export const translations = {
       totalLoss: 'Total Kalah',
       plRatio: 'Rasio L/R',
       plRatioDesc: 'Rata-rata Menang / Rata-rata Kalah',
-      sharpeRatio: 'Rasio Sharpe',
-      sharpeRatioDesc: 'Return yang Disesuaikan Risiko',
+      sharpeRatio: 'Rasio P&L per-transaksi (mean/std)',
+      sharpeRatioDesc:
+        'rata-rata / simpangan baku PnL bersih per transaksi — belum dianualisasi',
       maxDrawdown: 'Drawdown Maksimum',
       avgWin: 'Rata-rata Menang',
       avgLoss: 'Rata-rata Kalah',
@@ -4701,7 +4711,9 @@ export const translations = {
       value: 'Nilai',
       lev: 'Lev.',
       uPnL: 'uPnL',
-      pnlPct: 'PnL%',
+      pnlPct: 'ROE% (on margin)',
+      pnlPctHint:
+        'Unrealized PnL ÷ margin used × 100 (return on margin, not the price move %)',
       orders: 'Order',
       ordersHint:
         'Resting exchange orders on this position (SL / TP / entry limit) — live from the exchange',
@@ -4935,7 +4947,7 @@ export const translations = {
       colEntry: 'Harga Masuk',
       colExit: 'Harga Keluar',
       colLeverage: 'Leverage',
-      colPnL: 'PnL (USDT)',
+      colPnL: 'PnL (net, USDT)',
       colPnlPct: 'Imbal Hasil',
       colTime: 'Masuk → Keluar',
       colPlan: 'Rencana SL/TP',

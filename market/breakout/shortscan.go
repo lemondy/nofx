@@ -45,6 +45,8 @@ const shortScanMinGainerChgPct = 5.0
 type ShortSignal struct {
 	Symbol           string          `json:"symbol"`
 	Price            float64         `json:"price"`
+	PriceSource      string          `json:"price_source,omitempty"`
+	PriceObservedAt  int64           `json:"price_observed_at,omitempty"`
 	Change24hPct     float64         `json:"change_24h_pct"`     // 24h gainer ranking input
 	Change5dPct      float64         `json:"change_5d_pct"`      // 5-day pump magnitude (4h bars)
 	BtcOutperform    float64         `json:"btc_outperform_pct"` // 5d return minus BTC's (pump "quality")
@@ -111,6 +113,7 @@ func gainerTickerSnapshot(limit int) ([]GainerQuote, []GainerQuote, map[string]G
 		LastPrice          string `json:"lastPrice"`
 		PriceChangePercent string `json:"priceChangePercent"`
 		QuoteVolume        string `json:"quoteVolume"`
+		CloseTime          int64  `json:"closeTime"`
 	}
 	if err := fetchJSONCached(u, tickerCacheTTL, &raw); err != nil {
 		return nil, nil, nil, err
@@ -130,7 +133,7 @@ func gainerTickerSnapshot(limit int) ([]GainerQuote, []GainerQuote, map[string]G
 		}
 		chg, _ := strconv.ParseFloat(t.PriceChangePercent, 64)
 		price, _ := strconv.ParseFloat(t.LastPrice, 64)
-		q := GainerQuote{Symbol: t.Symbol, ChgPct: chg, Price: price}
+		q := GainerQuote{Symbol: t.Symbol, ChgPct: chg, Price: price, PriceObservedAt: t.CloseTime}
 		index[t.Symbol] = q
 		board = append(board, q)
 	}
@@ -190,7 +193,7 @@ func AnalyzeShort(symbol string, chg24 float64, btc4h []Kline, ds DataSource) (*
 	c4h := closes(k4h)
 	sig := &ShortSignal{
 		Symbol:       symbol,
-		Price:        c1h[len(c1h)-1],
+		Price:        c1h[len(c1h)-1], // display only; research labels need an observed price (ScanShorts)
 		Change24hPct: chg24,
 		ListingDays:  len(k4h) * 4 / 24,
 		GeneratedAt:  time.Now().UTC(),
@@ -548,7 +551,7 @@ func divScore(div bool, recentHi, priorHi float64) float64 {
 // rsiSeries returns the Wilder RSI series (index-aligned from index=period).
 func rsiSeries(c []float64, period int) []float64 {
 	n := len(c)
-	if n < period+1 {
+	if period <= 0 || n < period+1 {
 		return nil
 	}
 	out := make([]float64, n)
@@ -563,7 +566,9 @@ func rsiSeries(c []float64, period int) []float64 {
 	}
 	ag, al := gains/float64(period), losses/float64(period)
 	setRSI := func(i int, ag, al float64) {
-		if al == 0 {
+		if ag == 0 && al == 0 {
+			out[i] = 50
+		} else if al == 0 {
 			out[i] = 100
 		} else {
 			out[i] = 100 - 100/(1+ag/al)
@@ -875,6 +880,19 @@ func ScanShorts(limit, histDaysRaw, histMaxRaw int) ([]ShortSignal, time.Time, e
 	// universe is exempt from (user audit 2026-09-17 — the exemption used to
 	// die silently on exactly this collision).
 	out = mergeShortScans(out, slowTopSnapshot())
+	// Reuse the scan's ticker snapshot for every universe, including slow tops.
+	// Prices never enter the closed-candle component calculations above.
+	// A closed 1m bar is fetched only when the ticker has no usable quote.
+	for i := range out {
+		q, ok := index[out[i].Symbol]
+		entry := tickerPrice(q.Price, q.PriceObservedAt, time.Now())
+		if !ok || !entry.valid() {
+			entry = latestClosedMinutePrice(NewBinanceDS(out[i].Symbol), time.Now())
+		}
+		if entry.valid() {
+			out[i].Price, out[i].PriceSource, out[i].PriceObservedAt = entry.Price, entry.Source, entry.ObservedAt
+		}
+	}
 	if len(out) == 0 {
 		return nil, time.Time{}, fmt.Errorf("short scan produced no analyzable symbols")
 	}

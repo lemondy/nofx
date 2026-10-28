@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"nofx/kernel"
@@ -22,7 +23,7 @@ import (
 // on a strategy that never opted into limit entries. It runs before any
 // risk/safe-mode filtering so every later stage sees the final action. The
 // input slice is not mutated.
-func (at *AutoTrader) forceMarketEntries(ds []kernel.Decision) []kernel.Decision {
+func (at *AutoTrader) forceMarketEntries(ds []kernel.Decision, originalActions ...map[string]string) []kernel.Decision {
 	if at.config.StrategyConfig == nil || at.config.StrategyConfig.RiskControl.LimitEntryEnabled {
 		return ds
 	}
@@ -39,6 +40,9 @@ func (at *AutoTrader) forceMarketEntries(ds []kernel.Decision) []kernel.Decision
 			continue
 		}
 		logger.Infof("🔁 [%s] %s %s → %s: strategy is market-entry (limit_entry_enabled=false)", at.name, out[i].Symbol, out[i].Action, to)
+		if len(originalActions) > 0 && originalActions[0] != nil {
+			originalActions[0][out[i].Symbol+"|"+to] = out[i].Action
+		}
 		out[i].Action = to
 		out[i].Price = 0
 	}
@@ -84,16 +88,27 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actio
 		return at.executeCloseShortWithRecord(decision, actionRecord)
 	case "adjust_stop_loss":
 		return at.executeAdjustStopLossWithRecord(decision, actionRecord)
-	case "partial_close_long":
-		return at.executePartialCloseWithRecord(decision, actionRecord, "long")
-	case "partial_close_short":
-		return at.executePartialCloseWithRecord(decision, actionRecord, "short")
+	case "partial_close_long", "partial_close_short":
+		return at.executeAIPartialClose(decision, actionRecord, strings.TrimPrefix(decision.Action, "partial_close_"))
 	case "hold", "wait":
 		// No execution needed, just record
 		return nil
 	default:
 		return fmt.Errorf("unknown action: %s", decision.Action)
 	}
+}
+
+func (at *AutoTrader) executeAIPartialClose(d *kernel.Decision, record *store.DecisionAction, side string) error {
+	err := at.executePartialCloseWithRecord(d, record, side)
+	if err == nil {
+		at.noteTPLedgerReduction(d.Symbol+"_"+side, record.Quantity)
+	} else if isReduceUnknown(err) {
+		at.alertReduceUnknown(d.Symbol, side, "AI 平/减仓", err)
+		if record.Quantity > 0 {
+			at.noteTPLedgerReduction(d.Symbol+"_"+side, record.Quantity)
+		}
+	}
+	return err
 }
 
 // stampEntryPath tags the entry context (timing-TF trend) for path
@@ -930,25 +945,101 @@ func tpCoverageTolerance(t Trader, symbol string, quantity float64) float64 {
 // the position size at that moment and the leg's quantity. It is the evidence
 // behind "the TP leg filled" (leg gone AND position shrank by ~its size), which
 // is what lets the runner flag follow execution instead of placement (review
-// 2026-10-28 #5). Memory-only, like the runner flag itself. It lives outside
-// the AutoTrader struct (keyed by trader pointer) so it needs no struct change.
+// 2026-10-28 #5). Write-through to the OPEN position row, restored on first use.
 type tpLedgerEntry struct {
 	posQty, tpQty float64
 }
 
 type tpLedgerStore struct {
-	mu sync.Mutex
-	m  map[string]tpLedgerEntry
+	mu     sync.Mutex
+	m      map[string]tpLedgerEntry
+	loaded map[string]bool
+	dirty  map[string]bool
 }
 
-var tpLedgers sync.Map // *AutoTrader -> *tpLedgerStore
+// JSON is kept in one additive column so runner and ledger changes are atomic.
+type tpProtectionState struct {
+	RunnerDone bool    `json:"runner_done,omitempty"`
+	PosQty     float64 `json:"pos_qty,omitempty"`
+	TPQty      float64 `json:"tp_qty,omitempty"`
+}
 
-func (at *AutoTrader) tpLedgerStore() *tpLedgerStore {
-	if v, ok := tpLedgers.Load(at); ok {
-		return v.(*tpLedgerStore)
+func (at *AutoTrader) tpLedgerStore() *tpLedgerStore { return &at.tpLedger }
+
+// loadTPStateLocked mirrors the existing trim flags' lazy restart restore.
+// Failed reads remain retryable. All ledger mutations hold l.mu through SQL.
+func (at *AutoTrader) loadTPStateLocked(l *tpLedgerStore, key string) bool {
+	if l.m == nil {
+		l.m = map[string]tpLedgerEntry{}
 	}
-	v, _ := tpLedgers.LoadOrStore(at, &tpLedgerStore{m: map[string]tpLedgerEntry{}})
-	return v.(*tpLedgerStore)
+	if l.loaded == nil {
+		l.loaded = map[string]bool{}
+	}
+	if at.store == nil {
+		return true
+	}
+	if l.loaded[key] {
+		if l.dirty[key] {
+			at.persistTPStateLocked(l, key)
+		}
+		return true
+	}
+	symbol, side, ok := strings.Cut(key, "_")
+	if !ok {
+		return false
+	}
+	p, err := at.store.Position().GetOpenPositionBySymbol(at.id, symbol, strings.ToUpper(side))
+	if err != nil {
+		logger.Warnf("[%s] cannot restore TP state %s: %v", at.name, key, err)
+		return false
+	}
+	var state tpProtectionState
+	if p != nil && p.TPProtectionState != "" {
+		if err := json.Unmarshal([]byte(p.TPProtectionState), &state); err != nil {
+			logger.Warnf("[%s] cannot decode TP state %s: %v", at.name, key, err)
+			return false
+		}
+	}
+	if state.PosQty >= 0 && state.TPQty > 0 {
+		l.m[key] = tpLedgerEntry{posQty: state.PosQty, tpQty: state.TPQty}
+	}
+	if state.RunnerDone {
+		at.volResizeMu.Lock()
+		if at.tpRunnerDoneMap == nil {
+			at.tpRunnerDoneMap = map[string]bool{}
+		}
+		at.tpRunnerDoneMap[key] = true
+		at.volResizeMu.Unlock()
+	}
+	l.loaded[key] = true
+	return true
+}
+
+func (at *AutoTrader) persistTPStateLocked(l *tpLedgerStore, key string) {
+	if l.dirty == nil {
+		l.dirty = map[string]bool{}
+	}
+	l.dirty[key] = true
+	if at.store == nil {
+		return
+	}
+	symbol, side, ok := strings.Cut(key, "_")
+	if !ok {
+		return
+	}
+	e := l.m[key]
+	at.volResizeMu.Lock()
+	state := tpProtectionState{RunnerDone: at.tpRunnerDoneMap[key], PosQty: e.posQty, TPQty: e.tpQty}
+	at.volResizeMu.Unlock()
+	data, err := json.Marshal(state)
+	if err == nil {
+		err = at.store.Position().SetTPProtectionState(at.id, symbol, side, string(data))
+	}
+	if err != nil {
+		logger.Warnf("[%s] cannot persist TP state %s: %v", at.name, key, err)
+		return
+	}
+	delete(l.dirty, key)
 }
 
 func (at *AutoTrader) recordTPLedger(posKey string, posQty, tpQty float64) {
@@ -957,55 +1048,97 @@ func (at *AutoTrader) recordTPLedger(posKey string, posQty, tpQty float64) {
 	}
 	l := at.tpLedgerStore()
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !at.loadTPStateLocked(l, posKey) {
+		return
+	}
 	l.m[posKey] = tpLedgerEntry{posQty: posQty, tpQty: tpQty}
-	l.mu.Unlock()
+	at.persistTPStateLocked(l, posKey)
 }
 
 func (at *AutoTrader) dropTPLedger(posKey string) {
 	l := at.tpLedgerStore()
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !at.loadTPStateLocked(l, posKey) {
+		return
+	}
 	delete(l.m, posKey)
-	l.mu.Unlock()
+	at.persistTPStateLocked(l, posKey)
 }
 
 func (at *AutoTrader) getTPLedger(posKey string) (tpLedgerEntry, bool) {
 	l := at.tpLedgerStore()
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if !at.loadTPStateLocked(l, posKey) {
+		return tpLedgerEntry{}, false
+	}
 	e, ok := l.m[posKey]
 	return e, ok
 }
 
-// noteTPLedgerReduction books a NON-TP reduction (1R trim, vol reduce) against
-// the ledger's position size so it is never mistaken for the TP leg filling.
+// noteTPLedgerReduction books a NON-TP reduction against the ledger so it
+// cannot be mistaken for the TP leg filling, including after a restart.
 func (at *AutoTrader) noteTPLedgerReduction(posKey string, reduced float64) {
 	if reduced <= 0 {
 		return
 	}
 	l := at.tpLedgerStore()
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !at.loadTPStateLocked(l, posKey) {
+		return
+	}
 	if e, ok := l.m[posKey]; ok {
 		e.posQty = math.Max(0, e.posQty-reduced)
 		l.m[posKey] = e
+		at.persistTPStateLocked(l, posKey)
 	}
-	l.mu.Unlock()
 }
 
-// pruneTPLedger drops entries of positions that are no longer live.
+// clearTPState makes one best-effort write, then forgets the ended lifecycle.
+func (at *AutoTrader) clearTPState(posKey string) {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.m, posKey)
+	at.volResizeMu.Lock()
+	delete(at.tpRunnerDoneMap, posKey)
+	at.volResizeMu.Unlock()
+	if symbol, side, ok := strings.Cut(posKey, "_"); ok && at.store != nil {
+		if err := at.store.Position().SetTPProtectionState(at.id, symbol, side, "{}"); err != nil {
+			logger.Debugf("[%s] cannot clear TP state %s: %v", at.name, posKey, err)
+		}
+	}
+	delete(l.dirty, posKey)
+	delete(l.loaded, posKey)
+}
+
 func (at *AutoTrader) pruneTPLedger(live map[string]bool) {
 	l := at.tpLedgerStore()
 	l.mu.Lock()
+	keys := map[string]bool{}
 	for k := range l.m {
+		keys[k] = true
+	}
+	for k := range l.loaded {
+		keys[k] = true
+	}
+	at.volResizeMu.Lock()
+	for k := range at.tpRunnerDoneMap {
+		keys[k] = true
+	}
+	at.volResizeMu.Unlock()
+	l.mu.Unlock()
+	for k := range keys {
 		if !live[k] {
-			delete(l.m, k)
+			at.clearTPState(k)
 		}
 	}
-	l.mu.Unlock()
 }
 
-// tpLegFilled: the recorded split-TP leg no longer rests on the exchange
-// (tpCover below its planned size by more than a lot step) while the position
-// has shrunk by about that leg's size since it was placed.
+// tpLegFilled requires both a vanished split-TP leg and the matching shrink.
 func (at *AutoTrader) tpLegFilled(posKey string, qtyNow, tpCover, step float64) bool {
 	e, ok := at.getTPLedger(posKey)
 	if !ok || e.tpQty <= 0 {
@@ -1261,6 +1394,10 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *kernel.Decision, acti
 	at.markCloseIntent(decision.Symbol, "long", "ai_close")
 	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = close all
 	if err != nil {
+		if isReduceUnknown(err) {
+			at.alertReduceUnknown(decision.Symbol, "long", "AI 平/减仓", err)
+			at.noteTPLedgerReduction(decision.Symbol+"_long", math.Abs(quantity))
+		}
 		return err
 	}
 
@@ -1346,6 +1483,10 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *kernel.Decision, act
 	at.markCloseIntent(decision.Symbol, "short", "ai_close")
 	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = close all
 	if err != nil {
+		if isReduceUnknown(err) {
+			at.alertReduceUnknown(decision.Symbol, "short", "AI 平/减仓", err)
+			at.noteTPLedgerReduction(decision.Symbol+"_short", math.Abs(quantity))
+		}
 		return err
 	}
 

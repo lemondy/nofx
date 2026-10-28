@@ -204,6 +204,7 @@ type AutoTrader struct {
 	tpTrimDone                 map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
 	r1TrimDone                 map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
 	partialTrimmed             map[string]float64 // fallback cumulative fraction of ORIGINAL size reduced by AI/automation (DB EntryQuantity is authoritative when available)
+	tpLedger                   tpLedgerStore
 	tpTrimMutex                sync.Mutex
 	// filterReasons records WHY an actionable proposal was dropped by the
 	// executor gates this cycle (symbol|action -> reason) — the Telegram

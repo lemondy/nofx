@@ -2298,11 +2298,31 @@ func scanRRWindowWithCost(entry float64, basis string, stopPct float64, stopPric
 	} else {
 		sort.Sort(sort.Reverse(sort.Float64Slice(targets))) // descending = near→far below
 	}
+	if stopPct <= 0 {
+		stopPct = math.Abs(stopPrice-entry) / entry * 100
+	}
+	qualifies := func(t float64) bool {
+		dist := math.Abs(t-entry) / entry * 100
+		costPct := math.Max(0, costBps) / 100
+		return minRR > 0 && (dist-costPct)/(stopPct+costPct) >= minRR-1e-9
+	}
 	var uniq []float64
-	for _, t := range targets {
-		if !inList(uniq, t, entry) {
-			uniq = append(uniq, t)
+	for start := 0; start < len(targets); {
+		chosen := targets[start]
+		end := start + 1
+		// Keep each cluster anchored at its nearest price, independently of
+		// which representative wins. Provenance stays attached via bollT:
+		// real structure beats a band, and qualifying structure beats a
+		// sub-threshold pivot so dedup cannot turn a valid RR scan unusable.
+		for end < len(targets) && math.Abs(targets[end]-targets[start]) <= entry*0.0005 {
+			t := targets[end]
+			if !bollT[t] && (bollT[chosen] || (qualifies(t) && !qualifies(chosen))) {
+				chosen = t
+			}
+			end++
 		}
+		uniq = append(uniq, chosen)
+		start = end
 	}
 	direction := "long"
 	if !isLong {
@@ -2312,9 +2332,6 @@ func scanRRWindowWithCost(entry float64, basis string, stopPct float64, stopPric
 	// buffer, band-clamped — see methodStopPlan), not the noise floor. The
 	// gate verdict, the adopted stop_loss and the executor's checkRR all
 	// price this same stop, so a passing scan IS a ≥min-RR trade.
-	if stopPct <= 0 {
-		stopPct = math.Abs(stopPrice-entry) / entry * 100
-	}
 	out := &RRScan{
 		CostBps:         costBps,
 		Direction:       direction,
