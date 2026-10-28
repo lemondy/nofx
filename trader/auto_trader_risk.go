@@ -531,9 +531,7 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 	// re-opened symbol_side inherits "runner done" — the fixed TP would
 	// never convert to the trend-run again and the watchdog would refuse to
 	// re-place a cancelled TP (round-4 review R4-7).
-	at.volResizeMu.Lock()
-	delete(at.tpRunnerDoneMap, posKey)
-	at.volResizeMu.Unlock()
+	at.clearTPState(posKey)
 }
 
 // ============================================================================

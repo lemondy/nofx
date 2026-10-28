@@ -138,6 +138,9 @@ type TraderPosition struct {
 	// the authority across restarts).
 	R1TrimDone bool `gorm:"column:r1_trim_done;default:false" json:"r1_trim_done"`
 	TPTrimDone bool `gorm:"column:tp_trim_done;default:false" json:"tp_trim_done"`
+	// TPProtectionState holds the runner flag and split-TP execution evidence.
+	// Empty on legacy rows; scoped to this position's lifecycle.
+	TPProtectionState string `gorm:"column:tp_protection_state;type:text;default:''" json:"-"`
 	// ExitMode is the exit template the program executes for this position
 	// (user menu directive 09-29): "trend" = split TP + trailing runner,
 	// "range" = full TP at the chosen target, "quick" = full TP + program
@@ -719,6 +722,21 @@ func (s *PositionStore) MarkTPTrimDone(traderID, symbol, side string) error {
 		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
 			traderID, symbol, strings.ToUpper(side), "OPEN").
 		Update("tp_trim_done", true).Error
+}
+
+// SetTPProtectionState writes only the live position; closed history is untouched.
+func (s *PositionStore) SetTPProtectionState(traderID, symbol, side, state string) error {
+	res := s.db.Model(&TraderPosition{}).
+		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
+			traderID, symbol, strings.ToUpper(side), "OPEN").
+		Update("tp_protection_state", state)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("open position not yet available for TP state: %s %s", symbol, side)
+	}
+	return nil
 }
 
 // SetExitModeIfEmpty stamps the position's exit template on the trader's OPEN

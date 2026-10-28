@@ -1005,18 +1005,33 @@ func (at *AutoTrader) recordOpenTakeProfit(symbol, side string, tp float64) {
 }
 
 func (at *AutoTrader) tpRunnerDone(posKey string) bool {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// An unreadable restart state must not re-arm a possibly completed TP.
+	if !at.loadTPStateLocked(l, posKey) {
+		return true
+	}
 	at.volResizeMu.Lock()
 	defer at.volResizeMu.Unlock()
 	return at.tpRunnerDoneMap[posKey]
 }
 
 func (at *AutoTrader) markTPRunner(posKey string) {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// A newly observed runner takeover is authoritative even if the old
+	// ledger cannot be read; it supersedes that evidence.
+	at.loadTPStateLocked(l, posKey)
+	l.loaded[posKey] = true
 	at.volResizeMu.Lock()
-	defer at.volResizeMu.Unlock()
 	if at.tpRunnerDoneMap == nil {
 		at.tpRunnerDoneMap = make(map[string]bool)
 	}
 	at.tpRunnerDoneMap[posKey] = true
+	at.volResizeMu.Unlock()
+	at.persistTPStateLocked(l, posKey)
 }
 
 // positionQty reads the LIVE exchange quantity for one symbol+side — R1 fix
