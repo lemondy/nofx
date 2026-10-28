@@ -332,16 +332,13 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 	}
 
 	// Create market sell order (close long, using br ID)
-	order, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(futures.SideTypeSell).
-		PositionSide(futures.PositionSideTypeLong).
-		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		NewClientOrderID(getBrOrderID()).
-		Do(context.Background())
-
+	order, recovered, err := t.submitMarketClose(symbol, futures.SideTypeSell, futures.PositionSideTypeLong, quantityStr, !fullClose)
 	if err != nil {
+		if !fullClose {
+			// review 2026-10-28 #7: submitEntryOrder already noted filter
+			// failures; an UNKNOWN result must stay recognizable (typed).
+			return nil, fmt.Errorf("failed to close long position: %w", wrapEntrySubmitError("CloseLong "+symbol, err))
+		}
 		t.noteFilterFailure(symbol, err)
 		return nil, fmt.Errorf("failed to close long position: %w", WrapAuthError("CloseLong "+symbol, err))
 	}
@@ -372,6 +369,7 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 	result["orderId"] = order.OrderID
 	result["symbol"] = order.Symbol
 	result["status"] = order.Status
+	annotateCloseReceipt(result, order, recovered)
 	return result, nil
 }
 
@@ -408,16 +406,13 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 	}
 
 	// Create market buy order (close short, using br ID)
-	order, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(futures.SideTypeBuy).
-		PositionSide(futures.PositionSideTypeShort).
-		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		NewClientOrderID(getBrOrderID()).
-		Do(context.Background())
-
+	order, recovered, err := t.submitMarketClose(symbol, futures.SideTypeBuy, futures.PositionSideTypeShort, quantityStr, !fullClose)
 	if err != nil {
+		if !fullClose {
+			// review 2026-10-28 #7: submitEntryOrder already noted filter
+			// failures; an UNKNOWN result must stay recognizable (typed).
+			return nil, fmt.Errorf("failed to close short position: %w", wrapEntrySubmitError("CloseShort "+symbol, err))
+		}
 		t.noteFilterFailure(symbol, err)
 		return nil, fmt.Errorf("failed to close short position: %w", WrapAuthError("CloseShort "+symbol, err))
 	}
@@ -447,7 +442,61 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 	result["orderId"] = order.OrderID
 	result["symbol"] = order.Symbol
 	result["status"] = order.Status
+	annotateCloseReceipt(result, order, recovered)
 	return result, nil
+}
+
+// submitMarketClose submits a market reduce order. Full closes keep the
+// original single-shot POST (retrying a full close is harmless: a flat side
+// answers "no position"). review 2026-10-28 #7: a PARTIAL close (explicit
+// quantity — 1R trim, vol reduce, fast trim) reuses the entry UNKNOWN
+// reconciliation: a timeout/5xx/connection error is resolved by looking the
+// SAME client order id up, never by a second blind POST — otherwise the lost
+// response of an executed trim is retried as a fresh 50% trim (75% total).
+// Confirmed-filled returns success (recovered=true); confirmed-absent returns
+// the original error; still unknown returns *SubmitUnknownError.
+func (t *FuturesTrader) submitMarketClose(symbol string, side futures.SideType, posSide futures.PositionSideType, quantityStr string, partial bool) (*futures.CreateOrderResponse, bool, error) {
+	clientID := getBrOrderID()
+	if !partial {
+		order, err := t.client.NewCreateOrderService().
+			Symbol(symbol).
+			Side(side).
+			PositionSide(posSide).
+			Type(futures.OrderTypeMarket).
+			Quantity(quantityStr).
+			NewClientOrderID(clientID).
+			Do(context.Background())
+		return order, false, err
+	}
+	service, transport := t.entryOrderService()
+	service = service.
+		Symbol(symbol).
+		Side(side).
+		PositionSide(posSide).
+		Type(futures.OrderTypeMarket).
+		Quantity(quantityStr).
+		// RESULT carries executedQty for an immediately filled market order, so
+		// the caller can size follow-up protection from a CONFIRMED fill
+		// (the default ACK always reports 0).
+		NewOrderResponseType(futures.NewOrderRespTypeRESULT).
+		NewClientOrderID(clientID)
+	return t.submitEntryOrder(service, transport, symbol, clientID)
+}
+
+// annotateCloseReceipt adds the fill evidence a caller needs to size follow-up
+// protection from the CONFIRMED executed quantity (review 2026-10-28 #3/#7).
+// A market close's POST ack usually carries executedQty "0"; the key is only
+// set when the exchange actually reported a positive, finite fill.
+func annotateCloseReceipt(result map[string]interface{}, order *futures.CreateOrderResponse, recovered bool) {
+	if recovered {
+		result["recoveredUnknownSubmit"] = true
+	}
+	if order.ClientOrderID != "" {
+		result["clientOrderId"] = order.ClientOrderID
+	}
+	if executed, err := strconv.ParseFloat(order.ExecutedQuantity, 64); err == nil && executed > 0 && !math.IsNaN(executed) && !math.IsInf(executed, 0) {
+		result["executedQty"] = executed
+	}
 }
 
 // closeConfirmSleep spaces the post-close position re-reads (test seam).
@@ -1368,9 +1417,8 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 	// the trailing stop (09-21 user experiment — a resting full-size TP
 	// structurally sold every spike top: BTCUSDT TP filled 83000, price
 	// printed 84275 in the same minute). quantity <= 0 keeps the legacy
-	// closePosition mode. If the fraction underflows the symbol's lot step
-	// the order falls back to full-close rather than placing a rejected
-	// dust order.
+	// closePosition mode. review 2026-10-28 #6: a fraction that underflows
+	// the lot step is an ERROR, never a silent full-close.
 	priceStr, ferr := t.formatAlgoTriggerPrice(symbol, takeProfitPrice)
 	if ferr != nil {
 		return fmt.Errorf("failed to set take-profit: %w", ferr)
@@ -1385,19 +1433,25 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 	if quantity > 0 {
 		qtyStr, qerr := t.FormatQuantity(symbol, quantity)
 		qty, _ := strconv.ParseFloat(qtyStr, 64)
-		if qerr == nil && qty > 0 {
-			// NO ReduceOnly here: with positionSide LONG/SHORT Binance
-			// rejects the redundant param (-1106 "Parameter 'reduceonly'
-			// sent when not required") and the whole TP leg fails to place
-			// (AKEUSDT/PHAUSDT 09-22 — positions ran with SL only). The
-			// quantity alone bounds the close; positionSide implies the
-			// reduce direction.
-			algo = algo.Quantity(qtyStr)
-		} else {
-			// Fraction underflowed the lot step — full close instead of a
-			// rejected order (which would leave the TP leg missing).
-			algo = algo.ClosePosition(true)
+		if qerr != nil || qty <= 0 {
+			// review 2026-10-28 #6: an explicit quantity that cannot be
+			// formatted (lot-step underflow, MAX_QTY, rules unreadable) used
+			// to degrade to closePosition=true, silently turning a PARTIAL
+			// take-profit into a whole-position one. The caller asked for a
+			// bounded close — fail so it can retry/alert; only an explicit
+			// quantity<=0 selects closePosition.
+			if qerr == nil {
+				qerr = fmt.Errorf("%s take-profit quantity %.8f formats to %q", symbol, quantity, qtyStr)
+			}
+			return fmt.Errorf("failed to set take-profit: partial quantity not placeable: %w", qerr)
 		}
+		// NO ReduceOnly here: with positionSide LONG/SHORT Binance
+		// rejects the redundant param (-1106 "Parameter 'reduceonly'
+		// sent when not required") and the whole TP leg fails to place
+		// (AKEUSDT/PHAUSDT 09-22 — positions ran with SL only). The
+		// quantity alone bounds the close; positionSide implies the
+		// reduce direction.
+		algo = algo.Quantity(qtyStr)
 	} else {
 		algo = algo.ClosePosition(true)
 	}

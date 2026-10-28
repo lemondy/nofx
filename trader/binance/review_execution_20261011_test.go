@@ -20,7 +20,6 @@ func TestReview11TakeProfitStaleRetryPreservesShape(t *testing.T) {
 		}{
 			{"partial", 0.57, "0.5", ""},
 			{"full", 0, "", "true"},
-			{"underflow_full", 0.01, "", "true"},
 		} {
 			t.Run(side+"/"+tc.name, func(t *testing.T) {
 				var posts []url.Values
@@ -80,5 +79,33 @@ func TestReview11TakeProfitStaleRetryPreservesShape(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// review 2026-10-28 #6: the former "underflow_full" case (an explicit quantity
+// that underflows the lot step silently became a whole-position closePosition
+// TP) is now an error that sends NOTHING — a partial TP must never widen.
+func TestReview11TakeProfitUnderflowIsErrorNotFullClose(t *testing.T) {
+	for _, side := range []string{"LONG", "SHORT"} {
+		t.Run(side, func(t *testing.T) {
+			posts := 0
+			tr := batch1FuturesTrader(func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case "/fapi/v1/exchangeInfo":
+					return batch1Response(r, http.StatusOK, `{"symbols":[{"symbol":"XUSDT","pricePrecision":2,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.1","minQty":"0.1","maxQty":"100"}]}]}`), nil
+				case "/fapi/v1/algoOrder":
+					posts++
+					return batch1Response(r, http.StatusOK, `{"algoId":8,"symbol":"XUSDT"}`), nil
+				default:
+					return nil, fmt.Errorf("unexpected endpoint: %s", r.URL.Path)
+				}
+			})
+			if err := tr.SetTakeProfit("XUSDT", side, 0.01, 110); err == nil {
+				t.Fatal("an underflowing partial TP quantity must be an error")
+			}
+			if posts != 0 {
+				t.Fatalf("a TP order was still sent (%d) — the closePosition fallback is back", posts)
+			}
+		})
 	}
 }
