@@ -634,6 +634,16 @@ func (at *AutoTrader) moveProfitStop(symbol, side string, price, qty float64) er
 	return at.moveStopExchange(symbol, side, price)
 }
 
+// noteStopMark hands the MARK price a stop decision was computed from to the
+// adapter, so SetStopLoss can pre-check the candidate against the reference
+// price of the symbol's actual workingType before touching any protection
+// (review 2026-10-28 #2). Adapters without the capability are unaffected.
+func (at *AutoTrader) noteStopMark(symbol string, mark float64) {
+	if o, ok := at.trader.(interface{ ObserveStopMarkPrice(string, float64) }); ok {
+		o.ObserveStopMarkPrice(symbol, mark)
+	}
+}
+
 // moveProfitStopEffective is moveProfitStop returning the stop price that is
 // actually in force afterwards: the requested price, or — when the exchange
 // already held a tighter stop (review 2026-10-28 #1) — that tighter price.
@@ -666,6 +676,7 @@ func (at *AutoTrader) processRProfitRules(pos map[string]interface{}, markPrice 
 	if entry <= 0 || math.IsNaN(entry) || math.IsInf(entry, 0) || symbol == "" || (side != "long" && side != "short") || qty <= 0 || markPrice <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) || math.IsNaN(markPrice) || math.IsInf(markPrice, 0) || !at.isAIManaged(symbol, side) {
 		return false
 	}
+	at.noteStopMark(symbol, markPrice)
 	currentSL := at.GetRecordedStopLoss(symbol, side)
 	if currentSL <= 0 {
 		return false
@@ -876,6 +887,7 @@ func (at *AutoTrader) processTrailingForPosition(pos map[string]interface{}, mar
 	if entry <= 0 || math.IsNaN(entry) || math.IsInf(entry, 0) || symbol == "" || (side != "long" && side != "short") || qty <= 0 || markPrice <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) || math.IsNaN(markPrice) || math.IsInf(markPrice, 0) || !at.isAIManaged(symbol, side) {
 		return
 	}
+	at.noteStopMark(symbol, markPrice)
 	currentSL := at.GetRecordedStopLoss(symbol, side)
 	if currentSL <= 0 {
 		return
