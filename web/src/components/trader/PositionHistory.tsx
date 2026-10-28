@@ -10,6 +10,7 @@ import { Loader2 } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Segmented } from '../ui/tabs'
+import { drawdownBasis, positionNetPnl, statsNetPnl, sumNetPnl } from './netPnl'
 import { EmptyState } from '../ui/empty-state'
 import { PnL, Change } from '../ui/pnl'
 import type {
@@ -92,7 +93,9 @@ function StatCard({
         {suffix && <span className="text-xs text-fg-3">{suffix}</span>}
       </div>
       {subtitle && (
-        <div className="mt-0.5 truncate text-[11px] text-fg-3">{subtitle}</div>
+        <div className="mt-0.5 truncate text-[11px] text-fg-3" title={subtitle}>
+          {subtitle}
+        </div>
       )}
     </div>
   )
@@ -214,9 +217,22 @@ function PositionRow({
   const side = position.side || ''
   const isLong = side.toUpperCase() === 'LONG'
   const grossPnl = position.realized_pnl || 0
-  // Rows show NET PnL (after fees) — the same caliber as the stats cards;
-  // gross stays in the tooltip (2026-10-07 review).
-  const realizedPnl = grossPnl - (position.fee || 0)
+  // Rows show NET PnL (after fees, incl. funding when the backend sends
+  // net_pnl) — the same caliber as the stats cards; gross stays in the
+  // tooltip (2026-10-07 review).
+  const realizedPnl = positionNetPnl(position)
+  const fundingFee = position.funding_fee || 0
+  const pnlTitle = [
+    `${t('positionHistory.grossPnl', language)}: ${grossPnl >= 0 ? '+' : ''}${formatNumber(grossPnl)}`,
+    fundingFee !== 0 &&
+      t('positionHistory.includesFunding', language, {
+        amount: `${fundingFee >= 0 ? '+' : ''}${formatNumber(fundingFee, 4)}`,
+      }),
+    position.funding_unallocated &&
+      t('positionHistory.fundingUnallocated', language),
+  ]
+    .filter(Boolean)
+    .join('\n')
   const rMult = realizedR(position)
 
   // Calculate holding time
@@ -271,11 +287,16 @@ function PositionRow({
       </td>
 
       {/* P&L (net) */}
-      <td
-        className="px-3 text-right"
-        title={`${t('positionHistory.grossPnl', language)}: ${grossPnl >= 0 ? '+' : ''}${formatNumber(grossPnl)}`}
-      >
+      <td className="px-3 text-right" title={pnlTitle}>
         <div className="flex items-baseline justify-end gap-2">
+          {position.funding_unallocated && (
+            <span
+              className="text-[11px] text-brand"
+              title={t('positionHistory.fundingUnallocated', language)}
+            >
+              ⚠
+            </span>
+          )}
           <PnL value={realizedPnl} currency="" className="font-semibold" />
           <Change value={pnlPct} className="text-xs" />
         </div>
@@ -382,7 +403,7 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
             new Date(b.exit_time || 0).getTime()
           break
         case 'pnl':
-          comparison = (a.realized_pnl || 0) - (b.realized_pnl || 0)
+          comparison = positionNetPnl(a) - positionNetPnl(b)
           break
         case 'pnl_pct': {
           // 价格收益率按方向取反：空头盈利时 (exit−entry)/entry 为负，
@@ -457,11 +478,19 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
     )
   }
 
-  // 合计与行内、stats 卡同口径：净额 Σ(realized_pnl − fee)，不能用毛额（review A4）
-  const totalFilteredPnl = filteredAndSortedPositions.reduce(
-    (sum, p) => sum + (p.realized_pnl || 0) - (p.fee || 0),
-    0
-  )
+  // 合计与行内、stats 卡同口径：净额 Σ net_pnl（无则回退 realized_pnl − fee），不能用毛额（review A4）
+  const totalFilteredPnl = sumNetPnl(filteredAndSortedPositions)
+
+  // Net PnL card subtitle: funding total (+ unattributed funding count) when
+  // the backend reports funding, otherwise the legacy "after fees" note.
+  let netPnlSubtitle = t('positionHistory.netPnLDesc', language)
+  if (stats && typeof stats.total_funding === 'number') {
+    const f = stats.total_funding
+    netPnlSubtitle = `${t('positionHistory.fundingTotal', language)}: ${f >= 0 ? '+' : ''}${formatNumber(f)}`
+    if ((stats.unallocated_funding_count || 0) > 0) {
+      netPnlSubtitle += ` · ${t('positionHistory.fundingUnallocatedCount', language, { count: stats.unallocated_funding_count || 0 })}`
+    }
+  }
 
   const thBase =
     'sticky top-0 z-10 h-8 whitespace-nowrap bg-surface-2 px-3 text-xs font-medium text-fg-3'
@@ -480,6 +509,16 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
 
   return (
     <div className="space-y-3 p-3">
+      {/* Stats query failed: say so instead of silently dropping the cards */}
+      {historyData?.stats_error && (
+        <div
+          className="rounded-md border border-line bg-surface-2 px-3 py-1.5 text-xs text-down"
+          title={Object.values(historyData.stats_error).join('\n')}
+        >
+          {t('positionHistory.statsUnavailable', language)}
+        </div>
+      )}
+
       {/* Overall Stats - Row 1: Core Metrics */}
       {stats && (
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
@@ -581,14 +620,27 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
           />
           <StatCard
             title={t('positionHistory.maxDrawdown', language)}
-            value={(stats.max_drawdown_pct || 0).toFixed(1)}
-            suffix="%"
+            value={
+              drawdownBasis(stats) === 'unavailable'
+                ? '—'
+                : (stats.max_drawdown_pct || 0).toFixed(1)
+            }
+            suffix={drawdownBasis(stats) === 'unavailable' ? undefined : '%'}
             color={
-              (stats.max_drawdown_pct || 0) <= 10
-                ? 'var(--up)'
-                : (stats.max_drawdown_pct || 0) <= 20
-                  ? 'var(--brand)'
-                  : 'var(--down)'
+              drawdownBasis(stats) === 'unavailable'
+                ? 'var(--fg-3)'
+                : (stats.max_drawdown_pct || 0) <= 10
+                  ? 'var(--up)'
+                  : (stats.max_drawdown_pct || 0) <= 20
+                    ? 'var(--brand)'
+                    : 'var(--down)'
+            }
+            subtitle={
+              drawdownBasis(stats) === 'equity_twr'
+                ? t('positionHistory.ddBasisEquity', language)
+                : drawdownBasis(stats) === 'closed_trades'
+                  ? t('positionHistory.ddBasisClosed', language)
+                  : undefined
             }
             metricKey="max_drawdown"
             language={language}
@@ -608,14 +660,14 @@ export function PositionHistory({ traderId }: PositionHistoryProps) {
           />
           <StatCard
             title={t('positionHistory.netPnL', language)}
-            // 后端 stats.total_pnl 已是净额（Σ(realized_pnl − fee)），
-            // 这里直接显示，不能再减一次 total_fee（会双重扣手续费，review A1）
+            // 后端 total_net_pnl = total_pnl + total_funding（旧后端无此字段则回退 total_pnl，
+            // 它已是扣费净额）。这里直接显示，不能再减一次 total_fee（会双重扣手续费，review A1）
             value={
-              ((stats.total_pnl || 0) >= 0 ? '+' : '') +
-              formatNumber(stats.total_pnl || 0)
+              (statsNetPnl(stats) >= 0 ? '+' : '') +
+              formatNumber(statsNetPnl(stats))
             }
-            color={(stats.total_pnl || 0) >= 0 ? 'var(--up)' : 'var(--down)'}
-            subtitle={t('positionHistory.netPnLDesc', language)}
+            color={statsNetPnl(stats) >= 0 ? 'var(--up)' : 'var(--down)'}
+            subtitle={netPnlSubtitle}
             language={language}
           />
         </div>
