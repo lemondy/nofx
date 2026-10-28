@@ -2475,17 +2475,8 @@ func computeTFSignal(tf string, tfData *market.TimeframeSeriesData, now time.Tim
 	dur := tfDuration(tf)
 
 	// ── Closed-candle settlement ──
-	klines := tfData.Klines
-	dropped := 0
-	if len(klines) > 0 {
-		last := klines[len(klines)-1]
-		if time.UnixMilli(last.Time).Add(dur).After(now) {
-			// The most recent candle is still forming — indicators and
-			// structure are computed on CLOSED candles only.
-			klines = klines[:len(klines)-1]
-			dropped = 1
-		}
-	}
+	klines := ClosedKlines(tfData, now, dur)
+	dropped := len(tfData.Klines) - len(klines)
 	n := len(klines)
 	if n < 10 {
 		return &TFSignal{
@@ -3091,10 +3082,9 @@ func TimeframeTrend(data *market.Data, tf string) string {
 	return ""
 }
 
-// snapshotNow is the clock every closed-candle judgement of a market snapshot
-// uses: the moment the klines were SAMPLED, else the caller's `fallback`, else
-// the wall clock. A forming bar fetched at 14:59:30 must not turn "closed"
-// just because the signal is recomputed after 15:00 (review 2026-10-20 #4).
+// snapshotNow supplies the fallback clock for candle settlement. Each series'
+// ObservedAt takes precedence in ClosedKlines / computeTFSignal. Without that
+// metadata use SampledAt, else the caller's fallback, else the wall clock.
 func snapshotNow(data *market.Data, fallback time.Time) time.Time {
 	if data != nil && !data.SampledAt.IsZero() {
 		return data.SampledAt
@@ -3103,6 +3093,15 @@ func snapshotNow(data *market.Data, fallback time.Time) time.Time {
 		return fallback
 	}
 	return time.Now()
+}
+
+// timeframeNow is the earlier of the series' request time and the caller's
+// clock: a caller may pass a deliberate earlier cutoff, which must still win.
+func timeframeNow(tfData *market.TimeframeSeriesData, fallback time.Time) time.Time {
+	if tfData != nil && !tfData.ObservedAt.IsZero() && (fallback.IsZero() || tfData.ObservedAt.Before(fallback)) {
+		return tfData.ObservedAt
+	}
+	return fallback
 }
 
 func tfDuration(tf string) time.Duration {
@@ -3172,8 +3171,13 @@ func closedCloses(tfData *market.TimeframeSeriesData, now time.Time, dur time.Du
 	return out
 }
 
-// closedKlines drops the still-forming tail candle, mirroring computeTFSignal.
+// ClosedKlines excludes bars that had not closed when this timeframe's request
+// was issued. now is the snapshot-clock fallback for legacy series.
 func ClosedKlines(tfData *market.TimeframeSeriesData, now time.Time, dur time.Duration) []market.KlineBar {
+	if tfData == nil {
+		return nil
+	}
+	now = timeframeNow(tfData, now)
 	kl := tfData.Klines
 	if len(kl) > 0 && time.UnixMilli(kl[len(kl)-1].Time).Add(dur).After(now) {
 		kl = kl[:len(kl)-1]
