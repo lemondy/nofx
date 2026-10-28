@@ -206,11 +206,11 @@ func TestRankICSamplingAndLegacyRank(t *testing.T) {
 	if err := os.WriteFile(shortTuningPath, []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	now := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
 	var signals []ShortSignal
 	for i := 0; i < 50; i++ {
-		signals = append(signals, ShortSignal{Symbol: fmt.Sprintf("COIN%02dUSDT", i), Score: float64(100 - i), Price: 100})
+		signals = append(signals, ShortSignal{Symbol: fmt.Sprintf("COIN%02dUSDT", i), Score: float64(100 - i), Price: 100, PriceSource: "ticker_24h_last", PriceObservedAt: now.UnixMilli()})
 	}
-	now := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
 	SampleShortSignals(signals, now)
 	samples := readSamples()
 	if len(samples) != 31 || samples[0].Rank != 0 || samples[0].Outcome != 2 {

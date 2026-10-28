@@ -107,23 +107,25 @@ func SetShortTuningPath(p string) {
 }
 
 type shortSample struct {
-	LabelAttempts int                `json:"label_attempts,omitempty"`
-	NextRetryAt   int64              `json:"next_retry_at,omitempty"`
-	LabelAt       int64              `json:"label_at,omitempty"`
-	LabelVersion  int                `json:"label_version,omitempty"`
-	EvaluatedAt   int64              `json:"evaluated_at,omitempty"`
-	FundingPct    float64            `json:"funding_pct,omitempty"`
-	CostPct       float64            `json:"cost_pct,omitempty"`
-	MissingReason string             `json:"missing_reason,omitempty"`
-	TS            int64              `json:"ts"`
-	Symbol        string             `json:"symbol"`
-	Score         float64            `json:"score"`
-	Rank          int                `json:"rank,omitempty"` // 1-based position in the ranked snapshot
-	Price         float64            `json:"price"`
-	Components    map[string]float64 `json:"components"`
-	Evaluated     bool               `json:"evaluated"`
-	Outcome       float64            `json:"outcome,omitempty"`     // % short PnL at +24h
-	Unpriceable   bool               `json:"unpriceable,omitempty"` // delisted/no quote — excluded from correlations
+	PriceSource     string             `json:"price_source,omitempty"`
+	PriceObservedAt int64              `json:"price_observed_at,omitempty"`
+	LabelAttempts   int                `json:"label_attempts,omitempty"`
+	NextRetryAt     int64              `json:"next_retry_at,omitempty"`
+	LabelAt         int64              `json:"label_at,omitempty"`
+	LabelVersion    int                `json:"label_version,omitempty"`
+	EvaluatedAt     int64              `json:"evaluated_at,omitempty"`
+	FundingPct      float64            `json:"funding_pct,omitempty"`
+	CostPct         float64            `json:"cost_pct,omitempty"`
+	MissingReason   string             `json:"missing_reason,omitempty"`
+	TS              int64              `json:"ts"`
+	Symbol          string             `json:"symbol"`
+	Score           float64            `json:"score"`
+	Rank            int                `json:"rank,omitempty"` // 1-based position in the ranked snapshot
+	Price           float64            `json:"price"`
+	Components      map[string]float64 `json:"components"`
+	Evaluated       bool               `json:"evaluated"`
+	Outcome         float64            `json:"outcome,omitempty"`     // % short PnL at +24h
+	Unpriceable     bool               `json:"unpriceable,omitempty"` // delisted/no quote — excluded from correlations
 }
 
 // SampleShortSignals journals up to shortTunerSampleTopN ranked signals for future evaluation.
@@ -146,12 +148,19 @@ func SampleShortSignals(signals []ShortSignal, now time.Time) {
 	}
 	var buf []byte
 	for i, sig := range signals[:n] {
+		entry := PriceObservation{sig.Price, sig.PriceSource, sig.PriceObservedAt}
+		if !entry.valid() || entry.ObservedAt > now.UnixMilli() {
+			continue // A price without an observation cannot produce a new label.
+		}
 		rec := shortSample{
-			TS:     now.UnixMilli(),
-			Symbol: sig.Symbol,
-			Score:  sig.Score,
-			Rank:   i + 1,
-			Price:  sig.Price,
+			TS:              now.UnixMilli(),
+			Symbol:          sig.Symbol,
+			Score:           sig.Score,
+			Rank:            i + 1,
+			Price:           sig.Price,
+			PriceSource:     sig.PriceSource,
+			PriceObservedAt: sig.PriceObservedAt,
+			LabelVersion:    shortPriceLabelVersion,
 			Components: map[string]float64{
 				"stretch":     sig.Components.Stretch,
 				"overbought":  sig.Components.Overbought,
@@ -169,6 +178,9 @@ func SampleShortSignals(signals []ShortSignal, now time.Time) {
 			continue
 		}
 		buf = append(buf, append(b, '\n')...)
+	}
+	if len(buf) == 0 {
+		return
 	}
 	f, err := os.OpenFile(shortTuningPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -208,12 +220,12 @@ func RunShortTuner(now time.Time) {
 	evaluatedThisRun := 0
 	for i := range samples {
 		s := &samples[i]
-		if s.Evaluated && s.LabelVersion != 2 {
+		if s.Evaluated && s.LabelVersion != shortSampleLabelVersion(*s) {
 			s.Evaluated = false
 			s.Unpriceable = false
 			legacyInvalidated = true
 		}
-		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
+		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-shortEntryTime(*s) < shortTunerEvalAfter.Milliseconds() {
 			continue
 		}
 		// 50 labels per 30-min tick = 2400/day, versus at most 30 × 24 = 720 new samples/day.
@@ -237,7 +249,7 @@ func RunShortTuner(now time.Time) {
 	for _, d := range due {
 		s := d.sample
 		res := labelResult{}
-		if s.Price <= 0 || math.IsNaN(s.Price) || math.IsInf(s.Price, 0) || s.TS <= 0 {
+		if s.Price <= 0 || math.IsNaN(s.Price) || math.IsInf(s.Price, 0) || shortEntryTime(s) <= 0 {
 			res.failed, res.errMsg = true, "invalid sample price/time"
 		} else {
 			price, labelAt, funding, err := historicalShortLabel(s)
@@ -262,12 +274,12 @@ func RunShortTuner(now time.Time) {
 		// a v1 sample re-read from disk still carries Evaluated=true and the
 		// skip below would discard its freshly fetched label forever, looping
 		// the relabel budget every run without ever migrating the sample.
-		if s.Evaluated && s.LabelVersion != 2 {
+		if s.Evaluated && s.LabelVersion != shortSampleLabelVersion(*s) {
 			s.Evaluated = false
 			s.Unpriceable = false
 			changed = true
 		}
-		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-s.TS < shortTunerEvalAfter.Milliseconds() {
+		if s.Evaluated || s.NextRetryAt > now.UnixMilli() || now.UnixMilli()-shortEntryTime(*s) < shortTunerEvalAfter.Milliseconds() {
 			continue
 		}
 		res, ok := results[[2]interface{}{s.TS, s.Symbol}]
@@ -279,7 +291,7 @@ func RunShortTuner(now time.Time) {
 				s.Unpriceable = true
 				s.MissingReason = res.errMsg
 				s.Evaluated = true
-				s.LabelVersion = 2
+				s.LabelVersion = shortSampleLabelVersion(*s)
 				changed = true
 				continue
 			}
@@ -293,7 +305,7 @@ func RunShortTuner(now time.Time) {
 		}
 		s.Outcome = (s.Price-res.price)/s.Price*100 + res.funding - btCostRoundTrip
 		s.LabelAt = res.labelAt
-		s.LabelVersion = 2
+		s.LabelVersion = shortSampleLabelVersion(*s)
 		s.EvaluatedAt = now.UnixMilli()
 		s.FundingPct = res.funding
 		s.CostPct = btCostRoundTrip
@@ -329,7 +341,7 @@ func RunShortTuner(now time.Time) {
 		for _, s := range samples {
 			// Delisted/unpriceable samples carry Outcome=0 — including them
 			// poisoned the correlations with fake zeros. Excluded.
-			if s.Evaluated && s.LabelVersion == 2 && !s.Unpriceable && s.TS > lastTuned && len(s.Components) > 0 {
+			if s.Evaluated && s.LabelVersion == shortPriceLabelVersion && !s.Unpriceable && s.TS > lastTuned && len(s.Components) > 0 {
 				eval = append(eval, s)
 			}
 		}
@@ -340,7 +352,7 @@ func RunShortTuner(now time.Time) {
 			// Proposal generation does not consume the live promotion cursor.
 			if ok {
 				proposal := ShortWeightProposal{
-					GeneratedAt: now.UTC(), Incumbent: w, Candidate: newW,
+					GeneratedAt: now.UTC(), Incumbent: w, Candidate: newW, LabelVersion: shortPriceLabelVersion,
 					Samples: len(eval), Applied: false, Diagnostics: diagnostics,
 					EvaluationScope: "cross_sectional_rank_ic_24h_close_not_sl_tp_research_only",
 				}
@@ -388,6 +400,16 @@ func updateShortWeights(samples []shortSample, base map[string]float64, eta floa
 // day, regardless of how often it was sampled. Rank IC answers whether higher
 // component values select better shorts within that day, removing day shocks.
 func updateShortWeightsWithDiagnostics(samples []shortSample, base map[string]float64, eta float64) (map[string]float64, map[string]ICStat, bool) {
+	// Direct research callers may study a legacy cohort, but never pool versions.
+	for _, s := range samples {
+		if s.LabelVersion != samples[0].LabelVersion {
+			out := make(map[string]float64, len(base))
+			for k, v := range base {
+				out[k] = v
+			}
+			return out, map[string]ICStat{}, false
+		}
+	}
 	type point struct {
 		x, y float64
 		n    int
@@ -639,7 +661,8 @@ func historicalShortLabel(s shortSample) (float64, int64, float64, error) {
 }
 
 func historicalShortHorizon(s shortSample, horizon time.Duration) (float64, int64, float64, error) {
-	target := time.UnixMilli(s.TS).Add(horizon)
+	entryAt := shortEntryTime(s)
+	target := time.UnixMilli(entryAt).Add(horizon)
 	open := target.Truncate(time.Minute).Add(-time.Minute).UnixMilli()
 	u := fmt.Sprintf("%s/fapi/v1/klines?symbol=%s&interval=1m&startTime=%d&endTime=%d&limit=1", fapiBase(), url.QueryEscape(s.Symbol), open, open+time.Minute.Milliseconds()-1)
 	var raw [][]interface{}
@@ -661,13 +684,13 @@ func historicalShortHorizon(s shortSample, horizon time.Duration) (float64, int6
 		FundingRate string `json:"fundingRate"`
 		FundingTime int64  `json:"fundingTime"`
 	}
-	u = fmt.Sprintf("%s/fapi/v1/fundingRate?symbol=%s&startTime=%d&endTime=%d&limit=1000", fapiBase(), url.QueryEscape(s.Symbol), s.TS+1, labelAt)
+	u = fmt.Sprintf("%s/fapi/v1/fundingRate?symbol=%s&startTime=%d&endTime=%d&limit=1000", fapiBase(), url.QueryEscape(s.Symbol), entryAt+1, labelAt)
 	if err := fetchJSON(u, &funding); err != nil {
 		return 0, 0, 0, fmt.Errorf("historical funding: %w", err)
 	}
 	total := 0.0
 	for _, f := range funding {
-		if f.FundingTime <= s.TS || f.FundingTime > labelAt {
+		if f.FundingTime <= entryAt || f.FundingTime > labelAt {
 			continue
 		}
 		rate, err := strconv.ParseFloat(f.FundingRate, 64)
@@ -682,11 +705,12 @@ func historicalShortHorizon(s shortSample, horizon time.Duration) (float64, int6
 var shortWeightProposalPath = "data/shortscan_weight_proposal.json"
 
 type ShortWeightProposal struct {
-	GeneratedAt time.Time          `json:"generated_at"`
-	Incumbent   map[string]float64 `json:"incumbent"`
-	Candidate   map[string]float64 `json:"candidate"`
-	Samples     int                `json:"samples"`
-	Applied     bool               `json:"applied"`
+	LabelVersion int                `json:"label_version"`
+	GeneratedAt  time.Time          `json:"generated_at"`
+	Incumbent    map[string]float64 `json:"incumbent"`
+	Candidate    map[string]float64 `json:"candidate"`
+	Samples      int                `json:"samples"`
+	Applied      bool               `json:"applied"`
 	// Labels use the +24h close, not an SL/TP path; proposals remain research-only.
 	EvaluationScope string            `json:"evaluation_scope"`
 	Diagnostics     map[string]ICStat `json:"diagnostics,omitempty"`

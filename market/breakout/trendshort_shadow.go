@@ -54,9 +54,11 @@ type TrendShortLabels struct {
 }
 
 type TrendShortShadowRow struct {
-	Kind string `json:"kind"` // pick or control
-	TS   int64  `json:"ts"`   // UTC observation time (minute resolution); entry is the last closed 1h close.
-	Rank int    `json:"rank,omitempty"`
+	LabelVersion      int                         `json:"label_version,omitempty"`
+	PriceObservations map[string]PriceObservation `json:"price_observations,omitempty"`
+	Kind              string                      `json:"kind"` // pick or control
+	TS                int64                       `json:"ts"`   // UTC cohort time; entry observations carry their own timestamps.
+	Rank              int                         `json:"rank,omitempty"`
 	TrendShortPick
 	Labels        TrendShortLabels            `json:"labels"`
 	Prices        map[string]float64          `json:"prices,omitempty"`
@@ -99,8 +101,42 @@ func writeTrendShadow(rows []TrendShortShadowRow) error {
 	return atomicWriteJSON(trendShadowPath, b.Bytes())
 }
 
-// ReadTrendShortShadow is read-only; the API never triggers network or labelling.
+// ReadTrendShortShadow returns the latest label-version cohort only, so API
+// statistics cannot pool old hourly entries with observed prices. Reading
+// never triggers network or labelling; older rows remain in the journal.
 func ReadTrendShortShadow() ([]TrendShortShadowRow, error) {
+	rows, err := readAllTrendShortShadow()
+	if err != nil {
+		return nil, err
+	}
+	version := 0
+	for _, r := range rows {
+		version = max(version, r.LabelVersion)
+	}
+	return trendShadowVersion(rows, version), nil
+}
+
+// ReadTrendShortShadowVersion explicitly reads a historical cohort (zero for
+// pre-versioning rows) without mixing entry conventions in a single result.
+func ReadTrendShortShadowVersion(version int) ([]TrendShortShadowRow, error) {
+	rows, err := readAllTrendShortShadow()
+	if err != nil {
+		return nil, err
+	}
+	return trendShadowVersion(rows, version), nil
+}
+
+func trendShadowVersion(rows []TrendShortShadowRow, version int) []TrendShortShadowRow {
+	var out []TrendShortShadowRow
+	for _, r := range rows {
+		if r.LabelVersion == version {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func readAllTrendShortShadow() ([]TrendShortShadowRow, error) {
 	trendShadowMu.Lock()
 	defer trendShadowMu.Unlock()
 	return readTrendShadow()
@@ -125,9 +161,17 @@ func appendTrendShadow(scan trendShortScan, ts int64) error {
 		return nil
 	}
 	for i, p := range scan.picks {
-		rows = append(rows, TrendShortShadowRow{Kind: "pick", TS: ts, Rank: i + 1, TrendShortPick: p})
+		version := 0
+		if (PriceObservation{p.Price, p.PriceSource, p.PriceObservedAt}).valid() {
+			version = shortPriceLabelVersion
+		}
+		rows = append(rows, TrendShortShadowRow{Kind: "pick", TS: ts, Rank: i + 1, TrendShortPick: p, LabelVersion: version})
 	}
-	rows = append(rows, TrendShortShadowRow{Kind: "control", TS: ts, Prices: scan.prices, ControlLabels: map[string]TrendShortLabels{}, Universe: scan.universe, Failures: scan.failures})
+	version := 0
+	if len(scan.observations) == len(scan.prices) {
+		version = shortPriceLabelVersion
+	}
+	rows = append(rows, TrendShortShadowRow{Kind: "control", TS: ts, LabelVersion: version, PriceObservations: scan.observations, Prices: scan.prices, ControlLabels: map[string]TrendShortLabels{}, Universe: scan.universe, Failures: scan.failures})
 	// Atomic batch append: picks and the empty-cohort dedupe marker survive together.
 	return writeTrendShadow(rows)
 }
@@ -163,13 +207,15 @@ func RunTrendShortShadow(now time.Time) {
 }
 
 type trendLabelKey struct {
-	ts     int64
-	symbol string
-	hours  int
+	version int
+	ts      int64
+	symbol  string
+	hours   int
 }
 type trendLabelJob struct {
 	key         trendLabelKey
 	price, stop float64
+	entryAt     int64
 	previous    TrendShortLabel
 }
 
@@ -182,21 +228,21 @@ func trendHorizon(l *TrendShortLabels, h int) *TrendShortLabel {
 
 // Three phases: read due work under lock, HTTP without lock, fresh-read merge.
 func labelTrendShadow(now time.Time) error {
-	rows, err := ReadTrendShortShadow()
+	rows, err := readAllTrendShortShadow()
 	if err != nil {
 		return err
 	}
 	jobsByKey := map[trendLabelKey]trendLabelJob{}
-	add := func(ts int64, sym string, price, stop float64, labels TrendShortLabels) {
+	add := func(version int, ts, entryAt int64, sym string, price, stop float64, labels TrendShortLabels) {
 		for _, h := range []int{4, 24} {
 			l := *trendHorizon(&labels, h)
-			if l.Done || l.NextRetryAt > now.UnixMilli() || now.UnixMilli() < ts+int64(h)*time.Hour.Milliseconds() {
+			if l.Done || l.NextRetryAt > now.UnixMilli() || now.UnixMilli() < entryAt+int64(h)*time.Hour.Milliseconds() {
 				continue
 			}
-			key := trendLabelKey{ts, sym, h}
+			key := trendLabelKey{version, ts, sym, h}
 			_, ok := jobsByKey[key]
 			if !ok || stop > 0 {
-				jobsByKey[key] = trendLabelJob{key, price, stop, l}
+				jobsByKey[key] = trendLabelJob{key: key, price: price, stop: stop, entryAt: entryAt, previous: l}
 			}
 		}
 	}
@@ -205,11 +251,19 @@ func labelTrendShadow(now time.Time) error {
 			continue
 		}
 		if r.Kind == "pick" {
-			add(r.TS, r.Symbol, r.Price, r.StopPrice, r.Labels)
+			entryAt := r.TS
+			if r.LabelVersion == shortPriceLabelVersion {
+				entryAt = r.PriceObservedAt
+			}
+			add(r.LabelVersion, r.TS, entryAt, r.Symbol, r.Price, r.StopPrice, r.Labels)
 		}
 		if r.Kind == "control" {
 			for sym, p := range r.Prices {
-				add(r.TS, sym, p, 0, r.ControlLabels[sym])
+				entryAt := r.TS
+				if r.LabelVersion == shortPriceLabelVersion {
+					entryAt = r.PriceObservations[sym].ObservedAt
+				}
+				add(r.LabelVersion, r.TS, entryAt, sym, p, 0, r.ControlLabels[sym])
 			}
 		}
 	}
@@ -240,7 +294,7 @@ func labelTrendShadow(now time.Time) error {
 			defer wg.Done()
 			for j := range queue {
 				l := j.previous
-				price, at, funding, e := historicalShortHorizon(shortSample{TS: j.key.ts, Symbol: j.key.symbol, Price: j.price}, time.Duration(j.key.hours)*time.Hour)
+				price, at, funding, e := historicalShortHorizon(shortSample{TS: j.entryAt, Symbol: j.key.symbol, Price: j.price}, time.Duration(j.key.hours)*time.Hour)
 				if e == nil && (j.price <= 0 || !trendFinite(j.price)) {
 					e = fmt.Errorf("invalid entry")
 				}
@@ -250,7 +304,7 @@ func labelTrendShadow(now time.Time) error {
 					l.CostPct = btCostRoundTrip
 					l.LabelAt = at
 					if j.key.hours == 24 && j.stop > 0 {
-						l.Path, l.R, l.MFER, l.MAER, e = historicalTrendPath(j.key.ts, j.key.symbol, j.price, j.stop)
+						l.Path, l.R, l.MFER, l.MAER, e = historicalTrendPath(j.entryAt, j.key.symbol, j.price, j.stop)
 					}
 				}
 				if e != nil {
@@ -291,13 +345,13 @@ func labelTrendShadow(now time.Time) error {
 		}
 		for _, h := range []int{4, 24} {
 			if r.Kind == "pick" {
-				if l, ok := results[trendLabelKey{r.TS, r.Symbol, h}]; ok {
+				if l, ok := results[trendLabelKey{r.LabelVersion, r.TS, r.Symbol, h}]; ok {
 					*trendHorizon(&r.Labels, h) = l
 				}
 			}
 			if r.Kind == "control" {
 				for sym := range r.Prices {
-					if l, ok := results[trendLabelKey{r.TS, sym, h}]; ok {
+					if l, ok := results[trendLabelKey{r.LabelVersion, r.TS, sym, h}]; ok {
 						if r.ControlLabels == nil {
 							r.ControlLabels = map[string]TrendShortLabels{}
 						}
@@ -317,10 +371,11 @@ func labelTrendShadow(now time.Time) error {
 }
 
 func historicalTrendPath(ts int64, symbol string, entry, stop float64) (string, float64, float64, float64, error) {
-	end := ts + 24*time.Hour.Milliseconds()
-	if ts%time.Minute.Milliseconds() != 0 {
-		return "", 0, 0, 0, fmt.Errorf("path timestamp must align to a minute")
-	}
+	// With a millisecond ticker observation, use only complete minutes after
+	// entry and before +24h: boundary candles must not contain pre-entry prices.
+	minute := time.Minute.Milliseconds()
+	end := ((ts + 24*time.Hour.Milliseconds()) / minute) * minute
+	ts = ((ts + minute - 1) / minute) * minute
 	quarter := (15 * time.Minute).Milliseconds()
 	first := ((ts + quarter - 1) / quarter) * quarter
 	last := (end / quarter) * quarter

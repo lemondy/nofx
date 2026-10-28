@@ -400,6 +400,8 @@ func TopVolumeSymbols(limit int) ([]string, error) {
 
 // boardTicker is shared by the boards and the shadow scan (one snapshot).
 type boardTicker struct {
+	LastPrice          string `json:"lastPrice"`
+	CloseTime          int64  `json:"closeTime"`
 	Symbol             string `json:"symbol"`
 	QuoteVolume        string `json:"quoteVolume"`
 	PriceChangePercent string `json:"priceChangePercent"`
