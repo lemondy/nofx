@@ -37,7 +37,9 @@ export interface Position {
   quantity: number
   leverage: number
   unrealized_pnl: number
-  unrealized_pnl_pct: number
+  // ROE：浮盈 / 占用保证金 ×100。后端在部分失败场景下可能缺省，
+  // 前端缺失时显示「—」而不是 0.00%（review A11）
+  unrealized_pnl_pct?: number
   liquidation_price: number
   margin_used: number
   // 交易所实查的该仓挂单腿(09-27):SL/TP algo 触发价 + 未成交入场限价;查询失败时缺省

@@ -13,6 +13,8 @@ import type { DecisionRecord, DecisionAction } from '../../types'
 import { t, type Language } from '../../i18n/translations'
 import { gateCodeLabel } from '../../lib/gateCodeLabels'
 import { cn } from '../../lib/cn'
+// 自适应精度价格格式化（meme 币 1e-7 也能显示有效数字，review A2）
+import { formatPrice } from '../../utils/format'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 
@@ -36,13 +38,10 @@ const ACTION_CONFIG: Record<string, { variant: BadgeVariant; label: string }> =
     wait: { variant: 'neutral', label: 'WAIT' },
   }
 
-// Format price with proper decimals
-function formatPrice(price: number | undefined): string {
-  if (!price || price === 0) return '-'
-  if (price >= 1000) return price.toFixed(2)
-  if (price >= 1) return price.toFixed(4)
-  return price.toFixed(6)
-}
+// 缺失值显示 '-'，有值时用 utils 的自适应精度 formatPrice
+// （本地 toFixed(6) 版本会把 <1e-6 的价格截断成 0.000000，review A2）
+const formatPriceOrDash = (price: number | undefined): string =>
+  price ? formatPrice(price) : '-'
 
 // Calculate percentage change
 function calcPctChange(
@@ -131,11 +130,11 @@ function ActionCard({
         <div className="mt-2 grid grid-cols-4 gap-2 border-t border-line pt-2">
           <Cell
             label={t('entryPrice', language)}
-            value={formatPrice(action.price)}
+            value={formatPriceOrDash(action.price)}
           />
           <Cell
             label={t('stopLoss', language)}
-            value={formatPrice(action.stop_loss)}
+            value={formatPriceOrDash(action.stop_loss)}
             sub={
               action.stop_loss && action.price
                 ? calcPctChange(action.price, action.stop_loss, isLong)
@@ -145,7 +144,7 @@ function ActionCard({
           />
           <Cell
             label={t('takeProfit', language)}
-            value={formatPrice(action.take_profit)}
+            value={formatPriceOrDash(action.take_profit)}
             sub={
               action.take_profit && action.price
                 ? calcPctChange(action.price, action.take_profit, isLong)

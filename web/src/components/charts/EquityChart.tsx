@@ -23,6 +23,7 @@ import {
   TrendingDown as ArrowDown,
 } from 'lucide-react'
 import { cn } from '../../lib/cn'
+import { parseServerTime } from '../../utils/serverTime'
 import {
   Card,
   EmptyState,
@@ -35,9 +36,9 @@ import {
 interface EquityPoint {
   timestamp: string
   total_equity: number
-  pnl: number
-  pnl_pct: number
-  cycle_number: number
+  // 后端 equity 端点的 total_pnl 是快照时刻的未实现盈亏，不能用来反推初始资金
+  total_pnl: number
+  cycle_number?: number
 }
 
 interface EquityChartProps {
@@ -171,51 +172,64 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
   const displayHistory =
     range === 'all' ? validHistory : validHistory.slice(-range)
 
-  // 计算初始余额（优先从 account 获取配置的初始余额，备选从历史数据反推）
+  // 初始余额只用交易员配置的 initial_balance。equity 点的 total_pnl 是未实现
+  // 盈亏，首点权益减它得到的是当时的钱包余额而非初始资金，所以不反推；
+  // 也绝不虚构 1000 兜底——无基线时 PnL/PnL% 显示「—」（2026-10-28 review A9）。
+  const configuredBalance = account?.initial_balance
   const initialBalance =
-    account?.initial_balance || // 从交易员配置读取真实初始余额
-    (validHistory[0]
-      ? validHistory[0].total_equity - validHistory[0].pnl
-      : undefined) || // 备选：淨值 - 盈亏
-    1000 // 默认值（与创建交易员时的默认配置一致）
+    configuredBalance !== undefined &&
+    Number.isFinite(configuredBalance) &&
+    configuredBalance > 0
+      ? configuredBalance
+      : undefined
 
   // 转换数据格式
   const chartData = displayHistory.map((point, index) => {
-    const pnl = point.total_equity - initialBalance
-    const pnlPct = ((pnl / initialBalance) * 100).toFixed(2)
+    const pnl =
+      initialBalance !== undefined ? point.total_equity - initialBalance : null
+    const pnlPct =
+      pnl !== null && initialBalance !== undefined
+        ? (pnl / initialBalance) * 100
+        : null
     return {
-      time: new Date(point.timestamp).toLocaleTimeString('zh-CN', {
+      // 快照时间为 UTC；旧格式无时区后缀，必须按 UTC 解析（不能交给本地时区）
+      time: parseServerTime(point.timestamp).toLocaleTimeString('zh-CN', {
         hour: '2-digit',
         minute: '2-digit',
       }),
-      value: displayMode === 'dollar' ? point.total_equity : parseFloat(pnlPct),
+      value: displayMode === 'dollar' ? point.total_equity : pnlPct,
       cycle: point.cycle_number ?? index + 1,
       raw_equity: point.total_equity,
       raw_pnl: pnl,
-      raw_pnl_pct: parseFloat(pnlPct),
+      raw_pnl_pct: pnlPct,
     }
   })
 
   const currentValue = chartData[chartData.length - 1]
-  const isProfit = currentValue.raw_pnl >= 0
+  const hasPnl = currentValue.raw_pnl_pct !== null
+  const isProfit = (currentValue.raw_pnl_pct ?? 0) >= 0
 
   // 计算Y轴范围
   const calculateYDomain = () => {
+    const values = chartData
+      .map((d) => d.value)
+      .filter((v): v is number => v !== null)
+    if (values.length === 0) return [0, 1]
     if (displayMode === 'percent') {
       // 百分比模式：找到最大最小值，留20%余量
-      const values = chartData.map((d) => d.value)
       const minVal = Math.min(...values)
       const maxVal = Math.max(...values)
       const range = Math.max(Math.abs(maxVal), Math.abs(minVal))
       const padding = Math.max(range * 0.2, 1) // 至少留1%余量
       return [Math.floor(minVal - padding), Math.ceil(maxVal + padding)]
     } else {
-      // 美元模式：以初始余额为基准，上下留10%余量
-      const values = chartData.map((d) => d.value)
-      const minVal = Math.min(...values, initialBalance)
-      const maxVal = Math.max(...values, initialBalance)
+      // 美元模式：以初始余额为基准，上下留10%余量（无基线时不参与 min/max）
+      const withBase =
+        initialBalance !== undefined ? [...values, initialBalance] : values
+      const minVal = Math.min(...withBase)
+      const maxVal = Math.max(...withBase)
       const range = maxVal - minVal
-      const padding = Math.max(range * 0.15, initialBalance * 0.01) // 至少留1%余量
+      const padding = Math.max(range * 0.15, (initialBalance ?? 0) * 0.01) // 至少留1%余量
       return [Math.floor(minVal - padding), Math.ceil(maxVal + padding)]
     }
   }
@@ -232,15 +246,19 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
           <div className="num font-semibold text-fg">
             {data.raw_equity.toFixed(2)} USDT
           </div>
-          <div
-            className={cn(
-              'num text-sm font-semibold',
-              data.raw_pnl >= 0 ? 'text-up' : 'text-down'
-            )}
-          >
-            {formatSigned(data.raw_pnl, { suffix: ' USDT' })} (
-            {formatSigned(data.raw_pnl_pct, { suffix: '%' })})
-          </div>
+          {data.raw_pnl == null ? (
+            <div className="num text-sm font-semibold text-fg-3">—</div>
+          ) : (
+            <div
+              className={cn(
+                'num text-sm font-semibold',
+                data.raw_pnl >= 0 ? 'text-up' : 'text-down'
+              )}
+            >
+              {formatSigned(data.raw_pnl, { suffix: ' USDT' })} (
+              {formatSigned(data.raw_pnl_pct, { suffix: '%' })})
+            </div>
+          )}
         </div>
       )
     }
@@ -266,18 +284,29 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               <span
                 className={cn(
                   'num inline-flex items-center gap-1 rounded px-2 py-0.5 text-sm font-semibold',
-                  isProfit ? 'bg-up-soft text-up' : 'bg-down-soft text-down'
+                  !hasPnl
+                    ? 'bg-surface-2 text-fg-3'
+                    : isProfit
+                      ? 'bg-up-soft text-up'
+                      : 'bg-down-soft text-down'
                 )}
               >
-                {isProfit ? (
+                {!hasPnl ? null : isProfit ? (
                   <ArrowUp className="h-3.5 w-3.5" />
                 ) : (
                   <ArrowDown className="h-3.5 w-3.5" />
                 )}
-                {formatSigned(currentValue.raw_pnl_pct, { suffix: '%' })}
+                {/* 无基线（initial_balance 缺失且无法反推）时不编造数字 */}
+                {currentValue.raw_pnl_pct === null
+                  ? '—'
+                  : formatSigned(currentValue.raw_pnl_pct, { suffix: '%' })}
               </span>
               <span className="num text-xs text-fg-3">
-                ({formatSigned(currentValue.raw_pnl, { suffix: ' USDT' })})
+                (
+                {currentValue.raw_pnl === null
+                  ? '—'
+                  : formatSigned(currentValue.raw_pnl, { suffix: ' USDT' })}
+                )
               </span>
             </div>
           </div>
@@ -358,19 +387,22 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               content={<CustomTooltip />}
               cursor={{ stroke: 'var(--line-strong)', strokeDasharray: '3 3' }}
             />
-            <ReferenceLine
-              y={displayMode === 'dollar' ? initialBalance : 0}
-              stroke="var(--line-strong)"
-              strokeDasharray="3 3"
-              label={{
-                value:
-                  displayMode === 'dollar'
-                    ? t('initialBalance', language).split(' ')[0]
-                    : '0%',
-                fill: 'var(--fg-3)',
-                fontSize: 12,
-              }}
-            />
+            {/* 美元模式且无可用基线时不画初始余额参考线 */}
+            {initialBalance !== undefined && (
+              <ReferenceLine
+                y={displayMode === 'dollar' ? initialBalance : 0}
+                stroke="var(--line-strong)"
+                strokeDasharray="3 3"
+                label={{
+                  value:
+                    displayMode === 'dollar'
+                      ? t('initialBalance', language).split(' ')[0]
+                      : '0%',
+                  fill: 'var(--fg-3)',
+                  fontSize: 12,
+                }}
+              />
+            )}
             <Line
               type="natural"
               dataKey="value"
@@ -396,7 +428,10 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
         {[
           {
             label: t('initialBalance', language),
-            value: `${initialBalance.toFixed(2)} USDT`,
+            value:
+              initialBalance !== undefined
+                ? `${initialBalance.toFixed(2)} USDT`
+                : '—',
           },
           {
             label: t('currentEquity', language),

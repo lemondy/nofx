@@ -42,15 +42,18 @@ export const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     descriptionEn: 'Largest peak-to-trough decline during the period',
     descriptionZh: '期间内从峰值到谷底的最大跌幅',
   },
+  // 2026-10-28 review A10: 后端该字段的实际口径是「每笔平仓净盈亏金额
+  // (USDT) 的 mean/std」，未年化、非收益率——名称与公式同步改为真实口径，
+  // 不再冒充收益率口径的 Sharpe (r̄−r_f)/σ。
   sharpe_ratio: {
     key: 'sharpe_ratio',
-    nameEn: 'Sharpe Ratio',
-    nameZh: '夏普比率',
-    formula: 'SR = \\frac{\\bar{r} - r_f}{\\sigma}',
+    nameEn: 'Per-trade P&L Ratio (mean/std)',
+    nameZh: '每笔盈亏稳定度（均值/标准差）',
+    formula: 'R = \\frac{\\mathrm{mean}(PnL_i)}{\\mathrm{std}(PnL_i)}',
     descriptionEn:
-      'Risk-adjusted return per unit of volatility (r̄=avg return, rf=risk-free rate, σ=std dev)',
+      'Mean of per-trade net PnL (USDT amounts, fees deducted) divided by its standard deviation. Not annualized and not a return-based measure — do not compare it directly with annualized Sharpe ratios.',
     descriptionZh:
-      '单位波动风险下的超额收益（r̄=平均收益，rf=无风险利率，σ=标准差）',
+      '每笔平仓净盈亏金额（USDT，已扣手续费）的均值除以其标准差。未年化、非收益率口径，请勿与年化 Sharpe 比率直接对比。',
   },
   sortino_ratio: {
     key: 'sortino_ratio',
