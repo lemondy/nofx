@@ -15,6 +15,23 @@ func (p *PaperFuturesTrader) FormatQuantity(symbol string, quantity float64) (st
 	return text, err
 }
 
+// QuantityRules exposes the lot step and minimum quantity the way the Binance
+// adapter does, so the program quantizes split-TP sizes and treats a sub-step
+// tail as covered. Without it a 0.005 tail was "missing", rounded to zero here
+// and fell back to a whole-position closePosition TP that replaced the split
+// leg every watchdog pass.
+func (p *PaperFuturesTrader) QuantityRules(symbol string) (step, minQty float64, err error) {
+	r, err := p.rules.QuantityRules(symbolName(symbol))
+	if err != nil {
+		return 0, 0, err
+	}
+	step, err = strconv.ParseFloat(r.StepSize, 64)
+	if err != nil || !positive(step) {
+		return 0, 0, fmt.Errorf("%s LOT_SIZE trading rule is missing", symbol)
+	}
+	return step, r.MinQty, nil
+}
+
 func (p *PaperFuturesTrader) quantity(symbol string, quantity float64) (float64, string, QuantityRule, error) {
 	p.mu.Lock()
 	err := p.initErr
