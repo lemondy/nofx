@@ -84,7 +84,9 @@ func TestReview20261028RemTPChoicesAreDecisionLocal(t *testing.T) {
 		{"symbol":"BTCUSDT","action":"open_short","leverage":3,"position_size_usd":1,"tp_option":2},
 		{"symbol":"BTCUSDT","action":"open_short","leverage":3,"position_size_usd":100,"tp_option":99}
 	]`
-	fd, err := parseFullDecisionResponse(body, 1000, 5, 3, 0.5, 0.3, 5, nil,
+	// Per-item parsing only: this test asserts menu choices are decision-local,
+	// using same-symbol decisions that batch-consistency (VF #8) would merge.
+	fd, err := parseDecisionsPerItem(body, 1000, 5, 3, 0.5, 0.3, 5, nil,
 		map[string]*GateState{"BTCUSDT": gs}, nil)
 	if err != nil {
 		t.Fatal(err)

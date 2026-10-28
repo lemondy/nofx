@@ -127,7 +127,7 @@ func computeMarketRegime(data *market.Data, now time.Time) *MarketRegime {
 	current.state.ConfirmedBars = 1
 
 	tf1h := data.TimeframeData["1h"]
-	closed1h := closedKlinesAt(tf1h, now, time.Hour)
+	closed1h := closedRegimeKlines(data, tf1h, now, time.Hour)
 	if len(closed1h) < 2 {
 		return current.state
 	}
@@ -148,8 +148,8 @@ func measureMarketRegime(data *market.Data, cutoff time.Time) regimeMeasurement 
 	if data == nil || data.TimeframeData == nil {
 		return regimeMeasurement{state: r}
 	}
-	b1 := closedKlinesAt(data.TimeframeData["1h"], cutoff, time.Hour)
-	b4 := closedKlinesAt(data.TimeframeData["4h"], cutoff, 4*time.Hour)
+	b1 := closedRegimeKlines(data, data.TimeframeData["1h"], cutoff, time.Hour)
+	b4 := closedRegimeKlines(data, data.TimeframeData["4h"], cutoff, 4*time.Hour)
 	if len(b1) < 50 || len(b4) < 50 {
 		return regimeMeasurement{state: r}
 	}
@@ -235,9 +235,23 @@ func marketRegimeAllowsException(sig *SymbolSignal, isLong bool) bool {
 	return sig.MarketRegime.Regime == "TREND_DOWN"
 }
 
+// Historical confirmation must respect BOTH the requested cutoff and the
+// observation clock. Unlike ClosedKlines, an older cutoff may not be replaced
+// by a later ObservedAt (that would leak future bars into confirmation).
+func closedRegimeKlines(data *market.Data, tfData *market.TimeframeSeriesData, cutoff time.Time, dur time.Duration) []market.KlineBar {
+	observedAt := timeframeNow(tfData, snapshotNow(data, cutoff))
+	if observedAt.Before(cutoff) {
+		cutoff = observedAt
+	}
+	return closedKlinesAt(tfData, cutoff, dur)
+}
+
 func closedKlinesAt(tfData *market.TimeframeSeriesData, cutoff time.Time, dur time.Duration) []market.KlineBar {
 	if tfData == nil {
 		return nil
+	}
+	if !tfData.ObservedAt.IsZero() && tfData.ObservedAt.Before(cutoff) {
+		cutoff = tfData.ObservedAt
 	}
 	out := make([]market.KlineBar, 0, len(tfData.Klines))
 	for _, b := range tfData.Klines {
