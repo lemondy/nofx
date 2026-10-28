@@ -189,6 +189,10 @@ export interface HistoricalPosition {
   exit_time: string
   realized_pnl: number
   fee: number
+  // Funding / net PnL (absent on older backends): net_pnl = realized_pnl − fee + funding_fee
+  funding_fee?: number // signed, positive is income
+  net_pnl?: number
+  funding_unallocated?: boolean // funding in the window could not be attributed
   leverage: number
   status: string
   close_reason: string
@@ -212,13 +216,21 @@ export interface TraderStats {
   sharpe_ratio: number
   total_pnl: number
   total_fee: number
+  total_funding?: number // allocated funding only, signed
+  total_net_pnl?: number // total_pnl + total_funding
+  unallocated_funding?: number
+  unallocated_funding_count?: number
   total_win: number
   total_loss: number
   avg_win: number
   avg_loss: number
   max_drawdown_pct: number
+  // equity_twr: equity curve ex-transfers; closed_trades: closed-trade curve; unavailable: no data
+  max_drawdown_basis?: MaxDrawdownBasis
   window_days?: number
 }
+
+export type MaxDrawdownBasis = 'equity_twr' | 'closed_trades' | 'unavailable'
 
 // Matches Go SymbolStats struct exactly
 export interface SymbolStats {
@@ -245,6 +257,8 @@ export interface PositionHistoryResponse {
   stats: TraderStats | null
   symbol_stats: SymbolStats[]
   direction_stats: DirectionStats[]
+  // Only present when a stats query failed; keys: stats / symbol_stats / direction_stats
+  stats_error?: Record<string, string>
 }
 
 // Grid Risk Information for frontend display
