@@ -31,24 +31,27 @@ const (
 )
 
 type TrendShortPick struct {
-	Symbol      string  `json:"symbol"`
-	Score       float64 `json:"score"`
-	Price       float64 `json:"price"`
-	ATR1hPct    float64 `json:"atr_1h_pct"`
-	ADX1h       float64 `json:"adx_1h"`
-	RSI1h       float64 `json:"rsi_1h"`
-	Chg24hPct   float64 `json:"chg_24h_pct"`
-	QuoteVol24h float64 `json:"quote_vol_24h"`
-	EMA20_1h    float64 `json:"ema20_1h"`
-	EMA50_1h    float64 `json:"ema50_1h"`
-	EMA20_4h    float64 `json:"ema20_4h"`
-	EMA50_4h    float64 `json:"ema50_4h"`
-	StopPrice   float64 `json:"stop_price"`
+	PriceSource     string  `json:"price_source,omitempty"`
+	PriceObservedAt int64   `json:"price_observed_at,omitempty"`
+	Symbol          string  `json:"symbol"`
+	Score           float64 `json:"score"`
+	Price           float64 `json:"price"`
+	ATR1hPct        float64 `json:"atr_1h_pct"`
+	ADX1h           float64 `json:"adx_1h"`
+	RSI1h           float64 `json:"rsi_1h"`
+	Chg24hPct       float64 `json:"chg_24h_pct"`
+	QuoteVol24h     float64 `json:"quote_vol_24h"`
+	EMA20_1h        float64 `json:"ema20_1h"`
+	EMA50_1h        float64 `json:"ema50_1h"`
+	EMA20_4h        float64 `json:"ema20_4h"`
+	EMA50_4h        float64 `json:"ema50_4h"`
+	StopPrice       float64 `json:"stop_price"`
 }
 
 type trendShortScan struct {
 	picks              []TrendShortPick
 	prices             map[string]float64
+	observations       map[string]PriceObservation
 	universe, failures int
 }
 
@@ -59,7 +62,7 @@ func ScanTrendShorts(now time.Time) ([]TrendShortPick, error) {
 }
 
 func scanTrendShorts(now time.Time) (trendShortScan, error) {
-	out := trendShortScan{prices: map[string]float64{}}
+	out := trendShortScan{prices: map[string]float64{}, observations: map[string]PriceObservation{}}
 	tickers, err := fetchBoardTickers()
 	if err != nil {
 		return out, err
@@ -101,9 +104,23 @@ func scanTrendShorts(now time.Time) (trendShortScan, error) {
 					mu.Unlock()
 					continue
 				}
-				out.prices[sym] = h1[len(h1)-1].Close
 				mu.Unlock()
-				pick, ok := qualifyTrendShort(bySymbol[sym], h1, h4)
+				ticker := bySymbol[sym]
+				entry := tickerPrice(toF(ticker.LastPrice), ticker.CloseTime, time.Now())
+				if !entry.valid() {
+					entry = latestClosedMinutePrice(ds, time.Now())
+				}
+				if !entry.valid() {
+					mu.Lock()
+					out.failures++
+					mu.Unlock()
+					continue
+				}
+				mu.Lock()
+				out.prices[sym], out.observations[sym] = entry.Price, entry
+				mu.Unlock()
+				pick, ok := qualifyTrendShort(ticker, h1, h4)
+				pick.Price, pick.PriceSource, pick.PriceObservedAt = entry.Price, entry.Source, entry.ObservedAt
 				if ok {
 					mu.Lock()
 					out.picks = append(out.picks, pick)
@@ -175,7 +192,7 @@ func qualifyTrendShort(t boardTicker, h1, h4 []Kline) (TrendShortPick, bool) {
 	c1, h, l := series(h1)
 	c4, h4s, l4 := series(h4)
 	last := func(xs []float64) float64 { return xs[len(xs)-1] }
-	p.Price = last(c1)
+	indicatorClose := last(c1)
 	p.EMA20_1h = last(ema(c1, trendShortFastEMA))
 	p.EMA50_1h = last(ema(c1, trendShortSlowEMA))
 	p.EMA20_4h = last(ema(c4, trendShortFastEMA))
@@ -184,17 +201,19 @@ func qualifyTrendShort(t boardTicker, h1, h4 []Kline) (TrendShortPick, bool) {
 	p.ADX1h = adxLast(h1, trendShortPeriod)
 	p.RSI1h = rsiLast(c1, trendShortPeriod)
 	if !trendFinite(p.QuoteVol24h) || !trendFinite(p.Chg24hPct) || p.QuoteVol24h < trendShortMinVolume || p.Chg24hPct > trendShortMaxChange ||
-		p.EMA20_4h >= p.EMA50_4h || last(c4) >= p.EMA20_4h || p.EMA20_1h >= p.EMA50_1h || p.Price >= p.EMA50_1h ||
-		p.ADX1h < trendShortMinADX || p.RSI1h < trendShortMinRSI || a1 <= 0 || a4 <= 0 || p.EMA20_1h-p.Price > trendShortMaxExtension*a1 {
+		p.EMA20_4h >= p.EMA50_4h || last(c4) >= p.EMA20_4h || p.EMA20_1h >= p.EMA50_1h || indicatorClose >= p.EMA50_1h ||
+		p.ADX1h < trendShortMinADX || p.RSI1h < trendShortMinRSI || a1 <= 0 || a4 <= 0 || p.EMA20_1h-indicatorClose > trendShortMaxExtension*a1 {
 		return p, false
 	}
-	p.ATR1hPct = a1 / p.Price * 100
+	p.ATR1hPct = a1 / indicatorClose * 100
 	// Score = capped ADX (50) + 10×capped 4h EMA separation/ATR (3)
 	// + 2×capped daily decline (10%). Range 0..100; higher ranks first.
 	p.Score = math.Min(p.ADX1h, trendShortADXCap) + 10*math.Min((p.EMA50_4h-p.EMA20_4h)/a4, trendShortSeparationCap) + 2*math.Min(-p.Chg24hPct, trendShortChangeCap)
-	p.StopPrice = p.Price + trendShortStopATR*a1
+	p.StopPrice = indicatorClose + trendShortStopATR*a1
 	for _, b := range h1[len(h1)-trendShortStopBars:] {
 		p.StopPrice = math.Max(p.StopPrice, b.High)
 	}
+	entry := tickerPrice(toF(t.LastPrice), t.CloseTime, time.Now())
+	p.Price, p.PriceSource, p.PriceObservedAt = entry.Price, entry.Source, entry.ObservedAt
 	return p, true
 }
