@@ -11,7 +11,7 @@ type Data struct {
 	CurrentEMA20  float64
 	CurrentMACD   float64
 	CurrentRSI7   float64
-	OpenInterest *OIData
+	OpenInterest  *OIData
 	// OpenInterestOK distinguishes a REAL zero OI reading from a failed
 	// fetch — OpenInterest is always non-nil (zero-value on failure) but
 	// only meaningful when this is true. Consumers that gate on OI level
@@ -19,7 +19,7 @@ type Data struct {
 	// "real OI = 0" let one failed endpoint call drop EVERY candidate as
 	// too illiquid (round-4 review R4-6).
 	OpenInterestOK bool
-	FundingRate   float64
+	FundingRate    float64
 	// FundingRateOK distinguishes a REAL zero rate (bstock tokens pay no
 	// funding) from a failed fetch — the kernel warns only on the latter.
 	FundingRateOK bool
@@ -41,10 +41,9 @@ type Data struct {
 	// the live ticker (primary timeframe). nil = not measurable this cycle
 	// (no klines) — the AI gate treats absent as UNKNOWN and fails closed.
 	VendorStalenessPct *float64 `json:"-"`
-	// SampledAt is the moment the klines were fetched. "Is the last bar
-	// closed?" must be judged against THIS clock, not the (later) processing
-	// clock: a forming bar sampled at 14:59:30 must stay forming when the
-	// signal is recomputed at 15:00:05 (review 2026-10-20 #4). Zero = unknown
+	// SampledAt is the snapshot sampling clock, used for candle settlement
+	// only when the timeframe has no ObservedAt. A forming bar must not turn
+	// closed just because the snapshot is processed later. Zero = unknown
 	// (hand-built data / tests): consumers fall back to their own `now`.
 	SampledAt time.Time `json:"-"`
 	// StaleTimeframes lists timeframes whose newest bar is too old (or whose
@@ -66,6 +65,11 @@ type KlineBar struct {
 
 // TimeframeSeriesData series data for a single timeframe
 type TimeframeSeriesData struct {
+	// ObservedAt is recorded immediately BEFORE this timeframe's request.
+	// Settlement uses this conservative clock, so a later response or another
+	// timeframe's slow request cannot promote an observed forming bar to closed.
+	// Zero falls back to Data.SampledAt; kept out of JSON for compatibility.
+	ObservedAt  time.Time  `json:"-"`
 	Timeframe   string     `json:"timeframe"`    // Timeframe identifier, e.g. "5m", "15m", "1h"
 	Klines      []KlineBar `json:"klines"`       // Full OHLCV kline data
 	MidPrices   []float64  `json:"mid_prices"`   // Price series (deprecated, kept for compatibility)

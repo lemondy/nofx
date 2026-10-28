@@ -1116,7 +1116,7 @@ func pendingMarginReservedSnapshot(pending map[string]*pendingEntry, excludeKey 
 // BTC/ETH position alone could cross the 90% line (audit 09-13 #2).
 // Resting limit entries count as reserved margin (audit 09-13 #4: N pending
 // limits each checked in isolation can jointly exceed the budget once they
-// all fill). Fail-open on data errors.
+// all fill). Unknown reservations fail closed for new risk.
 func (at *AutoTrader) marginBudgetBlocksOpen(symbol, side string, newSizeUSD, newLeverage, equity float64) (bool, string) {
 	if at.config.StrategyConfig == nil || newSizeUSD <= 0 || newLeverage <= 0 || equity <= 0 {
 		return false, ""
@@ -1134,6 +1134,7 @@ func (at *AutoTrader) marginBudgetBlocksSnapshot(newSizeUSD, newLeverage, equity
 	if at.config.StrategyConfig == nil || newSizeUSD <= 0 || newLeverage <= 0 || equity <= 0 {
 		return false, ""
 	}
+	pending += pendingMarginReservedSnapshot(at.externalEntryReservations(at.accountPendingEntries()), "")
 	budget := at.config.StrategyConfig.RiskControl.MaxMarginUsage
 	if budget <= 0 {
 		budget = 0.9
@@ -2218,6 +2219,16 @@ func (at *AutoTrader) accountOpenHaltReason(equity float64) string {
 // review 2026-10-28 #9: exact candidate risk and one pending snapshot also
 // support sizing to the remaining budget without repeated database reads.
 func (at *AutoTrader) accountRiskExposureSnapshotBlocks(d *kernel.Decision, candidateRisk float64, ctx *kernel.Context, pending map[string]*pendingEntry, replacingPending bool) (bool, string) {
+	// Keep external reservations out of the owned cancellation ledger and out of
+	// replacement exclusions: a new AI entry never replaces a manual order.
+	merged := make(map[string]*pendingEntry, len(pending))
+	for key, pe := range pending {
+		merged[key] = pe
+	}
+	for key, pe := range at.externalEntryReservations(pending) {
+		merged[key] = pe
+	}
+	pending = merged
 	rc := at.config.StrategyConfig.RiskControl
 	capPct := rc.EffectiveMaxAccountRiskPct()
 	symbolCapPct := rc.RiskPerTradePct

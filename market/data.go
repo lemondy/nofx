@@ -114,6 +114,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	useHyperliquidAPI := isXyzAsset || strings.ToLower(exchange) == "hyperliquid"
 
 	// Get 3-minute K-line data (or 5-minute for xyz assets as 3m may not be available)
+	shortObservedAt := time.Now()
 	if useHyperliquidAPI {
 		// Use Hyperliquid API for xyz dex assets (use 5m since 3m may not be available)
 		klines3m, err = getKlinesFromHyperliquid(symbol, "5m", 100)
@@ -137,6 +138,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	}
 
 	// Get 4-hour K-line data
+	observed4h := time.Now()
 	if useHyperliquidAPI {
 		klines4h, err = getKlinesFromHyperliquid(symbol, "4h", 100)
 		if err != nil {
@@ -154,6 +156,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// this series those gates silently skipped (the ATR helpers return 0 on
 	// missing data). On failure the floor's fallback chain rides 4h: a
 	// wider but still-enforced floor.
+	observed1h := time.Now()
 	if useHyperliquidAPI {
 		klines1h, err = getKlinesFromHyperliquid(symbol, "1h", 100)
 	} else {
@@ -170,6 +173,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// systematically too-tight stops on them. Fetched for every symbol so
 	// the stock check needs no data-path branch; unused by crypto paths.
 	var klines1d []Kline
+	observed1d := time.Now()
 	if useHyperliquidAPI {
 		klines1d, err = getKlinesFromHyperliquid(symbol, "1d", 100)
 	} else {
@@ -271,6 +275,14 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// never enforced (09-16 AKEUSDT: a healthy 11.45% structural stop was
 	// rejected by the degenerate 8% cap the prompt never promised).
 	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h, klines1d)
+	for tf, observedAt := range map[string]time.Time{
+		"3m": shortObservedAt, "15m": shortObservedAt,
+		"1h": observed1h, "4h": observed4h, "1d": observed1d,
+	} {
+		if td := TimeframeData[tf]; td != nil {
+			td.ObservedAt = observedAt
+		}
+	}
 
 	return &Data{
 		Symbol:             symbol,
@@ -370,6 +382,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	for _, tf := range timeframes {
 		var klines []Kline
 		var err error
+		observedAt := time.Now()
 
 		if useHyperliquidAPI {
 			// Use Hyperliquid API for xyz dex assets
@@ -407,6 +420,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		}
 
 		seriesData := fetchedTimeframeSeries(klines, tf, count)
+		seriesData.ObservedAt = observedAt
 		timeframeData[tf] = seriesData
 	}
 
@@ -414,8 +428,9 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	if len(primaryKlines) == 0 {
 		return nil, fmt.Errorf("Primary timeframe %s K-line data is empty", primaryTimeframe)
 	}
-	// Sampling clock: closed-bar and staleness judgements downstream are made
-	// against this moment, not against whenever the snapshot is processed.
+	// Snapshot clock remains the batch completion time. Candle settlement
+	// prefers each series' request-time ObservedAt; freshness still uses this
+	// clock so a slow batch cannot hide an old feed.
 	sampledAt := time.Now()
 
 	// Data staleness detection

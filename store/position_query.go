@@ -3,71 +3,83 @@ package store
 import (
 	"fmt"
 	"math"
+	"nofx/logger"
 	"strings"
 	"time"
+
+	"nofx/fundsledger"
 
 	"gorm.io/gorm"
 )
 
 // TraderStats trading statistics metrics
 type TraderStats struct {
-	TotalTrades    int     `json:"total_trades"`
-	WinTrades      int     `json:"win_trades"`
-	LossTrades     int     `json:"loss_trades"`
-	WinRate        float64 `json:"win_rate"`
-	ProfitFactor   float64 `json:"profit_factor"`
-	SharpeRatio    float64 `json:"sharpe_ratio"`
-	TotalPnL       float64 `json:"total_pnl"`
-	TotalFee       float64 `json:"total_fee"`
-	TotalWin       float64 `json:"total_win"`  // Σ realized_pnl of winning trades (gross, pre-fee)
-	TotalLoss      float64 `json:"total_loss"` // Σ |realized_pnl| of losing trades (gross, pre-fee)
-	AvgWin         float64 `json:"avg_win"`
-	AvgLoss        float64 `json:"avg_loss"`
-	MaxDrawdownPct float64 `json:"max_drawdown_pct"`
+	TotalTrades  int     `json:"total_trades"`
+	WinTrades    int     `json:"win_trades"`
+	LossTrades   int     `json:"loss_trades"`
+	WinRate      float64 `json:"win_rate"`
+	ProfitFactor float64 `json:"profit_factor"`
+	SharpeRatio  float64 `json:"sharpe_ratio"`
+	TotalPnL     float64 `json:"total_pnl"`
+	TotalFee     float64 `json:"total_fee"`
+	TotalFunding float64 `json:"total_funding"` // Allocated funding only, signed.
+	TotalNetPnL  float64 `json:"total_net_pnl"` // TotalPnL + TotalFunding; TotalPnL retains its legacy fee-only meaning.
+	// Funding rows inside the selected lifecycles that could not be attributed
+	// to a single position (overlapping positions on the same exchange+symbol).
+	UnallocatedFunding      float64 `json:"unallocated_funding"`
+	UnallocatedFundingCount int     `json:"unallocated_funding_count"`
+	TotalWin                float64 `json:"total_win"`  // Sum of positive net_pnl, including funding.
+	TotalLoss               float64 `json:"total_loss"` // Absolute sum of negative net_pnl, including funding.
+	AvgWin                  float64 `json:"avg_win"`
+	AvgLoss                 float64 `json:"avg_loss"`
+	MaxDrawdownPct          float64 `json:"max_drawdown_pct"`
+	// equity_twr: equity curve with external transfers removed;
+	// closed_trades: closed-trade PnL curve on initialEquity; unavailable: 0.
+	MaxDrawdownBasis string `json:"max_drawdown_basis"`
 	// WindowDays: stats only cover trades closed within the last N days.
 	// 0 (omitted in JSON) = full history.
 	WindowDays int `json:"window_days,omitempty"`
 }
 
-// GetPositionStats gets position statistics
+// GetPositionStats gets position statistics. total_pnl keeps its legacy
+// fee-only meaning; win counting and total_net_pnl include allocated funding.
 func (s *PositionStore) GetPositionStats(traderID string) (map[string]interface{}, error) {
-	stats := make(map[string]interface{})
-
-	type result struct {
-		Total    int
-		Wins     int
-		TotalPnL float64
-		TotalFee float64
-	}
-	var r result
-
-	err := s.db.Model(&TraderPosition{}).
-		// 2026-10-03 review: NET caliber (dead code today, kept consistent).
-		Select("COUNT(*) as total, SUM(CASE WHEN realized_pnl - fee > 0 THEN 1 ELSE 0 END) as wins, COALESCE(SUM(realized_pnl - fee), 0) as total_pnl, COALESCE(SUM(fee), 0) as total_fee").
-		Where("trader_id = ? AND status = ?", traderID, "CLOSED").
-		Scan(&r).Error
+	rows, funding, err := s.closedPositionsWithFunding(traderID, 0)
 	if err != nil {
 		return nil, err
 	}
-
-	stats["total_trades"] = r.Total
-	stats["win_trades"] = r.Wins
-	stats["total_pnl"] = r.TotalPnL
-	stats["total_fee"] = r.TotalFee
-	if r.Total > 0 {
-		stats["win_rate"] = float64(r.Wins) / float64(r.Total) * 100
-	} else {
-		stats["win_rate"] = 0.0
+	var wins int
+	var pnl, fee, allocated float64
+	for _, p := range rows {
+		pnl += p.RealizedPnL - p.Fee
+		fee += p.Fee
+		allocated += p.FundingFee
+		if p.NetPnL > 0 {
+			wins++
+		}
 	}
-
-	return stats, nil
+	var rate float64
+	if len(rows) > 0 {
+		rate = float64(wins) / float64(len(rows)) * 100
+	}
+	return map[string]interface{}{
+		"total_trades":              len(rows),
+		"win_trades":                wins,
+		"win_rate":                  rate,
+		"total_pnl":                 pnl,
+		"total_fee":                 fee,
+		"total_funding":             allocated,
+		"total_net_pnl":             pnl + allocated,
+		"unallocated_funding":       funding.Amount,
+		"unallocated_funding_count": funding.Count,
+	}, nil
 }
 
 // GetFullStats gets complete trading statistics
 // GetFullStats computes closed-trade statistics. initialEquity is the
-// trader's real starting capital — the max-drawdown percentage is measured
-// against it (a hardcoded 10k base shrank a ~9% account drawdown to 0.2%).
-// Pass 0 when unknown (falls back to a 100 USDT base).
+// trader's real starting capital, used only for the closed-trade fallback.
+// Equity MDD includes open PnL and adjusts confirmed external cash flows.
+// Pass 0 when unknown; an unknown capital base is never invented.
 func (s *PositionStore) GetFullStats(traderID string, initialEquity float64) (*TraderStats, error) {
 	return s.getStats(traderID, initialEquity, 0)
 }
@@ -82,46 +94,30 @@ func (s *PositionStore) GetRollingStats(traderID string, initialEquity float64, 
 }
 
 func (s *PositionStore) getStats(traderID string, initialEquity float64, windowDays int) (*TraderStats, error) {
-	stats := &TraderStats{WindowDays: windowDays}
+	stats := &TraderStats{WindowDays: windowDays, MaxDrawdownBasis: "unavailable"}
 
 	var exitCutoff int64
 	if windowDays > 0 {
 		exitCutoff = time.Now().Add(-time.Duration(windowDays) * 24 * time.Hour).UnixMilli()
 	}
-	filtered := func() *gorm.DB {
-		q := s.db.Model(&TraderPosition{}).Where("trader_id = ? AND status = ?", traderID, "CLOSED")
-		if exitCutoff > 0 {
-			q = q.Where("exit_time >= ?", exitCutoff)
-		}
-		return q
-	}
-
-	var count int64
-	if err := filtered().Count(&count).Error; err != nil {
-		return nil, err
-	}
-	if count == 0 {
-		return stats, nil
-	}
-
-	var positions []TraderPosition
-	err := filtered().Order("exit_time ASC").
-		Find(&positions).Error
+	positions, funding, err := s.closedPositionsWithFunding(traderID, exitCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query position statistics: %w", err)
 	}
+	stats.UnallocatedFunding, stats.UnallocatedFundingCount = funding.Amount, funding.Count
 
 	var pnls []float64
 	var totalWin, totalLoss float64
 
 	for _, pos := range positions {
 		stats.TotalTrades++
-		// 09-19 audit 五-3: fees are REAL costs — net them per trade so PF /
-		// expectancy / 总盈亏 reflect what the account actually keeps
-		// (gross numbers flattered PF 0.73 → 0.79 on the 30d window).
-		net := pos.RealizedPnL - pos.Fee
-		stats.TotalPnL += net
+		// All outcome metrics (win rate, PF, Sharpe, averages) use net_pnl,
+		// including uniquely attributable funding. Legacy total_pnl stays fee-only.
+		net := pos.NetPnL
+		stats.TotalPnL += pos.RealizedPnL - pos.Fee
 		stats.TotalFee += pos.Fee
+		stats.TotalFunding += pos.FundingFee
+		stats.TotalNetPnL += net
 		pnls = append(pnls, net)
 
 		if net > 0 {
@@ -150,8 +146,19 @@ func (s *PositionStore) getStats(traderID string, initialEquity float64, windowD
 	if len(pnls) > 1 {
 		stats.SharpeRatio = calculateSharpeRatioFromPnls(pnls)
 	}
-	if len(pnls) > 0 {
+	// Max drawdown: prefer the equity curve (includes unrealized swings) with
+	// external transfers stripped out (time-weighted index). The closed-trade
+	// curve is only a fallback and needs a real capital base: no invented one.
+	dd, ok, err := s.equityDrawdown(traderID, exitCutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute equity drawdown: %w", err)
+	}
+	switch {
+	case ok:
+		stats.MaxDrawdownPct, stats.MaxDrawdownBasis = dd, "equity_twr"
+	case len(pnls) > 0 && initialEquity > 0 && !math.IsNaN(initialEquity) && !math.IsInf(initialEquity, 0):
 		stats.MaxDrawdownPct = calculateMaxDrawdownFromPnls(pnls, initialEquity)
+		stats.MaxDrawdownBasis = "closed_trades"
 	}
 
 	return stats, nil
@@ -167,11 +174,14 @@ type RecentTrade struct {
 	PnLPct      float64 `json:"pnl_pct"` // PRICE return (no leverage — 09-19 audit)
 	// Reconciliation fields: the AI's risk/margin math runs on the notional,
 	// fees explain realized-PnL gaps beyond the price return.
-	PositionValue float64 `json:"position_value"`
-	Fee           float64 `json:"fee"`
-	EntryTime     int64   `json:"entry_time"`
-	ExitTime      int64   `json:"exit_time"`
-	HoldDuration  string  `json:"hold_duration"`
+	PositionValue      float64 `json:"position_value"`
+	Fee                float64 `json:"fee"`
+	FundingFee         float64 `json:"funding_fee"` // signed, positive is income
+	NetPnL             float64 `json:"net_pnl"`     // realized_pnl - fee + funding_fee
+	FundingUnallocated bool    `json:"funding_unallocated"`
+	EntryTime          int64   `json:"entry_time"`
+	ExitTime           int64   `json:"exit_time"`
+	HoldDuration       string  `json:"hold_duration"`
 	// CloseReason: the per-cycle exit attribution (stop_loss / trailing_stop
 	// / ai_close / take_profit / trend_runner / external …) — the trades
 	// endpoint previously couldn't surface it while /positions/history could.
@@ -188,6 +198,13 @@ func (s *PositionStore) GetRecentTrades(traderID string, limit int) ([]RecentTra
 	if err != nil {
 		return nil, fmt.Errorf("failed to query recent trades: %w", err)
 	}
+	ptrs := make([]*TraderPosition, len(positions))
+	for i := range positions {
+		ptrs[i] = &positions[i]
+	}
+	if _, err := s.allocateFunding(ptrs); err != nil {
+		return nil, fmt.Errorf("failed to allocate funding: %w", err)
+	}
 
 	var trades []RecentTrade
 	for _, pos := range positions {
@@ -201,10 +218,13 @@ func (s *PositionStore) GetRecentTrades(traderID string, limit int) ([]RecentTra
 			// the exchange's gross realized PnL — rendering it raw contradicted
 			// the dictionary ("已扣手续费") and overstated every winner. The
 			// aggregate stats have netted per-trade since the 09-19 audit.
-			RealizedPnL:   pos.RealizedPnL - pos.Fee,
-			PositionValue: pos.EntryQuantity * pos.EntryPrice,
-			Fee:           pos.Fee,
-			EntryTime:     pos.EntryTime / 1000, // Convert ms to seconds for API compatibility
+			RealizedPnL:        pos.RealizedPnL - pos.Fee,
+			PositionValue:      pos.EntryQuantity * pos.EntryPrice,
+			Fee:                pos.Fee,
+			FundingFee:         pos.FundingFee,
+			NetPnL:             pos.NetPnL,
+			FundingUnallocated: pos.FundingUnallocated,
+			EntryTime:          pos.EntryTime / 1000, // Convert ms to seconds for API compatibility
 		}
 
 		if pos.ExitTime > 0 {
@@ -261,8 +281,9 @@ func calculateMaxDrawdownFromPnls(pnls []float64, initialEquity float64) float64
 	if len(pnls) == 0 {
 		return 0
 	}
-	if initialEquity <= 0 {
-		initialEquity = 100 // sane fallback when the real base is unknown
+	// No invented base: an unknown/invalid capital base yields no drawdown.
+	if initialEquity <= 0 || math.IsNaN(initialEquity) || math.IsInf(initialEquity, 0) {
+		return 0
 	}
 
 	equity := initialEquity
@@ -298,8 +319,7 @@ type SymbolStats struct {
 
 // GetSymbolStats gets per-symbol trading statistics
 func (s *PositionStore) GetSymbolStats(traderID string, limit int) ([]SymbolStats, error) {
-	var positions []TraderPosition
-	err := s.db.Where("trader_id = ? AND status = ?", traderID, "CLOSED").Find(&positions).Error
+	positions, _, err := s.closedPositionsWithFunding(traderID, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query symbol stats: %w", err)
 	}
@@ -316,8 +336,9 @@ func (s *PositionStore) GetSymbolStats(traderID string, limit int) ([]SymbolStat
 		s := symbolMap[pos.Symbol]
 		s.TotalTrades++
 		// NET caliber (same rationale as GetDirectionStats — gross flatters
-		// nothing here, but per-symbol fee drag must be visible).
-		net := pos.RealizedPnL - pos.Fee
+		// nothing here, but per-symbol fee drag must be visible). Funding that
+		// is uniquely attributable to the position is included (net_pnl).
+		net := pos.NetPnL
 		s.TotalPnL += net
 		if net > 0 {
 			s.WinTrades++
@@ -371,8 +392,7 @@ type HoldingTimeStats struct {
 
 // GetHoldingTimeStats analyzes performance by holding duration
 func (s *PositionStore) GetHoldingTimeStats(traderID string) ([]HoldingTimeStats, error) {
-	var positions []TraderPosition
-	err := s.db.Where("trader_id = ? AND status = ? AND exit_time > 0", traderID, "CLOSED").Find(&positions).Error
+	positions, _, err := s.closedPositionsWithFunding(traderID, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query holding time stats: %w", err)
 	}
@@ -410,8 +430,8 @@ func (s *PositionStore) GetHoldingTimeStats(traderID string) ([]HoldingTimeStats
 		r.count++
 		// NET caliber (2026-10-03 review): every other aggregate on this
 		// store nets the fee — this one fed the history summary's
-		// best-hold-range with gross numbers.
-		net := pos.RealizedPnL - pos.Fee
+		// best-hold-range with gross numbers. Includes attributable funding.
+		net := pos.NetPnL
 		r.totalPnL += net
 		if net > 0 {
 			r.wins++
@@ -449,8 +469,7 @@ type DirectionStats struct {
 // 10.14 (net −18.53). Fees decide winners too: a gross winner can be a net
 // loser.
 func (s *PositionStore) GetDirectionStats(traderID string) ([]DirectionStats, error) {
-	var positions []TraderPosition
-	err := s.db.Where("trader_id = ? AND status = ?", traderID, "CLOSED").Find(&positions).Error
+	positions, _, err := s.closedPositionsWithFunding(traderID, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query direction stats: %w", err)
 	}
@@ -462,7 +481,7 @@ func (s *PositionStore) GetDirectionStats(traderID string) ([]DirectionStats, er
 		}
 		s := sideStats[pos.Side]
 		s.TradeCount++
-		net := pos.RealizedPnL - pos.Fee
+		net := pos.NetPnL // fee-netted, plus attributable funding
 		s.TotalPnL += net
 		if net > 0 {
 			s.WinRate++
@@ -493,4 +512,243 @@ func (s *PositionStore) GetClosedPositionsSince(traderID string, sinceMs int64) 
 		return nil, fmt.Errorf("failed to query closed positions since %d: %w", sinceMs, err)
 	}
 	return positions, nil
+}
+
+// fundingSummary totals funding rows that could not be attributed to a single position.
+type fundingSummary struct {
+	Amount float64
+	Count  int
+}
+
+func positionFundingKind(p *TraderPosition) string {
+	if p.ExchangeType == "paper" {
+		return fundsledger.Paper
+	}
+	return fundsledger.LiveFutures
+}
+
+// closedPositionsWithFunding loads the trader's closed positions (exit_time
+// ASC, optionally exit_time >= exitCutoff) with funding allocated.
+func (s *PositionStore) closedPositionsWithFunding(traderID string, exitCutoff int64) ([]*TraderPosition, fundingSummary, error) {
+	q := s.db.Where("trader_id = ? AND status = ?", traderID, "CLOSED")
+	if exitCutoff > 0 {
+		q = q.Where("exit_time >= ?", exitCutoff)
+	}
+	var positions []*TraderPosition
+	if err := q.Order("exit_time ASC").Find(&positions).Error; err != nil {
+		return nil, fundingSummary{}, err
+	}
+	sum, err := s.allocateFunding(positions)
+	return positions, sum, err
+}
+
+// allocateFunding fills FundingFee / NetPnL / FundingUnallocated (query-only
+// fields, never persisted) on closed positions. A FUNDING_FEE row belongs to a
+// position when it has the same exchange_id, symbol and account kind and its
+// time_ms lies in [entry_time, exit_time]. If any OTHER position (another
+// trader sharing the exchange, the opposite hedge leg, an open position, or an
+// adjacent cycle touching the same instant) also covers that instant the owner
+// is ambiguous: the row is not allocated, the positions are flagged
+// funding_unallocated, and the row is counted once in the returned summary.
+// Two bulk queries (funding rows + peer lifecycles) serve all positions.
+func (s *PositionStore) allocateFunding(positions []*TraderPosition) (fundingSummary, error) {
+	var sum fundingSummary
+	var eligible []*TraderPosition
+	exchanges, symbols, kinds := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	var minStart, maxEnd int64
+	for _, p := range positions {
+		p.FundingFee, p.FundingUnallocated = 0, false
+		p.NetPnL = p.RealizedPnL - p.Fee
+		if p.ExchangeID == "" || p.Symbol == "" || p.EntryTime <= 0 || p.ExitTime < p.EntryTime {
+			continue
+		}
+		eligible = append(eligible, p)
+		exchanges[p.ExchangeID], symbols[p.Symbol], kinds[positionFundingKind(p)] = true, true, true
+		if minStart == 0 || p.EntryTime < minStart {
+			minStart = p.EntryTime
+		}
+		if p.ExitTime > maxEnd {
+			maxEnd = p.ExitTime
+		}
+	}
+	if len(eligible) == 0 {
+		return sum, nil
+	}
+	keys := func(m map[string]bool) []string {
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		return out
+	}
+	rows, err := NewAccountIncomeStore(s.db).fundingBetween(keys(exchanges), keys(symbols), keys(kinds), minStart, maxEnd)
+	if err != nil {
+		// Funding is an enrichment: without it NetPnL stays realized − fee
+		// (initialised above). Never fail the position history over it.
+		logger.Warnf("funding allocation skipped (income unavailable): %v", err)
+		return sum, nil
+	}
+	if len(rows) == 0 {
+		return sum, nil
+	}
+	// Peer lifecycles on the same exchange+symbol, any trader/side/status.
+	// exit_time = 0 (open) is treated as open-ended.
+	var peers []TraderPosition
+	if err := s.db.Select("id", "exchange_id", "exchange_type", "symbol", "entry_time", "exit_time").
+		Where("exchange_id IN ? AND symbol IN ? AND entry_time <= ? AND (exit_time = 0 OR exit_time >= ?)",
+			keys(exchanges), keys(symbols), maxEnd, minStart).Find(&peers).Error; err != nil {
+		logger.Warnf("funding allocation skipped (peer positions unavailable): %v", err)
+		return sum, nil
+	}
+	mine := map[int64]*TraderPosition{}
+	for _, p := range eligible {
+		mine[p.ID] = p
+	}
+	for _, r := range rows {
+		var owners []int64
+		var ownedByMe []*TraderPosition
+		for i := range peers {
+			c := &peers[i]
+			if c.ExchangeID != r.ExchangeID || c.Symbol != r.Symbol || positionFundingKind(c) != r.AccountKind {
+				continue
+			}
+			if c.EntryTime > r.TimeMS || (c.ExitTime != 0 && c.ExitTime < r.TimeMS) {
+				continue
+			}
+			owners = append(owners, c.ID)
+			if p := mine[c.ID]; p != nil {
+				ownedByMe = append(ownedByMe, p)
+			}
+		}
+		if len(ownedByMe) == 0 {
+			continue
+		}
+		if len(owners) == 1 {
+			ownedByMe[0].FundingFee += r.Amount
+			continue
+		}
+		sum.Amount += r.Amount
+		sum.Count++
+		for _, p := range ownedByMe {
+			p.FundingUnallocated = true
+		}
+	}
+	for _, p := range eligible {
+		p.NetPnL = p.RealizedPnL - p.Fee + p.FundingFee
+	}
+	return sum, nil
+}
+
+// equityPoint / cashFlow feed the time-weighted equity index.
+type equityPoint struct {
+	At     time.Time
+	Equity float64
+}
+type cashFlow struct {
+	At     time.Time
+	Amount float64 // signed: deposit > 0, withdrawal < 0
+}
+
+// equityDrawdown computes max drawdown (%) from equity snapshots with external
+// transfers neutralised. ok=false means no usable equity curve (fewer than two
+// snapshots / no positive equity), so the caller falls back.
+func (s *PositionStore) equityDrawdown(traderID string, exitCutoff int64) (float64, bool, error) {
+	start := time.Unix(0, 0)
+	if exitCutoff > 0 {
+		start = time.UnixMilli(exitCutoff)
+	}
+	var snaps []EquitySnapshot
+	if err := s.db.Select("timestamp", "total_equity").Where("trader_id = ? AND timestamp >= ?", traderID, start).
+		Order("timestamp ASC").Find(&snaps).Error; err != nil {
+		return 0, false, err
+	}
+	if len(snaps) < 2 {
+		return 0, false, nil
+	}
+	points := make([]equityPoint, len(snaps))
+	for i, sn := range snaps {
+		points[i] = equityPoint{At: sn.Timestamp, Equity: sn.TotalEquity}
+	}
+	flows, err := s.externalCashFlows(traderID, points[0].At, points[len(points)-1].At)
+	if err != nil {
+		return 0, false, err
+	}
+	dd, ok := twrMaxDrawdown(points, flows)
+	return dd, ok, nil
+}
+
+// externalCashFlows returns confirmed deposits/withdrawals on the trader's
+// exchange account in (from, to]. Classification is shared with the funds page
+// (fundsledger.ClassifyIncome / StableAsset); the account kind follows the
+// funds page too (paper exchange -> paper ledger, otherwise live_futures).
+// Non-stable assets are skipped. Transfers inferred from reconciliation
+// residuals are NOT used: a residual can also be a real loss.
+func (s *PositionStore) externalCashFlows(traderID string, from, to time.Time) ([]cashFlow, error) {
+	var tr Trader
+	if err := s.db.Select("id", "exchange_id").Where("id = ?", traderID).First(&tr).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if tr.ExchangeID == "" {
+		return nil, nil
+	}
+	kind := fundsledger.LiveFutures
+	var ex Exchange
+	if err := s.db.Select("id", "exchange_type").Where("id = ?", tr.ExchangeID).First(&ex).Error; err == nil && ex.ExchangeType == "paper" {
+		kind = fundsledger.Paper
+	}
+	incomes, err := NewAccountIncomeStore(s.db).TransfersForKind(tr.ExchangeID, kind, from.UnixMilli(), to.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	var flows []cashFlow
+	for _, in := range incomes {
+		if fundsledger.ClassifyIncome(in.IncomeType) != "transfer" || !fundsledger.StableAsset(in.Asset) || in.Amount == 0 {
+			continue
+		}
+		flows = append(flows, cashFlow{At: time.UnixMilli(in.TimeMS), Amount: in.Amount})
+	}
+	return flows, nil
+}
+
+// twrMaxDrawdown builds a time-weighted return index from equity snapshots
+// (sorted ascending) and cash flows, and returns the max drawdown of that index
+// in percent. For each snapshot interval (t0, t1] the return is
+// (E1 - E0 - F) / E0 where F is the net external flow in that interval
+// (Modified-Dietz with flows at the interval end), so a deposit is not profit
+// and a withdrawal is not loss. Intervals with non-positive opening equity
+// carry no return information and are skipped. ok=false when no interval
+// produced a return.
+func twrMaxDrawdown(points []equityPoint, flows []cashFlow) (float64, bool) {
+	index, peak, maxDD := 1.0, 1.0, 0.0
+	used := false
+	fi := 0
+	for i := 1; i < len(points); i++ {
+		var f float64
+		for fi < len(flows) && !flows[fi].At.After(points[i].At) {
+			if flows[fi].At.After(points[i-1].At) {
+				f += flows[fi].Amount
+			}
+			fi++
+		}
+		e0, e1 := points[i-1].Equity, points[i].Equity
+		if e0 <= 0 || math.IsNaN(e0) || math.IsNaN(e1) || math.IsInf(e0, 0) || math.IsInf(e1, 0) {
+			continue
+		}
+		r := (e1 - e0 - f) / e0
+		if r < -1 {
+			r = -1
+		}
+		index *= 1 + r
+		used = true
+		if index > peak {
+			peak = index
+		}
+		if dd := (peak - index) / peak * 100; dd > maxDD {
+			maxDD = dd
+		}
+	}
+	return maxDD, used
 }

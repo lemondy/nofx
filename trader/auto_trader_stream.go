@@ -386,6 +386,7 @@ func (at *AutoTrader) fastProfitPass(r *realtimeProtection, now time.Time) {
 		if !ok || age < 0 || age > 10*time.Second || mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
 			continue
 		}
+		at.noteStopMark(symbol, mark)
 		at.tpTrimMutex.Lock()
 		r1Before := at.r1TrimDone[key]
 		at.tpTrimMutex.Unlock()

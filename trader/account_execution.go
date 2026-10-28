@@ -5,14 +5,184 @@ import (
 	"fmt"
 	"math"
 	"nofx/kernel"
-	"nofx/trader/types"
 	"nofx/store"
+	"nofx/trader/binance"
+	"nofx/trader/types"
+	"strings"
 	"sync"
+	"time"
 )
+
+// openOrdersCache is the TTL-bounded all-symbol open-order snapshot shared by
+// every strategy on one exchange account.
+type openOrdersCache struct {
+	mu     sync.Mutex
+	at     time.Time
+	orders []types.OpenOrder
+	err    error
+}
 
 type accountExecution struct {
 	mu      sync.Mutex
 	traders map[*AutoTrader]bool
+	open    openOrdersCache
+}
+
+// Match the Binance execution account cache (futures.go: cacheDuration).
+const executionOpenOrdersTTL = 15 * time.Second
+
+// Traders without an account key (pure unit-test fixtures) cache per trader.
+// Keyed by pointer and retained, so a recycled address can never inherit a
+// stale snapshot.
+var unkeyedOpenOrders = struct {
+	sync.Mutex
+	caches map[*AutoTrader]*openOrdersCache
+}{caches: map[*AutoTrader]*openOrdersCache{}}
+
+func (at *AutoTrader) openOrdersCache() *openOrdersCache {
+	if key := at.executionAccountKey(); key != "" {
+		accountRegistry.Lock()
+		defer accountRegistry.Unlock()
+		account := accountRegistry.accounts[key]
+		if account == nil {
+			account = &accountExecution{traders: map[*AutoTrader]bool{}}
+			accountRegistry.accounts[key] = account
+		}
+		return &account.open
+	}
+	unkeyedOpenOrders.Lock()
+	defer unkeyedOpenOrders.Unlock()
+	c := unkeyedOpenOrders.caches[at]
+	if c == nil {
+		c = &openOrdersCache{}
+		unkeyedOpenOrders.caches[at] = c
+	}
+	return c
+}
+
+// executionOpenOrders returns the account-wide open-order snapshot used to
+// reserve exposure for orders this process did not register (the user's manual
+// limit orders on the same Binance account). One GetOpenOrders("") call per TTL
+// per account: the Binance adapter issues it through the bnweight-wrapped
+// execution client (Critical priority; all-symbol openOrders costs 40 weight
+// plus the algo list). Failures are cached for the TTL too, and a previous
+// successful snapshot is never reused after an error.
+func (at *AutoTrader) executionOpenOrders() ([]types.OpenOrder, error) {
+	return at.executionOpenOrdersFresh(false)
+}
+
+// executionOpenOrdersFresh with force bypasses the TTL: the execution refresh
+// (once per decision batch / final open check) re-reads the account like it
+// does balance and positions, and the admission gates that follow reuse it.
+func (at *AutoTrader) executionOpenOrdersFresh(force bool) ([]types.OpenOrder, error) {
+	c := at.openOrdersCache()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !force && !c.at.IsZero() && time.Since(c.at) < executionOpenOrdersTTL {
+		return c.orders, c.err
+	}
+	orders, err := at.trader.GetOpenOrders("")
+	c.orders, c.err = nil, err
+	if err == nil {
+		c.orders = append([]types.OpenOrder(nil), orders...)
+	}
+	c.at = time.Now()
+	return c.orders, c.err
+}
+
+func reservationIdentity(pe *pendingEntry, ids, clients map[string]bool) {
+	if pe == nil {
+		return
+	}
+	if isUnknownEntryRef(pe.OrderID) {
+		clients[pe.Symbol+"|"+strings.TrimPrefix(pe.OrderID, binance.ClientOrderRefPrefix)] = true
+	} else if pe.OrderID != "" {
+		ids[pe.Symbol+"|"+pe.OrderID] = true
+	}
+	if pe.ClientOrderID != "" {
+		clients[pe.Symbol+"|"+pe.ClientOrderID] = true
+	}
+}
+
+// Admission-only reservations: NEVER merge these into accountPendingEntries,
+// whose callers also cancel owned entries during a breaker. Manual orders must
+// remain hands-off. Full original quantity is conservative for partial external
+// fills because the adapter does not expose open-order executedQty.
+func (at *AutoTrader) externalEntryReservations(local map[string]*pendingEntry) map[string]*pendingEntry {
+	out := map[string]*pendingEntry{}
+	if at.trader == nil {
+		return out
+	} // no executable account (pure sizing callers)
+	orders, err := at.executionOpenOrders()
+	if err != nil {
+		out["unknown"] = nil
+		return out
+	}
+	ids, clients := map[string]bool{}, map[string]bool{}
+	for _, pe := range local {
+		reservationIdentity(pe, ids, clients)
+	}
+	leverage := map[string]int{}
+	positionsRead := false
+	for _, o := range orders {
+		if o.ReduceOnly || o.ClosePosition || o.Algo || o.StopPrice > 0 || strings.ToUpper(o.Type) != "LIMIT" {
+			continue
+		}
+		if o.Status != "" && !strings.EqualFold(o.Status, "NEW") && !strings.EqualFold(o.Status, "PARTIALLY_FILLED") {
+			continue
+		}
+		side := ""
+		switch strings.ToUpper(o.PositionSide) {
+		case "LONG":
+			if strings.EqualFold(o.Side, "BUY") {
+				side = "long"
+			}
+		case "SHORT":
+			if strings.EqualFold(o.Side, "SELL") {
+				side = "short"
+			}
+		case "", "BOTH":
+			// Without reduce-only, a one-way order can add/reverse exposure.
+			if strings.EqualFold(o.Side, "BUY") {
+				side = "long"
+			} else if strings.EqualFold(o.Side, "SELL") {
+				side = "short"
+			}
+		}
+		if side == "" {
+			continue
+		}
+		if (o.OrderID != "" && ids[o.Symbol+"|"+o.OrderID]) || (o.ClientID != "" && clients[o.Symbol+"|"+o.ClientID]) {
+			continue
+		}
+		if o.Symbol == "" || o.Price <= 0 || o.Quantity <= 0 || math.IsNaN(o.Price*o.Quantity) || math.IsInf(o.Price*o.Quantity, 0) {
+			out["unknown"] = nil
+			continue
+		}
+		if !positionsRead {
+			positionsRead = true
+			// GetPositions reports the current symbol leverage for held symbols;
+			// absent/unknown leverage is charged at 1x, never the new entry's leverage.
+			if positions, err := at.trader.GetPositions(); err == nil {
+				for _, p := range positions {
+					s, _ := p["symbol"].(string)
+					lev, _ := p["leverage"].(float64)
+					if lev >= 1 && !math.IsNaN(lev) && !math.IsInf(lev, 0) {
+						leverage[s] = int(lev)
+					}
+				}
+			}
+		}
+		lev := leverage[o.Symbol]
+		if lev < 1 {
+			lev = 1
+		}
+		// No external SL plan is known. StopLoss=0 charges the existing
+		// kernel.UnprotectedStopWorstCasePct of notional (no parameter change).
+		out["external:"+o.Symbol+"|"+o.OrderID+"|"+o.ClientID] = &pendingEntry{Symbol: o.Symbol, Side: side, Price: o.Price, Quantity: o.Quantity, Leverage: lev, OrderID: o.OrderID, ClientOrderID: o.ClientID}
+		reservationIdentity(out["external:"+o.Symbol+"|"+o.OrderID+"|"+o.ClientID], ids, clients)
+	}
+	return out
 }
 
 var accountRegistry = struct {
@@ -194,12 +364,33 @@ func (at *AutoTrader) refreshExecutionAccount(ctx *kernel.Context) error {
 	// doubled the request on exactly those. A failed fetch fails the pass
 	// (fail-closed) exactly as the per-row call did.
 	openOrdersBySymbol := make(map[string][]types.OpenOrder, len(positions))
+	// One forced all-symbol read replaces the per-symbol reads and doubles as
+	// the manual-order snapshot the admission gates reuse. If it fails the
+	// per-symbol path below still runs, so reduce/close handling is never
+	// blocked by the extra read; the cached failure keeps new opens closed.
+	var allOrders []types.OpenOrder
+	allKnown := false
+	if len(positions) > 0 {
+		var allErr error
+		allOrders, allErr = at.executionOpenOrdersFresh(true)
+		allKnown = allErr == nil
+	}
 	for _, p := range positions {
 		symbol, _ := p["symbol"].(string)
 		if symbol == "" {
 			continue
 		}
 		if _, done := openOrdersBySymbol[symbol]; done {
+			continue
+		}
+		if allKnown {
+			orders := make([]types.OpenOrder, 0, len(allOrders))
+			for _, o := range allOrders {
+				if o.Symbol == "" || o.Symbol == symbol {
+					orders = append(orders, o)
+				}
+			}
+			openOrdersBySymbol[symbol] = orders
 			continue
 		}
 		orders, err := at.trader.GetOpenOrders(symbol)

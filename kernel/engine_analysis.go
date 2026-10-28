@@ -455,6 +455,17 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 // ============================================================================
 
 func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool, gateStates map[string]*GateState, limitAnchors map[string]*LimitAnchor) (*FullDecision, error) {
+	fd, err := parseDecisionsPerItem(aiResponse, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio, minPositionSize, positionSymbols, gateStates, limitAnchors)
+	if err == nil && fd != nil {
+		// review 2026-10-28 #8: batch-level consistency after per-item validation.
+		fd.Decisions = resolveBatchConflicts(fd.Decisions)
+	}
+	return fd, err
+}
+
+// parseDecisionsPerItem extracts and validates each decision independently
+// (no cross-decision consistency; see resolveBatchConflicts).
+func parseDecisionsPerItem(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, positionSymbols map[string]bool, gateStates map[string]*GateState, limitAnchors map[string]*LimitAnchor) (*FullDecision, error) {
 	cotTrace := extractCoTTrace(aiResponse)
 
 	decisions, err := extractDecisions(aiResponse)
@@ -531,6 +542,101 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		CoTTrace:  cotTrace,
 		Decisions: kept,
 	}, nil
+}
+
+// Batch-consistency reason codes (review 2026-10-28 #8). They are written into
+// the NoTradeReasons of the non-executing wait that replaces a conflicting open.
+const (
+	BatchConflictCloseReopen   = "BATCH_CONFLICT_CLOSE_REOPEN"
+	BatchConflictOpposingOpens = "BATCH_CONFLICT_OPPOSING_OPENS"
+)
+
+// resolveBatchConflicts makes one decision batch self-consistent per
+// (normalized) symbol. Validation is per decision, so contradictory or
+// duplicated actions would otherwise all execute (the trader runs closes
+// before opens, which turns close_long + open_long into a silent re-entry).
+//
+//   - exact duplicate (symbol+action): keep the first
+//   - open_long* + open_short* : both opens -> wait (contradiction)
+//   - close_X + open_X*        : keep the close, open -> wait (no same-side re-entry)
+//   - close_long + open_short* / close_short + open_long*: legal reversal, kept
+//   - partial_close_X / adjust_stop_loss together with close: keep the close
+//
+// It never adds risk: every rewrite removes an action or turns an open into a
+// non-executing wait; closes are always preserved. Input order is kept.
+func resolveBatchConflicts(in []Decision) []Decision {
+	if len(in) < 2 {
+		return in
+	}
+	type symState struct{ openLong, openShort, closeLong, closeShort bool }
+	isOpenLong := func(a string) bool { return a == "open_long" || a == "open_long_limit" }
+	isOpenShort := func(a string) bool { return a == "open_short" || a == "open_short_limit" }
+
+	// 1. drop exact duplicates, keeping the first occurrence.
+	seen := make(map[string]bool, len(in))
+	dedup := make([]Decision, 0, len(in))
+	for _, d := range in {
+		key := market.Normalize(d.Symbol) + "|" + d.Action
+		if seen[key] {
+			logger.Warnf("⚠️  [BatchConflict] duplicate %s %s dropped (first one kept)", d.Symbol, d.Action)
+			continue
+		}
+		seen[key] = true
+		dedup = append(dedup, d)
+	}
+
+	states := make(map[string]*symState, len(dedup))
+	for _, d := range dedup {
+		norm := market.Normalize(d.Symbol)
+		st := states[norm]
+		if st == nil {
+			st = &symState{}
+			states[norm] = st
+		}
+		switch {
+		case isOpenLong(d.Action):
+			st.openLong = true
+		case isOpenShort(d.Action):
+			st.openShort = true
+		case d.Action == "close_long":
+			st.closeLong = true
+		case d.Action == "close_short":
+			st.closeShort = true
+		}
+	}
+
+	toWait := func(d Decision, code, why string) Decision {
+		logger.Warnf("⚠️  [BatchConflict] %s %s -> wait (%s): %s", d.Symbol, d.Action, code, why)
+		return Decision{
+			Symbol:         d.Symbol,
+			Action:         "wait",
+			Reasoning:      d.Reasoning,
+			NoTradeReasons: []string{fmt.Sprintf("%s: %s %s %s", code, d.Action, d.Symbol, why)},
+		}
+	}
+
+	// 2. resolve per symbol.
+	out := make([]Decision, 0, len(dedup))
+	for _, d := range dedup {
+		st := states[market.Normalize(d.Symbol)]
+		switch {
+		case isOpenLong(d.Action) || isOpenShort(d.Action):
+			if st.openLong && st.openShort {
+				d = toWait(d, BatchConflictOpposingOpens, "opposing opens in the same batch")
+			} else if isOpenLong(d.Action) && st.closeLong {
+				d = toWait(d, BatchConflictCloseReopen, "close_long in the same batch (no same-side re-entry)")
+			} else if isOpenShort(d.Action) && st.closeShort {
+				d = toWait(d, BatchConflictCloseReopen, "close_short in the same batch (no same-side re-entry)")
+			}
+		case d.Action == "partial_close_long" && st.closeLong,
+			d.Action == "partial_close_short" && st.closeShort,
+			d.Action == "adjust_stop_loss" && (st.closeLong || st.closeShort):
+			logger.Warnf("⚠️  [BatchConflict] %s %s dropped: superseded by a full close in the same batch", d.Symbol, d.Action)
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 func extractCoTTrace(response string) string {
