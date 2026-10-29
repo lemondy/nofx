@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"nofx/market/usstock"
 	"strings"
+	"sync"
 	"time"
 
 	"nofx/logger"
@@ -16,16 +17,51 @@ import (
 // us_stock (design 2026-10-09 §5/§6): the 60s protection tick and resting
 // limit-entry reconciliation.
 
+// lockWithContext queues on the mutex; a cancelled waiter releases its acquisition.
+func lockWithContext(ctx context.Context, mu *sync.Mutex) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if mu.TryLock() {
+		return true
+	}
+	// An unbuffered handoff transfers ownership only to a waiting caller.
+	acquired := make(chan struct{})
+	go func() {
+		mu.Lock()
+		select {
+		case acquired <- struct{}{}:
+		case <-ctx.Done():
+			mu.Unlock()
+		}
+	}()
+	select {
+	case <-acquired:
+		if ctx.Err() != nil {
+			mu.Unlock()
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // stockProtectionTick re-places missing protection, sells at market when the
 // price sits below the stop and the stop order has not filled for
 // stockStopFallbackTicks ticks (program fallback), and in paper mode simulates
 // stop / take-profit fills.
 func (at *AutoTrader) stockProtectionTick(ctx context.Context) {
 	mu := at.stockMutex()
-	if !mu.TryLock() { // a decision cycle is running
+	// Stock cycles and ticks share a goroutine; queue behind account peers.
+	started := time.Now()
+	if !lockWithContext(ctx, mu) {
 		return
 	}
 	defer mu.Unlock()
+	if waited := time.Since(started); waited > stockProtectInterval {
+		logger.Warnf("⚠️ [%s] us_stock protection tick waited %s for the account execution lock", at.name, waited)
+	}
 	if !at.stockRunning() || at.stock.cfg == nil || ctx.Err() != nil {
 		return
 	}
