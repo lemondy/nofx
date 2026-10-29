@@ -16,6 +16,7 @@ import (
 	"github.com/adshao/go-binance/v2/futures"
 	"golang.org/x/sync/singleflight"
 	"nofx/logger"
+	"nofx/market"
 )
 
 const (
@@ -273,7 +274,7 @@ func cloneFuturesRuleJSON(value interface{}) interface{} {
 	}
 }
 
-const fallbackFuturesMinNotional = 10.0
+const fallbackFuturesMinNotional = market.FallbackMinNotional
 
 func (t *FuturesTrader) warnRulesOnce(symbol, reason, message string, args ...interface{}) {
 	e := futuresRulesFor(t.client.BaseURL)
