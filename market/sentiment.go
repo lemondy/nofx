@@ -164,13 +164,51 @@ func fetchCryptoFG() *CryptoFG {
 	if err1 != nil || err2 != nil {
 		return nil
 	}
-	out := &CryptoFG{Value: today, Classification: payload.Data[0].ValueClassification, YesterdayValue: yest}
+	out := &CryptoFG{Value: today, Classification: cryptoFGClassification(today), YesterdayValue: yest}
 	// The reading's own date (unix seconds, daily 00:00 UTC) — the honest
 	// as-of for a value that is up to 24h old by design.
 	if sec, err := strconv.ParseInt(payload.Data[0].Timestamp, 10, 64); err == nil && sec > 0 {
 		out.SourceAt = time.Unix(sec, 0).UTC().Format("2006-01-02")
 	}
 	return out
+}
+
+// Vendor labels are never prompt text: derive the closed enum from the score.
+func cryptoFGClassification(value int) string {
+	switch {
+	case value < 0 || value > 100:
+		return "Unknown"
+	case value <= 24:
+		return "Extreme Fear"
+	case value <= 46:
+		return "Fear"
+	case value <= 54:
+		return "Neutral"
+	case value <= 75:
+		return "Greed"
+	default:
+		return "Extreme Greed"
+	}
+}
+
+// Only the proxy model's known component names may become prompt text.
+// Unknown names are omitted, never shortened or stripped into valid names.
+func validSentimentComponent(name string) bool {
+	switch name {
+	// Names as served by feargreedchart.com/api (verified 2026-10-29 in live prompts).
+	case "JUNK BONDS", "MOMENTUM", "PUT/CALL", "SAFE HAVEN", "VOLATILITY":
+		return true
+	default:
+		return false
+	}
+}
+
+func sentimentDate(value string) string {
+	date, err := time.Parse("2006-01-02", value)
+	if err != nil || date.Format("2006-01-02") != value {
+		return ""
+	}
+	return date.Format("2006-01-02")
 }
 
 func fetchStockFG() *StockFG {
@@ -194,7 +232,9 @@ func fetchStockFG() *StockFG {
 	}
 	out := &StockFG{Score: payload.Score.Score}
 	for _, c := range payload.Score.Components {
-		out.Components = append(out.Components, StockFGComponent{Name: c.Name, Val: c.Val, Wt: c.Wt})
+		if validSentimentComponent(c.Name) && len(out.Components) < 5 {
+			out.Components = append(out.Components, StockFGComponent{Name: c.Name, Val: c.Val, Wt: c.Wt})
+		}
 	}
 	if out.Score <= 0 {
 		return nil
@@ -202,7 +242,7 @@ func fetchStockFG() *StockFG {
 	// The trading day the CURRENT score describes = the latest dated entry
 	// (score matches; on weekends that is Friday's close — disclose it).
 	if n := len(payload.Recent); n > 0 && payload.Recent[n-1].Date != "" {
-		out.MarketDate = payload.Recent[n-1].Date
+		out.MarketDate = sentimentDate(payload.Recent[n-1].Date)
 	}
 	if payload.Ts > 0 {
 		out.FetchedAt = time.UnixMilli(payload.Ts).UTC().Format("2006-01-02 15:04 UTC")
@@ -469,24 +509,26 @@ func (m *MarketSentiment) Render() string {
 		} else if m.Crypto.Value < m.Crypto.YesterdayValue {
 			dir = "较昨日回落"
 		}
-		line := fmt.Sprintf("加密宏观情绪(Alternative.me): %d %s(%s,昨日 %d)", m.Crypto.Value, m.Crypto.Classification, dir, m.Crypto.YesterdayValue)
-		if m.Crypto.SourceAt != "" {
-			line += "[数据日 " + m.Crypto.SourceAt + "]"
+		line := fmt.Sprintf("加密宏观情绪(Alternative.me): %d %s(%s,昨日 %d)", m.Crypto.Value, cryptoFGClassification(m.Crypto.Value), dir, m.Crypto.YesterdayValue)
+		if date := sentimentDate(m.Crypto.SourceAt); date != "" {
+			line += "[数据日 " + date + "]"
 		}
 		sb_ = append(sb_, line)
 	}
 	if m.Stock != nil {
 		comps := make([]string, 0, len(m.Stock.Components))
 		for _, c := range m.Stock.Components {
-			comps = append(comps, fmt.Sprintf("%s %d(权重%d%%)", c.Name, c.Val, c.Wt))
+			if validSentimentComponent(c.Name) && len(comps) < 5 {
+				comps = append(comps, fmt.Sprintf("%s %d(权重%d%%)", c.Name, c.Val, c.Wt))
+			}
 		}
 		sort.Strings(comps)
 		// FearGreedChart's own methodology is an independent five-component
 		// model over Yahoo Finance data — it is NOT CNN's official index and
 		// must not be presented as one (user review 2026-09-27 #2).
 		line := fmt.Sprintf("美股情绪代理(FearGreedChart 独立模型,非CNN官方): %d;分量: %s", m.Stock.Score, strings.Join(comps, ", "))
-		if m.Stock.MarketDate != "" {
-			line += "[数据日 " + m.Stock.MarketDate + " 收盘]"
+		if date := sentimentDate(m.Stock.MarketDate); date != "" {
+			line += "[数据日 " + date + " 收盘]"
 		}
 		sb_ = append(sb_, line)
 	}
@@ -541,11 +583,15 @@ func (m *MarketSentiment) Render() string {
 	// funding drifts per settlement, the daily indexes age by design, and a
 	// stale cache must never pose as "just fetched".
 	var stamps []string
-	if m.Crypto != nil && m.Crypto.SourceAt != "" {
-		stamps = append(stamps, "crypto_fng="+m.Crypto.SourceAt)
+	if m.Crypto != nil {
+		if date := sentimentDate(m.Crypto.SourceAt); date != "" {
+			stamps = append(stamps, "crypto_fng="+date)
+		}
 	}
-	if m.Stock != nil && m.Stock.MarketDate != "" {
-		stamps = append(stamps, "stock="+m.Stock.MarketDate+"收盘")
+	if m.Stock != nil {
+		if date := sentimentDate(m.Stock.MarketDate); date != "" {
+			stamps = append(stamps, "stock="+date+"收盘")
+		}
 	}
 	if m.Binance != nil {
 		if m.Binance.RatioPeriodEnd != "" {

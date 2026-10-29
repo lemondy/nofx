@@ -233,6 +233,11 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	currentEMA20 := calculateEMA(klines3m, 20)
 	currentMACD := calculateMACD(klines3m)
 	currentRSI7 := calculateRSI(klines3m, 7)
+	closedTF := "3m"
+	if useHyperliquidAPI {
+		closedTF = "5m"
+	}
+	closedMACD, closedRSI7, closedTF := calculateClosedIndicators(klines3m, closedTF, shortObservedAt)
 
 	// Calculate price change percentage
 	// 1-hour price change = price from 20 3-minute K-lines ago
@@ -301,6 +306,9 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 		CurrentEMA20:       currentEMA20,
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,
+		ClosedMACD:         closedMACD,
+		ClosedRSI7:         closedRSI7,
+		ClosedTimeframe:    closedTF,
 		OpenInterest:       oiData,
 		OpenInterestOK:     oiOK,
 		FundingRate:        fundingRate,
@@ -501,6 +509,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	currentEMA20 := calculateEMA(primaryKlines, 20)
 	currentMACD := calculateMACD(primaryKlines)
 	currentRSI7 := calculateRSI(primaryKlines, 7)
+	closedMACD, closedRSI7, closedTF := calculateClosedIndicators(primaryKlines, primaryTimeframe, timeframeData[primaryTimeframe].ObservedAt)
 
 	// Calculate price changes
 	priceChange1h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 60, currentPrice)  // 1 hour
@@ -528,6 +537,9 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		CurrentEMA20:       currentEMA20,
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,
+		ClosedMACD:         closedMACD,
+		ClosedRSI7:         closedRSI7,
+		ClosedTimeframe:    closedTF,
 		OpenInterest:       oiData,
 		OpenInterestOK:     oiOK,
 		FundingRate:        fundingRate,
@@ -538,6 +550,33 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		SampledAt:          sampledAt,
 		StaleTimeframes:    StaleTimeframes(symbol, timeframeData, sampledAt),
 	}, nil
+}
+
+// candleClosedAt is the settlement check shared by live-price patching and
+// closed-only indicators: a candle closes at its open time + timeframe duration.
+func candleClosedAt(openTime int64, duration time.Duration, observedAt time.Time) bool {
+	return !time.UnixMilli(openTime).Add(duration).After(observedAt)
+}
+
+// calculateClosedIndicators pins the existing settlement check to the
+// request's ObservedAt: later fetches must not promote a forming candle to closed.
+func calculateClosedIndicators(klines []Kline, timeframe string, observedAt time.Time) (macd, rsi7 float64, closedTF string) {
+	dur := TimeframeDuration(timeframe)
+	if dur <= 0 || observedAt.IsZero() {
+		return 0, 0, ""
+	}
+	cut := len(klines)
+	for cut > 0 && !candleClosedAt(klines[cut-1].OpenTime, dur, observedAt) {
+		cut--
+	}
+	if cut < 26 {
+		return 0, 0, ""
+	}
+	macd, rsi7 = calculateMACD(klines[:cut]), calculateRSI(klines[:cut], 7)
+	if math.IsNaN(macd) || math.IsInf(macd, 0) || math.IsNaN(rsi7) || math.IsInf(rsi7, 0) {
+		return 0, 0, ""
+	}
+	return macd, rsi7, timeframe
 }
 
 // TimeframeDuration returns the bar duration of a supported timeframe label,
@@ -591,7 +630,7 @@ func applyLivePrice(bar *KlineBar, tf string, livePrice float64) bool {
 	if dur <= 0 || bar == nil || bar.Close <= 0 || livePrice <= 0 {
 		return false
 	}
-	if !time.UnixMilli(bar.Time).Add(dur).After(time.Now()) {
+	if candleClosedAt(bar.Time, dur, time.Now()) {
 		return false // candle already closed
 	}
 	if livePrice > bar.Close*1.8 || livePrice < bar.Close*0.2 {

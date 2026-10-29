@@ -381,8 +381,12 @@ func CotBitcoinFetch(ctx context.Context) (*CotBitcoin, error) {
 		return nil, fmt.Errorf("cot: empty")
 	}
 	r := payload.Results[0]
+	reportDate, err := time.Parse("2006-01-02", r.Date)
+	if err != nil || reportDate.Format("2006-01-02") != r.Date {
+		return nil, fmt.Errorf("cot: invalid report date")
+	}
 	return &CotBitcoin{
-		ReportDate:         r.Date,
+		ReportDate:         reportDate.Format("2006-01-02"),
 		OpenInterestAll:    r.OpenInterestAll,
 		SpeculatorsNetLong: r.NonCommLongAll - r.NonCommShortAll,
 		HedgersNetLong:     r.CommLongAll - r.CommShortAll,

@@ -11,7 +11,12 @@ type Data struct {
 	CurrentEMA20  float64
 	CurrentMACD   float64
 	CurrentRSI7   float64
-	OpenInterest  *OIData
+	// ClosedTimeframe is empty when closed-only MACD/RSI7 are unavailable
+	// (unknown timeframe/observation clock or fewer than 26 closed bars).
+	ClosedMACD      float64
+	ClosedRSI7      float64
+	ClosedTimeframe string
+	OpenInterest    *OIData
 	// OpenInterestOK distinguishes a REAL zero OI reading from a failed
 	// fetch — OpenInterest is always non-nil (zero-value on failure) but
 	// only meaningful when this is true. Consumers that gate on OI level

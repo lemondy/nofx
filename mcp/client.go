@@ -256,10 +256,10 @@ func (client *Client) BuildMCPRequestBody(systemPrompt, userPrompt string) map[s
 
 	// Build request body
 	requestBody := map[string]interface{}{
-		"model":       client.Model,
-		"messages":    messages,
-		"temperature": client.Cfg.Temperature, // Use configured temperature
+		"model":    client.Model,
+		"messages": messages,
 	}
+	client.applyTemperature(requestBody, nil, client.Cfg.ReasoningEffort)
 	// OpenAI newer models use max_completion_tokens instead of max_tokens
 	if client.Provider == ProviderOpenAI {
 		requestBody["max_completion_tokens"] = client.MaxTokens
@@ -275,6 +275,7 @@ func (client *Client) MarshalRequestBody(requestBody map[string]any) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize request: %w", err)
 	}
+	client.logTemperature(requestBody)
 	return jsonData, nil
 }
 
@@ -383,9 +384,6 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	// Print current AI configuration
 	client.Log.Infof("📡 [%s] Request AI Server: BaseURL: %s", client.String(), client.BaseURL)
 	client.Log.Debugf("[%s] UseFullURL: %v", client.String(), client.UseFullURL)
-	if len(client.APIKey) > 8 {
-		client.Log.Debugf("[%s]   API Key: %s...%s", client.String(), client.APIKey[:4], client.APIKey[len(client.APIKey)-4:])
-	}
 
 	// Step 1: Build request body (via hooks for dynamic dispatch)
 	requestBody := client.Hooks.BuildMCPRequestBody(systemPrompt, userPrompt)
@@ -654,13 +652,11 @@ func (client *Client) BuildRequestBodyFromRequest(req *Request) map[string]any {
 		"messages": messages,
 	}
 
-	// Add optional parameters (only add non-nil parameters)
-	if req.Temperature != nil {
-		requestBody["temperature"] = *req.Temperature
-	} else {
-		// If not set in Request, use Client's configuration
-		requestBody["temperature"] = client.Cfg.Temperature
+	effort := client.Cfg.ReasoningEffort
+	if req.ReasoningEffort != "" {
+		effort = req.ReasoningEffort
 	}
+	client.applyTemperature(requestBody, req.Temperature, effort)
 
 	// OpenAI newer models use max_completion_tokens instead of max_tokens
 	tokenKey := "max_tokens"
@@ -924,11 +920,11 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 		{"role": "user", "content": userPrompt},
 	}
 	requestBody := map[string]interface{}{
-		"model":       client.Model,
-		"messages":    messages,
-		"temperature": client.Cfg.Temperature,
-		"stream":      true,
+		"model":    client.Model,
+		"messages": messages,
+		"stream":   true,
 	}
+	client.applyTemperature(requestBody, nil, client.Cfg.ReasoningEffort)
 	// OpenAI newer models use max_completion_tokens instead of max_tokens
 	if client.Provider == ProviderOpenAI {
 		requestBody["max_completion_tokens"] = client.MaxTokens
