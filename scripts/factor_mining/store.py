@@ -131,6 +131,14 @@ def append_ledger(market, rows, root=ROOT):
     append_jsonl(Path(root) / market / 'ledger.jsonl', rows)
 
 
+def read_status_events(market, root=ROOT):
+    return read_jsonl(Path(root) / market / 'status_events.jsonl')
+
+
+def append_status_events(market, rows, root=ROOT):
+    append_jsonl(Path(root) / market / 'status_events.jsonl', rows)
+
+
 def write_zoo(market, zoo, root=ROOT):
     write_json(Path(root) / market / 'zoo.json', zoo)
 
