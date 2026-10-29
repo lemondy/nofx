@@ -950,6 +950,196 @@ func TestStockVerifiedMissingProtectionAllowsBoundedFallback(t *testing.T) {
 	}
 }
 
+func TestStockFullExitWritesOffUnsellableRemainder(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		owned, ratio, sold, remainder float64
+	}{
+		{"sub_step", 5.0004, 0, 5, 0.0004},
+		{"below_min_notional", 0.08, 0.5, 0.04, 0.04},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+			if _, _, err := fx.at.stockRecordBuyAtomic("AAPLBUSDT", tc.owned, 120, 0, "seed1", 115, stockTestNow, nil, true); err != nil {
+				t.Fatal(err)
+			}
+			fx.spot.hold["AAPLBUSDT"], fx.spot.sellRatio = tc.owned, tc.ratio
+			fx.at.stock.lastProtect["AAPLBUSDT"] = stockProtect{Stop: 115, Qty: tc.owned}
+			fx.at.stock.stopTicks["AAPLBUSDT"] = 2
+			h := &stockHolding{Symbol: "AAPLBUSDT", Owned: tc.owned, Balance: tc.owned, Mark: 120, Stop: 115}
+			out, err := fx.at.stockSellLive(context.Background(), h, tc.owned, true, "ai_close", stockTestNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !out.Closed || !near(out.Qty, tc.sold) || !strings.Contains(out.Note, fmt.Sprintf("%.8g written off", tc.remainder)) || !strings.Contains(out.Note, "exchange untracked") {
+				t.Fatalf("exit outcome: %+v", out)
+			}
+			if len(fx.spot.sells) != 1 || fx.spot.zeroSells != 0 || !near(fx.spot.hold["AAPLBUSDT"], tc.remainder) || len(fx.spot.setProt) != 0 {
+				t.Fatalf("sells=%v balance=%g protection=%v", fx.spot.sells, fx.spot.hold["AAPLBUSDT"], fx.spot.setProt)
+			}
+			if rows, err := fx.at.store.Position().StockOwnedRows("t1", "AAPLBUSDT"); err != nil || len(rows) != 0 {
+				t.Fatalf("open rows=%+v err=%v", rows, err)
+			}
+			if rows, err := fx.at.store.Position().GetClosedPositions("t1", 5); err != nil || len(rows) != 1 || rows[0].CloseReason != "ai_close" {
+				t.Fatalf("closed rows=%+v err=%v", rows, err)
+			}
+			if in, err := fx.at.store.StockPaper().ListProtectionIntents("t1"); err != nil || in["AAPLBUSDT"] {
+				t.Fatalf("intent=%v err=%v", in, err)
+			}
+			if _, ok := fx.at.stock.lastProtect["AAPLBUSDT"]; ok || fx.at.stock.stopTicks["AAPLBUSDT"] != 0 || fx.at.store.AIManaged().IsMarked("t1", "AAPLBUSDT", "long") {
+				t.Fatal("closed position keeps its protection or ownership state")
+			}
+		})
+	}
+}
+
+func TestStockDustFallbackClosesOnceWithoutOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		owned, sold, balance, price float64
+	}{
+		{"sub_step", 0.0009, 0, 0.0009, 114},
+		{"rounded_remainder", 0.03996, 0.039, 0.00096, 114},
+		{"first_protection_exhausted", 0.03996, 0.039, 0.00096, 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+			if _, _, err := fx.at.stockRecordBuyAtomic("AAPLBUSDT", tc.owned, 120, 0, "seed1", 115, stockTestNow, nil, true); err != nil {
+				t.Fatal(err)
+			}
+			if tc.sold > 0 {
+				fx.at.stockRecordSell("AAPLBUSDT", tc.sold, 120, 0, "old_sell", "stop_fallback", false, stockTestNow)
+			}
+			fx.spot.hold["AAPLBUSDT"] = tc.balance
+			fx.price, fx.spot.price = tc.price, tc.price
+			for i := 0; i < stockFirstProtectionMaxAttempts; i++ {
+				if _, err := fx.at.store.StockPaper().BumpProtectionIntent("t1", "AAPLBUSDT"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := context.Background()
+			fx.at.stockProtectionTick(ctx)
+			if rows, err := fx.at.store.Position().StockOwnedRows("t1", "AAPLBUSDT"); err != nil || len(rows) != 0 {
+				t.Fatalf("open rows=%+v err=%v", rows, err)
+			}
+			closed, err := fx.at.store.Position().GetClosedPositions("t1", 5)
+			if err != nil || len(closed) != 1 || closed[0].CloseReason != "dust_writeoff" || closed[0].ExitOrderID != "" {
+				t.Fatalf("closed rows=%+v err=%v", closed, err)
+			}
+			if in, err := fx.at.store.StockPaper().ListProtectionIntents("t1"); err != nil || in["AAPLBUSDT"] {
+				t.Fatalf("intent=%v err=%v", in, err)
+			}
+			notices := 0
+			for _, a := range fx.alert {
+				if strings.HasPrefix(a, "ORDER|") && strings.Contains(a, "🧹 美股零头持仓已注销") && strings.Contains(a, "written off") {
+					notices++
+				}
+				if strings.Contains(a, "兜底卖出失败") || strings.Contains(a, "兜底市价卖出") || (tc.price < 115 && strings.HasPrefix(a, "ALERT|")) {
+					t.Fatalf("unexpected fallback alert: %s", a)
+				}
+			}
+			if notices != 1 {
+				t.Fatalf("dust notices=%d alerts=%v", notices, fx.alert)
+			}
+			before := len(fx.alert)
+			fx.at.stockProtectionTick(ctx)
+			if len(fx.spot.sells) != 0 || len(fx.spot.setProt) != 0 || fx.spot.hold["AAPLBUSDT"] != tc.balance || len(fx.alert) != before {
+				t.Fatalf("dust retried: sells=%v protection=%v balance=%g alerts=%v", fx.spot.sells, fx.spot.setProt, fx.spot.hold["AAPLBUSDT"], fx.alert)
+			}
+		})
+	}
+}
+
+func TestStockDustWithoutIntentWrittenOffOnMissingProtection(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	if _, _, err := fx.at.stockRecordBuyAtomic("AAPLBUSDT", 0.03996, 120, 0, "seed1", 115, stockTestNow, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	fx.spot.hold["AAPLBUSDT"] = 0.03996
+	if err := fx.at.stockPlaceProtection(ctx, "AAPLBUSDT", 0.03996, 115, 0, 120); err != nil {
+		t.Fatal(err)
+	}
+	fx.spot.cancelProtection("AAPLBUSDT") // recorded set, no fills
+	fx.at.stockRecordSell("AAPLBUSDT", 0.039, 120, 0, "old_sell", "ai_reduce", false, stockTestNow)
+	if in, _ := fx.at.store.StockPaper().ListProtectionIntents("t1"); in["AAPLBUSDT"] {
+		t.Fatal("intent must be absent in this scenario")
+	}
+	fx.spot.hold["AAPLBUSDT"] = 0.00096
+	fx.price, fx.spot.price = 120, 120
+	setProt := len(fx.spot.setProt)
+	fx.at.stockProtectionTick(ctx)
+	fx.at.stockProtectionTick(ctx)
+	closed, err := fx.at.store.Position().GetClosedPositions("t1", 5)
+	if err != nil || len(closed) != 1 || closed[0].CloseReason != "dust_writeoff" || len(fx.spot.sells) != 0 || len(fx.spot.setProt) != setProt {
+		t.Fatalf("closed=%+v sells=%v protection=%v err=%v", closed, fx.spot.sells, fx.spot.setProt, err)
+	}
+	for _, a := range fx.alert {
+		if strings.HasPrefix(a, "ALERT|") {
+			t.Fatalf("unexpected alert: %s", a)
+		}
+	}
+}
+
+func TestStockFullExitDoesNotWriteOffBalanceDiscrepancy(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	fx.openLiveOwned(t, 5, 0)
+	h := &stockHolding{Symbol: "AAPLBUSDT", Owned: 5, Mark: 120, Stop: 115}
+	out, err := fx.at.stockSellLive(context.Background(), h, 5, true, "stop_fallback", stockTestNow)
+	if err == nil || err.Error() != "nothing sellable for AAPLBUSDT (owned 5.000000, balance 0.000000)" || out != nil {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	rows, err := fx.at.store.Position().StockOwnedRows("t1", "AAPLBUSDT")
+	if err != nil || len(rows) != 1 || rows[0].Quantity != 5 || len(fx.spot.sells) != 0 {
+		t.Fatalf("discrepancy written off: rows=%+v sells=%v err=%v", rows, fx.spot.sells, err)
+	}
+}
+
+func TestStockFullExitWritesOffBelowMinNotional(t *testing.T) {
+	for _, mark := range []float64{120, 0} {
+		t.Run(fmt.Sprintf("mark_%g", mark), func(t *testing.T) {
+			fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+			fx.openLiveOwned(t, 0.02, 0.02)
+			h := &stockHolding{Symbol: "AAPLBUSDT", Owned: 0.02, Balance: 0.02, Mark: mark, Stop: 115}
+			out, err := fx.at.stockSellLive(context.Background(), h, 0.02, true, "ai_close", stockTestNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !out.Closed || out.Qty != 0 || out.Price != 120 || out.PnL != 0 || !strings.Contains(out.Note, "dust remainder 0.02 written off") {
+				t.Fatalf("dust outcome: %+v", out)
+			}
+			closed, err := fx.at.store.Position().GetClosedPositions("t1", 5)
+			if err != nil || len(closed) != 1 || closed[0].CloseReason != "dust_writeoff" || len(fx.spot.sells) != 0 || fx.spot.hold["AAPLBUSDT"] != 0.02 {
+				t.Fatalf("closed=%+v sells=%v balance=%g err=%v", closed, fx.spot.sells, fx.spot.hold["AAPLBUSDT"], err)
+			}
+		})
+	}
+}
+
+func TestStockPartialExitKeepsSubStepRemainder(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	fx.openLiveOwned(t, 5.0004, 5.0004)
+	h := &stockHolding{Symbol: "AAPLBUSDT", Owned: 5.0004, Balance: 5.0004, Mark: 120, Stop: 115}
+	out, err := fx.at.stockSellLive(context.Background(), h, 5, false, "ai_reduce", stockTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := fx.at.store.Position().StockOwnedRows("t1", "AAPLBUSDT")
+	if err != nil || out.Closed || out.Qty != 5 || len(rows) != 1 || !near(rows[0].Quantity, 0.0004) || strings.Contains(out.Note, "written off") {
+		t.Fatalf("partial exit: out=%+v rows=%+v err=%v", out, rows, err)
+	}
+}
+
+func TestStockEmergencySellReportsSellFailure(t *testing.T) {
+	fx := newStockFixture(t, false, stockTestNow, func(int) string { return holdAAPL })
+	fx.openLiveOwned(t, 5, 0)
+	h := &stockHolding{Symbol: "AAPLBUSDT", Owned: 5, Mark: 120}
+	fx.at.stockProtectOrEmergency(context.Background(), h, 5, 121, 0, 120, stockTestNow, func(string, ...interface{}) {})
+	if len(fx.alert) != 1 || !strings.HasPrefix(fx.alert[0], "ALERT|") || !strings.Contains(fx.alert[0], "nothing sellable") || strings.Contains(fx.alert[0], errStopNotBelowPrice.Error()) {
+		t.Fatalf("wrong emergency error: %v", fx.alert)
+	}
+}
+
 func TestStockProtectionFillRacingCancelCannotSellManualShares(t *testing.T) {
 	for _, replace := range []bool{false, true} {
 		t.Run(fmt.Sprint(replace), func(t *testing.T) {

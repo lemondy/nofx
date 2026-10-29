@@ -107,6 +107,12 @@ func (at *AutoTrader) stockTickLive(ctx context.Context, now time.Time, logf fun
 		h.Mark = price
 		switch {
 		case h.ProtMissing:
+			// A remainder the exchange cannot sell cannot be protected either:
+			// write it off (no order) instead of retrying placement every tick.
+			if at.stockUnsellable(h.Symbol, h.Owned, price, stockSymbolInfo(ctx, h.Symbol)) {
+				at.stockFallbackSell(ctx, h, now, logf, "remainder below the exchange minimum")
+				continue
+			}
 			stop, tp := at.persistedStop(h.Symbol, h)
 			if stop <= 0 {
 				stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股持仓无保护单且无已知止损 %s</b>\n<i>请人工处理</i>", notify.Escape(h.Symbol)))
@@ -164,6 +170,11 @@ func (at *AutoTrader) stockFallbackSell(ctx context.Context, h *stockHolding, no
 	if err != nil {
 		logf("fallback sell of %s FAILED: %v", h.Symbol, err)
 		stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股止损兜底卖出失败 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
+		return
+	}
+	if out.Qty == 0 && out.Closed {
+		logf("fallback sell %s: %s — %s", h.Symbol, why, out.Note)
+		stockNotify("ORDER", at.name, fmt.Sprintf("<b>🧹 美股零头持仓已注销 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(out.Note)))
 		return
 	}
 	logf("fallback sell %s: %s — sold %.6f at %.4f (pnl %.2f)", h.Symbol, why, out.Qty, out.Price, out.PnL)
