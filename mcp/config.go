@@ -32,6 +32,7 @@ type Config struct {
 	MaxTokens       int
 	MaxContext      int // Model's max context window in tokens (0 = no limit)
 	Temperature     float64
+	ReasoningEffort string // Empty leaves the server default; "none" must be explicit.
 	UseFullURL      bool
 
 	// Retry configuration

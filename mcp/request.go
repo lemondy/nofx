@@ -4,9 +4,9 @@ package mcp
 // Supports plain messages (Role+Content), assistant tool-call messages (ToolCalls),
 // and tool result messages (Role="tool", ToolCallID, Content).
 type Message struct {
-	Role       string     `json:"role"`                  // "system", "user", "assistant", "tool"
-	Content    string     `json:"content,omitempty"`     // Text content (omitted when ToolCalls present)
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`  // Set by assistant when calling tools
+	Role       string     `json:"role"`                   // "system", "user", "assistant", "tool"
+	Content    string     `json:"content,omitempty"`      // Text content (omitted when ToolCalls present)
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // Set by assistant when calling tools
 	ToolCallID string     `json:"tool_call_id,omitempty"` // Set on role="tool" result messages
 }
 
@@ -47,12 +47,13 @@ type FunctionDef struct {
 // Request AI API request (supports advanced features)
 type Request struct {
 	// Basic fields
-	Model    string    `json:"model"`              // Model name
-	Messages []Message `json:"messages"`           // Conversation message list
-	Stream   bool      `json:"stream,omitempty"`   // Whether to stream response
+	Model    string    `json:"model"`            // Model name
+	Messages []Message `json:"messages"`         // Conversation message list
+	Stream   bool      `json:"stream,omitempty"` // Whether to stream response
 
 	// Optional parameters (for fine-grained control)
 	Temperature      *float64 `json:"temperature,omitempty"`       // Temperature (0-2), controls randomness
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`  // Non-empty overrides the client effort.
 	MaxTokens        *int     `json:"max_tokens,omitempty"`        // Maximum token count
 	TopP             *float64 `json:"top_p,omitempty"`             // Nucleus sampling parameter (0-1)
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"` // Frequency penalty (-2 to 2)
