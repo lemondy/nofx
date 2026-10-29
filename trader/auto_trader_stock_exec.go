@@ -82,6 +82,17 @@ func (at *AutoTrader) stockPlaceProtection(ctx context.Context, sym string, owne
 			tp = 0
 		}
 	}
+	if band, ok, err := at.stockSellBand(sym); err != nil {
+		logger.Warnf("⚠️ [%s] cannot read sell price band for %s: %v", at.name, sym, err)
+	} else if ok {
+		if tp > 0 && band.Ceiling > 0 && tp > band.Ceiling {
+			logger.Warnf("⚠️ [%s] dropping %s take-profit %.4f above sell ceiling %.4f", at.name, sym, tp, band.Ceiling)
+			tp = 0
+		}
+		if limit := stockStopLimit(stop, info); band.Floor > 0 && limit < band.Floor {
+			return fmt.Errorf("%w: stop %.4f (limit %.4f) below sell floor %.4f", types.ErrStopBelowSellBand, stop, limit, band.Floor)
+		}
+	}
 	if _, err := at.stockPrepareProtectionChange(sym, at.stockClock()); err != nil {
 		return err
 	}
@@ -110,6 +121,7 @@ func (at *AutoTrader) stockPlaceProtection(ctx context.Context, sym string, owne
 	}
 	at.stock.lastProtect[sym] = stockProtect{Stop: stop, TakeProfit: tp, Qty: qty}
 	at.stock.stopTicks[sym] = 0
+	delete(at.stock.bandHeld, sym)
 	if err := at.store.StockPaper().ClearProtectionIntent(at.id, sym); err != nil {
 		logger.Warnf("⚠️ [%s] cannot clear the protection intent of %s: %v", at.name, sym, err)
 	}
@@ -170,7 +182,11 @@ func (at *AutoTrader) stockProtectOrEmergency(ctx context.Context, h *stockHoldi
 		}
 	default:
 		logf("PROTECTION FAILED for %s: %v (the protection tick will retry)", h.Symbol, err)
-		stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股保护单挂单失败 %s</b>\n<i>%s；每分钟保护检查会重试</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
+		if stockStopBelowBand(err) {
+			at.stockNotifyBandHeld(h.Symbol, stop, err)
+		} else {
+			stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股保护单挂单失败 %s</b>\n<i>%s；每分钟保护检查会重试</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
+		}
 	}
 }
 
@@ -396,6 +412,21 @@ func (at *AutoTrader) stockRawBalance(sym string) (float64, error) {
 	return balance, err
 }
 
+func (at *AutoTrader) stockSellBand(sym string) (types.SellBand, bool, error) {
+	reader, ok := at.stockTrader.(interface {
+		SellPriceBand(string) (types.SellBand, error)
+	})
+	if !ok {
+		return types.SellBand{}, false, nil
+	}
+	band, err := reader.SellPriceBand(sym)
+	return band, true, err
+}
+
+func stockStopBelowBand(err error) bool {
+	return err != nil && (errors.Is(err, types.ErrStopBelowSellBand) || strings.Contains(err.Error(), "PERCENT_PRICE"))
+}
+
 func (at *AutoTrader) stockCheckEntryManager(sym string) error {
 	// Refuse before any order is sent when another trader of this account
 	// already manages the symbol: their protection and ours would contend for
@@ -452,6 +483,8 @@ func (at *AutoTrader) stockAlertEntryRejected(paper bool, d stockengine.Decision
 		reason = "下单前无法刷新 bStock 报价"
 	case "DATA_INSUFFICIENT":
 		reason = "缺少下单所需的行情数据"
+	case "STOP_BELOW_SELL_BAND":
+		reason = "止损距入场价超过交易所卖出价格带（PERCENT_PRICE），交易所止损单无法挂出"
 	}
 	logger.Warnf("⚠️ [%s] 美股入场被下单前复核放弃 %s %s: %s", at.name, d.Action, d.Symbol, msg)
 	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股入场已放弃（下单前复核未通过）</b>\n%s %s\n<i>%s</i>\n<code>%s</code>",

@@ -36,6 +36,7 @@ func (at *AutoTrader) prepareStockRuntime(ctx context.Context) (*store.StockConf
 	at.stock.cfg = &cfg
 	at.stock.stopTicks = map[string]int{}
 	at.stock.lastProtect = map[string]stockProtect{}
+	at.stock.bandHeld = map[string]bool{}
 	at.stock.pendings = map[string]*stockPending{}
 	if sc.IsScanMode() || sc.RegimeEnabled() {
 		stockWarmScan(stockScanWarmAge)
@@ -898,6 +899,29 @@ func (at *AutoTrader) execStockEntry(ctx context.Context, sizing *stockengine.Co
 		}
 		logf("PAPER fill %s qty=%.6f @ %.4f (no exchange order)", d.Symbol, out.Qty, out.Price)
 		return out, out.Qty * out.Price, nil
+	}
+	stop := d.StopLoss
+	if h != nil && h.Stop > stop {
+		stop = h.Stop
+	}
+	stopLimit := stockStopLimit(stop, info)
+	// An entry whose stop the exchange would refuse would be naked from the
+	// first tick; an unreadable band proceeds (the protection tick then holds
+	// the stop program-side instead of force-exiting).
+	band, ok, bandErr := at.stockSellBand(d.Symbol)
+	if bandErr != nil {
+		logger.Warnf("⚠️ [%s] cannot check entry sell price band for %s: %v", at.name, d.Symbol, bandErr)
+	} else if ok {
+		floorAtEntry := band.DownMultiplier * entry
+		if d.EntryType != stockengine.EntryLimit {
+			floorAtEntry = math.Max(band.Floor, floorAtEntry)
+		}
+		if floorAtEntry > 0 && stopLimit < floorAtEntry*(1+0.002) {
+			err := fmt.Errorf("STOP_BELOW_SELL_BAND: stop %.4f (limit %.4f) is below the exchange sell floor %.4f (%.1f%% under entry %.4f); exchange stop could not be placed",
+				stop, stopLimit, floorAtEntry, (1-floorAtEntry/entry)*100, entry)
+			at.stockAlertEntryRejected(paper, d, err, at.stockClock())
+			return nil, 0, err
+		}
 	}
 	out, err := at.stockOpenLive(ctx, d, qty, entry, h, info, now, logf)
 	if err != nil {
