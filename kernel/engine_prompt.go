@@ -647,7 +647,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// 最大回撤来自权益曲线快照,峰谷日期让它可对账(可能是早于初始基线
 			// 手动重设的真实历史深回撤)。
 			if ctx.TradingStats.MaxDDPeakAt != "" && ctx.TradingStats.MaxDDTroughAt != "" {
-				sb.WriteString(fmt.Sprintf("总盈亏(净手续费): %+.2f USDT | 手续费合计: %.2f | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(权益曲线峰值 %.2f @ %s → 谷值 %.2f @ %s,窗口内历史;当前净值 vs 初始见账户行 AccountBreaker)\n",
+				sb.WriteString(fmt.Sprintf("总盈亏(净手续费): %+.2f USDT | 手续费合计: %.2f | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(权益曲线峰值 %.2f @ %s → 谷值 %.2f @ %s,已扣除出入金,窗口内历史;当前净值 vs 初始见账户行 AccountBreaker)\n",
 					ctx.TradingStats.TotalPnL,
 					ctx.TradingStats.TotalFee,
 					ctx.TradingStats.AvgWin,

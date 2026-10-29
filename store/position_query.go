@@ -36,6 +36,12 @@ type TraderStats struct {
 	// equity_twr: equity curve with external transfers removed;
 	// closed_trades: closed-trade PnL curve on initialEquity; unavailable: 0.
 	MaxDrawdownBasis string `json:"max_drawdown_basis"`
+	// Provenance of a positive equity_twr drawdown. Equity values are the
+	// original snapshots; the percentage is computed on the cash-flow-adjusted index.
+	MaxDrawdownPeakAt       *time.Time `json:"max_drawdown_peak_at,omitempty"`
+	MaxDrawdownTroughAt     *time.Time `json:"max_drawdown_trough_at,omitempty"`
+	MaxDrawdownPeakEquity   float64    `json:"max_drawdown_peak_equity,omitempty"`
+	MaxDrawdownTroughEquity float64    `json:"max_drawdown_trough_equity,omitempty"`
 	// WindowDays: stats only cover trades closed within the last N days.
 	// 0 (omitted in JSON) = full history.
 	WindowDays int `json:"window_days,omitempty"`
@@ -155,7 +161,11 @@ func (s *PositionStore) getStats(traderID string, initialEquity float64, windowD
 	}
 	switch {
 	case ok:
-		stats.MaxDrawdownPct, stats.MaxDrawdownBasis = dd, "equity_twr"
+		stats.MaxDrawdownPct, stats.MaxDrawdownBasis = dd.Pct, "equity_twr"
+		if dd.Pct > 0 {
+			stats.MaxDrawdownPeakAt, stats.MaxDrawdownTroughAt = &dd.PeakAt, &dd.TroughAt
+			stats.MaxDrawdownPeakEquity, stats.MaxDrawdownTroughEquity = dd.PeakEquity, dd.TroughEquity
+		}
 	case len(pnls) > 0 && initialEquity > 0 && !math.IsNaN(initialEquity) && !math.IsInf(initialEquity, 0):
 		stats.MaxDrawdownPct = calculateMaxDrawdownFromPnls(pnls, initialEquity)
 		stats.MaxDrawdownBasis = "closed_trades"
@@ -649,10 +659,16 @@ type cashFlow struct {
 	Amount float64 // signed: deposit > 0, withdrawal < 0
 }
 
+type twrDrawdown struct {
+	Pct                      float64
+	PeakAt, TroughAt         time.Time
+	PeakEquity, TroughEquity float64 // original total_equity at the index peak/trough
+}
+
 // equityDrawdown computes max drawdown (%) from equity snapshots with external
 // transfers neutralised. ok=false means no usable equity curve (fewer than two
 // snapshots / no positive equity), so the caller falls back.
-func (s *PositionStore) equityDrawdown(traderID string, exitCutoff int64) (float64, bool, error) {
+func (s *PositionStore) equityDrawdown(traderID string, exitCutoff int64) (twrDrawdown, bool, error) {
 	start := time.Unix(0, 0)
 	if exitCutoff > 0 {
 		start = time.UnixMilli(exitCutoff)
@@ -660,10 +676,10 @@ func (s *PositionStore) equityDrawdown(traderID string, exitCutoff int64) (float
 	var snaps []EquitySnapshot
 	if err := s.db.Select("timestamp", "total_equity").Where("trader_id = ? AND timestamp >= ?", traderID, start).
 		Order("timestamp ASC").Find(&snaps).Error; err != nil {
-		return 0, false, err
+		return twrDrawdown{}, false, err
 	}
 	if len(snaps) < 2 {
-		return 0, false, nil
+		return twrDrawdown{}, false, nil
 	}
 	points := make([]equityPoint, len(snaps))
 	for i, sn := range snaps {
@@ -671,7 +687,7 @@ func (s *PositionStore) equityDrawdown(traderID string, exitCutoff int64) (float
 	}
 	flows, err := s.externalCashFlows(traderID, points[0].At, points[len(points)-1].At)
 	if err != nil {
-		return 0, false, err
+		return twrDrawdown{}, false, err
 	}
 	dd, ok := twrMaxDrawdown(points, flows)
 	return dd, ok, nil
@@ -720,9 +736,12 @@ func (s *PositionStore) externalCashFlows(traderID string, from, to time.Time) (
 // (Modified-Dietz with flows at the interval end), so a deposit is not profit
 // and a withdrawal is not loss. Intervals with non-positive opening equity
 // carry no return information and are skipped. ok=false when no interval
-// produced a return.
-func twrMaxDrawdown(points []equityPoint, flows []cashFlow) (float64, bool) {
-	index, peak, maxDD := 1.0, 1.0, 0.0
+// produced a return. Provenance identifies the original snapshots at the
+// index peak and maximum drawdown trough, and stays empty when drawdown is zero.
+func twrMaxDrawdown(points []equityPoint, flows []cashFlow) (twrDrawdown, bool) {
+	index, peak := 1.0, 1.0
+	var maxDD twrDrawdown
+	var peakPoint equityPoint
 	used := false
 	fi := 0
 	for i := 1; i < len(points); i++ {
@@ -737,6 +756,9 @@ func twrMaxDrawdown(points []equityPoint, flows []cashFlow) (float64, bool) {
 		if e0 <= 0 || math.IsNaN(e0) || math.IsNaN(e1) || math.IsInf(e0, 0) || math.IsInf(e1, 0) {
 			continue
 		}
+		if !used {
+			peakPoint = points[i-1]
+		}
 		r := (e1 - e0 - f) / e0
 		if r < -1 {
 			r = -1
@@ -745,9 +767,13 @@ func twrMaxDrawdown(points []equityPoint, flows []cashFlow) (float64, bool) {
 		used = true
 		if index > peak {
 			peak = index
+			peakPoint = points[i]
 		}
-		if dd := (peak - index) / peak * 100; dd > maxDD {
-			maxDD = dd
+		if dd := (peak - index) / peak * 100; dd > maxDD.Pct {
+			maxDD = twrDrawdown{
+				Pct: dd, PeakAt: peakPoint.At, TroughAt: points[i].At,
+				PeakEquity: peakPoint.Equity, TroughEquity: points[i].Equity,
+			}
 		}
 	}
 	return maxDD, used

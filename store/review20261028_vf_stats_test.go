@@ -217,15 +217,15 @@ func TestReview20261028VFTWRDrawdownIgnoresTransfers(t *testing.T) {
 	at := func(h int) time.Time { return time.Unix(0, 0).Add(time.Duration(h) * time.Hour) }
 	// Withdrawal 100 -> 60 with -40 flow is not a drawdown; raw equity would show 40%.
 	pts := []equityPoint{{at(0), 100}, {at(1), 60}}
-	if dd, ok := twrMaxDrawdown(pts, []cashFlow{{at(1), -40}}); !ok || dd != 0 {
+	if dd, ok := twrMaxDrawdown(pts, []cashFlow{{at(1), -40}}); !ok || dd.Pct != 0 {
 		t.Fatalf("withdrawal dd=%v ok=%v, want 0", dd, ok)
 	}
-	if dd, ok := twrMaxDrawdown(pts, nil); !ok || math.Abs(dd-40) > 1e-9 {
+	if dd, ok := twrMaxDrawdown(pts, nil); !ok || math.Abs(dd.Pct-40) > 1e-9 {
 		t.Fatalf("no-flow dd=%v ok=%v, want 40", dd, ok)
 	}
 	// Deposit +100 at the end of a flat period is not recovery of a prior loss.
 	pts = []equityPoint{{at(0), 100}, {at(1), 80}, {at(2), 180}}
-	if dd, ok := twrMaxDrawdown(pts, []cashFlow{{at(2), 100}}); !ok || math.Abs(dd-20) > 1e-9 {
+	if dd, ok := twrMaxDrawdown(pts, []cashFlow{{at(2), 100}}); !ok || math.Abs(dd.Pct-20) > 1e-9 {
 		t.Fatalf("deposit dd=%v, want 20", dd)
 	}
 	// Flows before the first snapshot are ignored; non-positive opening equity is skipped.
