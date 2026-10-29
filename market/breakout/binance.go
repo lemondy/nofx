@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nofx/market"
 	"nofx/market/bnweight"
 	"nofx/market/pubcache"
 	"nofx/security"
@@ -218,8 +219,10 @@ func (b *binanceDS) OIHistory(period string, limit int) ([]OIPoint, error) {
 	return out, nil
 }
 
-// FundingInfo combines the forward rate (premiumIndex) with the settlement
-// interval measured from recent settlement timestamps.
+var scheduleHours = market.FundingScheduleHours
+
+// FundingInfo combines the forward rate (premiumIndex) with the exchange
+// settlement schedule, falling back to the median recent settlement gap.
 func (b *binanceDS) FundingInfo() (*FundingInfo, error) {
 	// Forward-looking rate: what the next settlement charges.
 	var px struct {
@@ -231,26 +234,25 @@ func (b *binanceDS) FundingInfo() (*FundingInfo, error) {
 	rate, _ := strconv.ParseFloat(px.LastFundingRate, 64)
 
 	info := &FundingInfo{NextRate: rate, IntervalHours: 8}
-	// Measure the real interval from the last few settlements (some listings
-	// settle every 1h or 4h — a fixed ×3/day annualization would understate
-	// them by 3-8×).
+	// The market schedule belongs to the default Binance endpoint. A custom
+	// base (test server or private gateway) must use its own funding history
+	// rather than mixing it with metadata fetched from the fixed public base.
+	if fapiBase() == defaultFAPIBase {
+		if hours, ok := scheduleHours(b.symbol); ok {
+			info.IntervalHours = hours
+			return info, nil
+		}
+	}
 	var raw []struct {
 		FundingTime int64 `json:"fundingTime"`
 	}
 	if err := fetchJSONCached(fapiBase()+"/fapi/v1/fundingRate?symbol="+b.symbol+"&limit=4", fundingCacheTTL, &raw); err == nil && len(raw) >= 2 {
-		gaps := []float64{}
-		for i := 1; i < len(raw); i++ {
-			h := float64(raw[i].FundingTime-raw[i-1].FundingTime) / 3.6e6
-			if h > 0 && h <= 24 {
-				gaps = append(gaps, h)
-			}
+		times := make([]int64, len(raw))
+		for i, row := range raw {
+			times[i] = row.FundingTime
 		}
-		if len(gaps) > 0 {
-			sum := 0.0
-			for _, g := range gaps {
-				sum += g
-			}
-			info.IntervalHours = sum / float64(len(gaps))
+		if hours := market.MedianFundingIntervalHours(times); hours > 0 {
+			info.IntervalHours = hours
 		}
 	}
 	return info, nil
