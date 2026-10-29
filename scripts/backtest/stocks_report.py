@@ -114,7 +114,11 @@ def cross_check(result, go):
     cfg = result['config']
     expected = dict(timeframe=cfg['timeframe'], max_positions=cfg['max_positions'],
         rebalance_trading_days=cfg['rebalance_trading_days'], cost_bps_per_side=cfg['commission']*10000)
-    mismatches = [f'{k}: BT={v}, Go={go["config"].get(k)}' for k, v in expected.items() if go['config'].get(k) != v]
+    # Older Go outputs carry no slippage field and simulate none: absent means 0.
+    expected['slippage_bps_per_side'] = cfg.get('slippage', 0)*10000
+    mismatches = [f'{k}: BT={v}, Go={go["config"].get(k, 0 if k == "slippage_bps_per_side" else None)}'
+                  for k, v in expected.items()
+                  if go['config'].get(k, 0 if k == 'slippage_bps_per_side' else None) != v]
     if cfg['cash'] != 100000:
         mismatches.append('Go initial equity is 100000; Backtrader cash differs')
     for k in ('first_signal_close', 'last_mark_close'):
@@ -128,6 +132,13 @@ def cross_check(result, go):
 
 def pct(x):
     return 'n/a' if x is None else f'{x*100:.2f}%'
+
+
+def slippage_assumption(slippage):
+    """Plain-language statement of the slippage assumption; never calibrated."""
+    if slippage:
+        return f'滑点: {slippage*10000:g} bp/侧（假设情景，非实测）'
+    return '滑点: 0（假设，未实测 bStock 价差/深度）'
 
 
 def num(x):
@@ -279,9 +290,12 @@ def render_report(result):
     cfg, cov = result['config'], result['coverage']
     lines = [f"# US-stock portfolios — Backtrader ({cfg['timeframe']})", '',
         f"Engine: Backtrader {result['engine_version']}; initial cash {cfg['cash']:,.2f}; "
-        f"commission {pct(cfg['commission'])} per side; maxpos {cfg['max_positions']}; "
+        f"commission {pct(cfg['commission'])} per side; slippage {cfg['slippage']*10000:g} bp per side; "
+        f"maxpos {cfg['max_positions']}; "
         f"momentum rebalance every {cfg['rebalance_trading_days']} SPY sessions.", '',
-        'Native Cerebro / BackBroker / Market orders; no cheat-on-close/open; **no slippage**. '
+        f"Native Cerebro / BackBroker / Market orders; no cheat-on-close/open; {slippage_assumption(cfg['slippage'])}. "
+        f"Slippage is an assumption, not measured; buys fill at min(next open×(1+slippage), bar high), "
+        f"sells at max(next open×(1−slippage), bar low). "
         'Signals at close t execute at next SPY bar open t+1. Fractional shares; no leverage. '
         'Shares are sized at the signal close and capped to actual cash at the fill open; sells precede buys. '
         'A missing next-SPY open cancels the order without promoting another candidate. '
@@ -360,7 +374,8 @@ def render_report(result):
         '## Caveats', '',
         '- Survivorship bias: a current cached universe, without historical listing/delisting membership or delisting proceeds.',
         '- Yahoo adjusted underlying regular-session OHLCV differs from executable bStock tokens (hours, spreads, adjustments, liquidity). '
-        'No bStock trading, volume constraint, taxes, borrow, dividends beyond the vendor adjustment, or market impact is modeled.',
+        'No bStock trading, volume constraint, taxes, borrow, dividends beyond the vendor adjustment, or market impact is modeled. '
+        'Slippage is an explicit assumption, not a measured bStock spread/depth estimate (default 0).',
         '- No LLM layer: these are mechanical rules. 1h Yahoo history covers only ~2 years (about 730 days), with 60m/last half-hour bars.',
         '- 1h MA/ATR windows count hourly bars; ranking uses the previous completed daily session. '
         'The common warmup is SPY rank-valid (253 daily bars), at least 61 execution bars, and the session’s last bar. '
