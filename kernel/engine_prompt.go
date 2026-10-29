@@ -422,7 +422,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		params.WriteString("- 注意: 资金费率极端拥挤时禁止逆势扛单;目标位越过 structure_high/low(历史新高新低区)时注明无历史阻力参考、不确定性大\n")
 		if e.config.RiskControl.VolTargetEnabled {
-			params.WriteString("- 波动率调仓(程序自动): 每周期按 权益×单笔风险%÷ATR(1h)% 重算目标仓位,80/120 滞后带外才调——>120% 程序自动减仓,<80% 时你可在信号仍有效的前提下评估加仓。不要因波动率变化去动 SL/TP\n")
+			params.WriteString("- 波动率调仓(程序自动): 每周期按 权益×单笔风险%÷ATR(1h)% 重算目标仓位,80/120 滞后带外才调——>120% 程序自动减仓,<80% 时程序不会自动加仓,同向加仓会被拒绝,因此不要提出加仓。不要因波动率变化去动 SL/TP\n")
 		}
 		if e.config.RiskControl.CloseRejectBreakoutPct > 0 {
 			params.WriteString(fmt.Sprintf("- 浮亏平仓限制(程序强制): 持仓浮亏时,若最近的反向结构位(做多看上方 resistance/structure_high、做空看下方 support)距离现价 < %.1f%% 且 15m 结构未破坏(未破支撑/未破阻力),\"被阻力拒绝/被支撑拒绝\"不构成平仓理由,该 close 会被程序拦截——给突破留空间;你的合法离场路径是 15m 结构实际破位、止损触发,或浮盈状态下的正常止盈\n", e.config.RiskControl.CloseRejectBreakoutPct))
@@ -525,9 +525,13 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 
 	// BTC market
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD(12/26线,价格绝对值口径): %.4f | RSI(7): %.2f\n\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
+		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%)",
+			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h))
+		if btcData.ClosedTimeframe != "" {
+			sb.WriteString(fmt.Sprintf(" | BTC(%s 收盘): MACD(12/26线,价格绝对值口径)=%.4f RSI7=%.2f",
+				btcData.ClosedTimeframe, btcData.ClosedMACD, btcData.ClosedRSI7))
+		}
+		sb.WriteString("\n\n")
 	}
 
 	// Account information. "Available" is DERIVED (equity − Σposition margin)
