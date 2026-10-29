@@ -5,8 +5,10 @@ ensemble.json itself is untouched by forward results."""
 from collections import Counter
 import copy
 import datetime as dt
+import hashlib
 import os
 from pathlib import Path
+import secrets
 import sys
 
 import numpy as np
@@ -41,7 +43,9 @@ def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None,
     as_of = dates.max()
     mask = panels.mask.loc[as_of]
     output = dict(version=1, market=market, generated_at=generated.isoformat(),
-                  as_of=as_of.strftime('%Y-%m-%d'), universe_size=int(mask.sum()), horizons={})
+                  as_of=as_of.strftime('%Y-%m-%d'), universe_size=int(mask.sum()), horizons={},
+                  run_id=f'{market}-{generated.strftime("%Y%m%dT%H%M%S%fZ")}-{secrets.token_hex(4)}',
+                  evaluator_sha256=hashlib.sha256(Path(__file__).with_name('evaluate.py').read_bytes()).hexdigest())
     for h in MARKETS[market]['horizons']:
         if selected_ids is None:
             selected = select_ensemble_factors(factors, h)
@@ -178,7 +182,8 @@ def _extended_snapshot(snapshot, factors, core, symbols, *, root, selected_ids, 
             verdict = (factor.get('forward') or {}).get('verdict', 'none')
             item = dict(
                 family=factor.get('family'), horizon=factor['horizon'], direction=factor['direction'],
-                expr=factor['expr'][:120], val_t=validation.get('t'), val_ic=validation.get('ic'),
+                expr=factor['expr'][:120], expr_sha256=hashlib.sha256(factor['expr'].encode('utf-8')).hexdigest()[:12],
+                val_t=validation.get('t'), val_ic=validation.get('ic'),
                 forward=verdict if verdict in {'pending', 'confirmed', 'inconclusive', 'failed'} else 'none')
             if factor['id'] not in metadata:
                 metadata[factor['id']] = item

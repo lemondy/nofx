@@ -1,6 +1,7 @@
 """Synthetic scoring-only extension tests; no production data/network access."""
 import copy
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -71,9 +72,12 @@ class ExtendedScoresTests(unittest.TestCase):
             self.assertFalse(scoring.mask['XUSDT'].any())
             output = live_scores.extend_live_scores(self.factors, core, symbols, root=root, now=self.now)
             self.assertEqual(legacy_only(output), before)
-            # Even with extension files present, the original exporter is exact.
-            live_scores.export_live_scores('crypto', self.factors, core, root=root, now=self.now)
-            self.assertEqual(path.read_bytes(), before)
+            # A new export has a new identity, with all other fields unchanged.
+            repeated = live_scores.export_live_scores('crypto', self.factors, core, root=root, now=self.now)
+            self.assertEqual(json.loads(path.read_bytes()), repeated)
+            self.assertNotEqual(repeated['run_id'], baseline['run_id'])
+            self.assertEqual({k: v for k, v in repeated.items() if k != 'run_id'},
+                             {k: v for k, v in baseline.items() if k != 'run_id'})
         outside_mask = core.mask.columns[-1]
         self.assertEqual(names, [outside_mask, 'XUSDT'])
         self.assertEqual(skipped, {'SHORTUSDT': 'history<60d', 'STALEUSDT': 'stale', 'NONEUSDT': 'no_data'})
@@ -85,7 +89,8 @@ class ExtendedScoresTests(unittest.TestCase):
         self.assertEqual(entry['forward_failed_excluded'], 1)
         self.assertNotIn('f_failed', output['factors'])
         self.assertEqual(output['factors']['f_close'], dict(family='price_volume', horizon=1, direction=1,
-            expr='$close', val_t=5.06, val_ic=.0449, forward='inconclusive'))
+            expr='$close', expr_sha256=hashlib.sha256(b'$close').hexdigest()[:12],
+            val_t=5.06, val_ic=.0449, forward='inconclusive'))
         self.assertIsNone(output['factors']['f_rank']['val_t'])
         self.assertIsNone(output['factors']['f_rank']['val_ic'])
         self.assertEqual(output['factors']['f_rank']['forward'], 'none')
@@ -124,9 +129,12 @@ class ExtendedScoresTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'crypto/live_scores.json'
             live_scores.export_live_scores('crypto', fs, without, root=root, now=self.now)
-            before = path.read_bytes()
+            before = store.read_json(path)
             live_scores.export_live_scores('crypto', fs, core, root=root, now=self.now)
-            self.assertEqual(path.read_bytes(), before)
+            after = store.read_json(path)
+            self.assertNotEqual(after.pop('run_id'), before.pop('run_id'))
+            self.assertEqual(after, before)
+            before = path.read_bytes()
             # A repeated core symbol in the extra list must neither read an
             # ext file nor duplicate scores. Mask-eligible core names stay core.
             symbols = [symbol, symbol, core.mask.columns[0]]
@@ -273,6 +281,10 @@ class ExtendedScoresTests(unittest.TestCase):
                                                     now=self.now, selected_ids=ids)
             self.assertEqual(output['horizons']['1']['factor_ids'], ['f1'])
             self.assertEqual(len(output['factors']['f1']['expr']), 120)
+            self.assertEqual(output['factors']['f1']['expr_sha256'],
+                             hashlib.sha256(fs[0]['expr'].encode('utf-8')).hexdigest()[:12])
+            self.assertNotEqual(output['factors']['f1']['expr_sha256'],
+                                hashlib.sha256(output['factors']['f1']['expr'].encode('utf-8')).hexdigest()[:12])
             serialized = (Path(root) / 'crypto/live_scores.json').read_text()
             self.assertNotIn('NaN', serialized)
             self.assertNotIn('Infinity', serialized)
