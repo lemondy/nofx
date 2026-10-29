@@ -123,7 +123,7 @@ func TestPositionValuePct(t *testing.T) {
 
 func TestMatchSoftRules(t *testing.T) {
 	rules := []*store.TradingRuleDB{
-		{ID: 1, RuleType: "soft", Name: "fomo", Tags: "fomo,chase", LessonText: "high leverage + chasing historically wins 15%", Enabled: true},
+		{ID: 1, RuleType: "soft", Name: "breakout", Tags: "breakout,rsi,reversal", LessonText: "avoid chasing breakouts", Enabled: true},
 		{ID: 2, RuleType: "soft", Name: "btc only", Tags: "BTCUSDT", LessonText: "BTC mean reversion works better", Enabled: true},
 		{ID: 3, RuleType: "soft", Name: "disabled", Tags: "", LessonText: "should not appear", Enabled: false},
 	}
@@ -151,6 +151,9 @@ func TestBuildRulesPromptText(t *testing.T) {
 	}
 	if !contains(text, "max leverage") || !contains(text, "avoid FOMO") {
 		t.Fatalf("prompt missing rules: %s", text)
+	}
+	if !contains(text, "不能覆盖程序硬门") {
+		t.Fatalf("prompt missing trust boundary: %s", text)
 	}
 	if ruleTestContains(text, "off") {
 		t.Fatalf("disabled rule should be excluded: %s", text)

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"nofx/kernel"
 	"nofx/store"
 )
 
@@ -40,7 +41,7 @@ func TestApplyRulesVerification(t *testing.T) {
 		name    string
 		highNet float64
 		saved   int
-	}{{"supported", -3, 1}, {"contradicted", 5, 0}} {
+	}{{"in_sample_only", -3, 1}, {"contradicted", 5, 0}} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, r, token, _, traderID := idorFixture(t)
 			r.POST("/review/ai/apply-rules", srv.authMiddleware(), srv.handleAIApplyRules)
@@ -80,12 +81,15 @@ func TestApplyRulesVerification(t *testing.T) {
 			if len(rules) != 1 || rules[0].Source != "ai_review" || rules[0].VerifiedAt == 0 {
 				t.Fatalf("saved rule wrong: %+v", rules)
 			}
-			var v struct {
-				Status  string `json:"status"`
-				Matched int    `json:"matched"`
-			}
-			if err := json.Unmarshal([]byte(rules[0].VerifiedStats), &v); err != nil || v.Status != "supported" || v.Matched != 4 {
+			var v kernel.RuleVerification
+			if err := json.Unmarshal([]byte(rules[0].VerifiedStats), &v); err != nil || v.Status != kernel.VerifyInSampleOnly ||
+				v.Matched != 4 || v.InSampleMatched != 4 || v.InSampleNetPnL != -12 || v.OutOfSampleMatched != 0 {
 				t.Fatalf("verified_stats=%q", rules[0].VerifiedStats)
+			}
+			// Replaying immediately must not promote the generation history.
+			fresh := do("POST", "/review/rules/"+jsonID(rules[0].ID)+"/reverify?trader_id="+traderID, "")
+			if fresh["verification"].(map[string]any)["status"] != kernel.VerifyInSampleOnly {
+				t.Fatalf("fresh rule should remain in sample: %v", fresh)
 			}
 
 			// list: trigger stats + review_due, seeded straight into the DB.
@@ -103,7 +107,19 @@ func TestApplyRulesVerification(t *testing.T) {
 				t.Fatalf("list annotations wrong: %v", rl)
 			}
 			// reverify clears review_due
-			do("POST", "/review/rules/"+jsonID(rules[0].ID)+"/reverify?trader_id="+traderID, "")
+			reverified := do("POST", "/review/rules/"+jsonID(rules[0].ID)+"/reverify?trader_id="+traderID, "")
+			// The seeded exits now follow created_at, and verified_at must not
+			// replace that generation cutoff on subsequent reverifications.
+			for i := 0; i < 2; i++ {
+				rv := reverified["verification"].(map[string]any)
+				if rv["status"] != kernel.VerifySupported || rv["out_of_sample_matched"] != float64(4) ||
+					rv["out_of_sample_net_pnl"] != float64(-12) || rv["in_sample_matched"] != float64(0) {
+					t.Fatalf("reverification should use created_at: %v", reverified)
+				}
+				if i == 0 {
+					reverified = do("POST", "/review/rules/"+jsonID(rules[0].ID)+"/reverify?trader_id="+traderID, "")
+				}
+			}
 			lm = do("GET", "/review/rules?trader_id="+traderID, "")
 			if lm["rules"].([]any)[0].(map[string]any)["review_due"] != false {
 				t.Fatalf("review_due should clear after reverify: %v", lm)

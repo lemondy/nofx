@@ -1360,6 +1360,7 @@ function VerificationBadge({
     t(`reviewPage.${key}`, language, params)
   const label: Record<string, string> = {
     supported: rv('verifSupported'),
+    in_sample_only: rv('verifInSampleOnly'),
     weak: rv('verifWeak'),
     contradicted: rv('verifContradicted'),
     unverifiable: rv('verifUnverifiable'),
@@ -1370,11 +1371,13 @@ function VerificationBadge({
       ? 'up'
       : v.status === 'weak'
         ? 'warn'
-        : v.status === 'contradicted'
-          ? 'down'
-          : v.status === 'soft'
-            ? 'info'
-            : 'neutral'
+        : v.status === 'in_sample_only'
+          ? 'warn'
+          : v.status === 'contradicted'
+            ? 'down'
+            : v.status === 'soft'
+              ? 'info'
+              : 'neutral'
   const detail = rv('verifDetail', {
     matched: v.matched,
     pop: v.population,
