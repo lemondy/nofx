@@ -36,24 +36,33 @@ type FundingIntervalCache struct {
 
 var (
 	fundingIntervalMap sync.Map // map[string]*FundingIntervalCache
-	fundingIntervalTTL = 24 * time.Hour
+	fundingIntervalTTL = time.Hour
 )
 
-// fundingIntervalHours returns the symbol's real funding settlement interval
-// in hours, measured from recent settlement timestamps (0 = unknown).
-// The interval is fixed per listing (8h default; some new listings 4h/1h)
-// and changes rarely, so it is cached for a day. The measurement rides on
-// the same /fapi/v1/fundingRate call that feeds the rollover history
-// (funding_history.go) — one endpoint call per 5-minute cache window serves
-// both.
+// fundingIntervalHours prefers the exchange's current settlement schedule,
+// falling back to the median of recent settlement gaps (0 = unknown).
+// History-based estimates are cached for one hour, but a different latest
+// valid gap forces recalculation. fundingHistory shares its five-minute
+// cache with rollover history, so checking the latest gap shares that fetch.
 func fundingIntervalHours(symbol string) float64 {
+	symbol = Normalize(symbol)
+	if hours, ok := FundingScheduleHours(symbol); ok {
+		return hours
+	}
+	_, times, ok := fundingHistory(symbol)
 	if cached, ok := fundingIntervalMap.Load(symbol); ok {
 		c := cached.(*FundingIntervalCache)
 		if time.Since(c.UpdatedAt) < fundingIntervalTTL {
-			return c.Hours
+			latest := 0.0
+			if len(times) >= 2 {
+				latest = float64(times[len(times)-1]-times[len(times)-2]) / 3.6e6
+			}
+			// Settlement timestamps carry millisecond jitter: compare with tolerance.
+			if latest <= 0 || latest > 24 || math.Abs(latest-c.Hours) < 0.01 {
+				return c.Hours
+			}
 		}
 	}
-	_, times, ok := fundingHistory(symbol)
 	if !ok || len(times) < 2 {
 		return 0
 	}

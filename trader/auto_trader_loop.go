@@ -980,60 +980,15 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		} else if stats.TotalTrades == 0 {
 			logger.Infof("⚠️ [%s] Trading stats: 0 closed trades in %s (traderID=%s) — strategy_health omitted", at.name, windowLabel, at.id)
 		} else {
-			maxDD := stats.MaxDrawdownPct
-			// Equity-curve provenance (user audit 2026-10-01: the max-DD
-			// number needs its peak/trough dates to be auditable — it can
-			// describe a real crash against a baseline that predates the
-			// manual initial-balance reset).
+			// Use the store's cash-flow-adjusted drawdown and its index
+			// peak/trough provenance; raw equity swings include transfers.
 			var ddPeak, ddTrough float64
 			var ddPeakAt, ddTroughAt string
-			// Prefer the real equity curve when available: it includes
-			// unrealized swings that closed-trade PnL never shows. The
-			// curve is clipped to the same window so DD and PF describe
-			// the same period.
-			snapLimit := 2000
-			if statsWindow > 0 {
-				// ~5min snapshot cadence (288/day) plus headroom.
-				snapLimit = statsWindow*288 + 100
-			}
-			if snaps, err := at.store.Equity().GetLatest(at.id, snapLimit); err == nil && len(snaps) > 1 {
-				if statsWindow > 0 {
-					cutoff := time.Now().Add(-time.Duration(statsWindow) * 24 * time.Hour)
-					filtered := snaps[:0]
-					for _, sn := range snaps {
-						if sn.Timestamp.After(cutoff) {
-							filtered = append(filtered, sn)
-						}
-					}
-					snaps = filtered
-				}
-				if len(snaps) > 1 {
-					peak := snaps[0].TotalEquity
-					peakAt := snaps[0].Timestamp
-					var dd float64
-					var troughV, peakV float64
-					var peakAtStr, troughAtStr string
-					for _, sn := range snaps {
-						if sn.TotalEquity > peak {
-							peak = sn.TotalEquity
-							peakAt = sn.Timestamp
-						}
-						if peak > 0 {
-							if d := (peak - sn.TotalEquity) / peak * 100; d > dd {
-								dd = d
-								troughV = sn.TotalEquity
-								peakV = peak
-								peakAtStr = peakAt.UTC().Format("01-02")
-								troughAtStr = sn.Timestamp.UTC().Format("01-02")
-							}
-						}
-					}
-					if dd > 0 {
-						maxDD = dd
-						ddPeak, ddTrough = peakV, troughV
-						ddPeakAt, ddTroughAt = peakAtStr, troughAtStr
-					}
-				}
+			if stats.MaxDrawdownBasis == "equity_twr" && stats.MaxDrawdownPct > 0 &&
+				stats.MaxDrawdownPeakAt != nil && stats.MaxDrawdownTroughAt != nil {
+				ddPeak, ddTrough = stats.MaxDrawdownPeakEquity, stats.MaxDrawdownTroughEquity
+				ddPeakAt = stats.MaxDrawdownPeakAt.UTC().Format("01-02")
+				ddTroughAt = stats.MaxDrawdownTroughAt.UTC().Format("01-02")
 			}
 			ctx.TradingStats = &kernel.TradingStats{
 				TotalTrades:       stats.TotalTrades,
@@ -1044,7 +999,7 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				TotalFee:          stats.TotalFee,
 				AvgWin:            stats.AvgWin,
 				AvgLoss:           stats.AvgLoss,
-				MaxDrawdownPct:    maxDD,
+				MaxDrawdownPct:    stats.MaxDrawdownPct,
 				MaxDDPeakEquity:   ddPeak,
 				MaxDDTroughEquity: ddTrough,
 				MaxDDPeakAt:       ddPeakAt,
@@ -1068,8 +1023,8 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				logger.Infof("📈 [%s] Measured R (%s): %d trades, avgWin %+.2fR, avgLoss %.2fR, expectancy %+.2fR",
 					at.name, windowLabel, rm.Samples, rm.AvgWinR, rm.AvgLossR, rm.ExpectancyR)
 			}
-			logger.Infof("📈 [%s] Trading stats (%s): %d trades, %.1f%% win rate, PF=%.2f, Sharpe=%.2f, DD=%.1f%%",
-				at.name, windowLabel, stats.TotalTrades, stats.WinRate, stats.ProfitFactor, stats.SharpeRatio, stats.MaxDrawdownPct)
+			logger.Infof("📈 [%s] Trading stats (%s): %d trades, %.1f%% win rate, PF=%.2f, Sharpe=%.2f, DD=%.1f%%(%s)",
+				at.name, windowLabel, stats.TotalTrades, stats.WinRate, stats.ProfitFactor, stats.SharpeRatio, stats.MaxDrawdownPct, stats.MaxDrawdownBasis)
 		}
 	} else {
 		logger.Infof("⚠️ [%s] Store is nil, cannot get recent trades", at.name)

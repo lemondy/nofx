@@ -11,6 +11,7 @@ import (
 )
 
 func TestReview20261028VFRequestObservation(t *testing.T) {
+	review20261029Schedule(t, func() (map[string]float64, error) { return map[string]float64{"BTCUSDT": 8}, nil })
 	for _, execution := range []bool{false, true} {
 		t.Run(strconv.FormatBool(execution), func(t *testing.T) {
 			symbol := "VFOBS" + strconv.FormatInt(time.Now().UnixNano(), 10) + "USDT"

@@ -1,6 +1,8 @@
 package market
 
 import (
+	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"sync"
@@ -19,7 +21,7 @@ import (
 // ============================================================================
 
 // SymbolLotFilter is the exchange's tradability floor for one symbol.
-// Zero fields = unknown (fetch failed) — callers fail-open.
+// Zero fields = unknown (absent or fetch failed) — callers fail-open.
 type SymbolLotFilter struct {
 	StepSize    float64 // quantity granularity
 	MinQty      float64 // minimum order quantity
@@ -32,62 +34,128 @@ type lotFilterCache struct {
 }
 
 var (
-	lotFilterMu     sync.Mutex
-	lotFilterCacheV map[string]lotFilterCache
+	lotFilterMu        sync.Mutex
+	lotFilterCacheV    map[string]lotFilterCache
+	lotFilterFetchedAt time.Time
+	lotFilterFailedAt  time.Time
+	lotFilterInflight  chan struct{}
+	// lotFilterFetch is the offline test seam for a complete exchange snapshot.
+	lotFilterFetch = func() (map[string]SymbolLotFilter, error) {
+		var payload struct {
+			Symbols []struct {
+				Symbol  string                   `json:"symbol"`
+				Status  string                   `json:"status"`
+				Filters []map[string]interface{} `json:"filters"`
+			} `json:"symbols"`
+		}
+		if err := binanceGetJSON("/fapi/v1/exchangeInfo", &payload); err != nil {
+			return nil, err
+		}
+		// Binance error bodies can decode successfully but contain no symbols.
+		if len(payload.Symbols) == 0 {
+			return nil, fmt.Errorf("empty futures exchangeInfo symbols")
+		}
+		filters := make(map[string]SymbolLotFilter, len(payload.Symbols))
+		for _, s := range payload.Symbols {
+			if s.Status == "TRADING" && s.Symbol != "" {
+				filters[s.Symbol] = ParseSymbolLotFilter(s.Filters)
+			}
+		}
+		return filters, nil
+	}
 )
 
 // lotFilterTTL: exchangeInfo changes ~never intraday; 6h keeps it fresh
 // across listing updates without hammering the endpoint.
 const lotFilterTTL = 6 * time.Hour
 
-// DefaultMinNotional is the house fallback when the filter is absent —
-// Binance USDT-M has carried 5U (VIP-adjustable) for years; the executor
-// defaults its own check to 10.
-const DefaultMinNotional = 5.0
+const lotFilterFailureBackoff = time.Minute
 
-// GetSymbolLotFilter returns the LOT_SIZE/MIN_NOTIONAL floor for symbol.
-// Cached 6h per symbol; fetch failure returns a zero filter (unknown) and
-// is retried next call after the TTL — never cached as authoritative.
-func GetSymbolLotFilter(symbol string) SymbolLotFilter {
-	lotFilterMu.Lock()
-	defer lotFilterMu.Unlock()
-	if lotFilterCacheV == nil {
-		lotFilterCacheV = map[string]lotFilterCache{}
-	}
-	if c, ok := lotFilterCacheV[symbol]; ok && time.Since(c.fetchedAt) < lotFilterTTL {
-		return c.filter
-	}
-	var payload struct {
-		Symbols []struct {
-			Symbol  string                   `json:"symbol"`
-			Status  string                   `json:"status"`
-			Filters []map[string]interface{} `json:"filters"`
-		} `json:"symbols"`
-	}
-	if err := binanceGetJSON("/fapi/v1/exchangeInfo", &payload); err != nil {
-		return SymbolLotFilter{} // unknown — fail-open
-	}
-	out := SymbolLotFilter{MinNotional: DefaultMinNotional}
-	for _, s := range payload.Symbols {
-		if s.Symbol != symbol {
-			continue
-		}
-		for _, f := range s.Filters {
-			ft, _ := f["filterType"].(string)
-			switch ft {
-			case "LOT_SIZE":
-				out.StepSize = parseF(f["stepSize"])
-				out.MinQty = parseF(f["minQty"])
-			case "MIN_NOTIONAL", "NOTIONAL":
-				if v := parseF(f["notional"]); v > 0 {
-					out.MinNotional = v
-				}
+// FallbackMinNotional is shared with the Binance executor when a known
+// symbol has no valid MIN_NOTIONAL/NOTIONAL filter.
+const FallbackMinNotional = 10.0
+
+// ParseSymbolLotFilter parses the tradability floor without fetching data.
+// Kernel planning does not yet know whether entry will use MARKET or LIMIT.
+// Take the larger minQty and coarser step from MARKET_LOT_SIZE and LOT_SIZE
+// so the floor shown to the model covers both execution paths.
+func ParseSymbolLotFilter(filters []map[string]interface{}) SymbolLotFilter {
+	out := SymbolLotFilter{MinNotional: FallbackMinNotional}
+	notionalFound := false
+	for _, f := range filters {
+		switch f["filterType"] {
+		case "LOT_SIZE", "MARKET_LOT_SIZE":
+			out.StepSize = math.Max(out.StepSize, parseF(f["stepSize"]))
+			out.MinQty = math.Max(out.MinQty, parseF(f["minQty"]))
+		case "MIN_NOTIONAL", "NOTIONAL":
+			v := f["notional"]
+			if v == nil || v == "" {
+				v = f["minNotional"]
+			}
+			if n := parseF(v); !notionalFound && n > 0 {
+				out.MinNotional = n
+				notionalFound = true
 			}
 		}
-		break
 	}
-	lotFilterCacheV[symbol] = lotFilterCache{filter: out, fetchedAt: time.Now()}
 	return out
+}
+
+// GetSymbolLotFilter uses one six-hour snapshot for all trading symbols.
+// Failed refreshes retain the old table and back off for one minute. Missing
+// symbols return zero (unknown) without inventing an exchange floor.
+func GetSymbolLotFilter(symbol string) SymbolLotFilter {
+	for {
+		lotFilterMu.Lock()
+		now := time.Now()
+		c, ok := lotFilterCacheV[symbol]
+		if (ok && now.Sub(c.fetchedAt) < lotFilterTTL) ||
+			(!lotFilterFetchedAt.IsZero() && now.Sub(lotFilterFetchedAt) < lotFilterTTL) ||
+			(!lotFilterFailedAt.IsZero() && now.Sub(lotFilterFailedAt) < lotFilterFailureBackoff) {
+			lotFilterMu.Unlock()
+			return c.filter
+		}
+		if done := lotFilterInflight; done != nil {
+			lotFilterMu.Unlock()
+			<-done
+			continue
+		}
+		done := make(chan struct{})
+		lotFilterInflight = done
+		fetch := lotFilterFetch
+		lotFilterMu.Unlock()
+
+		filters, err := fetch()
+
+		lotFilterMu.Lock()
+		// Reset invalidates an outstanding refresh as well as its snapshot.
+		if lotFilterInflight == done {
+			if err != nil {
+				lotFilterFailedAt = time.Now()
+			} else {
+				fetchedAt := time.Now()
+				table := make(map[string]lotFilterCache, len(filters))
+				for sym, f := range filters {
+					table[sym] = lotFilterCache{filter: f, fetchedAt: fetchedAt}
+				}
+				// Preserve unexpired test pins, including those installed
+				// while the request was in flight.
+				for sym, pinned := range lotFilterCacheV {
+					if fetchedAt.Sub(pinned.fetchedAt) < lotFilterTTL {
+						table[sym] = pinned
+					}
+				}
+				lotFilterCacheV = table
+				lotFilterFetchedAt = fetchedAt
+				lotFilterFailedAt = time.Time{}
+			}
+			lotFilterInflight = nil
+		}
+		out := lotFilterCacheV[symbol].filter
+		close(done)
+		lotFilterMu.Unlock()
+		return out
+	}
 }
 
 // MinTradableNotional is the smallest notional this symbol can actually
@@ -124,12 +192,11 @@ func (f SymbolLotFilter) MinTradableNotional(price float64) float64 {
 }
 
 func parseF(v interface{}) float64 {
-	switch x := v.(type) {
-	case float64:
-		return x
-	case string:
-		f, err := strconv.ParseFloat(x, 64)
-		if err == nil {
+	switch v.(type) {
+	case string, json.Number, float64, float32,
+		int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		f, err := strconv.ParseFloat(fmt.Sprint(v), 64)
+		if err == nil && f > 0 && !math.IsNaN(f) && !math.IsInf(f, 0) {
 			return f
 		}
 	}
@@ -152,4 +219,7 @@ func ResetSymbolLotFilters() {
 	lotFilterMu.Lock()
 	defer lotFilterMu.Unlock()
 	lotFilterCacheV = map[string]lotFilterCache{}
+	lotFilterFetchedAt = time.Time{}
+	lotFilterFailedAt = time.Time{}
+	lotFilterInflight = nil
 }
