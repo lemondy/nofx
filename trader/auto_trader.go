@@ -156,6 +156,9 @@ type AutoTrader struct {
 	fastMovesMu      sync.Mutex                   // state/cache only; actions use executionMutex
 	fastMoves        map[string]*fastMoveState
 	fastATR          map[string]fastATRValue
+	// marketContextFn, when set (tests), replaces market context enrichment;
+	// nil = live candidate and market-data fetches.
+	marketContextFn func(ctx *kernel.Context)
 	// marketDataFn, when set (tests), replaces the generic execution-quote
 	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
 	marketDataFn               func(symbol string) (*market.Data, error)
