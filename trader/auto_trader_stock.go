@@ -122,6 +122,7 @@ type stockRuntime struct {
 
 	stopTicks   map[string]int
 	lastProtect map[string]stockProtect
+	bandHeld    map[string]bool
 	pendings    map[string]*stockPending
 	// Alert history is loop-owned, like protection reconciliation itself.
 	protectionAlerts map[string]map[string]stockProtectionNotice

@@ -17,6 +17,7 @@ func tpOrder(list int64) *binance.Order {
 
 func TestSetProtectionOCOAndStopOnly(t *testing.T) {
 	tr, f, _ := fixture(t)
+	f.symbols[0].Filters[3]["askMultiplierUp"] = "1.3"
 	tr.client.TimeOffset = 250
 	p, err := tr.SetProtection("AAPLBUSDT", 2.0009, 90.019, 89.509, 120.019)
 	if err != nil {
@@ -99,6 +100,7 @@ func TestProtectionValidationLeavesOldStopLive(t *testing.T) {
 
 func TestProtectionReplacementCancelsFirst(t *testing.T) {
 	tr, f, _ := fixture(t)
+	f.symbols[0].Filters[3]["askMultiplierUp"] = "1.3"
 	f.orders = []*binance.Order{stopOrder(9), tpOrder(9)}
 	f.balances = []binance.Balance{{Asset: "AAPLB", Free: "0", Locked: "2"}}
 	_, err := tr.SetProtection("AAPLBUSDT", 2, 91, 90.5, 121)
@@ -212,6 +214,7 @@ func TestSetStopLossPreservesTakeProfit(t *testing.T) {
 
 func TestSetTakeProfitPreservesStop(t *testing.T) {
 	tr, f, _ := fixture(t)
+	f.symbols[0].Filters[3]["askMultiplierUp"] = "1.3"
 	f.orders = []*binance.Order{stopOrder(-1)}
 	if err := tr.SetTakeProfit("AAPLBUSDT", "LONG", 2, 125); err != nil {
 		t.Fatal(err)
