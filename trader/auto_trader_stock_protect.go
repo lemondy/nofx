@@ -164,6 +164,10 @@ func (at *AutoTrader) stockTickLive(ctx context.Context, now time.Time, logf fun
 			}
 			if err := at.stockPlaceProtection(ctx, h.Symbol, h.Owned, stop, tp, price); err != nil {
 				logf("re-placing protection for %s failed: %v", h.Symbol, err)
+				if stockStopBelowBand(err) {
+					at.stockNotifyBandHeld(h.Symbol, stop, err)
+					continue
+				}
 				stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股保护单缺失且补挂失败 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
 				at.stockBoundFirstProtection(ctx, h, err, now, logf)
 				continue
@@ -179,9 +183,29 @@ func (at *AutoTrader) stockTickLive(ctx context.Context, now time.Time, logf fun
 			at.stock.stopTicks[h.Symbol] = 0
 		}
 	}
+	// A closed position ends its band episode; a later one re-alerts.
+	for sym := range at.stock.bandHeld {
+		if st.Holdings[sym] == nil {
+			delete(at.stock.bandHeld, sym)
+		}
+	}
 	if at.stock.tickCount%stockSnapshotEvery == 0 {
 		at.saveStockEquity(now, st)
 	}
+}
+
+// stockNotifyBandHeld alerts once per episode that the exchange refuses the
+// stop (percent-price band) and the program holds it on the tick instead.
+func (at *AutoTrader) stockNotifyBandHeld(sym string, stop float64, err error) {
+	if at.stock.bandHeld[sym] {
+		return
+	}
+	if at.stock.bandHeld == nil {
+		at.stock.bandHeld = map[string]bool{}
+	}
+	at.stock.bandHeld[sym] = true
+	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股止损超出交易所卖出价格带 %s</b>\n<i>止损 %.4g 低于交易所允许的卖出价下限，交易所止损单暂时无法挂出；程序每分钟按该止损监控，跌破即市价卖出，价格带允许时自动补挂。%s</i>",
+		notify.Escape(sym), stop, notify.Escape(err.Error())))
 }
 
 // stockBoundFirstProtection bounds the retries of a NEW position's first

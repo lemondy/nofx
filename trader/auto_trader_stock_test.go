@@ -78,10 +78,19 @@ type fakeSpot struct {
 	onPositions  func()
 	setProtErr   error   // SetProtection fails with it while set
 	sellRatio    float64 // >0: a market sell executes only this share of the quantity
+	band         *types.SellBand
+	bandErr      error
 }
 
 func newFakeSpot(price float64) *fakeSpot {
 	return &fakeSpot{usdt: 10000, hold: map[string]float64{}, price: price, prot: map[string]*types.ProtectionOrders{}, statuses: map[string]map[string]interface{}{}}
+}
+
+func (f *fakeSpot) SellPriceBand(string) (types.SellBand, error) {
+	if f.band != nil {
+		return *f.band, f.bandErr
+	}
+	return types.SellBand{}, f.bandErr
 }
 
 func (f *fakeSpot) GetBalance() (map[string]interface{}, error) {

@@ -7,6 +7,7 @@ import (
 
 	binance "github.com/adshao/go-binance/v2"
 	"github.com/shopspring/decimal"
+	"nofx/trader/types"
 )
 
 // The executor deliberately uses only spot exchangeInfo. The strategy layer
@@ -127,6 +128,71 @@ func (t *BStockTrader) FormatQuantity(symbol string, qty float64) (string, error
 		return "", fmt.Errorf("LOT_SIZE: missing stepSize for %s", symbol)
 	}
 	return value(round(qty, step, false)), nil
+}
+
+// SellPriceBand intersects the percent-price filters using SELL multipliers.
+func (t *BStockTrader) SellPriceBand(symbol string) (types.SellBand, error) {
+	s, err := t.rule(symbol)
+	if err != nil {
+		return types.SellBand{}, err
+	}
+	var band types.SellBand
+	var avg, last float64
+	var haveAvg, haveLast bool
+	for _, kind := range []string{"PERCENT_PRICE", "PERCENT_PRICE_BY_SIDE"} {
+		f := filter(s, kind)
+		if f == nil {
+			continue
+		}
+		down, up := field(f, "multiplierDown"), field(f, "multiplierUp")
+		if kind == "PERCENT_PRICE_BY_SIDE" {
+			down, up = field(f, "askMultiplierDown"), field(f, "askMultiplierUp")
+		}
+		if !finite(down) || !finite(up) || down <= 0 || up <= down {
+			return types.SellBand{}, fmt.Errorf("sell price band: invalid %s multipliers", kind)
+		}
+		var ref float64
+		if field(f, "avgPriceMins") > 0 {
+			if !haveAvg {
+				a, e := t.client.NewAveragePriceService().Symbol(symbol).Do(context.Background())
+				if e != nil {
+					return types.SellBand{}, wrap("sell price band average price", e)
+				}
+				avg, haveAvg = number(a.Price), true
+			}
+			ref = avg
+		} else {
+			if !haveLast {
+				last, err = t.GetMarketPrice(symbol)
+				if err != nil {
+					return types.SellBand{}, err
+				}
+				haveLast = true
+			}
+			ref = last
+		}
+		if !finite(ref) || ref <= 0 {
+			return types.SellBand{}, fmt.Errorf("sell price band: invalid %s reference price", kind)
+		}
+		tick := field(filter(s, "PRICE_FILTER"), "tickSize")
+		if !finite(tick) || tick <= 0 {
+			return types.SellBand{}, fmt.Errorf("sell price band: invalid tickSize")
+		}
+		low, _ := decimal.NewFromFloat(ref).Mul(decimal.NewFromFloat(down)).Float64()
+		high, _ := decimal.NewFromFloat(ref).Mul(decimal.NewFromFloat(up)).Float64()
+		low, high = round(low, tick, true), round(high, tick, false)
+		if band.Ref == 0 || low > band.Floor {
+			band.Floor, band.Ref = low, ref
+		}
+		if band.UpMultiplier == 0 || high < band.Ceiling {
+			band.Ceiling = high
+		}
+		band.DownMultiplier = math.Max(band.DownMultiplier, down)
+		if band.UpMultiplier == 0 || up < band.UpMultiplier {
+			band.UpMultiplier = up
+		}
+	}
+	return band, nil
 }
 
 // Preflight uses the average-price endpoint when a nonzero averaging window

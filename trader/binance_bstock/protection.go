@@ -229,6 +229,15 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 		return nil, fmt.Errorf("protection quantity exceeds held balance")
 	}
 	// Validate before cancel; an invalid adjustment must leave the old stop live.
+	// An unreadable band skips the check: the exchange stays authoritative and
+	// its PERCENT_PRICE rejection is classified below.
+	band, bandErr := t.SellPriceBand(symbol)
+	if bandErr == nil && band.Floor > 0 && stopLimit < band.Floor {
+		return nil, fmt.Errorf("%w: %s stop-limit %s < floor %s (ref %s)", types.ErrStopBelowSellBand, symbol, value(stopLimit), value(band.Floor), value(band.Ref))
+	}
+	if bandErr == nil && tp > 0 && band.Ceiling > 0 && tp > band.Ceiling {
+		return nil, fmt.Errorf("%s take-profit %s > sell ceiling %s", symbol, value(tp), value(band.Ceiling))
+	}
 	if err = t.cancelProtection(symbol); err != nil {
 		return nil, err
 	}
@@ -244,6 +253,9 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 	if tp == 0 {
 		o, e := t.placeWithID(symbol, t.client.NewCreateOrderService().Symbol(symbol).Side(binance.SideTypeSell).Type(binance.OrderTypeStopLossLimit).TimeInForce(binance.TimeInForceTypeGTC).Quantity(value(qty)).StopPrice(value(stop)).Price(value(stopLimit)), t.protectionID("sl"))
 		if e != nil {
+			if strings.Contains(e.Error(), "PERCENT_PRICE") {
+				return nil, fmt.Errorf("protection canceled; replacement stop failed: %w: %w", types.ErrStopBelowSellBand, e)
+			}
 			return nil, fmt.Errorf("protection canceled; replacement stop failed: %w", e)
 		}
 		p.StopOrderID = o.OrderID
@@ -264,6 +276,9 @@ func (t *BStockTrader) setProtection(symbol string, qty, stop, stopLimit, tp flo
 	t.invalidate()
 	if err != nil {
 		t.noteFilterFailure(symbol, err)
+		if strings.Contains(err.Error(), "PERCENT_PRICE") {
+			return nil, fmt.Errorf("protection canceled; replacement OCO failed: %w: %w", types.ErrStopBelowSellBand, err)
+		}
 		return nil, fmt.Errorf("protection canceled; replacement OCO failed: %w", err)
 	}
 	for _, o := range append(result.Orders, result.Reports...) {
