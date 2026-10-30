@@ -68,8 +68,8 @@ func NewClaudeClientWithOptions(opts ...mcp.ClientOption) mcp.AIClient {
 // SetAPIKey stores credentials and optional custom endpoint / model.
 func (c *ClaudeClient) SetAPIKey(apiKey, customURL, customModel string) {
 	c.APIKey = apiKey
-	if len(apiKey) > 8 {
-		c.Log.Infof("🔧 [MCP] Claude API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
+	if apiKey != "" {
+		c.Log.Infof("🔧 [MCP] Claude API key configured")
 	}
 	if customURL != "" {
 		c.BaseURL = customURL

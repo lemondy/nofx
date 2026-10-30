@@ -16,6 +16,7 @@ class Config:
     max_positions: int = 10
     rebalance_trading_days: int = 10
     commission: float = 0.001
+    slippage: float = 0.0
     cash: float = 100000
     scaler: str = 'NONE'
     floor: float = 0.25
@@ -32,6 +33,8 @@ class Config:
             raise ValueError('tf must be 1d/1h; maxpos and rebalance must be positive')
         if not math.isfinite(self.commission) or not 0 <= self.commission < 1 or not math.isfinite(self.cash) or self.cash <= 0:
             raise ValueError('commission must be finite in [0,1); cash must be positive and finite')
+        if not math.isfinite(self.slippage) or not 0 <= self.slippage < 0.05:
+            raise ValueError('slippage must be finite in [0,0.05); it is an unmeasured assumption, 0 keeps fills unslipped')
         from .stocks_regime import SCALERS
         if self.scaler not in SCALERS:
             raise ValueError('unknown scaler: '+self.scaler)
@@ -66,6 +69,10 @@ class CashSlotSizer:
             size = 0.0
         else:
             ci = self.broker.getcommissioninfo(order.data)
+            # `price` is the broker's final fill price, already slipped by
+            # slip_perc, so unit equals the exact broker cash debit for one
+            # share (price*(1+commission)) and a non-zero slippage cannot
+            # overdraw the account at execution.
             unit = price + ci.getcommission(1, price)
             size = min(requested, max(0, self.broker.get_cash()) / unit * (1-1e-14))
             if size*price <= MIN_NOTIONAL:
@@ -214,8 +221,9 @@ class StockPortfolio(bt.Strategy):
                    [dict(symbol=s, entry=e, entry_atr=a) for s, e, a in entries]))
         equity = self.broker.getvalue()
         # Size at the observable close; BackBroker fills fixed shares next open.
-        # Estimate proceeds solely for allocation. Actual buying power is capped
-        # again by CashSlotSizer using broker.get_cash() at execution.
+        # Estimate proceeds/costs at the signal close with commission AND the
+        # slippage assumption, solely for allocation. Actual buying power is
+        # capped again by CashSlotSizer using broker.get_cash() at execution.
         available = self.broker.get_cash()
         buys = []
         if targets is not None:
@@ -226,7 +234,7 @@ class StockPortfolio(bt.Strategy):
                 delta = equity*targets.get(s, 0)/d.close[0]-self.getposition(d).size
                 if delta < -1e-10:
                     self.submit(s, -delta, key, exit=exits.get(s, 'SCALE' if scale_resize else 'REBALANCE'))
-                    available += -delta*d.close[0]*(1-cfg.commission)
+                    available += -delta*d.close[0]*(1-cfg.commission-cfg.slippage)
             for s in targets:  # momentum order, not alphabetical order
                 if s in current:
                     d = self.feeds[s]
@@ -238,10 +246,10 @@ class StockPortfolio(bt.Strategy):
                 d = self.feeds[s]
                 size = self.getposition(d).size
                 self.submit(s, size, key, exit=reason)
-                available += size*d.close[0]*(1-cfg.commission)
+                available += size*d.close[0]*(1-cfg.commission-cfg.slippage)
             buys = [(s, equity/cfg.max_positions/self.feeds[s].close[0], e, a) for s, e, a in entries]
         for s, wanted, e, a in buys:
-            unit = self.feeds[s].close[0]*(1+cfg.commission)
+            unit = self.feeds[s].close[0]*(1+cfg.commission+cfg.slippage)
             size = min(wanted, max(0, available)/unit)
             if size*self.feeds[s].close[0] > MIN_NOTIONAL:
                 self.submit(s, size, key, entry=e, atr=a)
@@ -321,7 +329,11 @@ def run_strategy(study, cfg, name, scales=None, overlay=False):
     cerebro = bt.Cerebro(stdstats=False, cheat_on_open=False)
     cerebro.broker.setcash(cfg.cash)
     cerebro.broker.setcommission(commission=cfg.commission)
-    cerebro.broker.set_slippage_perc(0.0)
+    # Explicit, unmeasured assumption (default 0): Market orders slip the next
+    # open by cfg.slippage per side, adverse direction; slip_match caps fills to
+    # the bar's [low, high] range (no slip_out), so orders never fill off-bar.
+    cerebro.broker.set_slippage_perc(cfg.slippage, slip_open=True, slip_limit=True,
+                                     slip_match=True, slip_out=False)
     cerebro.broker.set_coc(False)
     cerebro.broker.set_coo(False)
     # Skip pseudo-fill cash rejection: execution-size cap handles gaps and

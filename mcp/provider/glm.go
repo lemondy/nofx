@@ -50,8 +50,8 @@ func NewGLMClientWithOptions(opts ...mcp.ClientOption) mcp.AIClient {
 func (c *GLMClient) SetAPIKey(apiKey string, customURL string, customModel string) {
 	c.APIKey = apiKey
 
-	if len(apiKey) > 8 {
-		c.Log.Infof("🔧 [MCP] GLM API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
+	if apiKey != "" {
+		c.Log.Infof("🔧 [MCP] GLM API key configured")
 	}
 	if customURL != "" {
 		c.BaseURL = customURL
