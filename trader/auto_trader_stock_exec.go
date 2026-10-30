@@ -64,6 +64,11 @@ func (at *AutoTrader) stockFormatQty(sym string, qty float64, info usstock.Symbo
 	return floorStep(qty, info.StepSize)
 }
 
+func (at *AutoTrader) stockUnsellable(sym string, qty, price float64, info usstock.SymbolInfo) bool {
+	qty = at.stockFormatQty(sym, qty, info)
+	return qty <= 0 || (price > 0 && info.MinNotional > 0 && qty*price < info.MinNotional)
+}
+
 // stockPlaceProtection (re)places the protective orders for the OWNED
 // quantity. tp is dropped when it is not above the price.
 func (at *AutoTrader) stockPlaceProtection(ctx context.Context, sym string, owned, stop, tp, price float64) error {
@@ -178,7 +183,7 @@ func (at *AutoTrader) stockProtectOrEmergency(ctx context.Context, h *stockHoldi
 		hh.Owned, hh.Balance = owned, math.Max(h.Balance, owned)
 		if _, e := at.stockSellLive(ctx, &hh, owned, true, "stop_fallback", now); e != nil {
 			logf("emergency sell of %s FAILED: %v", h.Symbol, e)
-			stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股止损兜底卖出失败 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
+			stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股止损兜底卖出失败 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(e.Error())))
 		}
 	default:
 		logf("PROTECTION FAILED for %s: %v (the protection tick will retry)", h.Symbol, err)
@@ -227,8 +232,20 @@ func (at *AutoTrader) stockSellLive(ctx context.Context, h *stockHolding, qty fl
 	if reason == "stop_fallback" && check.Filled {
 		return nil, fmt.Errorf("protection filled during reconciliation; fallback deferred for %s", sym)
 	}
+	price := h.Mark
+	if full && price <= 0 {
+		if p, e := at.stockTrader.GetMarketPrice(sym); e == nil && p > 0 {
+			price = p
+		}
+	}
+	dust := full && at.stockUnsellable(sym, math.Min(owned, balance), price, info)
 	qty = at.stockFormatQty(sym, math.Min(qty, math.Min(owned, balance)), info)
-	if qty <= 0 {
+	if qty <= 0 || dust {
+		if dust && owned-balance <= math.Max(info.StepSize, 1e-9)/2+1e-4 {
+			pnl := at.stockRecordSell(sym, owned, price, 0, "", "dust_writeoff", true, now)
+			return &stockOutcome{Closed: true, Qty: 0, Price: price, PnL: pnl,
+				Note: fmt.Sprintf("dust remainder %.8g written off; stays on the exchange untracked", math.Min(owned, balance))}, nil
+		}
 		return nil, fmt.Errorf("nothing sellable for %s (owned %.6f, balance %.6f)", sym, owned, balance)
 	}
 	res, err := at.stockTrader.SellMarket(sym, qty)
@@ -246,12 +263,16 @@ func (at *AutoTrader) stockSellLive(ctx context.Context, h *stockHolding, qty fl
 		}
 		return nil, err
 	}
-	price := fillPrice(res, h.Mark)
+	price = fillPrice(res, h.Mark)
 	fee, _ := stockFee(res, price, info.BaseAsset)
 	remaining := owned - res.ExecutedQty
-	fullNow := remaining <= 1e-9
+	dust = full && remaining > 1e-9 && at.stockUnsellable(sym, remaining, price, info)
+	fullNow := remaining <= 1e-9 || dust
 	pnl := at.stockRecordSell(sym, res.ExecutedQty, price, fee, res.OrderID, reason, fullNow, now)
 	out := &stockOutcome{Qty: res.ExecutedQty, Price: price, Fee: fee, PnL: pnl, OrderID: res.OrderID, Closed: fullNow}
+	if dust {
+		out.Note = fmt.Sprintf("dust remainder %.8g written off; stays on the exchange untracked", remaining)
+	}
 	if !fullNow && stop > 0 {
 		if err := at.stockPlaceProtection(ctx, sym, remaining, stop, tp, price); err != nil {
 			out.Note = fmt.Sprintf("remainder protection failed: %v", err)

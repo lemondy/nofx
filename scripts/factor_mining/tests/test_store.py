@@ -50,3 +50,26 @@ class AppendStoreTests(unittest.TestCase):
 
     def test_only_evaluator_and_expression_are_frozen(self):
         self.assertEqual(set(miner.frozen_hashes()), {'evaluator_sha256', 'expr_sha256'})
+
+    def test_status_events_mirror_ledger_appends(self):
+        with tempfile.TemporaryDirectory() as root:
+            market = 'crypto'
+            self.assertEqual(store.read_status_events(market, root), [])
+            first = [dict(ts='t1', run_id='r1', id='f1', horizon=1, **{'from': None},
+                          to='accepted', kind='first_admission')]
+            store.append_status_events(market, first, root)
+            path = Path(root) / market / 'status_events.jsonl'
+            prefix, inode = path.read_bytes(), path.stat().st_ino
+            with patch.object(store, '_replace', side_effect=AssertionError('must append')), \
+                 patch.object(store.os, 'fsync', wraps=store.os.fsync) as sync:
+                store.append_status_events(market, [dict(ts='t2', run_id='r2', id='f1', horizon=1,
+                                                         **{'from': 'accepted'}, to=None,
+                                                         kind='dropped')], root)
+            sync.assert_called_once()
+            self.assertEqual(path.stat().st_ino, inode)
+            self.assertTrue(path.read_bytes().startswith(prefix))
+            self.assertTrue(path.read_bytes().endswith(b'\n'))
+            events = store.read_status_events(market, root)
+            self.assertEqual([e['kind'] for e in events], ['first_admission', 'dropped'])
+            self.assertEqual(events[1]['from'], 'accepted')
+            self.assertIsNone(events[1]['to'])

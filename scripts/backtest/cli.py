@@ -192,7 +192,8 @@ def cmd_stocks(a):
         raise ValueError('stocks needs pandas; install scripts/backtest/requirements.txt') from exc
     if a.out and a.json_out and os.path.abspath(a.out) == os.path.abspath(a.json_out):
         raise ValueError('out and json must be different paths')
-    cfg = Config(a.tf, a.maxpos, a.rebalance, a.commission, a.cash,
+    cfg = Config(timeframe=a.tf, max_positions=a.maxpos, rebalance_trading_days=a.rebalance,
+                 commission=a.commission, slippage=a.slippage, cash=a.cash,
                  floor=a.floor, band=a.band, target_vol=a.target_vol)
     cfg.validate()
     scalers = None if a.scalers is None else [n.strip() for n in a.scalers.split(',') if n.strip()]
@@ -228,7 +229,7 @@ def cmd_stocks(a):
                 f.write(content)
             print('written '+path)
     print(f"engine=backtrader version={result['engine_version']} tf={a.tf} stocks={study.coverage['universe_size']} "
-          f"bars={len(study.calendar)} commission={a.commission} slippage=0")
+          f"bars={len(study.calendar)} commission={a.commission} slippage={a.slippage}")
     if a.out:
         if a.compare:
             from .stocks_report import comparison_table
@@ -308,6 +309,8 @@ def build_parser():
     p.add_argument('--maxpos', type=int, default=10)
     p.add_argument('--rebalance', type=int, default=10)
     p.add_argument('--commission', type=float, default=0.001)
+    p.add_argument('--slippage', type=float, default=0.0,
+                   help='每侧滑点比例，0.0005=5bp；默认0=未计滑点（无实测价差数据）')
     p.add_argument('--cash', type=float, default=100000)
     p.add_argument('--exclude', default='TQQQBUSDT,SQQQBUSDT,SOXLBUSDT,SOXSBUSDT,UVXYBUSDT,MUUBUSDT,KORUBUSDT',
                    help='逗号分隔，替换默认排除项；SPY/QQQ 始终仅作基准')

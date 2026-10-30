@@ -503,15 +503,16 @@ func isEntryAction(a string) bool {
 }
 
 // runStockCycle runs one decision cycle: account + data → engine → execution →
-// decision record. Holds the execution mutex (paper: its own mutex).
+// decision record. Only account reconciliation, trimming and execution hold
+// the execution mutex (paper: its own mutex); data fetches and AI calls do not.
 func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 	sc := at.stock.cfg
 	paper := sc.IsPaper()
 	mu := at.stockMutex()
-	mu.Lock()
-	defer mu.Unlock()
-	if !at.stockRunning() {
-		return nil
+	withStockLock := func(call func() error) error {
+		mu.Lock()
+		defer mu.Unlock() // also release on panic before runStockCycleSafe recovers
+		return call()
 	}
 	now := at.stockClock()
 	pfx := stockPrefix(paper)
@@ -532,29 +533,58 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 	session := usstock.SessionAt(now)
 	logf("cycle start %s ET session=%s preset=%s", now.In(stockET).Format("2006-01-02 15:04"), session, preset.Name)
 
-	var state *stockState
-	var err error
-	var quarantined map[string]string
-	if !paper {
-		quarantined, err = at.reconcileStockPendings(ctx, now, logf)
-		if err != nil {
-			return fail(fmt.Errorf("pending reconciliation: %w", err))
+	// All callers hold mu. Each pass gets its own quarantine map: pending and
+	// protection orders may have filled while data/AI work released the lock.
+	gather := func(prices map[string]float64) (*stockState, map[string]string, error) {
+		var state *stockState
+		var quarantined map[string]string
+		var err error
+		if paper {
+			state, err = at.stockGatherPaper(nil)
+			if err == nil {
+				state.repricePaper(prices)
+			}
+		} else {
+			freshNow := at.stockClock()
+			quarantined, err = at.reconcileStockPendings(ctx, freshNow, logf)
+			if err != nil {
+				return nil, nil, fmt.Errorf("pending reconciliation: %w", err)
+			}
+			state, err = at.stockGatherLiveWithQuarantine(ctx, freshNow, true, true, quarantined)
 		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("account state: %w", err)
+		}
+		for _, n := range state.Notes {
+			logf("%s", n)
+		}
+		for _, n := range state.manualNotes() {
+			logf("%s", n)
+		}
+		return state, quarantined, nil
 	}
-	if paper {
-		state, err = at.stockGatherPaper(nil)
-	} else {
-		state, err = at.stockGatherLiveWithQuarantine(ctx, now, true, true, quarantined)
-	}
+
+	// Phase A (locked): reconcile orders and capture the initial account view.
+	var state *stockState
+	var quarantined map[string]string
+	err := withStockLock(func() error {
+		if !at.stockRunning() || ctx.Err() != nil {
+			return nil
+		}
+		var err error
+		state, quarantined, err = gather(nil)
+		return err
+	})
 	if err != nil {
-		return fail(fmt.Errorf("account state: %w", err))
+		return fail(err) // called after Unlock, including all refresh failures below
 	}
-	for _, n := range state.Notes {
-		logf("%s", n)
+	if state == nil {
+		return nil
 	}
-	for _, n := range state.manualNotes() {
-		logf("%s", n)
-	}
+
+	// Phase B (unlocked): market data, local prices/risk and equity persistence.
+	// The cycle and protection tick share one loop goroutine; prices have their
+	// own mutex for API readers. None of this work places/cancels orders.
 
 	// Per-cycle config copy: scan mode swaps in this cycle's symbol list so the
 	// snapshots, the prompt and the validator agree; at.stock.cfg is not touched.
@@ -594,13 +624,32 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 	// Market-state position scale: sizes new entries and trims held positions
 	// when it falls. Off by default (inert scale 1, no store access).
 	regime := at.stockCycleRegime(cc, report, now, logf)
+	// Phase C (locked, when enabled): trim only a freshly reconciled account.
 	if regime.Enabled {
-		state, err = at.applyStockRegimeTrim(ctx, cc, regime, session, state, snaps, prices, quarantined, rec, now, logf)
+		stopped := false
+		err = withStockLock(func() error {
+			if !at.stockRunning() || ctx.Err() != nil {
+				stopped = true
+				return nil
+			}
+			var err error
+			state, quarantined, err = gather(prices)
+			if err != nil {
+				return err
+			}
+			state, err = at.applyStockRegimeTrim(ctx, cc, regime, session, state, snaps, prices, quarantined, rec, now, logf)
+			return err
+		})
 		if err != nil {
 			return fail(err)
 		}
+		if stopped {
+			return nil
+		}
 	}
 
+	// Phase D (unlocked): build the prompt and call the engine/LLM. Keep state
+	// as the prompt-time snapshot for the execution-time ownership comparison.
 	// Carry each open position's thesis/invalidation forward into the prompt. A
 	// missing row (position opened before theses existed, or a store error) is fine.
 	theses, terr := at.store.StockThesis().List(at.id)
@@ -642,104 +691,140 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 		return fail(derr)
 	}
 	at.callCount++
-	if !at.stockRunning() || ctx.Err() != nil {
-		logf("trader stopped before execution — decisions not executed")
-		return nil
-	}
+	// Phase E (locked): refresh again after AI latency, then validate ownership
+	// and execute the whole batch with fresh account sizing and reservations.
+	err = withStockLock(func() error {
+		if !at.stockRunning() || ctx.Err() != nil {
+			logf("trader stopped before execution — decisions not executed")
+			return nil
+		}
 
-	snapBy := map[string]*stockengine.SymbolSnapshot{}
-	for _, s := range snaps {
-		snapBy[s.Symbol] = s
-	}
-	sizing := *ectx
-	acct := ectx.Account
-	var rejected []string
-	for _, v := range result.Verdicts {
-		d := v.Decision
-		if !v.Accepted && isStockContextNoop(d, v.Codes) {
-			logf("%s %s ignored: market-context reference, not a candidate", d.Action, d.Symbol)
-			continue
+		fresh, _, err := gather(prices)
+		if err != nil {
+			return err
 		}
-		act := store.DecisionAction{Action: d.Action, Symbol: d.Symbol, StopLoss: d.StopLoss, TakeProfit: d.TakeProfit,
-			Confidence: d.Confidence, Reasoning: d.Reasoning, Leverage: 1, Timestamp: now.UTC()}
-		code := ""
-		h := state.Holdings[d.Symbol]
-		switch {
-		case h != nil && h.Quarantined && d.Action != stockengine.ActionHold && d.Action != stockengine.ActionWait:
-			code = "PROTECTION_UNVERIFIED"
-		case !v.Accepted:
-			code = joinCodes(v.Codes)
-		case isEntryAction(d.Action) && halted:
-			code = "WEEKLY_DRAWDOWN_HALT"
-		case isEntryAction(d.Action) && at.stock.pendings[d.Symbol] != nil:
-			code = "PENDING_ENTRY"
+		snapBy := map[string]*stockengine.SymbolSnapshot{}
+		for _, s := range snaps {
+			snapBy[s.Symbol] = s
 		}
-		if code != "" {
-			act.Error = pfx + "rejected: " + code
-			logf("%s %s rejected: %s %s", d.Action, d.Symbol, code, v.Note)
-			if isEntryAction(d.Action) {
-				rejected = append(rejected, d.Symbol+" "+code)
+		sizing := *ectx
+		sizing.Positions = fresh.enginePositions(prices)
+		acct := stockengine.Account{Equity: fresh.Equity, Available: fresh.Available, Exposure: fresh.Exposure}
+		var rejected []string
+		for _, v := range result.Verdicts {
+			d := v.Decision
+			if !v.Accepted && isStockContextNoop(d, v.Codes) {
+				logf("%s %s ignored: market-context reference, not a candidate", d.Action, d.Symbol)
+				continue
 			}
+			act := store.DecisionAction{Action: d.Action, Symbol: d.Symbol, StopLoss: d.StopLoss, TakeProfit: d.TakeProfit,
+				Confidence: d.Confidence, Reasoning: d.Reasoning, Leverage: 1, Timestamp: now.UTC()}
+			code := ""
+			h := fresh.Holdings[d.Symbol]
+			switch {
+			case h != nil && h.Quarantined && d.Action != stockengine.ActionHold && d.Action != stockengine.ActionWait:
+				code = "PROTECTION_UNVERIFIED"
+			case !v.Accepted:
+				code = joinCodes(v.Codes)
+			case stockDecisionStateChanged(d.Action, state.Holdings[d.Symbol], h):
+				code = "STATE_CHANGED"
+			case isEntryAction(d.Action) && halted:
+				code = "WEEKLY_DRAWDOWN_HALT"
+			case isEntryAction(d.Action) && at.stock.pendings[d.Symbol] != nil:
+				code = "PENDING_ENTRY"
+			}
+			if code != "" {
+				act.Error = pfx + "rejected: " + code
+				logf("%s %s rejected: %s %s", d.Action, d.Symbol, code, v.Note)
+				if isEntryAction(d.Action) {
+					rejected = append(rejected, d.Symbol+" "+code)
+				}
+				rec.Decisions = append(rec.Decisions, act)
+				continue
+			}
+			var out *stockOutcome
+			var xerr error
+			snap := snapBy[d.Symbol]
+			switch d.Action {
+			case stockengine.ActionHold, stockengine.ActionWait:
+				act.Success = true
+				logf("%s %s", d.Action, d.Symbol)
+				if d.Action == stockengine.ActionHold {
+					at.refineStockThesis(d, theses, now, logf)
+				}
+			case stockengine.ActionOpenLong, stockengine.ActionAddLong:
+				sizing.Account = acct
+				var reserved float64
+				out, reserved, xerr = at.execStockEntry(ctx, &sizing, d, snap, h, paper, now, logf)
+				if xerr == nil {
+					acct.Available -= reserved
+					acct.Exposure += reserved
+					at.setStockRegimeScale(regime, paper, d.Symbol, logf)
+				}
+			case stockengine.ActionReduceLong, stockengine.ActionCloseLong:
+				out, xerr = at.execStockExit(ctx, d, snap, h, paper, now)
+				if xerr == nil && d.Action == stockengine.ActionCloseLong {
+					at.deleteStockRegimeScale(regime, paper, d.Symbol, logf)
+				}
+			case stockengine.ActionAdjustStop:
+				out, xerr = at.execStockAdjust(ctx, d, snap, h, paper, now)
+			}
+			if d.Action == stockengine.ActionHold || d.Action == stockengine.ActionWait {
+				rec.Decisions = append(rec.Decisions, act)
+				continue
+			}
+			if xerr != nil {
+				act.Error = pfx + xerr.Error()
+				logf("%s %s FAILED: %v", d.Action, d.Symbol, xerr)
+				if isEntryAction(d.Action) {
+					rejected = append(rejected, d.Symbol+" "+xerr.Error())
+				}
+				rec.Decisions = append(rec.Decisions, act)
+				continue
+			}
+			act.Success, act.Quantity, act.Price = true, out.Qty, out.Price
+			at.persistStockThesis(d, theses, now, logf)
+			act.OrderID, act.EntryOrderID = orderIDInt(out.OrderID), out.OrderID
+			logf("%s %s ok: qty=%.6f price=%.4f stop=%.4f tp=%.4f%s", d.Action, d.Symbol, out.Qty, out.Price, d.StopLoss, d.TakeProfit, noteSuffix(out.Note))
+			at.notifyStockOutcome(paper, d, out)
 			rec.Decisions = append(rec.Decisions, act)
-			continue
 		}
-		var out *stockOutcome
-		var xerr error
-		snap := snapBy[d.Symbol]
-		switch d.Action {
-		case stockengine.ActionHold, stockengine.ActionWait:
-			act.Success = true
-			logf("%s %s", d.Action, d.Symbol)
-			if d.Action == stockengine.ActionHold {
-				at.refineStockThesis(d, theses, now, logf)
-			}
-		case stockengine.ActionOpenLong, stockengine.ActionAddLong:
-			sizing.Account = acct
-			var reserved float64
-			out, reserved, xerr = at.execStockEntry(ctx, &sizing, d, snap, h, paper, now, logf)
-			if xerr == nil {
-				acct.Available -= reserved
-				acct.Exposure += reserved
-				at.setStockRegimeScale(regime, paper, d.Symbol, logf)
-			}
-		case stockengine.ActionReduceLong, stockengine.ActionCloseLong:
-			out, xerr = at.execStockExit(ctx, d, snap, h, paper, now)
-			if xerr == nil && d.Action == stockengine.ActionCloseLong {
-				at.deleteStockRegimeScale(regime, paper, d.Symbol, logf)
-			}
-		case stockengine.ActionAdjustStop:
-			out, xerr = at.execStockAdjust(ctx, d, snap, h, paper, now)
+		if len(rejected) > 0 {
+			stockNotify("ORDER", at.name, fmt.Sprintf("<b>%s🇺🇸 美股开仓被拒绝 %d 项</b>\n<i>%s</i>",
+				map[bool]string{true: "[PAPER 模拟] ", false: ""}[paper], len(rejected), notify.Escape(strings.Join(rejected, "; "))))
 		}
-		if d.Action == stockengine.ActionHold || d.Action == stockengine.ActionWait {
-			rec.Decisions = append(rec.Decisions, act)
-			continue
+		rec.Success = true
+		at.saveStockRecord(rec)
+		if !paper {
+			at.syncStockJournal()
 		}
-		if xerr != nil {
-			act.Error = pfx + xerr.Error()
-			logf("%s %s FAILED: %v", d.Action, d.Symbol, xerr)
-			if isEntryAction(d.Action) {
-				rejected = append(rejected, d.Symbol+" "+xerr.Error())
-			}
-			rec.Decisions = append(rec.Decisions, act)
-			continue
-		}
-		act.Success, act.Quantity, act.Price = true, out.Qty, out.Price
-		at.persistStockThesis(d, theses, now, logf)
-		act.OrderID, act.EntryOrderID = orderIDInt(out.OrderID), out.OrderID
-		logf("%s %s ok: qty=%.6f price=%.4f stop=%.4f tp=%.4f%s", d.Action, d.Symbol, out.Qty, out.Price, d.StopLoss, d.TakeProfit, noteSuffix(out.Note))
-		at.notifyStockOutcome(paper, d, out)
-		rec.Decisions = append(rec.Decisions, act)
-	}
-	if len(rejected) > 0 {
-		stockNotify("ORDER", at.name, fmt.Sprintf("<b>%s🇺🇸 美股开仓被拒绝 %d 项</b>\n<i>%s</i>",
-			map[bool]string{true: "[PAPER 模拟] ", false: ""}[paper], len(rejected), notify.Escape(strings.Join(rejected, "; "))))
-	}
-	rec.Success = true
-	at.saveStockRecord(rec)
-	if !paper {
-		at.syncStockJournal()
+		return nil
+	})
+	if err != nil {
+		return fail(err)
 	}
 	return nil
+}
+
+// stockDecisionStateChanged protects decisions made from an older ownership
+// snapshot. Ignore relative float noise up to 1e-6 (absolute floor 1e-9 shares),
+// without a registry/network lookup. Missing positions always count as changed.
+func stockDecisionStateChanged(action string, prompt, fresh *stockHolding) bool {
+	switch action {
+	case stockengine.ActionOpenLong:
+		return (prompt == nil || prompt.Owned <= 0) && fresh != nil && fresh.Owned > 0
+	case stockengine.ActionAddLong, stockengine.ActionReduceLong, stockengine.ActionCloseLong, stockengine.ActionAdjustStop:
+		if prompt == nil || fresh == nil || prompt.Owned <= 0 || fresh.Owned <= 0 {
+			return true
+		}
+		before, after := prompt.Owned, fresh.Owned
+		if math.IsNaN(before) || math.IsNaN(after) || math.IsInf(before, 0) || math.IsInf(after, 0) {
+			return true
+		}
+		return math.Abs(after-before) > math.Max(1e-9, math.Max(before, after)*1e-6)
+	default: // hold/wait never act on an old quantity
+		return false
+	}
 }
 
 // stockCoTTrace renders the model's portfolio reasoning and market context for

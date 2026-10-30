@@ -225,6 +225,56 @@ def frozen_hashes():
             'expr_sha256': hashlib.sha256(Path(__file__).with_name('expr.py').read_bytes()).hexdigest()}
 
 
+def build_status_events(run_id, market, ts, factors, old_factors, first_status, K, kept, past_accepted):
+    """Build one run's immutable status events (pure bookkeeping, no classification).
+
+    factors maps (horizon, id) to factor dicts carrying the run-final status;
+    old_factors is the previous zoo snapshot with its pre-run statuses;
+    first_status holds the first-classify status of trials first seen in this
+    run; K is the horizon trial counter at final classify; kept are the keys
+    retained in the new zoo (previous-zoo keys outside it are reported as
+    dropped); past_accepted lists keys already accepted run-final in earlier
+    status events or the zoo status_history.
+
+    Returns (events, promoted): events sorted by (horizon, id) with drops
+    last; promoted are the keys that entered accepted via promotion or
+    re_promotion (for the zoo promotion counters).
+    """
+    events, promoted = [], []
+    for key in sorted(factors):
+        h, fid = key
+        factor = factors[key]
+        to = factor['status']
+        if key in first_status:
+            previous, kind = None, 'first_admission'
+            ledger_status = first_status[key]
+        else:
+            previous = old_factors.get(key, {}).get('status')
+            if previous == to:
+                continue
+            ledger_status = None
+            if to == 'accepted':
+                kind = 're_promotion' if key in past_accepted else 'promotion'
+                promoted.append(key)
+            elif previous == 'accepted':
+                kind = 'demotion'
+            else:
+                kind = 'transition'
+        events.append(dict(ts=ts, run_id=run_id, market=market, id=fid, horizon=h,
+                           **{'from': previous}, to=to, kind=kind, K=K[h],
+                           t_required=evaluate.t_required(K[h]),
+                           first_seen=factor.get('first_seen'), ledger_status=ledger_status))
+    for key in sorted(old_factors):
+        if key in kept:
+            continue
+        h, fid = key
+        events.append(dict(ts=ts, run_id=run_id, market=market, id=fid, horizon=h,
+                           **{'from': old_factors[key].get('status')}, to=None, kind='dropped',
+                           K=K[h], t_required=evaluate.t_required(K[h]),
+                           first_seen=old_factors[key].get('first_seen'), ledger_status=None))
+    return events, promoted
+
+
 class Miner:
     def __init__(self, root=ROOT):
         self.root = Path(root)
@@ -261,9 +311,26 @@ class Miner:
             factors = {(f['horizon'], f['id']): dict(f) for f in old_zoo['factors']}
             old_forward = {key: f['forward'] for key, f in factors.items() if 'forward' in f}
             old_status = {key: f['status'] for key, f in factors.items()}
+            # Frozen pre-run snapshot (per-factor copies: refresh may reuse and
+            # re-classify the loaded dicts in place when a field vanished).
+            old_factors = {key: dict(f) for key, f in factors.items()}
+            # Acceptances observed run-final before this run, for re_promotion
+            # detection: the full append-only event log plus whatever earlier
+            # evidence survives the truncated zoo status_history.
+            past_accepted = {(e['horizon'], e['id'])
+                             for e in store.read_status_events(market, self.root)
+                             if e.get('to') == 'accepted'}
+            for key, factor in factors.items():
+                if factor['status'] == 'accepted' or any(
+                        hist.get('to') == 'accepted' or hist.get('from') == 'accepted'
+                        for hist in factor.get('status_history', [])):
+                    past_accepted.add(key)
             # One expression evaluation per id across refresh, redundancy,
             # forward display and ensemble construction in this run.
             values_cache = {}
+            # First-classify status of trials first seen in this run (the ledger
+            # row status), kept aside because the final pass re-classifies.
+            first_status = {}
             def values_for(key, expr):
                 if key not in values_cache:
                     values_cache[key] = evaluate_expr(expr, panels.fields)
@@ -388,6 +455,7 @@ class Miner:
                         seen.add((h, key))
                         t_req = evaluate.t_required(K[h])
                         state = evaluate.classify(metrics['train'], metrics['val'], K[h], t_req)
+                        first_status[h, key] = state
                         per_horizon.append(dict(
                             horizon=h, status=state, train_t=metrics['train']['t'], train_ic=metrics['train']['ic'],
                             val_ic=metrics['val']['ic'], val_t=metrics['val']['t'],
@@ -458,6 +526,13 @@ class Miner:
                     factor['status_history'] = history[-5:]
                 if previous != factor['status'] and factor['status'] in ('accepted', 'candidate'):
                     row['new_' + factor['status']] += 1
+            # Zoo counters for factors first seen in this run: the run-final
+            # status of their admission run and their promotion count. Older
+            # entries keep working without these fields (unknown, never backfilled).
+            for key in first_status:
+                factor = factors[key]
+                factor['first_final_status'] = factor['status']
+                factor['promotions'] = 1 if factor['status'] == 'accepted' else 0
             # All selection is finished. Commit display updates as a batch so a
             # budget stop leaves every previous forward record intact.
             to_update = [f for f in factors.values()
@@ -510,6 +585,19 @@ class Miner:
             split = {s: splits[shortest]['ranges'][s] for s in ('train', 'val')}
             split.update(rolling=splits[shortest]['rolling'], windows=panels.windows, holdout_sealed=True)
             output = dict(market=market, generated_at=stamp, split=split, horizons=horizons, factors=retained)
+            # The run's statuses are final. Record first admissions, transitions
+            # and drops in one durable append, then bump the promotion counters
+            # of the promoted zoo entries. A crash before this point (budget
+            # stop or exception) leaves the log untouched for this run.
+            events, promoted = build_status_events(
+                run_id, market, stamp, factors, old_factors, first_status, K,
+                {(f['horizon'], f['id']) for f in retained}, past_accepted)
+            for key in promoted:
+                factor = factors[key]
+                # For entries that predate the counter, this counts observed
+                # promotions from now on; the earlier count stays unknown.
+                factor['promotions'] = (factor.get('promotions') or 0) + 1
+            store.append_status_events(market, events, self.root)
             # Preserve measured train/val metrics even if ensemble construction fails.
             store.write_zoo(market, output, self.root)
             stage('ensemble')

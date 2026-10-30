@@ -52,8 +52,8 @@ func NewQwenClientWithOptions(opts ...mcp.ClientOption) mcp.AIClient {
 func (qwenClient *QwenClient) SetAPIKey(apiKey string, customURL string, customModel string) {
 	qwenClient.APIKey = apiKey
 
-	if len(apiKey) > 8 {
-		qwenClient.Log.Infof("🔧 [MCP] Qwen API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
+	if apiKey != "" {
+		qwenClient.Log.Infof("🔧 [MCP] Qwen API key configured")
 	}
 	if customURL != "" {
 		qwenClient.BaseURL = customURL
