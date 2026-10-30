@@ -3,6 +3,7 @@ package trader
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
@@ -107,7 +108,7 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	}
 
 	// 4. Collect trading context
-	ctx, err := at.buildTradingContext()
+	ctx, err := at.buildAccountContext()
 	if err != nil {
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("Failed to build trading context: %v", err)
@@ -128,6 +129,25 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	// (the old latch only ran when an open decision reached the entry gate).
 	if halt := at.evaluateDailyLossLatch(ctx.Account.TotalEquity); halt != "" {
 		logger.Warnf("🛑 [%s] daily-loss halt active this cycle: %s", at.name, halt)
+	}
+
+	// 2026-10-30: market I/O must not hold up account protection. Preserve
+	// the prompt quantities for the post-AI execution-state check.
+	promptPositions := append([]kernel.PositionInfo(nil), ctx.Positions...)
+	withoutExecutionLock(mu, func() (struct{}, error) {
+		if at.marketContextFn != nil {
+			at.marketContextFn(ctx)
+		} else {
+			at.enrichMarketContext(ctx)
+		}
+		return struct{}{}, nil
+	})
+	at.isRunningMutex.RLock()
+	running = at.isRunning
+	at.isRunningMutex.RUnlock()
+	if !running {
+		logger.Infof("⏹ Trader stopped during market context enrichment, aborting cycle #%d", at.callCount)
+		return nil
 	}
 
 	// A source outage/empty entry pool must not suppress management of live
@@ -352,6 +372,20 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	// summary; stale reasons from a previous cycle would mislabel).
 	at.filterReasons = make(map[string]string)
 
+	// 2026-10-30: reject stale quantity-dependent decisions before any
+	// entry gate can reserve risk against the refreshed account.
+	filtered := make([]kernel.Decision, 0, len(sortedDecisions))
+	for _, d := range sortedDecisions {
+		if changed, detail := cryptoDecisionStateChanged(d.Action, d.Symbol, promptPositions, ctx.Positions); changed {
+			at.setFilterReason(d, "STATE_CHANGED: "+detail)
+			logger.Warnf("⚠️ [%s] %s %s rejected: STATE_CHANGED (%s)", at.name, d.Symbol, d.Action, detail)
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s rejected: STATE_CHANGED (%s)", d.Symbol, d.Action, detail))
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+	sortedDecisions = filtered
+
 	// Shadow-record blocked directions with a complete would-be trade, and
 	// resolve matured ones against the price path (09-21 user directive:
 	// gate-threshold calibration data). Observational only.
@@ -564,8 +598,18 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 	return nil
 }
 
-// buildTradingContext builds trading context
+// buildTradingContext builds trading context.
 func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
+	ctx, err := at.buildAccountContext()
+	if err != nil {
+		return nil, err
+	}
+	at.enrichMarketContext(ctx)
+	return ctx, nil
+}
+
+// buildAccountContext snapshots account state while the execution lock is held.
+func (at *AutoTrader) buildAccountContext() (*kernel.Context, error) {
 	// 1. Get account information
 	balance, err := at.trader.GetBalance()
 	if err != nil {
@@ -818,21 +862,6 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		}
 	}
 
-	// 3. Use strategy engine to get candidate coins (must have strategy engine)
-	var candidateCoins []kernel.CandidateCoin
-	if at.strategyEngine == nil {
-		logger.Infof("⚠️ [%s] No strategy engine configured, skipping candidate coins", at.name)
-	} else {
-		coins, err := at.strategyEngine.GetCandidateCoins()
-		if err != nil {
-			// Log warning but don't fail - equity snapshot should still be saved
-			logger.Infof("⚠️ [%s] Failed to get candidate coins: %v (will use empty list)", at.name, err)
-		} else {
-			candidateCoins = coins
-			logger.Infof("📋 [%s] Strategy engine fetched candidate coins: %d", at.name, len(candidateCoins))
-		}
-	}
-
 	// 4. Calculate total P&L
 	// Available margin is DERIVED (equity − Σposition margin), not the
 	// exchange availableBalance: Binance withholds margin for orders and
@@ -876,9 +905,8 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 			MarginUsedPct:    marginUsedPct,
 			PositionCount:    len(positionInfos),
 		},
-		Positions:      positionInfos,
-		SymbolStats:    at.loadSymbolStats(),
-		CandidateCoins: candidateCoins,
+		Positions:   positionInfos,
+		SymbolStats: at.loadSymbolStats(),
 		// F10 (2026-10-01 review): analysis/anchor data pinned to the
 		// EXECUTION venue — Binance data must not drive another venue's book.
 		Exchange: at.marketDataExchange(),
@@ -1030,14 +1058,37 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 		logger.Infof("⚠️ [%s] Store is nil, cannot get recent trades", at.name)
 	}
 
+	return ctx, nil
+}
+
+// enrichMarketContext only fills market fields; account protection can run meanwhile.
+func (at *AutoTrader) enrichMarketContext(ctx *kernel.Context) {
+	// 3. Use strategy engine to get candidate coins (must have strategy engine)
+	var candidateCoins []kernel.CandidateCoin
+	if at.strategyEngine == nil {
+		logger.Infof("⚠️ [%s] No strategy engine configured, skipping candidate coins", at.name)
+	} else {
+		coins, err := at.strategyEngine.GetCandidateCoins()
+		if err != nil {
+			// Log warning but don't fail - equity snapshot should still be saved
+			logger.Infof("⚠️ [%s] Failed to get candidate coins: %v (will use empty list)", at.name, err)
+		} else {
+			candidateCoins = coins
+			logger.Infof("📋 [%s] Strategy engine fetched candidate coins: %d", at.name, len(candidateCoins))
+		}
+	}
+
+	ctx.CandidateCoins = candidateCoins
+	strategyConfig := at.strategyEngine.GetConfig()
+
 	// 8. Get quantitative data (if enabled in strategy config)
 	if strategyConfig.Indicators.EnableQuantData {
 		// Collect symbols to query (candidate coins + position coins)
 		symbolsToQuery := make(map[string]bool)
-		for _, coin := range candidateCoins {
+		for _, coin := range ctx.CandidateCoins {
 			symbolsToQuery[coin.Symbol] = true
 		}
-		for _, pos := range positionInfos {
+		for _, pos := range ctx.Positions {
 			symbolsToQuery[pos.Symbol] = true
 		}
 
@@ -1080,8 +1131,46 @@ func (at *AutoTrader) buildTradingContext() (*kernel.Context, error) {
 				at.name, len(ctx.PriceRankingData.Durations))
 		}
 	}
+}
 
-	return ctx, nil
+// cryptoDecisionStateChanged compares prompt quantities with fresh execution
+// state. Full closes remain available to reduce risk after a quantity change.
+func cryptoDecisionStateChanged(action, symbol string, prompt, fresh []kernel.PositionInfo) (bool, string) {
+	var sides []string
+	requirePosition := false
+	switch action {
+	case "open_long", "open_long_limit":
+		sides = []string{"long"}
+	case "open_short", "open_short_limit":
+		sides = []string{"short"}
+	case "partial_close_long":
+		sides, requirePosition = []string{"long"}, true
+	case "partial_close_short":
+		sides, requirePosition = []string{"short"}, true
+	case "adjust_stop_loss":
+		sides = []string{"long", "short"}
+	default:
+		return false, ""
+	}
+
+	normalized := market.Normalize(symbol)
+	quantity := func(positions []kernel.PositionInfo, side string) float64 {
+		for _, p := range positions {
+			if market.Normalize(p.Symbol) == normalized && p.Side == side {
+				return p.Quantity
+			}
+		}
+		return 0
+	}
+	for _, side := range sides {
+		before, after := quantity(prompt, side), quantity(fresh, side)
+		if math.IsNaN(before) || math.IsNaN(after) || math.IsInf(before, 0) || math.IsInf(after, 0) ||
+			(requirePosition && (before == 0 || after == 0)) ||
+			math.Abs(after-before) > math.Max(1e-9, math.Max(before, after)*1e-6) {
+			return true, fmt.Sprintf("%s qty %g → %g", side, before, after)
+		}
+	}
+	return false, ""
 }
 
 // sortDecisionsByPriority sorts decisions: close positions first, then open positions, finally hold/wait
