@@ -239,6 +239,29 @@ def cmd_stocks(a):
     return 0
 
 
+def cmd_volrix(a):
+    from .volrix import DATA_ROOT, RULES, json_safe, render_report, run_study
+    names = list(RULES) if a.rules.lower() == 'all' else [n.strip().upper() for n in a.rules.split(',') if n.strip()]
+    symbols = tuple(s.strip().upper() for s in a.symbols.split(',') if s.strip())
+    result = run_study(names, symbols, a.universe_min_years, root=a.data_root or DATA_ROOT,
+                       progress=lambda line: print(line, flush=True))
+    report = render_report(result)
+    if a.out:
+        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+        with open(a.out, 'w') as f:
+            f.write(report)
+        print('written '+a.out)
+    if a.json_out:
+        os.makedirs(os.path.dirname(os.path.abspath(a.json_out)), exist_ok=True)
+        with open(a.json_out, 'w') as f:
+            json.dump(json_safe(result), f, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+            f.write('\n')
+        print('written '+a.json_out)
+    if not a.out:
+        print(report)
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="python3 -m scripts.backtest", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -325,6 +348,15 @@ def build_parser():
     p.add_argument('--out', help='Markdown 输出，默认 stdout')
     p.add_argument('--json', dest='json_out', help='JSON 输出，含原生分析器、权益、订单与交易')
     p.set_defaults(fn=cmd_stocks)
+
+    p = sub.add_parser('volrix', help='离线 Volrix 目标仓位规则移植（Backtrader）')
+    p.add_argument('--rules', default='all', help='all 或逗号分隔规则名称；分钟缓存缺失时须显式排除')
+    p.add_argument('--symbols', default='BTCUSDT,ETHUSDT', help='主表额外币种；BTC/ETH始终评估，不缩小截面池')
+    p.add_argument('--universe-min-years', type=float, default=3.)
+    p.add_argument('--data-root', help='离线数据根目录，默认主仓库 data；用于本地夹具/替代缓存')
+    p.add_argument('--out', help='中文 Markdown 报告，默认 stdout')
+    p.add_argument('--json', dest='json_out', help='紧凑JSON，仅BTC/ETH含日权益、成交和原生分析器；截面仅存metrics')
+    p.set_defaults(fn=cmd_volrix)
     return ap
 
 
