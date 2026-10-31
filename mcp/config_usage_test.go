@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -31,7 +32,8 @@ func TestConfig_MaxRetries_IsUsed(t *testing.T) {
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
 		WithAPIKey("sk-test-key"),
-		WithMaxRetries(5),      // Set to retry 5 times
+		WithMaxRetries(5), // Set to retry 5 times
+		WithRetryWaitBase(time.Nanosecond),
 		WithStreamDecisions(false), // keep the mock's non-stream expectations
 	)
 
@@ -158,14 +160,15 @@ func TestConfig_RetryWaitBase_IsUsed(t *testing.T) {
 		WithStreamDecisions(false), // non-stream: mock counts calls directly
 	)
 
-	// Record start time
-	start := time.Now()
+	// Observe selected waits without sleeping or depending on random wall time.
+	var waits []time.Duration
+	client.(*Client).retryWait = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
+	}
 
 	// Call API
 	_, err := client.CallWithMessages("system", "user")
-
-	// Record end time
-	elapsed := time.Since(start)
 
 	// 3rd time succeeds, but failed 2 times before
 	if err != nil {
@@ -176,15 +179,10 @@ func TestConfig_RetryWaitBase_IsUsed(t *testing.T) {
 		t.Errorf("expected 3 attempts, got %d", callCount)
 	}
 
-	// Verify wait time
-	// After 1st failure wait 1s (customWaitBase * 1)
-	// After 2nd failure wait 2s (customWaitBase * 2)
-	// Total wait time should be about 3s (allow some error)
-	expectedWait := 3 * time.Second
-	tolerance := 200 * time.Millisecond
-
-	if elapsed < expectedWait-tolerance || elapsed > expectedWait+tolerance {
-		t.Errorf("expected total time ~%v (with RetryWaitBase=%v), got %v", expectedWait, customWaitBase, elapsed)
+	// Equal jitter selects [base/2, base) then [base, 2*base).
+	if len(waits) != 2 || waits[0] < customWaitBase/2 || waits[0] >= customWaitBase ||
+		waits[1] < customWaitBase || waits[1] >= 2*customWaitBase {
+		t.Errorf("unexpected retry waits with base=%v: %v", customWaitBase, waits)
 	}
 }
 

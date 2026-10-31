@@ -112,6 +112,10 @@ type TraderPosition struct {
 	ExitTime           int64   `gorm:"column:exit_time;index:idx_positions_exit" json:"exit_time"` // Unix milliseconds UTC, 0 means not set
 	RealizedPnL        float64 `gorm:"column:realized_pnl;default:0" json:"realized_pnl"`
 	Fee                float64 `gorm:"column:fee;default:0" json:"fee"`
+	// Query-only attribution: never persist funding into the fill-derived ledger.
+	FundingFee         float64 `gorm:"-" json:"funding_fee"` // Signed: positive is income.
+	NetPnL             float64 `gorm:"-" json:"net_pnl"`     // realized_pnl - fee + funding_fee.
+	FundingUnallocated bool    `gorm:"-" json:"funding_unallocated"`
 	Leverage           int     `gorm:"column:leverage;default:1" json:"leverage"`
 	Status             string  `gorm:"column:status;default:OPEN;index:idx_positions_status" json:"status"`
 	CloseReason        string  `gorm:"column:close_reason;default:''" json:"close_reason"`
@@ -138,6 +142,9 @@ type TraderPosition struct {
 	// the authority across restarts).
 	R1TrimDone bool `gorm:"column:r1_trim_done;default:false" json:"r1_trim_done"`
 	TPTrimDone bool `gorm:"column:tp_trim_done;default:false" json:"tp_trim_done"`
+	// TPProtectionState holds the runner flag and split-TP execution evidence.
+	// Empty on legacy rows; scoped to this position's lifecycle.
+	TPProtectionState string `gorm:"column:tp_protection_state;type:text;default:''" json:"-"`
 	// ExitMode is the exit template the program executes for this position
 	// (user menu directive 09-29): "trend" = split TP + trailing runner,
 	// "range" = full TP at the chosen target, "quick" = full TP + program
@@ -580,6 +587,9 @@ func (s *PositionStore) GetClosedPositions(traderID string, limit int) ([]*Trade
 			pos.EntryQuantity = pos.Quantity
 		}
 	}
+	if _, err := s.allocateFunding(positions); err != nil {
+		return nil, err
+	}
 	return positions, nil
 }
 
@@ -719,6 +729,21 @@ func (s *PositionStore) MarkTPTrimDone(traderID, symbol, side string) error {
 		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
 			traderID, symbol, strings.ToUpper(side), "OPEN").
 		Update("tp_trim_done", true).Error
+}
+
+// SetTPProtectionState writes only the live position; closed history is untouched.
+func (s *PositionStore) SetTPProtectionState(traderID, symbol, side, state string) error {
+	res := s.db.Model(&TraderPosition{}).
+		Where("trader_id = ? AND symbol = ? AND UPPER(side) = ? AND status = ?",
+			traderID, symbol, strings.ToUpper(side), "OPEN").
+		Update("tp_protection_state", state)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("open position not yet available for TP state: %s %s", symbol, side)
+	}
+	return nil
 }
 
 // SetExitModeIfEmpty stamps the position's exit template on the trader's OPEN

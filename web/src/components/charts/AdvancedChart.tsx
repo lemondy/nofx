@@ -20,6 +20,8 @@ import {
   calculateBollingerBands,
   type Kline,
 } from '../../utils/indicators'
+// 自适应精度价格格式化（与 utils 档位一致，避免 1e-7 级价格显示成 0，review A2）
+import { formatPrice } from '../../utils/format'
 import { AlertTriangle, BarChart2, Settings, X } from 'lucide-react'
 import { useThemeVersion, type ChartTheme } from '../../lib/chartTheme'
 import { getCandleChartTheme } from './candleTheme'
@@ -108,26 +110,25 @@ const formatVolume = (value: number): string => {
   return value.toFixed(2)
 }
 
-// Adaptive price precision — TradingView style (fewer decimals for large prices)
-const formatLegendPrice = (value: number | undefined): string => {
-  if (value === undefined || value === null || !Number.isFinite(value))
-    return '-'
-  const abs = Math.abs(value)
-  if (abs >= 1000) return value.toFixed(2)
-  if (abs >= 1) return value.toFixed(4)
-  if (abs >= 0.01) return value.toFixed(5)
-  return value.toFixed(6)
-}
+// Adaptive price precision — TradingView style (fewer decimals for large prices).
+// Delegates to utils/format.ts: magnitude-based significant digits keep meme
+// prices (1e-7) readable instead of collapsing to "0.000000" (2026-10-28 A2).
+const formatLegendPrice = (value: number | undefined): string =>
+  value === undefined || value === null || !Number.isFinite(value)
+    ? '-'
+    : formatPrice(value)
 
-// Axis precision mirrors the legend: small-price symbols (0.0737) show
-// meaningful decimals on the price scale instead of everything collapsing
-// to "0.07" (2026-09-27 user report).
+// Axis precision mirrors the legend (utils formatPrice tiers): small-price
+// symbols keep meaningful decimals on the price scale instead of everything
+// collapsing to "0.07" (2026-09-27 user report).
 const priceAxisPrecision = (value: number | undefined): number => {
   const abs = Math.abs(value ?? 0)
-  if (abs >= 1000) return 2
-  if (abs >= 1) return 4
-  if (abs >= 0.01) return 5
-  return 6
+  if (abs < 0.000001) return 15
+  if (abs < 0.0001) return 12
+  if (abs < 0.01) return 10
+  if (abs < 1) return 8
+  if (abs < 1000) return 4
+  return 2
 }
 
 // Volume histogram: one bar per candle, coloured by candle direction. Colours
@@ -1208,11 +1209,7 @@ export function AdvancedChart({
                   marketStats.priceChange >= 0 ? 'text-up' : 'text-down'
                 )}
               >
-                {marketStats.price.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits:
-                    exchange === 'forex' || exchange === 'metals' ? 4 : 2,
-                })}
+                {formatPrice(marketStats.price)}
               </span>
               <Badge
                 variant={marketStats.priceChange >= 0 ? 'up' : 'down'}
@@ -1221,18 +1218,18 @@ export function AdvancedChart({
                 {formatSigned(marketStats.priceChangePercent, { suffix: '%' })}
               </Badge>
 
-              {/* Compact H/L */}
+              {/* Compact H/L（自适应精度，小价币不再显示 0.00，review A2） */}
               <div className="flex items-center gap-2 text-[11px] text-fg-3">
                 <span>
                   H{' '}
                   <span className="num text-fg-2">
-                    {marketStats.high.toFixed(2)}
+                    {formatPrice(marketStats.high)}
                   </span>
                 </span>
                 <span>
                   L{' '}
                   <span className="num text-fg-2">
-                    {marketStats.low.toFixed(2)}
+                    {formatPrice(marketStats.low)}
                   </span>
                 </span>
                 {marketStats.volume > 0 && baseUnit && (

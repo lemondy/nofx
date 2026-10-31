@@ -2,6 +2,7 @@ package store
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -33,7 +34,12 @@ func (AIManagedPosition) TableName() string { return "ai_managed_positions" }
 
 type AIManagedStore struct {
 	db *gorm.DB
+	// review 2026-10-28 #12: keep successful ownership reads across query failures.
+	mu        sync.Mutex
+	lastKnown map[aiManagedKey]bool
 }
+
+type aiManagedKey struct{ traderID, symbol, side string }
 
 func NewAIManagedStore(db *gorm.DB) *AIManagedStore {
 	return &AIManagedStore{db: db}
@@ -63,7 +69,9 @@ func (s *AIManagedStore) MarkEntry(traderID, symbol, side, orderID string) error
 }
 func (s *AIManagedStore) mark(traderID, symbol, side, orderID string) error {
 	side = strings.ToLower(side)
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		if orderID != "" {
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&AIEntryOrder{TraderID: traderID, OrderID: orderID, Symbol: symbol, Side: side}).Error; err != nil {
@@ -87,41 +95,87 @@ func (s *AIManagedStore) mark(traderID, symbol, side, orderID string) error {
 		}
 		return q.Update("ai_managed", true).Error
 	})
+	if err == nil {
+		s.rememberMarked(traderID, symbol, side, true)
+	}
+	return err
 }
 func (s *AIManagedStore) OwnsEntry(traderID, symbol, side, orderID string) bool {
 	if orderID == "" {
 		return false
 	}
 	var count int64
-	s.db.Model(&AIEntryOrder{}).Where("trader_id = ? AND order_id = ? AND symbol = ? AND LOWER(side) = ?", traderID, orderID, symbol, strings.ToLower(side)).Count(&count)
+	if err := s.db.Model(&AIEntryOrder{}).Where("trader_id = ? AND order_id = ? AND symbol = ? AND LOWER(side) = ?", traderID, orderID, symbol, strings.ToLower(side)).Count(&count).Error; err != nil {
+		return false
+	}
 	if count > 0 {
 		return true
 	}
 	// Resting AI plans are persisted before fills reach the syncer.
-	s.db.Model(&PendingEntryDB{}).Where("trader_id = ? AND order_id = ? AND symbol = ? AND LOWER(side) = ?", traderID, orderID, symbol, strings.ToLower(side)).Count(&count)
+	if err := s.db.Model(&PendingEntryDB{}).Where("trader_id = ? AND order_id = ? AND symbol = ? AND LOWER(side) = ?", traderID, orderID, symbol, strings.ToLower(side)).Count(&count).Error; err != nil {
+		return false
+	}
 	return count > 0
 }
 
 // Unmark removes the mark (position fully closed).
 func (s *AIManagedStore) Unmark(traderID, symbol, side string) error {
-	return s.db.Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, side).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	side = strings.ToLower(side)
+	err := s.db.Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, side).
 		Delete(&AIManagedPosition{}).Error
+	if err == nil {
+		s.rememberMarked(traderID, symbol, side, false)
+	}
+	return err
 }
 
 // IsMarked reports whether this position was opened by the AI.
 func (s *AIManagedStore) IsMarked(traderID, symbol, side string) bool {
+	marked, _ := s.IsMarkedWithError(traderID, symbol, side)
+	return marked
+}
+
+// review 2026-10-28 #12: distinguish absent ownership from an unavailable query.
+func (s *AIManagedStore) IsMarkedWithError(traderID, symbol, side string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	side = strings.ToLower(side)
 	var n int64
-	s.db.Model(&AIManagedPosition{}).
+	err := s.db.Model(&AIManagedPosition{}).
 		Where("trader_id = ? AND symbol = ? AND side = ?", traderID, symbol, side).
-		Count(&n)
-	return n > 0
+		Count(&n).Error
+	if err != nil {
+		return false, err
+	}
+	s.rememberMarked(traderID, symbol, side, n > 0)
+	return n > 0, nil
+}
+
+func (s *AIManagedStore) rememberMarked(traderID, symbol, side string, marked bool) {
+	if s.lastKnown == nil {
+		s.lastKnown = make(map[aiManagedKey]bool)
+	}
+	s.lastKnown[aiManagedKey{traderID, symbol, side}] = marked
+}
+
+// review 2026-10-28 #12: attached to the store handle, avoiding global trader
+// lifetimes; the trader chooses protective/open behavior when no cache exists.
+func (s *AIManagedStore) LastKnownMarked(traderID, symbol, side string) (bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	marked, known := s.lastKnown[aiManagedKey{traderID, symbol, strings.ToLower(side)}]
+	return marked, known
 }
 
 // IsLegacyMarked supports marks made before entry order provenance was recorded.
 // A live mark with a known order must not claim unrelated manual entry orders.
 func (s *AIManagedStore) IsLegacyMarked(traderID, symbol, side string) bool {
 	var n int64
-	s.db.Model(&AIManagedPosition{}).Where("trader_id = ? AND symbol = ? AND side = ? AND entry_order_id = ''", traderID, symbol, strings.ToLower(side)).Count(&n)
+	if err := s.db.Model(&AIManagedPosition{}).Where("trader_id = ? AND symbol = ? AND side = ? AND entry_order_id = ''", traderID, symbol, strings.ToLower(side)).Count(&n).Error; err != nil {
+		return false
+	}
 	return n > 0
 }
 

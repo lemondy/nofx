@@ -37,7 +37,9 @@ export interface Position {
   quantity: number
   leverage: number
   unrealized_pnl: number
-  unrealized_pnl_pct: number
+  // ROE：浮盈 / 占用保证金 ×100。后端在部分失败场景下可能缺省，
+  // 前端缺失时显示「—」而不是 0.00%（review A11）
+  unrealized_pnl_pct?: number
   liquidation_price: number
   margin_used: number
   // 交易所实查的该仓挂单腿(09-27):SL/TP algo 触发价 + 未成交入场限价;查询失败时缺省
@@ -187,6 +189,10 @@ export interface HistoricalPosition {
   exit_time: string
   realized_pnl: number
   fee: number
+  // Funding / net PnL (absent on older backends): net_pnl = realized_pnl − fee + funding_fee
+  funding_fee?: number // signed, positive is income
+  net_pnl?: number
+  funding_unallocated?: boolean // funding in the window could not be attributed
   leverage: number
   status: string
   close_reason: string
@@ -210,13 +216,21 @@ export interface TraderStats {
   sharpe_ratio: number
   total_pnl: number
   total_fee: number
+  total_funding?: number // allocated funding only, signed
+  total_net_pnl?: number // total_pnl + total_funding
+  unallocated_funding?: number
+  unallocated_funding_count?: number
   total_win: number
   total_loss: number
   avg_win: number
   avg_loss: number
   max_drawdown_pct: number
+  // equity_twr: equity curve ex-transfers; closed_trades: closed-trade curve; unavailable: no data
+  max_drawdown_basis?: MaxDrawdownBasis
   window_days?: number
 }
+
+export type MaxDrawdownBasis = 'equity_twr' | 'closed_trades' | 'unavailable'
 
 // Matches Go SymbolStats struct exactly
 export interface SymbolStats {
@@ -243,6 +257,8 @@ export interface PositionHistoryResponse {
   stats: TraderStats | null
   symbol_stats: SymbolStats[]
   direction_stats: DirectionStats[]
+  // Only present when a stats query failed; keys: stats / symbol_stats / direction_stats
+  stats_error?: Record<string, string>
 }
 
 // Grid Risk Information for frontend display

@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 
-from . import entry, exitsim, fetch, mldataset, params, signals
+from . import backtrader_adapter, entry, exitsim, fetch, mldataset, params, signals
 from .backtrader_adapter import BacktraderUnavailable, _backtrader
 from .klines import default_cache_dir
 
@@ -31,6 +31,8 @@ def _add_execution(p, with_limit=False):
     p.add_argument("--engine", choices=["backtrader"], default="backtrader", help="使用 Backtrader 原生 broker")
     p.add_argument("--commission", type=float, default=exitsim.TAKER, help="每次成交手续费率，0.0005=0.05%%")
     p.add_argument("--slippage", type=float, default=exitsim.SLIP, help="市价/止损滑点率，0.0003=0.03%%")
+    p.add_argument("--limit-fill", choices=("through", "touch"), default="through",
+                   help="限价成交模式: through=需穿过限价至少 1 tick(保守,默认); touch=触价即成交(旧行为)")
     if with_limit:
         p.add_argument("--limit-valid-min", type=float, default=45, help="从信号时间起算的限价有效期(分钟)")
 
@@ -41,7 +43,9 @@ def _execution(a):
         raise ValueError("手续费和滑点必须是非负有限数")
     if hasattr(a, "limit_valid_min") and (not math.isfinite(a.limit_valid_min) or a.limit_valid_min <= 0):
         raise ValueError("限价有效期必须大于 0")
-    print(f"engine=backtrader version={bt.__version__} commission={a.commission} slippage={a.slippage}")
+    backtrader_adapter.LIMIT_FILL_DEFAULT = a.limit_fill
+    print(f"engine=backtrader version={bt.__version__} commission={a.commission} slippage={a.slippage} "
+          f"limit_fill={a.limit_fill}")
     print("收盘提交订单，下一根起撮合；独立信号 R 研究，非组合资金回测；open 仅盯市、不收未成交的平仓费。")
 
 
@@ -188,7 +192,8 @@ def cmd_stocks(a):
         raise ValueError('stocks needs pandas; install scripts/backtest/requirements.txt') from exc
     if a.out and a.json_out and os.path.abspath(a.out) == os.path.abspath(a.json_out):
         raise ValueError('out and json must be different paths')
-    cfg = Config(a.tf, a.maxpos, a.rebalance, a.commission, a.cash,
+    cfg = Config(timeframe=a.tf, max_positions=a.maxpos, rebalance_trading_days=a.rebalance,
+                 commission=a.commission, slippage=a.slippage, cash=a.cash,
                  floor=a.floor, band=a.band, target_vol=a.target_vol)
     cfg.validate()
     scalers = None if a.scalers is None else [n.strip() for n in a.scalers.split(',') if n.strip()]
@@ -224,7 +229,7 @@ def cmd_stocks(a):
                 f.write(content)
             print('written '+path)
     print(f"engine=backtrader version={result['engine_version']} tf={a.tf} stocks={study.coverage['universe_size']} "
-          f"bars={len(study.calendar)} commission={a.commission} slippage=0")
+          f"bars={len(study.calendar)} commission={a.commission} slippage={a.slippage}")
     if a.out:
         if a.compare:
             from .stocks_report import comparison_table
@@ -304,6 +309,8 @@ def build_parser():
     p.add_argument('--maxpos', type=int, default=10)
     p.add_argument('--rebalance', type=int, default=10)
     p.add_argument('--commission', type=float, default=0.001)
+    p.add_argument('--slippage', type=float, default=0.0,
+                   help='每侧滑点比例，0.0005=5bp；默认0=未计滑点（无实测价差数据）')
     p.add_argument('--cash', type=float, default=100000)
     p.add_argument('--exclude', default='TQQQBUSDT,SQQQBUSDT,SOXLBUSDT,SOXSBUSDT,UVXYBUSDT,MUUBUSDT,KORUBUSDT',
                    help='逗号分隔，替换默认排除项；SPY/QQQ 始终仅作基准')

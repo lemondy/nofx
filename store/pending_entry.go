@@ -21,6 +21,11 @@ import (
 // Rows are written on every set/drop; startup reconciliation restores
 // ownership from them. One resting entry per trader+symbol+side.
 type PendingEntryDB struct {
+	// Additive columns: legacy rows have empty State/ClientOrderID and continue
+	// to recover by exchange order ID. New intents exist BEFORE the entry POST.
+	State          string    `gorm:"column:state" json:"state"` // submitting / pending
+	ClientOrderID  string    `gorm:"column:client_order_id" json:"client_order_id"`
+	OriginalR      float64   `gorm:"column:original_r;default:0" json:"original_r"` // planned price distance to SL
 	RecoveryReason string    `gorm:"column:recovery_reason" json:"recovery_reason,omitempty"`
 	ExecutedQty    float64   `gorm:"column:executed_qty;default:0" json:"executed_qty"`
 	ProtectedQty   float64   `gorm:"column:protected_qty;default:0" json:"protected_qty"`

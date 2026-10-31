@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
@@ -127,41 +128,90 @@ func binanceTickersTopN(tickers []binance24hrTicker, n int) []binance24hrTicker 
 	return tickers
 }
 
-// binanceKlineChange returns the price change percent (x100) from the open of
-// the current candle to now — i.e. the change over the last candle's span.
-func binanceKlineChange(ctx context.Context, symbol, interval string) (float64, float64, error) {
-	var candles [][]interface{}
-	if err := binanceGetFn(ctx, "/fapi/v1/klines?symbol="+symbol+"&interval="+interval+"&limit=1", &candles); err != nil {
-		return 0, 0, err
+// binanceNow is the sampling-clock seam for timestamp-based rolling returns.
+var binanceNow = time.Now
+
+// binanceRollingInterval chooses the finest interval that keeps the request
+// below 100 bars (the same weight tier as the former limit=1 request).
+func binanceRollingInterval(window time.Duration) string {
+	for _, interval := range []string{"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"} {
+		bar := market.TimeframeDuration(interval)
+		if (window+bar-1)/bar+2 < 100 {
+			return interval
+		}
 	}
-	if len(candles) == 0 || len(candles[0]) < 5 {
-		return 0, 0, fmt.Errorf("empty klines for %s", symbol)
-	}
-	open, _ := strconv.ParseFloat(candles[0][1].(string), 64)
-	close_, _ := strconv.ParseFloat(candles[0][4].(string), 64)
-	if open <= 0 {
-		return 0, 0, fmt.Errorf("bad kline open for %s", symbol)
-	}
-	return (close_ - open) / open * 100, close_, nil
+	return "1d"
 }
 
-// binanceRollingChange returns the price change percent (x100) versus
-// `barsAgo` bars of `interval` ago (e.g. 15m × 4 ≈ rolling 60 minutes), plus
-// the latest price.
+// binanceKlineChange returns a full rolling duration ending now. It never
+// measures the open-to-now return of the current forming duration bar.
+func binanceKlineChange(ctx context.Context, symbol, duration string) (float64, float64, error) {
+	window := market.TimeframeDuration(duration)
+	if window <= 0 {
+		return 0, 0, fmt.Errorf("unsupported rolling duration %q", duration)
+	}
+	now := binanceNow()
+	return binanceChangeAt(ctx, symbol, binanceRollingInterval(window), now.Add(-window), now, true)
+}
+
+// binanceRollingChange measures against NOW-barsAgo*interval, selecting the
+// latest close at/before that target rather than relying on array position.
 func binanceRollingChange(ctx context.Context, symbol, interval string, barsAgo int) (float64, float64, error) {
+	bar := market.TimeframeDuration(interval)
+	if bar <= 0 || barsAgo <= 0 {
+		return 0, 0, fmt.Errorf("invalid rolling window for %s", symbol)
+	}
+	now := binanceNow()
+	return binanceChangeAt(ctx, symbol, interval, now.Add(-time.Duration(barsAgo)*bar), now, true)
+}
+
+// binanceChangeAt uses close timestamps with one-bar tolerance. For a live
+// return the last forming close is the current price; historical OI pairs
+// instead use closes at/before BOTH observation times in the same request.
+func binanceChangeAt(ctx context.Context, symbol, interval string, start, end time.Time, live bool) (float64, float64, error) {
+	bar := market.TimeframeDuration(interval)
+	if bar <= 0 || !end.After(start) {
+		return 0, 0, fmt.Errorf("invalid price window for %s", symbol)
+	}
+	limit := int((end.Sub(start)+bar-1)/bar) + 2
+	path := "/fapi/v1/klines?symbol=" + symbol + "&interval=" + interval + "&limit=" + strconv.Itoa(limit)
+	if !live {
+		path += "&endTime=" + strconv.FormatInt(end.UnixMilli(), 10)
+	}
 	var candles [][]interface{}
-	if err := binanceGetFn(ctx, "/fapi/v1/klines?symbol="+symbol+"&interval="+interval+"&limit="+strconv.Itoa(barsAgo+1), &candles); err != nil {
+	if err := binanceGetFn(ctx, path, &candles); err != nil {
 		return 0, 0, err
 	}
-	if len(candles) < barsAgo+1 {
-		return 0, 0, fmt.Errorf("insufficient klines for %s", symbol)
+	var ref, last float64
+	var refAt, lastAt int64
+	for _, candle := range candles {
+		if len(candle) < 7 {
+			continue
+		}
+		openMS, openOK := candle[0].(float64)
+		closeMS, closeOK := candle[6].(float64)
+		closeText, priceOK := candle[4].(string)
+		price, err := strconv.ParseFloat(closeText, 64)
+		if !openOK || !closeOK || !priceOK || err != nil || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) || openMS <= 0 || closeMS < openMS || math.IsNaN(openMS) || math.IsNaN(closeMS) || math.IsInf(openMS, 0) || math.IsInf(closeMS, 0) {
+			continue
+		}
+		openAt, closeAt := int64(openMS), int64(closeMS)
+		if closeAt <= start.UnixMilli() && closeAt > refAt {
+			ref, refAt = price, closeAt
+		}
+		if live {
+			// Ignore future bars; an old final bar must also pass the age check.
+			if openAt <= end.UnixMilli() && openAt > lastAt {
+				last, lastAt = price, openAt
+			}
+		} else if closeAt <= end.UnixMilli() && closeAt > lastAt {
+			last, lastAt = price, closeAt
+		}
 	}
-	ref, _ := strconv.ParseFloat(candles[0][4].(string), 64) // close barsAgo bars back
-	last, _ := strconv.ParseFloat(candles[len(candles)-1][4].(string), 64)
-	if ref <= 0 {
-		return 0, 0, fmt.Errorf("bad kline close for %s", symbol)
+	if refAt == 0 || lastAt == 0 || start.Sub(time.UnixMilli(refAt)) > bar || end.Sub(time.UnixMilli(lastAt)) > bar {
+		return 0, 0, fmt.Errorf("insufficient timestamped price history for %s", symbol)
 	}
-	return (last - ref) / ref * 100, last, nil
+	return (last/ref - 1) * 100, last, nil
 }
 
 // binanceQuoteVolume24h returns the symbol's 24h quote turnover from the
@@ -298,39 +348,50 @@ func binanceBTC1hCloses(limit int) []float64 {
 	return closes
 }
 
+type binanceOIObservation struct {
+	curBase, curValue, deltaBase, deltaValue, deltaPct float64
+	start, end                                         time.Time
+}
+
 // binanceOIDelta returns current OI (in base asset and USDT value) and the
 // change versus one `period` ago, from openInterestHist.
 func binanceOIDelta(ctx context.Context, symbol, period string) (curBase, curValue, deltaBase, deltaValue, deltaPct float64, err error) {
+	o, err := binanceOIObservedDelta(ctx, symbol, period)
+	return o.curBase, o.curValue, o.deltaBase, o.deltaValue, o.deltaPct, err
+}
+
+func binanceOIObservedDelta(ctx context.Context, symbol, period string) (binanceOIObservation, error) {
+	var o binanceOIObservation
 	var hist []struct {
 		SumOpenInterest      string `json:"sumOpenInterest"`
 		SumOpenInterestValue string `json:"sumOpenInterestValue"`
+		Timestamp            int64  `json:"timestamp"`
 	}
-	if err = binanceGetFn(ctx, "/futures/data/openInterestHist?symbol="+symbol+"&period="+period+"&limit=2", &hist); err != nil {
-		return
+	if err := binanceGetFn(ctx, "/futures/data/openInterestHist?symbol="+symbol+"&period="+period+"&limit=2", &hist); err != nil {
+		return o, err
 	}
 	if len(hist) == 0 {
-		err = fmt.Errorf("no OI history for %s", symbol)
-		return
+		return o, fmt.Errorf("no OI history for %s", symbol)
 	}
 	parse := func(s string) float64 { v, _ := strconv.ParseFloat(s, 64); return v }
-	curBase = parse(hist[len(hist)-1].SumOpenInterest)
-	curValue = parse(hist[len(hist)-1].SumOpenInterestValue)
+	o.curBase = parse(hist[len(hist)-1].SumOpenInterest)
+	o.curValue = parse(hist[len(hist)-1].SumOpenInterestValue)
 	if len(hist) >= 2 {
 		prevBase := parse(hist[0].SumOpenInterest)
 		prevValue := parse(hist[0].SumOpenInterestValue)
 		if prevBase <= 0 {
-			err = fmt.Errorf("no OI baseline (new listing?) for %s", symbol)
-			return
+			return o, fmt.Errorf("no OI baseline (new listing?) for %s", symbol)
 		}
-		deltaBase, deltaValue, deltaPct = oiDeltas(curBase, prevBase, curValue, prevValue)
-		// Dust baseline: percentages divide by near-zero and explode
-		// (+134834% style) — meaningless for ranking/candidates.
-		if deltaPct != deltaPct || deltaPct > 500 || deltaPct < -500 || prevValue < 500_000 {
-			err = fmt.Errorf("degenerate OI baseline for %s (prev %.0f, pct %.1f)", symbol, prevValue, deltaPct)
-			return
+		o.deltaBase, o.deltaValue, o.deltaPct = oiDeltas(o.curBase, prevBase, o.curValue, prevValue)
+		// Dust baseline percentages are meaningless for rankings/candidates.
+		if math.IsNaN(o.deltaPct) || o.deltaPct > 500 || o.deltaPct < -500 || prevValue < 500_000 {
+			return o, fmt.Errorf("degenerate OI baseline for %s (prev %.0f, pct %.1f)", symbol, prevValue, o.deltaPct)
+		}
+		if hist[0].Timestamp > 0 && hist[len(hist)-1].Timestamp > hist[0].Timestamp {
+			o.start, o.end = time.UnixMilli(hist[0].Timestamp), time.UnixMilli(hist[len(hist)-1].Timestamp)
 		}
 	}
-	return
+	return o, nil
 }
 
 // oiDeltas computes signed OI deltas. The USD delta is the BASE-unit change
@@ -399,12 +460,16 @@ var (
 // binanceOIRanking builds the OI increase/decrease ranking from Binance
 // openInterestHist across the top-volume universe.
 func binanceOIRanking(ctx context.Context, duration string, limit int) (*nofxos.OIRankingData, error) {
+	duration = strings.ToLower(strings.TrimSpace(duration))
 	if duration == "" {
 		duration = "1h"
 	}
+	if limit <= 0 {
+		limit = 20
+	}
 	oiRankMu.Lock()
 	if oiRankCache != nil && oiRankCacheKey == duration && time.Since(oiRankFetchedAt) < rankingCacheTTL {
-		data := oiRankCache
+		data := copyOIRanking(oiRankCache, limit)
 		oiRankMu.Unlock()
 		return data, nil
 	}
@@ -415,24 +480,35 @@ func binanceOIRanking(ctx context.Context, duration string, limit int) (*nofxos.
 		return nil, err
 	}
 	entries := mapParallel(binanceTickersTopN(tickers, binanceFetchLimit), func(t binance24hrTicker) (oiRankingEntry, error) {
-		curBase, _, deltaBase, deltaValue, deltaPct, err := binanceOIDelta(ctx, t.Symbol, duration)
-		if err != nil || curBase <= 0 {
+		o, err := binanceOIObservedDelta(ctx, t.Symbol, duration)
+		if err != nil {
 			return oiRankingEntry{}, err
 		}
-		// Price change over the same window (rendered alongside OI change).
+		if o.curBase <= 0 {
+			return oiRankingEntry{}, fmt.Errorf("no current OI for %s", t.Symbol)
+		}
 		priceDeltaPct := 0.0
-		if chg, _, err := binanceKlineChange(ctx, t.Symbol, duration); err == nil {
-			priceDeltaPct = chg
+		if !o.start.IsZero() && !o.end.IsZero() {
+			if chg, _, err := binanceChangeAt(ctx, t.Symbol, binanceRollingInterval(o.end.Sub(o.start)), o.start, o.end, false); err == nil {
+				priceDeltaPct = chg
+			}
+		} else {
+			// Legacy/malformed history without observation timestamps cannot be
+			// aligned: this fallback price return ends NOW, while OI may lag by
+			// up to one history period. Normal Binance responses take the path above.
+			if chg, _, err := binanceKlineChange(ctx, t.Symbol, duration); err == nil {
+				priceDeltaPct = chg
+			}
 		}
 		return oiRankingEntry{position: nofxos.OIPosition{
 			Symbol:            t.Symbol,
 			Price:             t.LastPrice,
-			CurrentOI:         curBase,
-			OIDelta:           deltaBase,
-			OIDeltaValue:      deltaValue,
-			OIDeltaPercent:    deltaPct,
+			CurrentOI:         o.curBase,
+			OIDelta:           o.deltaBase,
+			OIDeltaValue:      o.deltaValue,
+			OIDeltaPercent:    o.deltaPct,
 			PriceDeltaPercent: priceDeltaPct,
-		}, deltaPct: deltaPct}, nil
+		}, deltaPct: o.deltaPct}, nil
 	})
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("binance OI ranking: no symbols resolved")
@@ -444,18 +520,12 @@ func binanceOIRanking(ctx context.Context, duration string, limit int) (*nofxos.
 		FetchedAt: time.Now(),
 	}
 	for i, e := range entries {
-		if len(data.TopPositions) >= limit {
-			break
-		}
 		e.position.Rank = i + 1
 		data.TopPositions = append(data.TopPositions, e.position)
 	}
 	// Decrease ranking: walk from the most negative.
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].deltaPct < entries[j].deltaPct })
 	for i, e := range entries {
-		if len(data.LowPositions) >= limit {
-			break
-		}
 		e.position.Rank = i + 1
 		data.LowPositions = append(data.LowPositions, e.position)
 	}
@@ -466,7 +536,15 @@ func binanceOIRanking(ctx context.Context, duration string, limit int) (*nofxos.
 	oiRankFetchedAt = time.Now()
 	oiRankMu.Unlock()
 	logger.Infof("📊 Binance OI ranking (%s): top %d / low %d from %d symbols", duration, len(data.TopPositions), len(data.LowPositions), len(entries))
-	return data, nil
+	return copyOIRanking(data, limit), nil
+}
+
+// copyOIRanking returns caller-owned slices; the cache always holds full depth.
+func copyOIRanking(data *nofxos.OIRankingData, limit int) *nofxos.OIRankingData {
+	cp := *data
+	cp.TopPositions = append([]nofxos.OIPosition(nil), data.TopPositions[:min(limit, len(data.TopPositions))]...)
+	cp.LowPositions = append([]nofxos.OIPosition(nil), data.LowPositions[:min(limit, len(data.LowPositions))]...)
+	return &cp
 }
 
 // ── Price ranking ────────────────────────────────────────────────────────────
@@ -481,25 +559,33 @@ type priceChangeSample struct {
 }
 
 var (
-	priceRankMu      sync.Mutex
-	priceRankCache   *nofxos.PriceRankingData
-	priceRankFetched time.Time
+	priceRankMu       sync.Mutex
+	priceRankCache    *nofxos.PriceRankingData
+	priceRankCacheKey string
+	priceRankFetched  time.Time
 )
 
-// binancePriceRanking builds the multi-duration gainers/losers ranking from
-// Binance tickers (24h) and kline opens (1h/4h spans).
+// binancePriceRanking caches full rankings per normalized duration set. Each
+// request receives an independent map, duration objects and trimmed slices.
 func binancePriceRanking(ctx context.Context, durations string, limit int) (*nofxos.PriceRankingData, error) {
+	durations = normalizeRankingDurations(durations)
+	if limit <= 0 {
+		limit = 10
+	}
 	priceRankMu.Lock()
-	if priceRankCache != nil && time.Since(priceRankFetched) < rankingCacheTTL {
-		data := priceRankCache
+	if priceRankCache != nil && priceRankCacheKey == durations && time.Since(priceRankFetched) < rankingCacheTTL {
+		data := copyPriceRanking(priceRankCache, limit)
 		priceRankMu.Unlock()
-		// A transient OI-ranking failure during the build cycle used to
-		// cache a zero-filled 1h OI column for the full TTL — retry on hit.
+		// Retry transient OI enrichment failures on the caller's copy.
 		fillPriceRankingOIFromRanking(ctx, data)
 		return data, nil
 	}
 	priceRankMu.Unlock()
 
+	want := map[string]bool{}
+	for _, d := range splitDurations(durations) {
+		want[d] = true
+	}
 	tickers, err := binanceTopTickers(ctx)
 	if err != nil {
 		return nil, err
@@ -507,13 +593,15 @@ func binancePriceRanking(ctx context.Context, durations string, limit int) (*nof
 	samples := mapParallel(binanceTickersTopN(tickers, binanceFetchLimit), func(t binance24hrTicker) (priceChangeSample, error) {
 		s := priceChangeSample{symbol: t.Symbol, price: t.LastPrice, chg24h: t.PriceChangePercent, quoteVol: t.QuoteVolume}
 		var err error
-		// Rolling 60-minute change (15m × 4) — the same canonical definition
-		// as the derivatives block and the quant snapshot.
-		if s.chg1h, _, err = binanceRollingChange(ctx, t.Symbol, "15m", 4); err != nil {
-			return s, err
+		if want["1h"] {
+			if s.chg1h, _, err = binanceKlineChange(ctx, t.Symbol, "1h"); err != nil {
+				return s, err
+			}
 		}
-		if s.chg4h, _, err = binanceKlineChange(ctx, t.Symbol, "4h"); err != nil {
-			return s, err
+		if want["4h"] {
+			if s.chg4h, _, err = binanceKlineChange(ctx, t.Symbol, "4h"); err != nil {
+				return s, err
+			}
 		}
 		return s, nil
 	})
@@ -521,10 +609,6 @@ func binancePriceRanking(ctx context.Context, durations string, limit int) (*nof
 		return nil, fmt.Errorf("binance price ranking: only %d symbols resolved", len(samples))
 	}
 
-	want := map[string]bool{}
-	for _, d := range splitDurations(durations) {
-		want[d] = true
-	}
 	data := &nofxos.PriceRankingData{Durations: map[string]*nofxos.PriceRankingDuration{}, FetchedAt: time.Now()}
 	build := func(key string, get func(priceChangeSample) float64) {
 		if !want[key] {
@@ -533,18 +617,14 @@ func binancePriceRanking(ctx context.Context, durations string, limit int) (*nof
 		sorted := append([]priceChangeSample(nil), samples...)
 		sort.Slice(sorted, func(i, j int) bool { return get(sorted[i]) > get(sorted[j]) })
 		dur := &nofxos.PriceRankingDuration{}
-		for i, s := range sorted {
-			if i >= limit {
-				break
-			}
+		for _, s := range sorted {
 			dur.Top = append(dur.Top, nofxos.PriceRankingItem{
 				Pair: s.symbol, Symbol: s.symbol, Price: s.price,
 				PriceDelta: get(s) / 100, // decimal format: 0.0723 = 7.23%
 			})
 		}
-		n := len(sorted)
-		for i := 0; i < limit && i < n; i++ {
-			s := sorted[n-1-i] // walk from the most negative change
+		for i := len(sorted) - 1; i >= 0; i-- {
+			s := sorted[i]
 			dur.Low = append(dur.Low, nofxos.PriceRankingItem{
 				Pair: s.symbol, Symbol: s.symbol, Price: s.price,
 				PriceDelta: get(s) / 100,
@@ -560,10 +640,44 @@ func binancePriceRanking(ctx context.Context, durations string, limit int) (*nof
 
 	priceRankMu.Lock()
 	priceRankCache = data
+	priceRankCacheKey = durations
 	priceRankFetched = time.Now()
 	priceRankMu.Unlock()
 	logger.Infof("📈 Binance price ranking ready for %d durations (%d symbols)", len(data.Durations), len(samples))
-	return data, nil
+	return copyPriceRanking(data, limit), nil
+}
+
+func normalizeRankingDurations(durations string) string {
+	seen := map[string]bool{}
+	for _, d := range strings.Split(durations, ",") {
+		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+			seen[d] = true
+		}
+	}
+	if len(seen) == 0 {
+		seen["1h"] = true
+	}
+	keys := make([]string, 0, len(seen))
+	for d := range seen {
+		keys = append(keys, d)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+func copyPriceRanking(data *nofxos.PriceRankingData, limit int) *nofxos.PriceRankingData {
+	cp := *data
+	cp.Durations = make(map[string]*nofxos.PriceRankingDuration, len(data.Durations))
+	for key, d := range data.Durations {
+		if d == nil {
+			continue
+		}
+		cp.Durations[key] = &nofxos.PriceRankingDuration{
+			Top: append([]nofxos.PriceRankingItem(nil), d.Top[:min(limit, len(d.Top))]...),
+			Low: append([]nofxos.PriceRankingItem(nil), d.Low[:min(limit, len(d.Low))]...),
+		}
+	}
+	return &cp
 }
 
 // fillPriceRankingOIFromRanking patches the 1h table's OI column from the

@@ -141,6 +141,28 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(audit.sharpe([0.1], 365), 0)
 
 
+class RankTieTests(unittest.TestCase):
+    def test_average_ranks_and_tied_correlation(self):
+        self.assertEqual(audit._ranks([3, 1, 1, 2]), [3, 0.5, 0.5, 2])
+        self.assertAlmostEqual(audit._spearman([0, 0, 1, 2], [0, 1, 1, 2]), 5 / 6)
+        self.assertEqual(audit._spearman([1] * 20, list(range(20))), 0)
+
+    def test_constant_sizes_do_not_flag_martingale_in_200_noise_trials(self):
+        import random
+        rng = random.Random(20261028)
+        flags = sum(audit.flag_martingale([1.0] * 200, [rng.gauss(0, 1) for _ in range(200)])
+                    for _ in range(200))
+        self.assertLessEqual(flags, 2)
+
+    def test_increasing_size_after_losses_is_still_detected(self):
+        returns = [-1.0, -1.0, 1.0, -1.0] * 50
+        streak, sizes = 0, [1.0]
+        for ret in returns[:-1]:
+            streak = streak + 1 if ret < 0 else 0
+            sizes.append(1.0 + streak)
+        self.assertTrue(audit.flag_martingale(sizes, returns))
+
+
 class SweepTests(unittest.TestCase):
     def test_plateau_and_lone_peak(self):
         grid = {i: {"x": i} for i in range(5)}

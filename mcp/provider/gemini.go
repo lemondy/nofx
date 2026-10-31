@@ -50,8 +50,8 @@ func NewGeminiClientWithOptions(opts ...mcp.ClientOption) mcp.AIClient {
 func (c *GeminiClient) SetAPIKey(apiKey string, customURL string, customModel string) {
 	c.APIKey = apiKey
 
-	if len(apiKey) > 8 {
-		c.Log.Infof("🔧 [MCP] Gemini API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
+	if apiKey != "" {
+		c.Log.Infof("🔧 [MCP] Gemini API key configured")
 	}
 	if customURL != "" {
 		c.BaseURL = customURL

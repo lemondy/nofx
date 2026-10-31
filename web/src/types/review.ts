@@ -108,7 +108,13 @@ export interface TradingRule {
 
 // review 2026-10-09 K: server-side historical verification of a rule
 export interface RuleVerification {
-  status: 'supported' | 'weak' | 'contradicted' | 'unverifiable' | 'soft'
+  status:
+    | 'supported'
+    | 'in_sample_only'
+    | 'weak'
+    | 'contradicted'
+    | 'unverifiable'
+    | 'soft'
   matched: number
   wins: number
   net_pnl: number

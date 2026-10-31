@@ -97,6 +97,7 @@ func validateDecisions(decisions []Decision, accountEquity float64, btcEthLevera
 }
 
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64, minPositionSize float64, hasPosition bool, gs *GateState) error {
+	d.Symbol = strings.ToUpper(strings.TrimSpace(d.Symbol))
 	validActions := map[string]bool{
 		"open_long":           true,
 		"open_short":          true,
@@ -549,11 +550,12 @@ func correctTakeProfitToPlan(decisions []Decision, gates map[string]*GateState, 
 }
 
 // resolveTakeProfitOptions applies each open decision's tp_option choice to
-// the gate state BEFORE the TP snap (user menu directive 09-29): the snap
+// a decision-local gate copy BEFORE the TP snap (user menu directive 09-29): the snap
 // target becomes the CHOSEN menu level instead of always option 1. A missing
-// or out-of-range option (validateDecision already resets those) keeps
+// or out-of-range option keeps
 // option 1 — the legacy first_rr_ge_target. The model can only move the TP
 // BETWEEN program-precomputed levels; an off-menu TP stays impossible.
+// Callers must not pass the shared cycle gate states: validation can still fail.
 func resolveTakeProfitOptions(decisions []Decision, gates map[string]*GateState) {
 	for i := range decisions {
 		d := &decisions[i]
@@ -572,7 +574,7 @@ func resolveTakeProfitOptions(decisions []Decision, gates map[string]*GateState)
 			menu = gs.ShortTPMenu
 		}
 		if d.TPOption > len(menu) {
-			continue // defensive — validateDecision resets this earlier
+			continue // validateDecision resets this after price correction
 		}
 		opt := menu[d.TPOption-1]
 		if opt.Level <= 0 {

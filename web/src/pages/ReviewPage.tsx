@@ -412,8 +412,9 @@ function JournalRow({
       <td className={`${td} num text-right`}>{fmtPrice(entry.entry_price)}</td>
       <td className={`${td} num text-right`}>{fmtPrice(entry.exit_price)}</td>
       <td className={`${td} num text-right`}>{entry.leverage}x</td>
+      {/* 净盈亏（realized_pnl − fee），与同页 win_rate/expectancy 及持仓历史页同口径（review B4） */}
       <td className={`${td} text-right font-semibold`}>
-        <PnL value={entry.realized_pnl} currency="" />
+        <PnL value={entry.realized_pnl - (entry.fee || 0)} currency="" />
       </td>
       <td className={`${td} text-right`}>
         <Change value={entry.pnl_pct} decimals={1} />
@@ -508,7 +509,9 @@ function ReviewEditModal({
     }
   }
 
-  const win = entry.realized_pnl > 0
+  // 净盈亏口径（已扣手续费），与列表 win_rate/expectancy 一致（review B4）
+  const netPnl = entry.realized_pnl - (entry.fee || 0)
+  const win = netPnl > 0
 
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
@@ -547,25 +550,13 @@ function ReviewEditModal({
           <FactBox label={rv('colExit')} value={fmtPrice(entry.exit_price)} />
           <FactBox
             label={rv('colPnL')}
-            value={`${entry.realized_pnl >= 0 ? '+' : ''}${entry.realized_pnl.toFixed(2)}`}
-            color={
-              win
-                ? 'text-up'
-                : entry.realized_pnl < 0
-                  ? 'text-down'
-                  : 'text-fg-3'
-            }
+            value={`${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)}`}
+            color={win ? 'text-up' : netPnl < 0 ? 'text-down' : 'text-fg-3'}
           />
           <FactBox
             label={rv('colPnlPct')}
             value={`${entry.pnl_pct >= 0 ? '+' : ''}${entry.pnl_pct.toFixed(1)}%`}
-            color={
-              win
-                ? 'text-up'
-                : entry.realized_pnl < 0
-                  ? 'text-down'
-                  : 'text-fg-3'
-            }
+            color={win ? 'text-up' : netPnl < 0 ? 'text-down' : 'text-fg-3'}
           />
           <FactBox
             label={rv('plannedSL')}
@@ -1369,6 +1360,7 @@ function VerificationBadge({
     t(`reviewPage.${key}`, language, params)
   const label: Record<string, string> = {
     supported: rv('verifSupported'),
+    in_sample_only: rv('verifInSampleOnly'),
     weak: rv('verifWeak'),
     contradicted: rv('verifContradicted'),
     unverifiable: rv('verifUnverifiable'),
@@ -1379,11 +1371,13 @@ function VerificationBadge({
       ? 'up'
       : v.status === 'weak'
         ? 'warn'
-        : v.status === 'contradicted'
-          ? 'down'
-          : v.status === 'soft'
-            ? 'info'
-            : 'neutral'
+        : v.status === 'in_sample_only'
+          ? 'warn'
+          : v.status === 'contradicted'
+            ? 'down'
+            : v.status === 'soft'
+              ? 'info'
+              : 'neutral'
   const detail = rv('verifDetail', {
     matched: v.matched,
     pop: v.population,

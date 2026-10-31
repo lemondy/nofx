@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // CoinData represents AI500 coin information
@@ -56,10 +58,14 @@ func (c *Client) GetAI500List() ([]CoinData, error) {
 	return nil, fmt.Errorf("all AI500 API requests failed: %w", lastErr)
 }
 
+// Request seam keeps AI500 parsing/candidate tests offline without patching
+// executable memory (unsupported on some macOS/arm64 test binaries).
+var ai500Request = (*Client).doRequest
+
 func (c *Client) fetchAI500() ([]CoinData, error) {
 	log.Printf("🔄 Requesting AI500 data from %s...", c.GetBaseURL())
 
-	body, err := c.doRequest("/api/ai500/list")
+	body, err := ai500Request(c, "/api/ai500/list")
 	if err != nil {
 		return nil, fmt.Errorf("failed to request AI500 API: %w", err)
 	}
@@ -100,6 +106,10 @@ func (c *Client) GetTopRatedCoins(limit int) ([]string, error) {
 	var availableCoins []CoinData
 	for _, coin := range coins {
 		if coin.IsAvailable {
+			coin.Pair = NormalizeSymbol(coin.Pair)
+			if coin.Pair == "" {
+				continue
+			}
 			availableCoins = append(availableCoins, coin)
 		}
 	}
@@ -144,6 +154,9 @@ func (c *Client) GetAvailableCoins() ([]string, error) {
 	for _, coin := range coins {
 		if coin.IsAvailable {
 			symbol := NormalizeSymbol(coin.Pair)
+			if symbol == "" {
+				continue
+			}
 			symbols = append(symbols, symbol)
 		}
 	}
@@ -152,12 +165,23 @@ func (c *Client) GetAvailableCoins() ([]string, error) {
 	return symbols, nil
 }
 
-// NormalizeSymbol normalizes coin symbol to XXXUSDT format
+var promptSymbolPattern = regexp.MustCompile(`^[A-Z0-9]{2,20}$`)
+
+// NormalizeSymbol normalizes coin symbol to XXXUSDT format. Whitespace and
+// interior whitespace/control characters are rejected.
 func NormalizeSymbol(symbol string) string {
+	// Edge whitespace is harmless and trimmed; interior whitespace/control
+	// characters reject the candidate (prompt-injection boundary).
 	symbol = strings.TrimSpace(symbol)
+	if symbol == "" || strings.ContainsFunc(symbol, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return ""
+	}
 	symbol = strings.ToUpper(symbol)
 	if !strings.HasSuffix(symbol, "USDT") {
 		symbol = symbol + "USDT"
+	}
+	if symbol == "USDT" || !promptSymbolPattern.MatchString(symbol) {
+		return ""
 	}
 	return symbol
 }

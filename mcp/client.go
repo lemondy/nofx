@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -37,10 +39,15 @@ var (
 		"no such host",
 		"stream error",   // HTTP/2 stream error
 		"INTERNAL_ERROR", // Server internal error
+		"status 408",     // Request Timeout
+		"status 429",     // Too Many Requests
+		"status 500",     // Internal Server Error
 		"status 502",     // Bad Gateway
 		"status 503",     // Service Unavailable
+		"status 504",     // Gateway Timeout
 		"status 520",     // Cloudflare origin error
 		"status 524",     // Cloudflare timeout
+		"status 529",     // Provider overloaded
 	}
 
 	// TokenUsageCallback is called after each AI request with token usage info
@@ -60,6 +67,7 @@ type TokenUsage struct {
 type Client struct {
 	requestMu      sync.RWMutex
 	requestContext context.Context
+	retryWait      func(context.Context, time.Duration) error // optional test clock
 	Provider       string
 	APIKey         string
 	BaseURL        string
@@ -168,15 +176,9 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 	// Fixed retry flow
 	var lastErr error
 	maxRetries := client.Cfg.MaxRetries
+	attempts := 0
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			// 09-19: the retry line used to swallow lastErr — a night of
-			// "context deadline exceeded" failures was invisible at the
-			// retry point and only surfaced in the final aggregate error.
-			client.Log.Warnf("⚠️  AI API call failed (attempt %d/%d): %v — retrying", attempt-1, maxRetries, lastErr)
-		}
-
+	for attempt := 1; ; attempt++ {
 		// Streamable OpenAI-compatible providers use SSE streaming: headers
 		// return immediately, so a long reasoning generation no longer hits
 		// the "awaiting headers" request timeout. Non-streamable providers
@@ -196,22 +198,29 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 		}
 
 		lastErr = err
+		attempts = attempt
 		// Check if error is retryable via hooks (supports custom retry strategy)
 		if !client.Hooks.IsRetryableError(err) {
 			return "", err
 		}
-
-		// Wait before retry
-		if attempt < maxRetries {
-			waitTime := client.Cfg.RetryWaitBase * time.Duration(attempt)
-			client.Log.Infof("⏳ Waiting %v before retry...", waitTime)
-			if err := client.waitForRetry(waitTime); err != nil {
-				return "", err
-			}
+		// review 2026-10-28 #14: HTTP status errors (429/5xx) fail within
+		// seconds, so they get one attempt beyond the configured budget.
+		// Timeouts and dropped streams keep it unchanged — a streaming
+		// attempt may run up to streamHardCap, and another one would stretch
+		// a stalled cycle by up to 600s.
+		limit := maxRetries
+		if isStatusError(err) {
+			limit += statusErrorBonusAttempts
+		}
+		if attempt >= limit {
+			break
+		}
+		if err := client.retryAfterError(err, attempt, limit); err != nil {
+			return "", err
 		}
 	}
 
-	return "", fmt.Errorf("still failed after %d retries: %w", maxRetries, lastErr)
+	return "", fmt.Errorf("still failed after %d retries: %w", attempts, lastErr)
 }
 
 func (client *Client) SetAuthHeader(reqHeader http.Header) {
@@ -247,10 +256,10 @@ func (client *Client) BuildMCPRequestBody(systemPrompt, userPrompt string) map[s
 
 	// Build request body
 	requestBody := map[string]interface{}{
-		"model":       client.Model,
-		"messages":    messages,
-		"temperature": client.Cfg.Temperature, // Use configured temperature
+		"model":    client.Model,
+		"messages": messages,
 	}
+	client.applyTemperature(requestBody, nil, client.Cfg.ReasoningEffort)
 	// OpenAI newer models use max_completion_tokens instead of max_tokens
 	if client.Provider == ProviderOpenAI {
 		requestBody["max_completion_tokens"] = client.MaxTokens
@@ -266,6 +275,7 @@ func (client *Client) MarshalRequestBody(requestBody map[string]any) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize request: %w", err)
 	}
+	client.logTemperature(requestBody)
 	return jsonData, nil
 }
 
@@ -374,9 +384,6 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	// Print current AI configuration
 	client.Log.Infof("📡 [%s] Request AI Server: BaseURL: %s", client.String(), client.BaseURL)
 	client.Log.Debugf("[%s] UseFullURL: %v", client.String(), client.UseFullURL)
-	if len(client.APIKey) > 8 {
-		client.Log.Debugf("[%s]   API Key: %s...%s", client.String(), client.APIKey[:4], client.APIKey[len(client.APIKey)-4:])
-	}
 
 	// Step 1: Build request body (via hooks for dynamic dispatch)
 	requestBody := client.Hooks.BuildMCPRequestBody(systemPrompt, userPrompt)
@@ -398,7 +405,7 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 	}
 
 	// Step 5: Send HTTP request (fixed logic)
-	resp, err := client.HTTPClient.Do(req.WithContext(client.RequestContext()))
+	resp, err := client.doHTTPRequest(client.HTTPClient, req.WithContext(client.RequestContext()))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
@@ -412,7 +419,7 @@ func (client *Client) Call(systemPrompt, userPrompt string) (string, error) {
 
 	// Step 7: Check HTTP status code (fixed logic)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API returned error (status %d): %s", resp.StatusCode, string(body))
+		return "", newAPIStatusError(resp, string(body), "API returned error")
 	}
 
 	// Step 8: Parse response (via hooks for dynamic dispatch)
@@ -434,6 +441,13 @@ func (c *Client) BaseClient() *Client { return c }
 
 // IsRetryableError determines if error is retryable (network errors, timeouts, etc.)
 func (client *Client) IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *APIStatusError
+	if errors.As(err, &statusErr) {
+		return isRetryableStatus(statusErr.StatusCode)
+	}
 	// Case-insensitive matching: Go's http errors read "Client.Timeout exceeded"
 	// while context errors read "context deadline exceeded".
 	errStr := strings.ToLower(err.Error())
@@ -465,10 +479,6 @@ func (client *Client) CallWithRequest(req *Request) (string, error) {
 	maxRetries := client.Cfg.MaxRetries
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			client.Log.Warnf("⚠️  AI API call failed, retrying (%d/%d)...", attempt, maxRetries)
-		}
-
 		// Call single request
 		result, err := client.callWithRequest(req)
 		if err == nil {
@@ -486,9 +496,7 @@ func (client *Client) CallWithRequest(req *Request) (string, error) {
 
 		// Wait before retry
 		if attempt < maxRetries {
-			waitTime := client.Cfg.RetryWaitBase * time.Duration(attempt)
-			client.Log.Infof("⏳ Waiting %v before retry...", waitTime)
-			if err := client.waitForRetry(waitTime); err != nil {
+			if err := client.retryAfterError(err, attempt, maxRetries); err != nil {
 				return "", err
 			}
 		}
@@ -509,9 +517,6 @@ func (client *Client) CallWithRequestFull(req *Request) (*LLMResponse, error) {
 	var lastErr error
 	maxRetries := client.Cfg.MaxRetries
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			client.Log.Warnf("⚠️  AI API call failed, retrying (%d/%d)...", attempt, maxRetries)
-		}
 		result, err := client.callWithRequestFull(req)
 		if err == nil {
 			return result, nil
@@ -521,8 +526,7 @@ func (client *Client) CallWithRequestFull(req *Request) (*LLMResponse, error) {
 			return nil, err
 		}
 		if attempt < maxRetries {
-			waitTime := client.Cfg.RetryWaitBase * time.Duration(attempt)
-			if err := client.waitForRetry(waitTime); err != nil {
+			if err := client.retryAfterError(err, attempt, maxRetries); err != nil {
 				return nil, err
 			}
 		}
@@ -546,7 +550,7 @@ func (client *Client) callWithRequestFull(req *Request) (*LLMResponse, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := client.HTTPClient.Do(httpReq.WithContext(client.RequestContext()))
+	resp, err := client.doHTTPRequest(client.HTTPClient, httpReq.WithContext(client.RequestContext()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -557,7 +561,7 @@ func (client *Client) callWithRequestFull(req *Request) (*LLMResponse, error) {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned error (status %d): %s", resp.StatusCode, string(body))
+		return nil, newAPIStatusError(resp, string(body), "API returned error")
 	}
 
 	return client.Hooks.ParseMCPResponseFull(body)
@@ -584,7 +588,7 @@ func (client *Client) callWithRequest(req *Request) (string, error) {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := client.HTTPClient.Do(httpReq.WithContext(client.RequestContext()))
+	resp, err := client.doHTTPRequest(client.HTTPClient, httpReq.WithContext(client.RequestContext()))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
@@ -596,7 +600,7 @@ func (client *Client) callWithRequest(req *Request) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API returned error (status %d): %s", resp.StatusCode, string(body))
+		return "", newAPIStatusError(resp, string(body), "API returned error")
 	}
 
 	result, err := client.Hooks.ParseMCPResponse(body)
@@ -648,13 +652,11 @@ func (client *Client) BuildRequestBodyFromRequest(req *Request) map[string]any {
 		"messages": messages,
 	}
 
-	// Add optional parameters (only add non-nil parameters)
-	if req.Temperature != nil {
-		requestBody["temperature"] = *req.Temperature
-	} else {
-		// If not set in Request, use Client's configuration
-		requestBody["temperature"] = client.Cfg.Temperature
+	effort := client.Cfg.ReasoningEffort
+	if req.ReasoningEffort != "" {
+		effort = req.ReasoningEffort
 	}
+	client.applyTemperature(requestBody, req.Temperature, effort)
 
 	// OpenAI newer models use max_completion_tokens instead of max_tokens
 	tokenKey := "max_tokens"
@@ -756,7 +758,7 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 	}()
 
 	httpReq = httpReq.WithContext(ctx)
-	resp, err := client.HTTPClient.Do(httpReq)
+	resp, err := client.doHTTPRequest(client.HTTPClient, httpReq)
 	if err != nil {
 		return "", fmt.Errorf("streaming request failed: %w", err)
 	}
@@ -764,14 +766,17 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := security.ReadResponseBody(resp.Body)
-		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return "", newAPIStatusError(resp, string(body), "API error")
 	}
 
-	return ParseSSEStream(resp.Body, onChunk, func() {
+	return parseSSEStream(resp.Body, onChunk, func() {
 		select {
 		case resetCh <- struct{}{}:
 		default:
 		}
+	}, func(_ string, chars int) {
+		client.Log.Warnf("⚠️ [Provider: %s, Model: %s] Response TRUNCATED by max_tokens (finish_reason=length, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.",
+			client.Provider, req.Model, chars)
 	})
 }
 
@@ -781,8 +786,21 @@ func (client *Client) CallWithRequestStream(req *Request, onChunk func(string)) 
 // (useful for resetting idle-timeout watchdogs).
 // Returns the complete accumulated text.
 func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string, error) {
+	return parseSSEStream(body, onChunk, onLine, func(model string, chars int) {
+		logger.Warnf("⚠️ [Model: %s] Response TRUNCATED by max_tokens (finish_reason=length, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.", model, chars)
+	})
+}
+
+func parseSSEStream(body io.Reader, onChunk func(string), onLine func(), onTruncated func(string, int)) (string, error) {
 	var accumulated strings.Builder
 	var reasoning strings.Builder
+	model, receivedChars := "unknown", 0
+	truncated := false
+	defer func() {
+		if truncated && onTruncated != nil {
+			onTruncated(model, receivedChars)
+		}
+	}()
 	scanner := bufio.NewScanner(body)
 
 	for scanner.Scan() {
@@ -800,6 +818,7 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		}
 
 		var chunk struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
 					Content          string `json:"content"`
@@ -816,6 +835,9 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed chunks
 		}
+		if chunk.Model != "" {
+			model = chunk.Model
+		}
 
 		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
 			fmt.Printf("📊 [TokenUsage] prompt=%d, completion=%d, total=%d\n",
@@ -825,6 +847,11 @@ func ParseSSEStream(body io.Reader, onChunk func(string), onLine func()) (string
 		if len(chunk.Choices) == 0 {
 			continue
 		}
+		if fr := chunk.Choices[0].FinishReason; fr != nil && *fr == "length" {
+			truncated = true
+		}
+		receivedChars += utf8.RuneCountInString(chunk.Choices[0].Delta.Content) +
+			utf8.RuneCountInString(chunk.Choices[0].Delta.ReasoningContent)
 
 		delta := chunk.Choices[0].Delta.Content
 		if delta != "" {
@@ -893,11 +920,11 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 		{"role": "user", "content": userPrompt},
 	}
 	requestBody := map[string]interface{}{
-		"model":       client.Model,
-		"messages":    messages,
-		"temperature": client.Cfg.Temperature,
-		"stream":      true,
+		"model":    client.Model,
+		"messages": messages,
+		"stream":   true,
 	}
+	client.applyTemperature(requestBody, nil, client.Cfg.ReasoningEffort)
 	// OpenAI newer models use max_completion_tokens instead of max_tokens
 	if client.Provider == ProviderOpenAI {
 		requestBody["max_completion_tokens"] = client.MaxTokens
@@ -951,7 +978,7 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 
 	httpReq = httpReq.WithContext(ctx)
 	client.Log.Infof("📡 [%s] Streaming request: %s", client.String(), url)
-	resp, err := httpClient.Do(httpReq)
+	resp, err := client.doHTTPRequest(&httpClient, httpReq)
 	if err != nil {
 		return "", fmt.Errorf("streaming request failed: %w", err)
 	}
@@ -959,27 +986,27 @@ func (client *Client) callStreamSingle(systemPrompt, userPrompt string, hardCap 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		// 4xx usually means the provider rejected the stream parameter —
-		// retry this attempt once via the non-stream flow.
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		// Rate limits, request timeouts and server errors belong to the
+		// outer retry loop. Other 4xx may reject the stream parameter.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && !isRetryableStatus(resp.StatusCode) {
 			logger.Warnf("⚠️  Stream rejected (status %d) — falling back to non-stream for this attempt", resp.StatusCode)
-			// NOTE (2026-10-03 review): Hooks.Call carries its own retry
-			// loop — nested here attempts multiply (bounded 3×3) and the
-			// fallback escapes this attempt's hard cap. Accepted for now:
-			// a 4xx stream rejection is terminal for the stream path, the
-			// non-stream fallback is the only working route, and the
-			// multiplication is bounded. A single-attempt primitive on
-			// Client would be the clean fix.
+			// Release this HTTP attempt's slot before acquiring one for
+			// the fallback, including when the per-key limit is one.
+			resp.Body.Close()
+			cancel()
 			return client.Hooks.Call(systemPrompt, userPrompt)
 		}
-		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(body), 200))
+		return "", newAPIStatusError(resp, truncate(string(body), 200), "API error")
 	}
 
-	return ParseSSEStream(resp.Body, nil, func() {
+	return parseSSEStream(resp.Body, nil, func() {
 		select {
 		case resetCh <- struct{}{}:
 		default:
 		}
+	}, func(_ string, chars int) {
+		client.Log.Warnf("⚠️ [%s] Response TRUNCATED by max_tokens (finish_reason=length, %d chars received) — decision JSON is cut off. Raise AI_MAX_TOKENS.",
+			client.String(), chars)
 	})
 }
 
@@ -1006,9 +1033,15 @@ func (client *Client) RequestContext() context.Context {
 	return client.requestContext
 }
 func (client *Client) waitForRetry(delay time.Duration) error {
+	ctx := client.RequestContext() // fetch ONCE — SetRequestContext may swap mid-wait
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if client.retryWait != nil {
+		return client.retryWait(ctx, delay)
+	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
-	ctx := client.RequestContext() // fetch ONCE — SetRequestContext may swap mid-wait
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

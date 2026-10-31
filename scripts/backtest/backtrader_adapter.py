@@ -20,11 +20,49 @@ def _backtrader():
     return bt
 
 
-def run_trade(tr, rules, commission=0.0005, slippage=0.0003):
+# CLI --limit-fill 通过该模块级默认值传入（entry/exitsim 调用 run_trade 时不感知该参数）。
+LIMIT_FILL_DEFAULT = "through"
+
+
+def _through_limit_broker(base_cls, tick):
+    """A6 保守限价撮合：限价需被穿过至少 1 个 tick 才触发，触发后的成交价与原生逻辑一致。
+
+    tick 取信号/品种已有的 tick 字段；缺省时逐单按限价的 0.01% 近似。
+    """
+
+    class ThroughLimitBroker(base_cls):
+        def __init__(self):
+            super().__init__()
+            self.limit_tick = tick
+
+        def _try_exec_limit(self, order, popen, phigh, plow, plimit):
+            # 与上游 BackBroker._try_exec_limit(1.9.78.123 bbroker.py)完全一致，
+            # 仅给触发比较加上 1 个 tick 的穿价要求；成交价计算保持不变。
+            t = self.limit_tick if self.limit_tick and self.limit_tick > 0 else plimit * 1e-4
+            if order.isbuy():
+                if plimit >= popen + t:  # 开盘已穿价（跳空越过限价）才算成交
+                    p = self._slip_up(min(phigh, plimit), popen, doslip=self.p.slip_open, lim=True)
+                    self._execute(order, ago=0, price=p)
+                elif plimit >= plow + t:  # 盘中 low 需穿过限价至少 1 tick
+                    self._execute(order, ago=0, price=plimit)
+            else:
+                if plimit <= popen - t:
+                    p = self._slip_down(max(plow, plimit), popen, doslip=self.p.slip_open, lim=True)
+                    self._execute(order, ago=0, price=p)
+                elif plimit <= phigh - t:  # 盘中 high 需穿过限价至少 1 tick
+                    self._execute(order, ago=0, price=plimit)
+
+    return ThroughLimitBroker()
+
+
+def run_trade(tr, rules, commission=0.0005, slippage=0.0003, limit_fill=None):
     """独立信号研究：发出真实 Backtrader 订单，返回 broker 的净盈亏/R。
 
     不使用 cheat-on-close/open；本根收盘产生的指令最早于下一根执行。
     限价单在信号后固定有效期内撮合，不使用未来实盘成交标签决定是否开仓。
+    limit_fill='through'（默认）要求价格穿过限价至少 1 个 tick 才成交，
+    'touch' 为触价即成交的旧行为；None 时取模块级 LIMIT_FILL_DEFAULT（CLI 传 --limit-fill）。
+    入场成交所在根的区间若穿过 SL，按同根「先止损」约定保守记为 SL 出场（按 SL 价结算）。
     """
     bt = _backtrader()
 
@@ -58,6 +96,8 @@ def run_trade(tr, rules, commission=0.0005, slippage=0.0003):
             self.exit_ms = None
             self.closing = False
             self.refresh = False
+            self.entry_bar_sl = False
+            self.sl_exit_pnl = None
             self.commission_paid = 0.0
             self.mode = rules.get("force_mode") or tr["mode"]
             self.sign = 1 if tr["side"] == "long" else -1
@@ -116,6 +156,11 @@ def run_trade(tr, rules, commission=0.0005, slippage=0.0003):
                         close.addinfo(reason="invalid_fill")
                     else:
                         self.refresh = True
+                        # A5：保护单最早下一根才生效，无法回溯入场成交所在根；该根区间若已
+                        # 穿过 SL，按同根「先止损」约定，在 next() 中保守记为 SL 出场。
+                        extreme = self.data.low[0] if self.sign > 0 else self.data.high[0]
+                        if self.sign * (extreme - tr["sl"]) <= 0:
+                            self.entry_bar_sl = True
                 else:
                     reason = order.info.get("reason", "time")
                     self.done.add(reason)
@@ -157,6 +202,17 @@ def run_trade(tr, rules, commission=0.0005, slippage=0.0003):
                 return
             if self.entry_ms is None:
                 return
+            if self.entry_bar_sl:
+                # A5：入场成交根的区间已穿过 SL，按 SL 价保守结算（同根「先止损」约定）。
+                # broker 无法回溯撮合同一根，出场费按 SL 价名义金额估算，不读取本根后续价格。
+                # 与 broker 止损单口径一致：出场价按滑点向不利方向偏移。
+                size = abs(self.position.size)
+                exit_px = tr["sl"] * (1 - self.sign * slippage)
+                self.commission_paid += exit_px * size * commission
+                self.sl_exit_pnl = self.sign * (exit_px - self.entry_price) * size - self.commission_paid
+                self.how, self.exit_ms = "sl", now_ms
+                self.env.runstop()
+                return
             favourable = self.data.high[0] if self.sign > 0 else self.data.low[0]
             self.peak = max(self.peak, self.sign * (favourable - self.entry_price) / self.risk)
             close_r = self.sign * (self.data.close[0] - self.entry_price) / self.risk
@@ -192,9 +248,15 @@ def run_trade(tr, rules, commission=0.0005, slippage=0.0003):
     for key in ("trim_frac", "tp_frac_trend"):
         if not 0 <= rules[key] <= 1:
             raise ValueError(f"{key} 必须在 [0, 1] 内")
+    if limit_fill is None:
+        limit_fill = LIMIT_FILL_DEFAULT
+    if limit_fill not in ("touch", "through"):
+        raise ValueError("limit_fill 必须是 'touch'（触价即成交）或 'through'（需穿价 1 tick）")
     cerebro = bt.Cerebro(stdstats=False)
     cerebro.adddata(CachedOHLC(dataname=tr["bars"], timeframe=bt.TimeFrame.Minutes))
     cerebro.addstrategy(SignalStrategy)
+    if limit_fill == "through":  # A6：保守限价撮合，默认启用；touch 保持原生行为
+        cerebro.setbroker(_through_limit_broker(type(cerebro.broker), tr.get("tick")))
     # 独立信号账户给予充足资金；只用信号当时已知价格，不读取未来高点设资金。
     initial_cash = tr["reference"] * 100
     cerebro.broker.setcash(initial_cash)
@@ -207,12 +269,15 @@ def run_trade(tr, rules, commission=0.0005, slippage=0.0003):
     # 已平仓用原生 TradeAnalyzer 的 PnL，避免小价格币种减去大现金余额损失精度。
     net_pnl = (trade_analysis["pnl"]["net"]["total"] if trade_analysis["total"].get("closed", 0)
                else cerebro.broker.getvalue() - initial_cash)
+    if strategy.entry_bar_sl:
+        net_pnl = strategy.sl_exit_pnl  # A5：同根先止损，用 SL 价结算，替代 broker 期末盯市
     risk = strategy.risk
     result = dict(engine="backtrader", engine_version=bt.__version__, how=strategy.how,
                   r=net_pnl / risk if risk and strategy.entry_price is not None else None,
                   peak=strategy.peak, entry_price=strategy.entry_price, entry_ms=strategy.entry_ms,
                   exit_ms=strategy.exit_ms, commission=strategy.commission_paid,
-                  net_pnl=net_pnl, risk=risk, open=bool(strategy.position.size),
+                  net_pnl=net_pnl, risk=risk,
+                  open=bool(strategy.position.size) and not strategy.entry_bar_sl,
                   coverage_end_ms=tr["bars"][-1][0],
                   trade_analysis=trade_analysis,
                   drawdown=strategy.analyzers.drawdown.get_analysis())

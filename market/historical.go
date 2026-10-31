@@ -28,7 +28,38 @@ func (e *invalidSymbolError) Error() string { return e.message }
 func (e *invalidSymbolError) Unwrap() error { return ErrInvalidSymbol }
 
 // GetKlinesRange fetches K-line series within specified time range (closed interval), returns data sorted by time in ascending order.
+// History paging runs at bnweight.Low priority; callers that need the data for
+// live trading decisions should use GetKlinesRangePriority.
 func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kline, error) {
+	return GetKlinesRangePriority(symbol, timeframe, start, end, bnweight.Low)
+}
+
+// klinePageLimit sizes one page to the bars still needed in [cursorMs, endMs]
+// (+1 spare so the last bar is never cut off), capped at Binance's maximum.
+// Binance klines weight grows with limit (<100 → 1, ≥1000 → 10), so a short
+// range must not pay for a full 1500-bar page.
+func klinePageLimit(cursorMs, endMs int64, barMs int64) int {
+	if barMs <= 0 {
+		return binanceMaxKlineLimit
+	}
+	span := endMs - cursorMs
+	if span < 0 {
+		span = 0
+	}
+	bars := (span+barMs-1)/barMs + 1
+	if bars > binanceMaxKlineLimit {
+		return binanceMaxKlineLimit
+	}
+	if bars < 1 {
+		return 1
+	}
+	return int(bars)
+}
+
+// GetKlinesRangePriority is GetKlinesRange with an explicit bnweight priority:
+// under IP-weight pressure Low requests are held first, so latency-sensitive
+// callers (e.g. paper execution simulation) pass bnweight.Normal.
+func GetKlinesRangePriority(symbol string, timeframe string, start, end time.Time, prio bnweight.Priority) ([]Kline, error) {
 	symbol = Normalize(symbol)
 	normTF, err := NormalizeTimeframe(timeframe)
 	if err != nil {
@@ -44,8 +75,8 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 	var all []Kline
 	cursor := startMs
 
-	// History paging (limit=1500 = weight 10 per page) is Low priority.
-	client := &http.Client{Timeout: 15 * time.Second, Transport: pubcache.Wrap(bnweight.Wrap(nil, bnweight.Low))}
+	barMs := TimeframeDuration(normTF).Milliseconds()
+	client := &http.Client{Timeout: 15 * time.Second, Transport: pubcache.Wrap(bnweight.Wrap(nil, prio))}
 
 	for cursor < endMs {
 		req, err := http.NewRequest("GET", binanceFuturesKlinesURL, nil)
@@ -56,7 +87,8 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 		q := req.URL.Query()
 		q.Set("symbol", symbol)
 		q.Set("interval", normTF)
-		q.Set("limit", fmt.Sprintf("%d", binanceMaxKlineLimit))
+		limit := klinePageLimit(cursor, endMs, barMs)
+		q.Set("limit", fmt.Sprintf("%d", limit))
 		q.Set("startTime", fmt.Sprintf("%d", cursor))
 		q.Set("endTime", fmt.Sprintf("%d", endMs))
 		req.URL.RawQuery = q.Encode()
@@ -111,7 +143,7 @@ func GetKlinesRange(symbol string, timeframe string, start, end time.Time) ([]Kl
 		cursor = last.CloseTime + 1
 
 		// If returned quantity is less than request limit, reached the end, can exit early.
-		if len(batch) < binanceMaxKlineLimit {
+		if len(batch) < limit {
 			break
 		}
 	}

@@ -12,13 +12,16 @@
 package trader
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"nofx/kernel"
 	"nofx/logger"
 	"nofx/market"
 	notify "nofx/telegram/notify"
+	"nofx/trader/binance"
 	"nofx/trader/types"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -59,6 +62,66 @@ func resizeAction(actual, target float64) string {
 	}
 }
 
+// stopKeptTighterError is returned by moveStopExchange when the exchange
+// already rests a stop tighter than the requested one (review 2026-10-28 #1).
+// Nothing was sent; the recorded stop has been synced UP to Kept. It is an
+// error (not nil) so callers that write "newSL" into memory after a nil return
+// can never record a looser value than what actually protects the position.
+type stopKeptTighterError struct {
+	Symbol, Side    string
+	Requested, Kept float64
+}
+
+func (e *stopKeptTighterError) Error() string {
+	return fmt.Sprintf("exchange stop already tighter for %s %s: kept %.6g, requested %.6g — not moved", e.Symbol, e.Side, e.Kept, e.Requested)
+}
+
+// exchangeTighterStop scans the open orders for a protective STOP leg of this
+// side that is tighter than target (long: trigger above; short: below). The
+// user trades by hand on this account, so the exchange — not program memory —
+// is the authority on how tight the stop already is.
+func exchangeTighterStop(orders []types.OpenOrder, side string, target float64) (float64, bool) {
+	eps := math.Max(1e-9, math.Abs(target)*1e-9)
+	best := 0.0
+	for _, o := range orders {
+		typ := strings.ToUpper(o.Type)
+		if !strings.Contains(typ, "STOP") || strings.Contains(typ, "TAKE_PROFIT") || o.StopPrice <= 0 || math.IsNaN(o.StopPrice) || math.IsInf(o.StopPrice, 0) {
+			continue
+		}
+		if o.Status != "" && !strings.EqualFold(o.Status, "NEW") && !strings.EqualFold(o.Status, "PARTIALLY_FILLED") {
+			continue
+		}
+		// Same side filter as the retire loop in moveStopExchange: one-way mode
+		// reports PositionSide "BOTH"/"" — it IS this side; the order must exit
+		// it (long -> SELL, short -> BUY) when a direction is given.
+		if ps := strings.ToUpper(o.PositionSide); ps != "" && ps != "BOTH" && ps != strings.ToUpper(side) {
+			continue
+		}
+		exit := "SELL"
+		if side == "short" {
+			exit = "BUY"
+		}
+		if o.Side != "" && !strings.EqualFold(o.Side, exit) {
+			continue
+		}
+		if (side == "long" && o.StopPrice > target+eps && (best == 0 || o.StopPrice > best)) ||
+			(side == "short" && o.StopPrice < target-eps && (best == 0 || o.StopPrice < best)) {
+			best = o.StopPrice
+		}
+	}
+	return best, best > 0
+}
+
+// keptTighterStop reports the stop that stayed in force when a move was
+// refused because the exchange already held a tighter one.
+func keptTighterStop(err error) (float64, bool) {
+	var kept *stopKeptTighterError
+	if errors.As(err, &kept) {
+		return kept.Kept, true
+	}
+	return 0, false
+}
+
 // Replace only the pre-existing order IDs, after confirming the new stop.
 func (at *AutoTrader) moveStopExchange(symbol, side string, newSL float64, snapshotQty ...float64) error {
 	// review 2026-10-07 B1-2: all stop-move paths must preserve the
@@ -87,6 +150,19 @@ func (at *AutoTrader) moveStopExchange(symbol, side string, newSL float64, snaps
 	old, err := at.trader.GetOpenOrders(symbol)
 	if err != nil {
 		return err
+	}
+	// review 2026-10-28 #1: tighten-only is enforced against the EXCHANGE, not
+	// just memory. A stop the user tightened by hand is invisible to the
+	// recorded value; moving past it would let SetStopLoss' -4130 self-heal (or
+	// the retire loop below) cancel the tighter leg and re-place a looser one.
+	// Compare on the same tick grid the adapter will use, keep the tighter leg,
+	// and pull memory UP to it (initial anchor untouched).
+	if kept, ok := exchangeTighterStop(old, side, at.tickRoundedStopPrice(symbol, newSL)); ok {
+		if cur := at.GetRecordedStopLoss(symbol, side); cur <= 0 || (side == "long" && kept > cur) || (side == "short" && kept < cur) {
+			at.SetRecordedStopLoss(symbol, side, kept)
+		}
+		logger.Warnf("🔒 [%s] %s %s stop move to %.6g skipped: exchange already holds a tighter stop at %.6g — kept, recorded stop synced", at.name, symbol, side, newSL, kept)
+		return &stopKeptTighterError{Symbol: symbol, Side: side, Requested: newSL, Kept: kept}
 	}
 	if err = at.trader.SetStopLoss(symbol, strings.ToUpper(side), qty, newSL); err != nil {
 		return err
@@ -332,6 +408,11 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 		}
 
 		// ── 规则1/2: volatility-targeted rescale (reduce-only) ──
+		// review 2026-10-28 #4: at most ONE quantity-changing action per position
+		// per round. After a vol reduce the round's `pos` snapshot is stale; the
+		// R-rules below would size a 50% trim off the pre-reduce quantity and,
+		// stacked on the reduce, could flatten the whole position.
+		var volReducedPos map[string]interface{}
 		if volEnabled && equity > 0 && atrPct > 0 {
 			target := volTargetNotional(equity, riskPct, atrPct)
 			actual := qty * markPrice
@@ -349,10 +430,27 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 				if at.volResizeAllowed(posKey) {
 					at.markCloseIntent(symbol, side, "vol_target_reduce")
 					reduceQty := qty - target/markPrice
-					if _, err := at.reducePosition(symbol, side, reduceQty); err == nil {
+					resp, err := at.reducePosition(symbol, side, reduceQty)
+					if err == nil {
 						at.markVolResize(posKey)
 						logger.Infof("📉 [%s] Vol-target reduce: %s %.2f → %.2f USDT (ATR %.2f%%, band >120%%)", at.name, symbol, actual, target, atrPct)
 						notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📉 波动率减仓 %s</b>\\n敞口 %.2f → %.2f USDT(目标=ATR目标位,滞后带>120%%)", notify.Escape(symbol), actual, target))
+						// Remainder = pre-reduce quantity − CONFIRMED fill (the
+						// requested size only when the receipt carries no fill).
+						filled := closeReceiptExecuted(resp)
+						if filled <= 0 {
+							filled = reduceQty
+						}
+						volReducedPos = reducedPositionSnapshot(pos, math.Max(0, qty-filled))
+						at.publishReducedPosition(symbol, side, volReducedPos)
+						at.rearmTPAfterReduce(symbol, side, qty, reduceQty, resp)
+					} else if isReduceUnknown(err) {
+						// review 2026-10-28 #7: the reduce may have executed.
+						// Burn the cooldown and keep this round's snapshot out
+						// of further sizing; the next fresh read decides.
+						at.markVolResize(posKey)
+						volReducedPos = pos
+						at.alertReduceUnknown(symbol, side, "波动率减仓", err)
 					}
 				}
 			case "underweight":
@@ -360,11 +458,171 @@ func (at *AutoTrader) processVolTargetAndTrailing() {
 			}
 		}
 
+		if volReducedPos != nil {
+			// The quantity-changing action for this round is spent. Skip the R
+			// rules (trim/full-close sizing) but still run the quantity-free
+			// trailing check on the reduced snapshot — a safe tightening stays.
+			at.processTrailingForPosition(volReducedPos, markPrice, atrPct)
+			continue
+		}
 		if at.processRProfitRules(pos, markPrice) {
 			continue
 		}
 		at.processTrailingForPosition(pos, markPrice, atrPct)
 	}
+}
+
+// isReduceUnknown: the partial-reduce submit may have executed but its outcome
+// could not be established (Binance adapter, same-client-id lookup inconclusive).
+func isReduceUnknown(err error) bool {
+	return err != nil && errors.Is(err, binance.ErrSubmitUnknown)
+}
+
+// alertReduceUnknown pages a human: the program deliberately under-reduces
+// rather than risk reducing twice.
+func (at *AutoTrader) alertReduceUnknown(symbol, side, what string, err error) {
+	logger.Warnf("❓ [%s] %s %s %s result UNKNOWN — not retried: %v", at.name, symbol, side, what, err)
+	notify.Notify("ALERT", at.name, fmt.Sprintf("<b>❓ %s结果未知 %s (%s)</b>\n<i>提交可能已成交,程序不会重复减仓(宁可少减);请人工核对持仓与保护单:%s</i>",
+		notify.Escape(what), notify.Escape(symbol), notify.Escape(side), notify.Escape(err.Error())))
+}
+
+// closeReceiptExecuted extracts the confirmed executed quantity from a close
+// receipt (0 when the adapter reported none).
+func closeReceiptExecuted(resp map[string]interface{}) float64 {
+	var v float64
+	switch x := resp["executedQty"].(type) {
+	case float64:
+		v = x
+	case string:
+		v, _ = strconv.ParseFloat(x, 64)
+	}
+	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
+}
+
+// reducedPositionSnapshot copies a position row with positionAmt set to the
+// post-reduce magnitude (sign preserved). The input may be an adapter-cached
+// map — never mutate it.
+func reducedPositionSnapshot(pos map[string]interface{}, remaining float64) map[string]interface{} {
+	out := make(map[string]interface{}, len(pos))
+	for k, v := range pos {
+		out[k] = v
+	}
+	amt, _ := pos["positionAmt"].(float64)
+	if amt < 0 {
+		remaining = -remaining
+	}
+	out["positionAmt"] = remaining
+	return out
+}
+
+// tpFractionFor resolves the split-TP share for one live position's exit mode.
+func (at *AutoTrader) tpFractionFor(symbol, side string) float64 {
+	if mode := at.ExitModeFor(symbol, side); mode != "" {
+		return tpFractionForMode(mode, at.effectiveTPCloseFraction())
+	}
+	return 1.0
+}
+
+// rearmTPAfterReduce re-sizes the resting take-profit to the post-reduce
+// remainder right after a confirmed partial reduction (1R trim, vol reduce) —
+// review 2026-10-28 #3. A TP sized for the old position would otherwise sell
+// the runner (or exceed the position) at the target. Best effort: any doubt
+// (unconfirmed fill, unreadable orders, failed placement) only logs and leaves
+// the correction to the protection watchdog, which converges the same way.
+func (at *AutoTrader) rearmTPAfterReduce(symbol, side string, qtyBefore, requested float64, resp map[string]interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("⚠️ [%s] TP re-arm after reduce recovered: %v", at.name, r)
+		}
+	}()
+	key := symbol + "_" + side
+	positionSide := strings.ToUpper(side)
+	executed := closeReceiptExecuted(resp)
+	tp := at.getOpenTakeProfit(symbol, side)
+	step, _ := quantityStepOf(at.trader, symbol)
+	var orders []types.OpenOrder
+	ordersOK := false
+	if !at.tpRunnerDone(key) && tp > 0 {
+		if o, err := at.trader.GetOpenOrders(symbol); err == nil {
+			orders, ordersOK = o, true
+			// The split TP may already have filled before this reduction:
+			// then the remainder IS the runner, not a fresh TP candidate.
+			if at.tpLegFilled(key, qtyBefore, protectiveCoverage(o, positionSide, "TP", tp), step) {
+				at.markTPRunner(key)
+				at.dropTPLedger(key)
+			}
+		}
+	}
+	booked := executed
+	if booked <= 0 {
+		booked = requested
+	}
+	at.noteTPLedgerReduction(key, booked) // a trim is not the TP leg filling
+	if at.tpRunnerDone(key) || tp <= 0 || !ordersOK || !at.canRetireTPLegs() {
+		return
+	}
+	if executed <= 0 || executed < requested*(1-1e-6) {
+		logger.Infof("ℹ️ [%s] %s %s reduce fill unconfirmed (requested %.6g, receipt %.6g) — TP re-arm left to the watchdog", at.name, symbol, side, requested, executed)
+		return
+	}
+	remaining := qtyBefore - executed
+	if remaining <= 0 {
+		return
+	}
+	frac := at.tpFractionFor(symbol, side)
+	target := at.quantizedTPQty(symbol, remaining, frac)
+	if target <= 0 {
+		return
+	}
+	cover := protectiveCoverage(orders, positionSide, "TP", tp)
+	tol := tpCoverageTolerance(at.trader, symbol, target)
+	oversized := (frac < 1 && cover > target+tol) || (frac >= 1 && !math.IsInf(cover, 0) && cover > target+tol)
+	if cover+tol >= target && !oversized {
+		return // already right-sized
+	}
+	if oversized || cover > 0 {
+		if err := at.cancelTakeProfitForSideChecked(symbol, side); err != nil {
+			logger.Warnf("⚠️ [%s] %s %s TP re-arm after reduce: cancel failed (%v) — left to the watchdog", at.name, symbol, side, err)
+			return
+		}
+	}
+	if err := ensureProtectiveCoverage(at.trader, symbol, positionSide, "TP", tp, target); err != nil {
+		logger.Warnf("⚠️ [%s] %s %s TP re-arm after reduce failed: %v — the watchdog will retry", at.name, symbol, side, err)
+		return
+	}
+	if frac < 1 && partialTPShare(target, remaining) {
+		at.recordTPLedger(key, remaining, target)
+	} else {
+		at.dropTPLedger(key)
+	}
+	logger.Infof("🎯 [%s] %s %s TP re-sized after reduce: remainder %.6g → TP %.6g @ %.6g", at.name, symbol, side, remaining, target, tp)
+}
+
+// canRetireTPLegs: the adapter can cancel ONE side's take-profit legs (Binance).
+// The re-size paths retire-and-re-place only there: a symbol-wide cancel would
+// also kill the opposite hedge side's TP, and adapters without the primitive
+// have unproven TP-leg reporting, so they keep their legacy handling.
+func (at *AutoTrader) canRetireTPLegs() bool {
+	_, ok := at.trader.(interface {
+		CancelTakeProfitOrdersForSide(symbol, positionSide string) error
+	})
+	return ok
+}
+
+// cancelTakeProfitForSideChecked is cancelTakeProfitForSide with the error
+// surfaced — callers that re-arm must know whether the old leg is really gone
+// before stacking a new one. Only meaningful when canRetireTPLegs().
+func (at *AutoTrader) cancelTakeProfitForSideChecked(symbol, side string) error {
+	sc, ok := at.trader.(interface {
+		CancelTakeProfitOrdersForSide(symbol, positionSide string) error
+	})
+	if !ok {
+		return fmt.Errorf("adapter cannot cancel one side's take-profit legs")
+	}
+	return sc.CancelTakeProfitOrdersForSide(symbol, strings.ToUpper(side))
 }
 
 // review 2026-10-11: Binance uses the cached quantity; other adapters keep
@@ -374,6 +632,31 @@ func (at *AutoTrader) moveProfitStop(symbol, side string, price, qty float64) er
 		return at.moveStopExchange(symbol, side, price, qty)
 	}
 	return at.moveStopExchange(symbol, side, price)
+}
+
+// noteStopMark hands the MARK price a stop decision was computed from to the
+// adapter, so SetStopLoss can pre-check the candidate against the reference
+// price of the symbol's actual workingType before touching any protection
+// (review 2026-10-28 #2). Adapters without the capability are unaffected.
+func (at *AutoTrader) noteStopMark(symbol string, mark float64) {
+	if o, ok := at.trader.(interface{ ObserveStopMarkPrice(string, float64) }); ok {
+		o.ObserveStopMarkPrice(symbol, mark)
+	}
+}
+
+// moveProfitStopEffective is moveProfitStop returning the stop price that is
+// actually in force afterwards: the requested price, or — when the exchange
+// already held a tighter stop (review 2026-10-28 #1) — that tighter price.
+// Callers record the RETURNED price, never their request.
+func (at *AutoTrader) moveProfitStopEffective(symbol, side string, price, qty float64) (float64, error) {
+	err := at.moveProfitStop(symbol, side, price, qty)
+	if err == nil {
+		return price, nil
+	}
+	if kept, ok := keptTighterStop(err); ok {
+		return kept, nil
+	}
+	return 0, err
 }
 
 // processRProfitRules is shared by the cycle and the 5s stream loop. The caller
@@ -393,6 +676,7 @@ func (at *AutoTrader) processRProfitRules(pos map[string]interface{}, markPrice 
 	if entry <= 0 || math.IsNaN(entry) || math.IsInf(entry, 0) || symbol == "" || (side != "long" && side != "short") || qty <= 0 || markPrice <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) || math.IsNaN(markPrice) || math.IsInf(markPrice, 0) || !at.isAIManaged(symbol, side) {
 		return false
 	}
+	at.noteStopMark(symbol, markPrice)
 	currentSL := at.GetRecordedStopLoss(symbol, side)
 	if currentSL <= 0 {
 		return false
@@ -411,8 +695,12 @@ func (at *AutoTrader) processRProfitRules(pos map[string]interface{}, markPrice 
 		beOffset := kernel.ProfitLockBreakevenOffsetR(&at.config.StrategyConfig.RiskControl)
 		bePrice, _ := kernel.ProfitLockTargets(side, entry, initialSL, currentSL, markPrice, armR, beOffset)
 		if bePrice > 0 {
-			if err := at.moveProfitStop(symbol, side, bePrice, qty); err != nil {
+			if eff, err := at.moveProfitStopEffective(symbol, side, bePrice, qty); err != nil {
 				logger.Infof("⚠️ [%s] early-breakeven SL place failed for %s: %v", at.name, symbol, err)
+			} else if eff != bePrice {
+				// review 2026-10-28 #1: the exchange already holds a tighter stop.
+				at.SetRecordedStopLoss(symbol, side, eff)
+				currentSL = eff
 			} else {
 				at.SetRecordedStopLoss(symbol, side, bePrice)
 				currentSL = bePrice // review 2026-10-07 B1-2: later moves use the new floor.
@@ -446,8 +734,14 @@ func (at *AutoTrader) processRProfitRules(pos map[string]interface{}, markPrice 
 		// at/through the target (including an earlier breakeven arm).
 		breakevenConfirmed := bePrice == 0 || (side == "long" && currentSL >= bePrice) || (side == "short" && currentSL <= bePrice)
 		if bePrice > 0 {
-			if err := at.moveProfitStop(symbol, side, bePrice, qty); err != nil {
+			if eff, err := at.moveProfitStopEffective(symbol, side, bePrice, qty); err != nil {
 				logger.Infof("⚠️ [%s] Breakeven SL place failed for %s: %v", at.name, symbol, err)
+			} else if eff != bePrice {
+				// review 2026-10-28 #1: a tighter exchange stop already covers
+				// breakeven (it is past bePrice by construction) — keep it.
+				at.SetRecordedStopLoss(symbol, side, eff)
+				currentSL = eff
+				breakevenConfirmed = true
 			} else {
 				at.SetRecordedStopLoss(symbol, side, bePrice)
 				currentSL = bePrice // review 2026-10-07 B1-2: trailing must retain breakeven.
@@ -502,7 +796,8 @@ func (at *AutoTrader) processRProfitRules(pos map[string]interface{}, markPrice 
 					logger.Infof("⚠️ [%s] 1R trim skipped for %s: breakeven SL not confirmed — retries next cycle", at.name, symbol)
 				} else {
 					at.markCloseIntent(symbol, side, "profit_lock_trim")
-					if _, err := at.reducePosition(symbol, side, qty*0.5); err == nil {
+					trimResp, err := at.reducePosition(symbol, side, qty*0.5)
+					if err == nil {
 						at.tpTrimMutex.Lock()
 						at.r1TrimDone[posKey] = true
 						at.tpTrimDone[posKey] = true // the ROE trim tier is consumed by the 1R lock
@@ -510,6 +805,21 @@ func (at *AutoTrader) processRProfitRules(pos map[string]interface{}, markPrice 
 						at.persistTrimFlags(symbol, side)
 						logger.Infof("🎯 [%s] 1R trim: %s 50%% trimmed @ %.6g (breakeven SL, rest rides to structural TP)", at.name, symbol, markPrice)
 						notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🎯 1R 止盈减仓 %s</b>\n浮盈达 %.0fR,市价减仓 50%% 锁定利润,剩余仓位止损已保本、继续持有", notify.Escape(symbol), lockR))
+						// review 2026-10-28 #3: re-size the resting TP to the remainder.
+						at.rearmTPAfterReduce(symbol, side, qty, qty*0.5, trimResp)
+					} else if isReduceUnknown(err) {
+						// review 2026-10-28 #7: the 50% trim may have executed
+						// (response lost). Treating it as "not done" would
+						// trim 50% AGAIN next round (75% total). Consume the
+						// one-shot markers — better under-trimmed than
+						// double-trimmed — and have a human check.
+						at.tpTrimMutex.Lock()
+						at.r1TrimDone[posKey] = true
+						at.tpTrimDone[posKey] = true
+						at.tpTrimMutex.Unlock()
+						at.persistTrimFlags(symbol, side)
+						at.noteTPLedgerReduction(posKey, qty*0.5)
+						at.alertReduceUnknown(symbol, side, "1R 止盈减仓", err)
 					} else {
 						logger.Infof("❌ [%s] 1R trim failed (%s) — retries next cycle", at.name, symbol)
 					}
@@ -577,6 +887,7 @@ func (at *AutoTrader) processTrailingForPosition(pos map[string]interface{}, mar
 	if entry <= 0 || math.IsNaN(entry) || math.IsInf(entry, 0) || symbol == "" || (side != "long" && side != "short") || qty <= 0 || markPrice <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) || math.IsNaN(markPrice) || math.IsInf(markPrice, 0) || !at.isAIManaged(symbol, side) {
 		return
 	}
+	at.noteStopMark(symbol, markPrice)
 	currentSL := at.GetRecordedStopLoss(symbol, side)
 	if currentSL <= 0 {
 		return
@@ -594,8 +905,12 @@ func (at *AutoTrader) processTrailingForPosition(pos map[string]interface{}, mar
 		newSL, move, armed := trailingDecision(side, posEntryPrice(pos), initialSL, markPrice, atrPct, currentSL)
 		if armed {
 			if move {
-				if err := at.moveProfitStop(symbol, side, newSL, qty); err != nil {
+				if eff, err := at.moveProfitStopEffective(symbol, side, newSL, qty); err != nil {
 					logger.Infof("⚠️ [%s] Trailing SL place failed for %s: %v", at.name, symbol, err)
+				} else if eff != newSL {
+					// review 2026-10-28 #1: exchange already tighter than the trail.
+					at.SetRecordedStopLoss(symbol, side, eff)
+					currentSL = eff
 				} else {
 					at.SetRecordedStopLoss(symbol, side, newSL)
 					currentSL = newSL // review 2026-10-07 B1-2: retain every successful move.
@@ -612,6 +927,7 @@ func (at *AutoTrader) processTrailingForPosition(pos map[string]interface{}, mar
 			if tp > 0 && tpRunnerDue(side, posEntryPrice(pos), tp, markPrice) && !at.tpRunnerDone(posKey) {
 				at.cancelTakeProfitForSide(symbol, side)
 				at.markTPRunner(posKey)
+				at.dropTPLedger(posKey)
 				logger.Infof("🏃 [%s] TP runner: %s reached its TP distance — fixed TP cancelled, 2×ATR trail takes over", at.name, symbol)
 				notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🏃 止盈转趋势跟踪 %s</b>\\n到达计划止盈距离,固定止盈单撤除,剩余仓位由移动止损接管", notify.Escape(symbol)))
 			}
@@ -701,18 +1017,33 @@ func (at *AutoTrader) recordOpenTakeProfit(symbol, side string, tp float64) {
 }
 
 func (at *AutoTrader) tpRunnerDone(posKey string) bool {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// An unreadable restart state must not re-arm a possibly completed TP.
+	if !at.loadTPStateLocked(l, posKey) {
+		return true
+	}
 	at.volResizeMu.Lock()
 	defer at.volResizeMu.Unlock()
 	return at.tpRunnerDoneMap[posKey]
 }
 
 func (at *AutoTrader) markTPRunner(posKey string) {
+	l := at.tpLedgerStore()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// A newly observed runner takeover is authoritative even if the old
+	// ledger cannot be read; it supersedes that evidence.
+	at.loadTPStateLocked(l, posKey)
+	l.loaded[posKey] = true
 	at.volResizeMu.Lock()
-	defer at.volResizeMu.Unlock()
 	if at.tpRunnerDoneMap == nil {
 		at.tpRunnerDoneMap = make(map[string]bool)
 	}
 	at.tpRunnerDoneMap[posKey] = true
+	at.volResizeMu.Unlock()
+	at.persistTPStateLocked(l, posKey)
 }
 
 // positionQty reads the LIVE exchange quantity for one symbol+side — R1 fix

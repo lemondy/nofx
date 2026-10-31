@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/adshao/go-binance/v2/futures"
 	"golang.org/x/sync/singleflight"
 	"nofx/logger"
+	"nofx/market"
 )
 
 const (
@@ -43,6 +45,7 @@ type futuresRulesEntry struct {
 	diskLoaded    bool
 	lastAttempt   time.Time
 	lastErr       error
+	warned        sync.Map // endpoint/symbol/reason: warn once, including across trader instances
 	invalidatedAt map[string]time.Time
 }
 
@@ -269,4 +272,35 @@ func cloneFuturesRuleJSON(value interface{}) interface{} {
 	default:
 		return value
 	}
+}
+
+const fallbackFuturesMinNotional = market.FallbackMinNotional
+
+func (t *FuturesTrader) warnRulesOnce(symbol, reason, message string, args ...interface{}) {
+	e := futuresRulesFor(t.client.BaseURL)
+	if _, loaded := e.warned.LoadOrStore(symbol+":"+reason, true); !loaded {
+		logger.Warnf("%s trading rules: "+message, append([]interface{}{symbol}, args...)...)
+	}
+}
+
+func (t *FuturesTrader) fallbackMinNotional(symbol string, err error) float64 {
+	t.warnRulesOnce(symbol, "min-notional", "MIN_NOTIONAL unavailable; using legacy fallback 10: %v", err)
+	return fallbackFuturesMinNotional
+}
+
+func (t *FuturesTrader) symbolMinNotional(s futures.Symbol) float64 {
+	for _, f := range s.Filters {
+		if f["filterType"] != "MIN_NOTIONAL" && f["filterType"] != "NOTIONAL" {
+			continue
+		}
+		text, _ := f["notional"].(string)
+		if text == "" {
+			text, _ = f["minNotional"].(string)
+		}
+		value, err := strconv.ParseFloat(text, 64)
+		if err == nil && positiveFinite(value) {
+			return value
+		}
+	}
+	return t.fallbackMinNotional(s.Symbol, fmt.Errorf("missing or invalid MIN_NOTIONAL filter"))
 }

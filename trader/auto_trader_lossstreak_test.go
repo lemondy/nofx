@@ -61,8 +61,8 @@ func TestLossStreakVerdict(t *testing.T) {
 	})
 
 	t.Run("ban expires 24h after the triggering (3rd) loss", func(t *testing.T) {
-		// 3 losses: 6h, 5h, 4h ago — the 3rd (triggering) loss closed 6h ago,
-		// so the ban runs until now+18h.
+		// 3 losses: 6h, 5h, 4h ago — the 3rd (triggering) loss closed 4h ago,
+		// so the ban runs until now+20h.
 		positions := []store.TraderPosition{
 			mkClosed("NEARUSDT", 4, -1, nowMs),
 			mkClosed("NEARUSDT", 5, -1, nowMs),
@@ -72,8 +72,8 @@ func TestLossStreakVerdict(t *testing.T) {
 		if !blocked {
 			t.Fatal("ban active while 24h from the 3rd loss has not elapsed")
 		}
-		if !strings.Contains(reason, "18.0h left") {
-			t.Fatalf("reason should mention ~18h remaining: %s", reason)
+		if !strings.Contains(reason, "20.0h left") {
+			t.Fatalf("reason should mention ~20h remaining: %s", reason)
 		}
 	})
 
@@ -100,9 +100,7 @@ func TestLossStreakVerdict(t *testing.T) {
 		}
 	})
 
-	t.Run("more losses during the ban do not refresh it", func(t *testing.T) {
-		// Streak of 5: trigger fired at the 3rd most recent loss (7h ago).
-		// Ban ends 17h from now even though losses #4/#5 are 6h/5h old.
+	t.Run("latest N consecutive losses use the newest loss", func(t *testing.T) {
 		positions := []store.TraderPosition{
 			mkClosed("NEARUSDT", 5, -1, nowMs),
 			mkClosed("NEARUSDT", 6, -1, nowMs),
@@ -110,16 +108,9 @@ func TestLossStreakVerdict(t *testing.T) {
 			mkClosed("NEARUSDT", 8, -1, nowMs),
 			mkClosed("NEARUSDT", 9, -1, nowMs),
 		}
-		blocked, _ := lossStreakVerdict(positions, 3, nowMs)
-		if !blocked {
-			t.Fatal("streak of 5 must still be banned")
-		}
-		// 7h-ago trigger + 24h ban → expiry at now+17h.
-		expiry := now.Add(17 * time.Hour).UnixMilli()
-		trigger := positions[2].ExitTime
-		if trigger+int64(lossStreakBanFor/time.Millisecond) != expiry {
-			t.Fatalf("ban must anchor at the 3rd loss: got expiry %d want %d",
-				trigger+int64(lossStreakBanFor/time.Millisecond), expiry)
+		_, until := lossStreakState(positions, 3, nowMs)
+		if !until.Equal(now.Add(19 * time.Hour)) {
+			t.Fatalf("ban must anchor at the newest loss: %v", until)
 		}
 	})
 
@@ -152,9 +143,9 @@ func TestLossStreakStateBannedUntil(t *testing.T) {
 	if streak != 3 {
 		t.Fatalf("streak = %d, want 3", streak)
 	}
-	want := time.UnixMilli(positions[2].ExitTime).Add(24 * time.Hour)
+	want := time.UnixMilli(positions[0].ExitTime).Add(24 * time.Hour)
 	if !until.Equal(want) {
-		t.Errorf("bannedUntil = %v, want Nth-loss exit + 24h = %v", until, want)
+		t.Errorf("bannedUntil = %v, want newest-loss exit + 24h = %v", until, want)
 	}
 	if _, until := lossStreakState(positions[:2], 3, nowMs); !until.IsZero() {
 		t.Errorf("2 losses must not ban, got until %v", until)

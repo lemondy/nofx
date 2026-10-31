@@ -117,7 +117,8 @@ func sliceClosed(bars []Kline, t time.Time, barDur time.Duration) []Kline {
 // relative to live grading. This is exactly why proposeWalkForward's
 // LIVE PUBLICATION BLOCKED lock must stay — do not feed these thresholds to
 // the live scanners without a replayable OI/funding history. Forward returns
-// are NET of btCostRoundTrip.
+// are NET of btCostRoundTrip. Funding history is unavailable in this replay
+// and is not included in returns.
 func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 	total := 0
 	var all []BTSignal
@@ -210,7 +211,10 @@ func RunBacktest(symbols []string, bars int) ([]BTSignal, int, error) {
 			}
 			tf := tfs["15m"][dir]
 
-			entry := series[len(series)-1].Close
+			entry, ok := nextOpenEntry(k15, i)
+			if !ok {
+				continue
+			}
 			sig := BTSignal{
 				Time:        sigTime,
 				Symbol:      sym,
@@ -293,16 +297,24 @@ func regimeAt(tl []btcRegimeTimelinePoint, t time.Time, dir string) (string, flo
 	return pick.regime, pick.upMult
 }
 
-// forwardReturn returns the signed % change of close[i+bars] vs close[i].
-func forwardReturn(k []Kline, i, bars int, dir string) float64 {
-	j := i + bars
-	if j >= len(k) {
-		j = len(k) - 1
+// nextOpenEntry requires the immediate next 15m candle; gaps cannot supply a fill.
+func nextOpenEntry(k []Kline, i int) (float64, bool) {
+	if i < 0 || i+1 >= len(k) || k[i+1].OpenTime != k[i].OpenTime+(15*time.Minute).Milliseconds() {
+		return 0, false
 	}
-	if j <= i || k[i].Close <= 0 {
+	entry := k[i+1].Open
+	return entry, entry > 0 && !math.IsNaN(entry) && !math.IsInf(entry, 0)
+}
+
+// forwardReturn returns signed close[i+bars] vs the next candle open.
+func forwardReturn(k []Kline, i, bars int, dir string) float64 {
+	entry, ok := nextOpenEntry(k, i)
+	j := i + bars
+	if !ok || bars <= 0 || j >= len(k) {
 		return 0
 	}
-	r := (k[j].Close/k[i].Close - 1) * 100
+	// The next open is signal-close time; bar i+bars closes bars*15m later.
+	r := (k[j].Close/entry - 1) * 100
 	if dir == DirDown {
 		r = -r
 	}

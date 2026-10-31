@@ -39,6 +39,9 @@ type SymbolRules interface {
 
 type marketPriceSource struct{ client *futures.Client }
 
+// getKlinesRange is a seam so tests can observe the bnweight priority used.
+var getKlinesRange = market.GetKlinesRangePriority
+
 // NewMarketPriceSource uses the same public futures ticker endpoint as
 // binance.FuturesTrader.GetMarketPrice and market's paginated 1m history reader.
 // Do NOT construct a Binance trader: that constructor makes authenticated calls.
@@ -65,7 +68,10 @@ func (s *marketPriceSource) Candles1m(symbol string, since time.Time) ([]Candle,
 	if !now.After(start) {
 		return nil, nil
 	}
-	rows, err := market.GetKlinesRange(symbol, "1m", start, now)
+	// Normal, not the Low default of history paging: every paper mutation
+	// (cancel/place/TP re-arm) blocks on this fetch, and a Low request held by
+	// the IP weight guard for up to a minute outlives the 15s client timeout.
+	rows, err := getKlinesRange(symbol, "1m", start, now, bnweight.Normal)
 	if err != nil {
 		return nil, err
 	}

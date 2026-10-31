@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -103,8 +104,10 @@ func TestFactorEnsembleInvalidFiles(t *testing.T) {
 }
 
 func TestFactorEnsembleSymbolAndHorizons(t *testing.T) {
-	factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-19"))
-	want := &FactorEnsembleRef{AsOf: "2026-10-19", Horizons: map[string]FactorHorizonRef{
+	raw := factorEnsembleFixture("2026-10-19")
+	factorEnsembleTestFile(t, raw)
+	snapshotID := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))[:12]
+	want := &FactorEnsembleRef{AsOf: "2026-10-19", AgeDays: 0, SnapshotID: snapshotID, Horizons: map[string]FactorHorizonRef{
 		"1": {Pct: 0.91, Z: 0.83, Factors: 4, Forward: "inconclusive×4"},
 		"3": {Pct: 0.25, Z: -0.2, Factors: 2, Forward: "inconclusive×1,negative×1"},
 	}}
@@ -118,8 +121,8 @@ func TestFactorEnsembleSymbolAndHorizons(t *testing.T) {
 		t.Fatalf("only the symbol's horizons should appear; zero scores are valid: %+v", eth)
 	}
 	encoded, err := json.Marshal(computeFactorEnsemble(&market.Data{Symbol: "BTCUSDT"}, factorEnsembleTestNow))
-	if err != nil || string(encoded) != `{"as_of":"2026-10-19","horizons":{"1":{"pct":0.91,"z":0.83,"factors":4,"forward":"inconclusive×4"},"3":{"pct":0.25,"z":-0.2,"factors":2,"forward":"inconclusive×1,negative×1"}}}` {
-		t.Fatalf("legacy JSON changed: %s, err=%v", encoded, err)
+	if err != nil || string(encoded) != `{"as_of":"2026-10-19","age_days":0,"snapshot_id":"`+snapshotID+`","horizons":{"1":{"pct":0.91,"z":0.83,"factors":4,"forward":"inconclusive×4"},"3":{"pct":0.25,"z":-0.2,"factors":2,"forward":"inconclusive×1,negative×1"}}}` {
+		t.Fatalf("reference JSON changed: %s, err=%v", encoded, err)
 	}
 	for _, data := range []*market.Data{nil, {}, {Symbol: "XRPUSDT"}, {Symbol: "btcusdt"}} {
 		if got := computeFactorEnsemble(data, factorEnsembleTestNow); got != nil {
@@ -204,12 +207,14 @@ func TestFactorEnsembleTopAbsoluteOrderAndZeroVotes(t *testing.T) {
 func TestFactorEnsembleUncoveredAndNonCrypto(t *testing.T) {
 	market.SetEquityClassificationForTesting(map[string]bool{"DELLUSDT": true, "TSLAUSDT": true}, nil)
 	t.Cleanup(func() { market.SetEquityClassificationForTesting(nil, nil) })
-	factorEnsembleTestFile(t, factorEnsembleExtendedFixture("2026-10-19"))
+	raw := factorEnsembleExtendedFixture("2026-10-19")
+	factorEnsembleTestFile(t, raw)
+	snapshotID := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))[:12]
 	for _, tc := range []struct{ symbol, reason string }{
 		{"CXMTUSDT", "history<60d"}, {"FOOUSDT", "no_data"}, {"XRPUSDT", "not_in_universe"},
 	} {
 		got := computeFactorEnsemble(&market.Data{Symbol: tc.symbol}, factorEnsembleTestNow)
-		want := &FactorEnsembleRef{AsOf: "2026-10-19", Scope: "none", Reason: tc.reason}
+		want := &FactorEnsembleRef{AsOf: "2026-10-19", AgeDays: 0, SnapshotID: snapshotID, Scope: "none", Reason: tc.reason}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: reference = %+v, want %+v", tc.symbol, got, want)
 		}
@@ -225,7 +230,7 @@ func TestFactorEnsembleUncoveredAndNonCrypto(t *testing.T) {
 	}
 	// The unchanged, cached snapshot must expire for all three scopes.
 	for _, symbol := range []string{"BTCUSDT", "LDOUSDT", "CXMTUSDT", "XRPUSDT"} {
-		if got := computeFactorEnsemble(&market.Data{Symbol: symbol}, factorEnsembleTestNow.AddDate(0, 0, 3)); got != nil {
+		if got := computeFactorEnsemble(&market.Data{Symbol: symbol}, factorEnsembleTestNow.AddDate(0, 0, 4)); got != nil {
 			t.Fatalf("expired reference for %s: %+v", symbol, got)
 		}
 	}
@@ -486,7 +491,7 @@ func TestFactorEnsembleDisabledCompatibilityAndGateIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enabled.FactorEnsemble == nil || !strings.Contains(RenderSignalJSON(enabled), `"factor_ensemble":{"as_of":`) {
+	if enabled.FactorEnsemble == nil || !strings.Contains(RenderSignalJSON(enabled), `"factor_ensemble":{`) || !strings.Contains(RenderSignalJSON(enabled), `"as_of":"2026-10-19"`) {
 		t.Fatal("enabled signal missing factor evidence or snake_case as_of")
 	}
 	enabled.FactorEnsemble = nil
@@ -602,7 +607,7 @@ func TestFactorEnsemblePromptOptIn(t *testing.T) {
 
 func TestFactorEnsembleEngineWiring(t *testing.T) {
 	now := time.Now()
-	factorEnsembleTestFile(t, factorEnsembleFixture(now.UTC().Format(time.DateOnly)))
+	factorEnsembleTestFile(t, factorEnsembleFixture(now.UTC().AddDate(0, 0, -1).Format(time.DateOnly)))
 	old := binanceGetFn
 	t.Cleanup(func() { binanceGetFn = old })
 	binanceGetFn = func(context.Context, string, interface{}) error { return fmt.Errorf("offline factor test") }
@@ -643,11 +648,11 @@ func captureFactorEnsembleStale(t *testing.T) *[]factorEnsembleStaleCall {
 
 func TestFactorEnsembleStaleAlerts(t *testing.T) {
 	btc := &market.Data{Symbol: "BTCUSDT"}
-	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC) // UTC today = 10-20
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC) // latest closed UTC day = 10-19
 
 	t.Run("fresh_no_alert", func(t *testing.T) {
 		calls := captureFactorEnsembleStale(t)
-		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-19")) // age 1
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-18")) // age 1: normal before the nightly run
 		if computeFactorEnsemble(btc, now) == nil {
 			t.Fatal("fresh snapshot must return evidence")
 		}
@@ -658,13 +663,13 @@ func TestFactorEnsembleStaleAlerts(t *testing.T) {
 
 	t.Run("expiring_age2_once_per_12h", func(t *testing.T) {
 		calls := captureFactorEnsembleStale(t)
-		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-18")) // age 2
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-17")) // age 2: one run missed
 		for i := 0; i < 5; i++ {                                       // many symbols/cycles within the window
 			if computeFactorEnsemble(btc, now.Add(time.Duration(i)*time.Minute)) == nil {
 				t.Fatal("expiring snapshot must still return evidence")
 			}
 		}
-		if want := []factorEnsembleStaleCall{{"2026-10-18", 2, false}}; !reflect.DeepEqual(*calls, want) {
+		if want := []factorEnsembleStaleCall{{"2026-10-17", 2, false}}; !reflect.DeepEqual(*calls, want) {
 			t.Fatalf("calls = %+v, want %+v", *calls, want)
 		}
 		computeFactorEnsemble(btc, now.Add(11*time.Hour+59*time.Minute))
@@ -679,31 +684,31 @@ func TestFactorEnsembleStaleAlerts(t *testing.T) {
 
 	t.Run("expired_age_over_3", func(t *testing.T) {
 		calls := captureFactorEnsembleStale(t)
-		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-16")) // age 4
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-15")) // age 4: every horizon dropped
 		for i := 0; i < 3; i++ {
 			if got := computeFactorEnsemble(btc, now); got != nil {
 				t.Fatalf("expired snapshot returned evidence: %+v", got)
 			}
 		}
-		if want := []factorEnsembleStaleCall{{"2026-10-16", 4, true}}; !reflect.DeepEqual(*calls, want) {
+		if want := []factorEnsembleStaleCall{{"2026-10-15", 4, true}}; !reflect.DeepEqual(*calls, want) {
 			t.Fatalf("calls = %+v, want %+v", *calls, want)
 		}
 	})
 
-	t.Run("age3_is_expiring_not_expired", func(t *testing.T) {
+	t.Run("age3_7d_horizon_still_served", func(t *testing.T) {
 		calls := captureFactorEnsembleStale(t)
-		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-17")) // age 3: still served
-		if computeFactorEnsemble(btc, now) == nil {
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-16"))          // age 3: 7d horizon still served
+		if computeFactorEnsemble(&market.Data{Symbol: "ETHUSDT"}, now) == nil { // only ETH has 7d scores
 			t.Fatal("age 3 must still return evidence")
 		}
-		if want := []factorEnsembleStaleCall{{"2026-10-17", 3, false}}; !reflect.DeepEqual(*calls, want) {
+		if want := []factorEnsembleStaleCall{{"2026-10-16", 3, false}}; !reflect.DeepEqual(*calls, want) {
 			t.Fatalf("calls = %+v, want %+v", *calls, want)
 		}
 	})
 
 	t.Run("expiring_and_expired_budgets_are_separate", func(t *testing.T) {
 		calls := captureFactorEnsembleStale(t)
-		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-18"))
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-17"))
 		computeFactorEnsemble(btc, now)                  // age 2 -> expiring
 		computeFactorEnsemble(btc, now.AddDate(0, 0, 2)) // age 4 -> expired, same cache
 		if len(*calls) != 2 || (*calls)[0].expired || !(*calls)[1].expired {

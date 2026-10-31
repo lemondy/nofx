@@ -4,11 +4,17 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"nofx/logger"
 	"nofx/security"
 )
+
+// Read once for the process; unset, zero and invalid values leave requests unlimited.
+var llmMaxInflight = sync.OnceValue(func() int {
+	return getEnvInt("NOFX_LLM_MAX_INFLIGHT", 0)
+})
 
 // Config client configuration (centralized management of all configurations)
 type Config struct {
@@ -26,6 +32,7 @@ type Config struct {
 	MaxTokens       int
 	MaxContext      int // Model's max context window in tokens (0 = no limit)
 	Temperature     float64
+	ReasoningEffort string // Empty leaves the server default; "none" must be explicit.
 	UseFullURL      bool
 
 	// Retry configuration
