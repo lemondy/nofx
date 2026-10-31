@@ -11,6 +11,7 @@ import {
   Plus,
   Pencil,
   Activity,
+  GitPullRequest,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
@@ -30,12 +31,19 @@ import { Badge, Button, Card, Input, Tabs } from '../components/ui'
 
 import { PaperBadge } from '../components/trader/PaperBadge'
 
-type Tab = 'account' | 'models' | 'exchanges' | 'telegram' | 'quality'
+type Tab =
+  | 'account'
+  | 'models'
+  | 'exchanges'
+  | 'telegram'
+  | 'quality'
+  | 'code-reviews'
 
 const SystemQualityPage = lazy(() => import('./SystemQualityPage'))
+const CodeReviewHistoryPage = lazy(() => import('./CodeReviewHistoryPage'))
 
 // 嵌入的诊断/研究类页面：内容较宽，不套设置卡片
-const EMBEDDED_TABS: Tab[] = ['quality']
+const EMBEDDED_TABS: Tab[] = ['quality', 'code-reviews']
 
 function tabFromHash(): Tab {
   const h = window.location.hash.slice(1)
@@ -355,6 +363,11 @@ export function SettingsPage() {
       label: language === 'zh' ? '系统质量' : 'System Quality',
       icon: <Activity size={14} />,
     },
+    {
+      key: 'code-reviews',
+      label: language === 'zh' ? '代码 Review 历史' : 'Code Review History',
+      icon: <GitPullRequest size={14} />,
+    },
   ]
   const embedded = EMBEDDED_TABS.includes(activeTab)
 
@@ -384,6 +397,9 @@ export function SettingsPage() {
           >
             {activeTab === 'quality' && (
               <SystemQualityPage language={language} />
+            )}
+            {activeTab === 'code-reviews' && (
+              <CodeReviewHistoryPage language={language} />
             )}
           </Suspense>
         )}
