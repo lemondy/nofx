@@ -172,3 +172,81 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv
 宏观缓存默认为 `<cache>/macro/VIX.json` 与 `VIX3M.json`，可用 `--macro` 指定目录；需要宏观数据的 scaler 或 sweep 会校验缓存，缺失则报错，不下载。缓存预先由 **Yahoo chart v8** 的 `^VIX`、`^VIX3M`（`range=10y&interval=1d`）取得，日线覆盖 2016-10-17～2026-10-16，格式与股票相同：`{"series":{"symbol":"VIX","timeframe":"1d","bars":[...]}}`。`open_time` 为交易日 00:00Z。每个序列独立使用日期≤当天的最新收盘价前向填充，绝不后向填充。VIX 收盘约 16:15 ET，股票 16:00 ET，均在次日开盘下单前已知。命令完全离线。
 
 报告增加 scale/敞口、额外缩放成交数及手续费、Calmar、分年收益、按评估日历前后各半的风险指标，以及 NONE 最差三个不重叠回撤峰谷窗口的各策略收益。后半段用前一日收盘作收益锚点，避免漏掉分界日收益；无需重新拟合。JSON 包含每次 overlay（含 sweep）的逐日 `scale_series`。`--sweep` 是固定的单因素扫描：RV_PCT/COMBO 的 floor=0/0.25/0.50，BASKET_VOL 的 target-vol=0.30/0.40/0.50，以及 COMBO 的 band=0.10/0.20/0.35；其余参数固定为默认值，重叠默认组合只运行一次。这些规则没有优化，结果仍受当前股票池幸存者偏差影响。
+
+## Volrix 规则移植（volrix）
+
+完全离线读取主仓库 `data/factor_mining/crypto/{daily,alt_daily/funding}` 与 `data/volrix/{detail,trades,klines}`。使用指定环境运行，避免 PYTHONPATH 污染：
+
+```bash
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest volrix \
+  --rules all --symbols BTCUSDT,ETHUSDT --universe-min-years 3 \
+  --out .volrix_out/volrix_report.md --json .volrix_out/volrix_report.json
+
+# 分钟缓存不全时明确排除三条分钟规则，完整执行日线评估：
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest volrix \
+  --rules MAX20,EWMAC_VT,EWMAC,GOLDEN_CROSS,TURTLE,VOL_MANAGED,HIGH52,SMA250,SUPERTREND_D,POST_DOWN,POST_DOWN_VOL,FABER,TOM \
+  --out .volrix_out/volrix_report.md --json .volrix_out/volrix_report.json
+
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m unittest scripts.backtest.tests.test_volrix -v
+```
+
+`--rules` 接受注册表名称；`--symbols` 增加主表币种，BTC/ETH始终参与准入和邻域，不缩小截面池；`--data-root` 可覆盖只读缓存根目录。分钟规则仅限BTC/ETH，缺文件明确报错退出，不下载或以合成数据替代。测试用合成数据，不依赖分钟缓存。
+
+每条规则为纯函数，返回当根收盘的目标值。每币每策略独立原生 Cerebro/PandasData/BackBroker，不开 cheat-on-close/open；**仅目标值变化时**定数量，Market 单下一根开盘成交。`run_rule(..., sizing='compound')` 为主评估默认：数量=新目标×当前策略权益/信号根收盘价，权益含已实现/未实现盈亏、手续费与资金费。按权益复利、不加杠杆（多头满仓名义≈权益）；目标未变则不交易，两次变化之间数量固定。权益一旦≤0即记录 `bankrupt=True` 并永久停止新开仓；目标变化时仍可平仓。`sizing='fixed'` 仅用于复现核对：数量=新目标×1000/信号根收盘价。EWMAC_VT仅在翻向时用sign×min(1,0.2/rv25)定目标，再乘相应模式的资本/收盘价，此后数量保持不变。BH基准为现货等价买入持有：首根按1000/close定买入数量，下一根开盘成交后一直持有，计手续费滑点、不计资金费——永续多头多年持有的累计资金费会超过本金（BTC 2019-09 起持有，2022-11 权益为负），使对数收益与 audit 无定义。末根不伪造平仓，交易数为原生TradeAnalyzer完整平仓数。
+
+`MAX20`按文字规则：在最近20根（含当根）最高收盘时持多，否则空仓。Volrix 的187笔成交为连续持仓（24–168小时，信号变化才平仓），与该描述一致。
+
+`volrix` 成本为零手续费、单边0.05%滑点、无资金费，仅配合 `fixed` 用于窗口对齐复现；`real` 为单边0.05%手续费、0.03%滑点并计资金费，主表、截面、裁决、参数邻域与准入全部使用 `compound` + `real`。资金费通过 `broker.add_cash` 原生现金调整，**按每日 3 次结算近似**：UTC日首根开盘前的隔夜数量×当根开盘价×当日日均费率×3；缺失日费率按0，记录覆盖天数。多头正费率付费，空头正费率收款。
+
+报告策略权益=broker value−初始虚拟现金+1000，CAGR、日度波动/Sharpe（rf=0，365）、峰谷MaxDD、Calmar均通过 `equity_statistics` 基于此权益序列计算，初始1000；1e9现金仅消除现金限制。原生TimeReturn/DrawDown的大现金口径保留作审计，不用作主指标。成本表平均名义/1000与换手/1000以初始资本为分母。TradeAnalyzer胜率/PF含手续费，不含现金调整型资金费。紧凑JSON仅为BTCUSDT/ETHUSDT保存逐日权益、收益、成交及原生分析器；其他主表币种和截面币仅保存汇总metrics，保留全部参数点，不保存截面组合日序列。主表前后半按日期中点，后半以前一日权益作锚且不重启策略；audit_returns另用默认60/40。截面等权组合在所有合格币共同日期交集上，将各币权益除以共同首日权益×1000后取算术平均，以1000为初始权益，用同一 `equity_statistics` 计算Sharpe/CAGR/MaxDD；等权BH同法。这是共同首日等权、之后不再平衡的组合。共同首日任一币权益≤0则无法归一；组合自身权益曾≤0时组合指标记“—”。
+
+BH在 `fixed` 和 `compound` 下买入数量相同；累计资金费仍可能使策略权益≤0，因此BH仍可能出现MaxDD>100%及不可定义的Sharpe。保留这些日期与实际权益；策略或BH权益曾≤0时audit记NO_EDGE。
+
+月末使用可事先知道的自然月末，截断样本末根不充当月末。滚动窗口须完整预热；“前N根”排除当根；rv为简单收益样本标准差；VOL_MANAGED参考前252个rv（排除当日）；POST_DOWN_VOL参考前20个收益（排除事件日）。POST_DOWN第五持仓根收盘下平仓单，第六根开盘成交；SAR首次突破前空仓，首次突破后永远在场。
+
+准入门槛预声明：同一BTC/ETH全样本Sharpe≥0.8且两半Sharpe都>0，audit为VALIDATED/TRADE_OFF且MaxDD低于BH，截面Sharpe>0占比≥60%，邻域PLATEAU；按顺序写首个失败条件。邻域用grid_around五档×sweep_plateau；超过125点只扫主要窗口，固定项在报告列明。分钟规则只做主表/audit，无截面和邻域不能判PASS。复现核对以入场日为主，JSON 另存持仓日比较（来源持仓日取 [entryDate, exitDate)），±1日采用一对一匹配。
+
+局限：缓存幸存者偏差；上市年数以缓存跨度估计；日线收盘UTC 00:00与Volrix时区及01:00检查可能不同；印度交易日改为加密自然日；复现窗口起始空仓与来源跨窗持仓不同；未建模保证金/强平/最小下单量；下根开盘跳空、成本及空头持仓损失仍会改变名义/权益比。等权组合、历史时间切分和参数邻域均不是独立样本外证明，报告不能当作实盘账户收益。
+
+### 日内止损/止盈规则（volrix_intraday）
+
+`VWAP_RECLAIM`、`HOLY_GRAIL`、`NR7`、`ICHI_ST`、`RSI3_2C`、`PDH_PDL` 六条 Volrix 日内规则单独由 `scripts/backtest/volrix_intraday.py` 回测（未注册到 cli）。数据为 `data/volrix/klines/{BTCUSDT,ETHUSDT}_5m.json`（2023-08 起，15m 由 5m 重采样）；原 1m/3m 规则以 5m 代替。会话取 UTC 日，日末最后一根收盘下 Market、次日首根开盘强平。入场/止损/止盈均为原生 Market/Stop/Limit + OCO，同根触及 SL/TP 先止损，入场根不回溯 TP；资金费在 00/08/16 UTC 结算时刻按当日平均费率用 `broker.add_cash` 记账。每笔固定名义 USD1000，收益以 1000 为分母。
+
+```bash
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.volrix_intraday \
+  --out .volrix_out/intraday.md --json .volrix_out/intraday.json
+
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m unittest scripts.backtest.tests.test_volrix_intraday -v
+```
+
+`--rules`、`--symbols`、`--start`、`--end` 可缩小范围。复现核对：`VWAP_RECLAIM` 在 BTCUSDT、volrix 口径（无手续费、0.01% 滑点、无资金费）下与 Volrix 6191 笔成交按 ±5 分钟一对一匹配。准入（预声明）：real 口径下 BTC 或 ETH 全样本 Sharpe≥0.8、两半 Sharpe 都>0、平均每笔净收益≥5 bps，且另一币全样本收益>0。
+
+原始抓取数据（策略列表、详情、报告、公开成交明细）存于 `data/volrix/`（gitignored），其中 `summary.csv` 为 83 个策略的汇总，`portable_specs.md` 为可移植规则的原文。
+
+## QuantJourney 示例策略移植（quantjourney / quantjourney_orders）
+
+QuantJourneyOrg/quantjourney-bt（Apache-2.0）的 50 个示例：源码只读放在主仓库 `data/quantjourney/src/`（不 import、不执行），官方 45 份 `performance_report.json` 在 `data/quantjourney/reports/`，美股日线在 `data/quantjourney/prices/`。两个模块都完全离线，执行走 Backtrader：
+
+```bash
+# 权重型 W01–W25（美股原始 ETF 篮子 + 加密 10 币篮子 / BTC、ETH）
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.quantjourney \
+  --market all --out .qj_out/weights.md --json .qj_out/weights.json
+# 订单型 O01–O18、O20 逻辑（市价/限价/止损/止损限价/跟踪止损/括号单/OCO）
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.quantjourney_orders \
+  --market all --out .qj_out/orders.md --json .qj_out/orders.json
+```
+
+- **复现**：原标的、原区间、原成本与原成交时序，对照官方月度收益（相关 ≥0.90 且总收益误差 ≤30% 或 ≤10 个百分点）与入场日期。
+- **评估**：t 收盘决策、t+1 开盘成交；美股佣金 1bp + 滑点 2bp + 空头借券 0.5%/年 + 杠杆融资 5%/年，门槛样本截至 2025-12-31，2026-01..10 单列为发布后样本外；加密 5bp + 3bp + 真实资金费。
+- **准入**：G1 60/40 两窗 Sharpe 都高于**同敞口基准**（`log(1+平均总敞口×基准简单收益)`，避免对数收益方差拖累让低敞口策略机械胜出）；G2 策略自身日收益 Deflated Sharpe ≥0.95（试验池只含日线规则×市场组合）；G3 两半净收益 >0；G4 参数平台；G5（加密单标的）10 币正 Sharpe ≥60%。日内规则沿用 volrix_intraday 门槛。G1 与 G2 的口径在审查时更正过，报告内披露。
+
+## 行情缓存（market_cache）
+
+研究用行情只增量更新、从不删除（原子写；美股复权基准变化时整只重下并保留 `.bak-YYYYMMDD`；重下结果不完整时拒绝覆盖；盘中未收盘的美股 bar 不入缓存）：
+
+```bash
+P="env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.market_cache"
+$P us SPY QQQ IWM                       # data/quantjourney/prices/<SYM>.json
+$P klines BTCUSDT 1h --start 2019-12-01 # data/volrix/klines/<SYM>_<interval>.json（已有文件时无需 --start）
+$P check --cross-check                  # 校验全部缓存；--cross-check 对照纳斯达克 / 币安官方数据
+```
