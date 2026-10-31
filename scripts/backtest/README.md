@@ -222,3 +222,31 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv
 `--rules`、`--symbols`、`--start`、`--end` 可缩小范围。复现核对：`VWAP_RECLAIM` 在 BTCUSDT、volrix 口径（无手续费、0.01% 滑点、无资金费）下与 Volrix 6191 笔成交按 ±5 分钟一对一匹配。准入（预声明）：real 口径下 BTC 或 ETH 全样本 Sharpe≥0.8、两半 Sharpe 都>0、平均每笔净收益≥5 bps，且另一币全样本收益>0。
 
 原始抓取数据（策略列表、详情、报告、公开成交明细）存于 `data/volrix/`（gitignored），其中 `summary.csv` 为 83 个策略的汇总，`portable_specs.md` 为可移植规则的原文。
+
+## QuantJourney 示例策略移植（quantjourney / quantjourney_orders）
+
+QuantJourneyOrg/quantjourney-bt（Apache-2.0）的 50 个示例：源码只读放在主仓库 `data/quantjourney/src/`（不 import、不执行），官方 45 份 `performance_report.json` 在 `data/quantjourney/reports/`，美股日线在 `data/quantjourney/prices/`。两个模块都完全离线，执行走 Backtrader：
+
+```bash
+# 权重型 W01–W25（美股原始 ETF 篮子 + 加密 10 币篮子 / BTC、ETH）
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.quantjourney \
+  --market all --out .qj_out/weights.md --json .qj_out/weights.json
+# 订单型 O01–O18、O20 逻辑（市价/限价/止损/止损限价/跟踪止损/括号单/OCO）
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.quantjourney_orders \
+  --market all --out .qj_out/orders.md --json .qj_out/orders.json
+```
+
+- **复现**：原标的、原区间、原成本与原成交时序，对照官方月度收益（相关 ≥0.90 且总收益误差 ≤30% 或 ≤10 个百分点）与入场日期。
+- **评估**：t 收盘决策、t+1 开盘成交；美股佣金 1bp + 滑点 2bp + 空头借券 0.5%/年 + 杠杆融资 5%/年，门槛样本截至 2025-12-31，2026-01..10 单列为发布后样本外；加密 5bp + 3bp + 真实资金费。
+- **准入**：G1 60/40 两窗 Sharpe 都高于**同敞口基准**（`log(1+平均总敞口×基准简单收益)`，避免对数收益方差拖累让低敞口策略机械胜出）；G2 策略自身日收益 Deflated Sharpe ≥0.95（试验池只含日线规则×市场组合）；G3 两半净收益 >0；G4 参数平台；G5（加密单标的）10 币正 Sharpe ≥60%。日内规则沿用 volrix_intraday 门槛。G1 与 G2 的口径在审查时更正过，报告内披露。
+
+## 行情缓存（market_cache）
+
+研究用行情只增量更新、从不删除（原子写；美股复权基准变化时整只重下并保留 `.bak-YYYYMMDD`；重下结果不完整时拒绝覆盖；盘中未收盘的美股 bar 不入缓存）：
+
+```bash
+P="env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /Users/zhangyun/workspace/nofx/.venv/bin/python -m scripts.backtest.market_cache"
+$P us SPY QQQ IWM                       # data/quantjourney/prices/<SYM>.json
+$P klines BTCUSDT 1h --start 2019-12-01 # data/volrix/klines/<SYM>_<interval>.json（已有文件时无需 --start）
+$P check --cross-check                  # 校验全部缓存；--cross-check 对照纳斯达克 / 币安官方数据
+```

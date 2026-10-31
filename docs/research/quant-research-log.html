@@ -71,6 +71,79 @@ th{color:var(--mut);font-weight:600}
 
 <div id="log">
 
+<div class="day">2026-10-31</div>
+
+<article data-v="no" data-id="quantjourney-bt">
+<h2>QuantJourney 开源回测库 50 个示例策略移植验证 <span class="tag t-no">无可融合策略（79 个组合全部未通过）</span><span class="dom">美股 ETF + 加密 · 外部策略</span></h2>
+<p class="k">思路：用户给出 GitHub 仓库 QuantJourneyOrg/quantjourney-bt（Apache-2.0，宣传为“50 个 Python 交易策略免费公开”：动量、突破、配对、风险平价、RSI 回归、走前优化）和一篇 X 文章《How to Become a Quant》，要求全部回测验证能否融合进 nofx。仓库实际是回测引擎的功能示例集：25 个权重型（演示再平衡/风控叠加）、20 个订单型（演示限价/止损/跟踪止损/括号单/OCO）、5 个走前优化流程，README 自述为教学用例、不构成投资建议。</p>
+<ul>
+<li>官方自报结果（45 份公开 performance_report，含月度收益与成交明细）与同期买入持有比较（同 rf=2%、同标的同区间）：可比的 35 个中 29 个 Sharpe 低于买入持有；订单型 O01–O14 为 −0.43~0.21（SPY 0.42）；只有月度动量轮动 O17（0.53 对 0.51）、波动率目标动量 W18（0.57 对 0.51）及两个 0.45 对 0.45 的打平跑赢。日内样本只有约一个月，FX/期货无可比基准。</li>
+<li>数据核对（数据保留在 data/quantjourney/，不删除）：Yahoo 美股 ETF/个股 23 只（2000-01 至 2026-10-30）交易日历与 SPY 完全一致，近 10 年与纳斯达克官方历史逐日比对收盘价偏差 &gt;0.5% 仅 1 天（纳斯达克的占位行），与 QJ 自己的成交价比值逐标的为常数（仅差其后的分红复权）；加密 10 币日线与币安 fapi 全历史逐日 OHLC 完全一致，资金费抽样逐结算一致，BTC/ETH 1h、5m 无缺口。</li>
+<li>复现（证明移植正确）：订单型 16/16 合格（月度收益相关 0.999–1.000，入场日期一致率 98.9%–100%）；权重型 18/19 合格，W19 风险平价不合格是 QJ 原 ERC 迭代数值不稳定（协方差差一个浮点 ULP 单资产权重变 78 个百分点），未为追官方数字改算法。</li>
+<li>评估：t 收盘决策 t+1 开盘成交；美股佣金 1bp+滑点 2bp+借券 0.5%/年+融资 5%/年（门槛样本截至 2025-12-31，2026 单列）；加密 5bp+3bp+真实资金费。门槛：G1 两窗 Sharpe 都胜同敞口基准、G2 Deflated Sharpe ≥0.95、G3 两半都赚钱、G4 参数平台、G5 加密 10 币横截面 ≥60%；按文章“谁在付钱”标注收益来源。</li>
+<li>审查时三处更正（已披露）：G2 原作用于超额收益导致全部为 0，改为策略自身收益 DSR（事后放宽）；日内规则 SR≈−10 被放进 DSR 试验池把门槛抬到年化约 3.6，改为只用日线组合；对数收益方差拖累让低敞口策略机械胜过满仓基准，G1 改为同敞口基准（收紧），原先通过 G1 的 14 个组合全部变为不通过。</li>
+<li>结果：没有择时能力超过同仓位持有（如 W22 MACD 在 BTC 上两窗 0.78/0.44 对同敞口持有 0.80/0.64）。唯一过 G1/G3/G4/G5 的是 O07 止损限价突破，但 DSR 仅 0.09（美股）/0.31（加密）；权重型 DSR 最高 W05 逆波动率 0.35、W06 0.29、W17 0.29。配对、截面动量/反转为负或接近零，日内规则每笔净 −15~−17 bps，短期均值回归在加密上为负。</li>
+</ul>
+<p><b>结论：</b>这些都是公开多年的教科书规则，按真实成本与同敞口基准比较后没有一个能证明有超额，与文章“无付钱方即噪声、多重检验出假赢家、发表后衰减”的观点一致；不改任何交易代码。移植模块与报告保留，供以后复查。</p>
+<p class="src">来源：<code>scripts/backtest/quantjourney.py</code> · <code>scripts/backtest/quantjourney_orders.py</code> · <code>scripts/backtest/market_cache.py</code> · <code>docs/research/2026-10-31-quantjourney-strategies.md</code> · <code>data/quantjourney/</code></p>
+</article>
+
+<article data-v="no" data-id="volrix-strategies">
+<h2>Volrix.ai 公开策略库（83 个）移植回测 <span class="tag t-no">无可融合策略</span><span class="dom">加密 · 外部策略</span></h2>
+<p class="k">思路：用户要求把 app.volrix.ai 策略库里所有公开策略抓下来，本地回测验证能否融合进 nofx。</p>
+<ul>
+<li>抓取：通过公开 API（无需登录）拿到全部 83 个策略的规则描述、指标与成交明细；策略代码需登录（未注册），只用公开文字规则与成交。62 个为印度期权（NIFTY/SENSEX/MCX 卖方、跨式等），需印度期权链数据且 nofx 不交易期权，不可移植；22 条价格规则移植到币安永续。</li>
+<li>复现：三个原生币安策略与 Volrix 成交对齐——BTC 20 日新高入场日 100% 一致（119.4% 对 133.2%）、ETH EWMAC 波动率目标入场日 97.3%（228.6% 对 223.9%）、BTC VWAP reclaim 入场时间 ±5 分钟 98.4%。Volrix 的加密回测不计手续费与资金费，Sharpe 算法未公开、不可比。</li>
+<li>口径：佣金 0.05%+滑点 0.03%+真实资金费，按当前权益复利定仓，基准为现货等价买入持有。教训：BTC 永续从 2019-09 满仓长持累计资金费约 3,553 美元（本金 1,000），2022-11 权益一度为负，长持基准必须用现货等价。</li>
+<li>结果：16 条日线/小时规则只有 SUPERTREND_D 在 ETH 上机械通过（全样本 Sharpe 0.91 对持有 0.90、回撤 48% 对 79%，但后半段 0.25 对 0.44、60/40 留出段 0.01 对 −0.03），22 条规则×2 币的多重比较下与随机相符；BTC 上慢速趋势规则 Sharpe 0.53–0.59 低于持有 0.79，本质是降回撤也降收益。6 条日内止损止盈规则每笔净 −8~−18 bps，扣成本前也接近 0。</li>
+<li>事后线索（未预声明）：MAX20、HIGH52 放到 49 币等权篮子（2023-08..2026-10）Sharpe 1.48/0.91、回撤约 14%，等权持有 0.76/73%；单币中位 Sharpe 仅 0.34/0.12，窗口短且有幸存者偏差，用户 10-31 决定暂缓。AI 历史信号按日线趋势分组：样本期 BTC 日线一直向上，逆势组每组仅 4–16 笔，无法判断。</li>
+</ul>
+<p><b>结论：</b>没有可以直接融合进加密交易系统的 Volrix 策略；不改任何交易代码。若跟进篮子线索，应作为截面因子交给 scripts/factor_mining 冻结评估，而不是直接上线。</p>
+<p class="src">来源：<code>scripts/backtest/volrix.py</code> · <code>scripts/backtest/volrix_intraday.py</code> · <code>docs/research/2026-10-31-volrix-strategies.md</code> · <code>data/volrix/</code></p>
+</article>
+
+<div class="day">2026-10-28</div>
+
+<article data-v="part" data-id="factor-mining-sensitivity">
+<h2>因子挖掘已准入因子的币池（幸存者偏差）/ 资金费敏感性 <span class="tag t-part">多数不稳：子池 + 资金费下仅 11/41 仍满足准入</span><span class="dom">加密 · 因子挖掘</span></h2>
+<p class="k">思路：因子挖掘的 100 币池来自当前存活快照，且多空收益未计资金费。检查 zoo 中 41 个 accepted 因子×持有期在两种口径下是否仍满足准入：只用 2022-01-01 前已有数据的 32 币子池（减轻幸存者偏差）；多空腿计入真实资金费。</p>
+<ul>
+<li>方法：全部 IC、HAC t、分层收益调用冻结的 evaluate.py（SHA256 记录在报告），不读 holdout 标签、不重搜表达式、不翻转方向；子池重新计算截面算子与成交额排名；资金费按每日 3 次结算估算、以每腿入场名义计费，缺失记 NA 不补零（实际缺失 0/606,928）。</li>
+<li>结果：只换子池仍满足 12/41，只加资金费 22/41，两者同时 11/41。三种口径都稳的有 7 个（如 f_709d7407、f_8dd9bbca、f_a601391e、f_ac795953 的 7 日期，f_86c39d5d、f_c0b3235b 的 1 日期，f_cba0f8c6 的 3 日期）；不少因子在子池的验证段多空收益由正转为 −30%~−77%。</li>
+<li>局限：32 币子池仍来自 10-18 存活快照，无法消除退市合约缺失造成的偏差，完整修复需 data.binance.vision 历史合约数据。</li>
+</ul>
+<p><b>结论：</b>已准入因子中相当一部分依赖幸存者偏差或忽略资金费，实盘参考需谨慎；本报告只作为是否另开评估器实验的证据，未修改冻结评估器、zoo 或 ledger。</p>
+<p class="src">来源：<code>scripts/factor_mining/sensitivity_20261028.py</code> · <code>docs/research/factor-mining-sensitivity-20261028.md（提交 142b19ff）</code></p>
+</article>
+
+<div class="day">2026-10-27</div>
+
+<article data-v="no" data-id="us-factor-mining-v2">
+<h2>美股因子挖掘 v2（us2：S&amp;P 500 ∪ bstock 544 只） <span class="tag t-no">G0 零效应校准未通过，中止，无因子</span><span class="dom">美股 · 因子挖掘</span></h2>
+<p class="k">思路：现行美股挖掘（96 只 bstock 池）9,031 次试验只得 2 个 accepted（20 日成交量族），前向 105 天均失败。v2 先预注册，把面板扩到 S&amp;P 500 ∪ bstock 正股 544 只（2020-10-27..2026-10-26，逐日成交额前 300、min_history=60），加入 SPY 日收益与 VIX 作为市场字段，并要求先通过时间错位 null 校准（G0）才可运行真实挖掘。</p>
+<ul>
+<li>数据审计：547 个文件逐个 SHA256 核对一致；13 只因历史过短在下载阶段排除；幸存者偏差按预注册披露。</li>
+<li>G0：3 个种子 × h=1/3/5 × 每格 5,000 次试验（t_req=4.42），在时间错位的零效应面板上仍有 200–566 个因子被判 accepted、179–890 个 candidate，全部 9 格失败（应接近 0）。</li>
+<li>按预注册第 4 节停止：未运行真实挖掘、未打开 holdout、未调整门槛或种子；耗时 G0 约 183 分钟。</li>
+</ul>
+<p><b>结论：</b>该评估设计在美股截面上无法控制误报，不能据此提出任何因子；“无证据”不等于证明效应为零。代码与报告在未合入 dev 的分支 claude/wyckoff-trading-review-7954ae（提交 2d604427）。</p>
+<p class="src">来源：<code>scripts/factor_mining/us2_study.py</code> · <code>docs/research/2026-10-27-us-factor-mining-v2-study.md</code> · <code>docs/research/us-factor-mining-v2-summary/（分支 claude/wyckoff-trading-review-7954ae）</code></p>
+</article>
+
+<div class="day">2026-10-26</div>
+
+<article data-v="no" data-id="wyckoff-vp">
+<h2>威科夫 / 成交量分布（VP）事件信号层研究 <span class="tag t-no">null 校准未通过，中止，不接入</span><span class="dom">加密 · 价格行为 / 成交量</span></h2>
+<p class="k">思路：检验威科夫/VP 事件（日线成交量分布、UT/Spring、努力与结果背离等 E1/E2h/E2l/B0/E3 五类事件 × 方向 × 24/72 根，共 45 格）能否作为加密 1h 信号层证据，先预注册再看结果。</p>
+<ul>
+<li>v1：对照规则自相矛盾（错位 ±[6,48] 又要求不落在任一事件 ±72 根内），可用对照恒为 0，45 格配对 n=0，无任何推断。</li>
+<li>v2：对照改为排除同类事件 ±6 根；随机游走 null 的 3 个面板各有 11、11、12/45 格 BH 通过——向更早错位的对照覆盖了事件的铺垫行情（对照 Y1 被压低约 50–300 bps），零效应下也显著。v2 真实结果已被看到，一律作废。</li>
+<li>v3：对照只取事件之后 +[7,48] 根，新增前置门槛 G0（每个 null 面板 BH 通过 ≤1）。51 币×8,700 根随机游走，种子 100 有 2 格通过，G0 未通过；植入 80 bps 已知效应时 44–45 格可检出（检出力足够）。</li>
+</ul>
+<p><b>结论：</b>真实数据从未得到裁决；用户 10-26 决定关闭，不再改规格，不并入系统。若重开需新的 v4 预注册，先修正 null 面板 E3 事件数不匹配（null 约 6,700 对真实 128）。代码与报告在未合入 dev 的分支 claude/wyckoff-trading-review-7954ae（提交 4d1a2e1e）。</p>
+<p class="src">来源：<code>scripts/backtest/wyckoff_study.py</code> · <code>docs/research/2026-10-25-wyckoff-vp-study.md</code> · <code>预注册 v1–v3</code> · <code>docs/research/wyckoff-summary/（分支 claude/wyckoff-trading-review-7954ae）</code></p>
+</article>
+
 <div class="day">2026-10-24</div>
 
 <article data-v="no">
