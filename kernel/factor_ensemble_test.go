@@ -623,3 +623,114 @@ func TestFactorEnsembleEngineWiring(t *testing.T) {
 		}
 	}
 }
+
+type factorEnsembleStaleCall struct {
+	asOf    string
+	age     int
+	expired bool
+}
+
+// captureFactorEnsembleStale swaps the alert hook for a recorder and resets the
+// rate-limit state so tests are independent.
+func captureFactorEnsembleStale(t *testing.T) *[]factorEnsembleStaleCall {
+	t.Helper()
+	var calls []factorEnsembleStaleCall
+	orig := factorEnsembleStaleNotify
+	factorEnsembleStaleNotify = func(asOf string, age int, expired bool) {
+		calls = append(calls, factorEnsembleStaleCall{asOf, age, expired})
+	}
+	factorEnsembleStaleState.mu.Lock()
+	factorEnsembleStaleState.lastLog, factorEnsembleStaleState.lastNotify = [2]time.Time{}, [2]time.Time{}
+	factorEnsembleStaleState.mu.Unlock()
+	t.Cleanup(func() { factorEnsembleStaleNotify = orig })
+	return &calls
+}
+
+func TestFactorEnsembleStaleAlerts(t *testing.T) {
+	btc := &market.Data{Symbol: "BTCUSDT"}
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC) // latest closed UTC day = 10-19
+
+	t.Run("fresh_no_alert", func(t *testing.T) {
+		calls := captureFactorEnsembleStale(t)
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-18")) // age 1: normal before the nightly run
+		if computeFactorEnsemble(btc, now) == nil {
+			t.Fatal("fresh snapshot must return evidence")
+		}
+		if len(*calls) != 0 {
+			t.Fatalf("unexpected alerts: %+v", *calls)
+		}
+	})
+
+	t.Run("expiring_age2_once_per_12h", func(t *testing.T) {
+		calls := captureFactorEnsembleStale(t)
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-17")) // age 2: one run missed
+		for i := 0; i < 5; i++ {                                       // many symbols/cycles within the window
+			if computeFactorEnsemble(btc, now.Add(time.Duration(i)*time.Minute)) == nil {
+				t.Fatal("expiring snapshot must still return evidence")
+			}
+		}
+		if want := []factorEnsembleStaleCall{{"2026-10-17", 2, false}}; !reflect.DeepEqual(*calls, want) {
+			t.Fatalf("calls = %+v, want %+v", *calls, want)
+		}
+		computeFactorEnsemble(btc, now.Add(11*time.Hour+59*time.Minute))
+		if len(*calls) != 1 {
+			t.Fatalf("repeated inside 12h: %+v", *calls)
+		}
+		computeFactorEnsemble(btc, now.Add(12*time.Hour)) // still age 2/3 -> re-alert
+		if len(*calls) != 2 {
+			t.Fatalf("expected a second alert after 12h: %+v", *calls)
+		}
+	})
+
+	t.Run("expired_age_over_3", func(t *testing.T) {
+		calls := captureFactorEnsembleStale(t)
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-15")) // age 4: every horizon dropped
+		for i := 0; i < 3; i++ {
+			if got := computeFactorEnsemble(btc, now); got != nil {
+				t.Fatalf("expired snapshot returned evidence: %+v", got)
+			}
+		}
+		if want := []factorEnsembleStaleCall{{"2026-10-15", 4, true}}; !reflect.DeepEqual(*calls, want) {
+			t.Fatalf("calls = %+v, want %+v", *calls, want)
+		}
+	})
+
+	t.Run("age3_7d_horizon_still_served", func(t *testing.T) {
+		calls := captureFactorEnsembleStale(t)
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-16"))          // age 3: 7d horizon still served
+		if computeFactorEnsemble(&market.Data{Symbol: "ETHUSDT"}, now) == nil { // only ETH has 7d scores
+			t.Fatal("age 3 must still return evidence")
+		}
+		if want := []factorEnsembleStaleCall{{"2026-10-16", 3, false}}; !reflect.DeepEqual(*calls, want) {
+			t.Fatalf("calls = %+v, want %+v", *calls, want)
+		}
+	})
+
+	t.Run("expiring_and_expired_budgets_are_separate", func(t *testing.T) {
+		calls := captureFactorEnsembleStale(t)
+		factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-17"))
+		computeFactorEnsemble(btc, now)                  // age 2 -> expiring
+		computeFactorEnsemble(btc, now.AddDate(0, 0, 2)) // age 4 -> expired, same cache
+		if len(*calls) != 2 || (*calls)[0].expired || !(*calls)[1].expired {
+			t.Fatalf("calls = %+v", *calls)
+		}
+	})
+
+	t.Run("missing_or_bad_file_does_not_alert", func(t *testing.T) {
+		for _, raw := range []string{"{", "null", factorEnsembleFixture("not-a-date"), "missing"} {
+			calls := captureFactorEnsembleStale(t)
+			path := factorEnsembleTestFile(t, raw)
+			if raw == "missing" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := computeFactorEnsemble(btc, now); got != nil {
+				t.Fatalf("%q returned evidence: %+v", raw, got)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("%q triggered stale alert: %+v", raw, *calls)
+			}
+		}
+	})
+}

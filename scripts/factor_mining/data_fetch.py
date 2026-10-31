@@ -26,6 +26,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import random
 import sys
 import time
 import urllib.error
@@ -35,7 +36,12 @@ from pathlib import Path
 
 DATA = Path('/Users/zhangyun/workspace/nofx/data')
 ROOT = Path(os.environ.get('FACTOR_MINING_DIR') or DATA / 'factor_mining')
+# FM_PROXY may list several comma-separated candidates; the first is used until it keeps failing.
 PROXY = os.environ.get('FM_PROXY', 'http://127.0.0.1:7890')
+BREAKER_DEFAULT = 8        # consecutive exhausted requests before the circuit opens (env FM_FETCH_BREAKER, 0 = off)
+JITTER = 0.25              # backoff is scaled by a uniform factor in [1-JITTER, 1+JITTER]
+RETRIES = 5               # attempts per request (backoff 2/4/8/16 s between them, +-JITTER)
+ROTATE_AFTER = 2           # consecutive connection failures on one proxy before trying the next candidate
 CRYPTO_EXCLUDED = {'APRUSDT', 'MANAUSDT', 'STXUSDT', 'USELESSUSDT'}
 # Leveraged / inverse products are not stocks for cross-sectional purposes; SPY is the benchmark.
 US_EXCLUDED = {'TQQQ', 'SQQQ', 'SOXL', 'SOXS', 'UVXY', 'QQQ', 'MUU', 'KORU'}
@@ -48,14 +54,51 @@ ALT_FIELDS = ('funding', 'premium')
 FUNDING_PAGE = 1000
 
 
+class CircuitOpen(RuntimeError):
+    """Raised instantly once an Http instance has seen too many consecutive failed requests."""
+
+
+def _proxy_list(proxy):
+    if isinstance(proxy, str):
+        proxy = proxy.split(',')
+    return [p.strip() for p in (proxy or ()) if p and p.strip()]
+
+
+def _breaker_limit(value=None):
+    if value is None:
+        try:
+            value = int(os.environ.get('FM_FETCH_BREAKER', BREAKER_DEFAULT))
+        except ValueError:
+            value = BREAKER_DEFAULT
+    return max(0, value)
+
+
 class Http:
-    """Proxy-aware JSON GET with spacing and bounded retries; ``get`` is the test seam."""
+    """Proxy-aware JSON GET with spacing, bounded jittered retries and a circuit breaker.
+
+    ``proxy`` is one URL or several (comma-separated string / list); a candidate that fails
+    ``ROTATE_AFTER`` connection attempts in a row hands over to the next one. After ``breaker``
+    consecutive requests that failed after exhausting their retries (0 disables) the circuit
+    opens and every further ``get`` raises ``CircuitOpen`` at once instead of retrying; any
+    success resets the count. A 400/401/403/404 reply proves the network works, so it resets
+    the count too. ``get`` is the test seam.
+    """
     def __init__(self, spacing=0.4, proxy=PROXY, sleep=time.sleep, *, deadline=None,
-                 clock=time.monotonic):
-        handlers = [urllib.request.ProxyHandler({'http': proxy, 'https': proxy})] if proxy else []
-        self.opener = urllib.request.build_opener(*handlers)
+                 clock=time.monotonic, breaker=None, rand=random.random):
+        self.proxies = _proxy_list(proxy)
+        self.openers = [urllib.request.build_opener(
+            urllib.request.ProxyHandler({'http': p, 'https': p})) for p in self.proxies]
+        if not self.openers:
+            self.openers = [urllib.request.build_opener()]
+        self.proxy_index, self.conn_failures = 0, 0
         self.spacing, self.sleep, self.last = spacing, sleep, 0.0
         self.deadline, self.clock = deadline, clock
+        self.breaker, self.rand = _breaker_limit(breaker), rand
+        self.consecutive_failures, self.open_reason = 0, None
+
+    @property
+    def opener(self):
+        return self.openers[self.proxy_index]
 
     def _remaining(self):
         if self.deadline is None:
@@ -69,26 +112,54 @@ class Http:
         self.sleep(min(seconds, self._remaining()))
         self._remaining()
 
+    def _backoff(self, seconds):
+        return seconds * (1 + JITTER * (2 * self.rand() - 1))
+
+    def _connection_failed(self):
+        self.conn_failures += 1
+        if len(self.openers) > 1 and self.conn_failures >= ROTATE_AFTER:
+            self.proxy_index = (self.proxy_index + 1) % len(self.openers)
+            self.conn_failures = 0
+            print(f'fetch: rotating to proxy {self.proxies[self.proxy_index]}', file=sys.stderr)
+
+    def _fail(self, url, err, reachable=False):
+        # An HTTP 4xx reply (delisted symbol, bad request) means the network path works.
+        self.consecutive_failures = 0 if reachable else self.consecutive_failures + 1
+        if self.breaker and self.consecutive_failures >= self.breaker and not self.open_reason:
+            self.open_reason = (f'{self.consecutive_failures} consecutive requests failed '
+                                f'after retries, last: {url}: {err}')[:300]
+        raise RuntimeError(f'{url}: {err}')
+
+    def _retry_sleep(self, attempt, seconds):
+        if attempt < RETRIES - 1:          # nothing to wait for after the last attempt
+            self._sleep(self._backoff(seconds))
+
     def get(self, url, params=None):
+        if self.open_reason:
+            raise CircuitOpen(f'fetch circuit open: {self.open_reason}')
         if params:
             url += '?' + urllib.parse.urlencode(params)
         err = None
-        for attempt in range(5):
+        for attempt in range(RETRIES):
             self._sleep(max(0.0, self.spacing - (self.clock() - self.last)))
             self.last = self.clock()
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': UA})
                 with self.opener.open(req, timeout=min(30, self._remaining())) as resp:
-                    return json.load(resp)
+                    data = json.load(resp)
+                self.consecutive_failures = self.conn_failures = 0
+                return data
             except urllib.error.HTTPError as exc:
                 err = exc
                 if exc.code in (400, 401, 403, 404):
-                    break
-                self._sleep(min(120, 8 * 2 ** attempt) if exc.code in (418, 429) else 2 ** (attempt + 1))
+                    self._fail(url, err, reachable=True)
+                self._retry_sleep(attempt, min(120, 8 * 2 ** attempt) if exc.code in (418, 429) else 2 ** (attempt + 1))
             except (OSError, ValueError) as exc:
                 err = exc
-                self._sleep(2 ** (attempt + 1))
-        raise RuntimeError(f'{url}: {err}')
+                if isinstance(exc, OSError):
+                    self._connection_failed()
+                self._retry_sleep(attempt, 2 ** (attempt + 1))
+        self._fail(url, err)
 
 
 def _num(x):
@@ -233,9 +304,12 @@ def update_alt(root, symbols, http, now_ms, log=print):
     Returns {'ok': n_symbol_fields, 'failed': {'field/SYMBOL': reason}}.
     """
     fetchers = {'funding': funding_rows, 'premium': premium_rows}
-    ok, failed = 0, {}
+    ok, failed, circuit = 0, {}, None
     for sym in symbols:
         for field in ALT_FIELDS:
+            if circuit:      # breaker open: fail the rest at once, no reads or waiting
+                failed[f'{field}/{sym}'] = circuit
+                continue
             path = Path(root) / 'crypto' / 'alt_daily' / field / f'{sym}.json'
             try:
                 old = read_symbol(path)
@@ -246,6 +320,9 @@ def update_alt(root, symbols, http, now_ms, log=print):
                 ok += 1
             except Exception as exc:    # alt data must never break the OHLCV update
                 failed[f'{field}/{sym}'] = f'{type(exc).__name__}: {exc}'[:160]
+                reason = getattr(http, 'open_reason', None)
+                if isinstance(exc, CircuitOpen) or reason:
+                    circuit = failed[f'{field}/{sym}'] if isinstance(exc, CircuitOpen) else f'fetch circuit open: {reason}'[:160]
     log(f'crypto alt: updated {ok}/{len(symbols) * len(ALT_FIELDS)}, failed {len(failed)}')
     return {'ok': ok, 'failed': failed}
 
@@ -280,8 +357,11 @@ def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print,
     base = Path(root) / market / 'daily'
     if symbols is None:
         symbols = crypto_universe() if market == 'crypto' else us_universe(http)
-    ok, failed = 0, {}
+    ok, failed, circuit = 0, {}, None
     for sym in symbols:
+        if circuit:          # breaker open: every remaining symbol fails at once
+            failed[sym] = circuit
+            continue
         path = base / f'{sym}.json'
         old = read_symbol(path)
         try:
@@ -296,6 +376,10 @@ def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print,
         except RuntimeError as exc:
             failed[sym] = str(exc)[:160]
             log(f'{market} {sym}: FAIL {failed[sym]}')
+            reason = getattr(http, 'open_reason', None)      # the failure that tripped it, or a later one
+            if isinstance(exc, CircuitOpen) or reason:
+                circuit = failed[sym] if isinstance(exc, CircuitOpen) else f'fetch circuit open: {reason}'[:160]
+                log(f'{market}: {circuit}; skipping remaining symbols')
             continue
         if not new and not old:
             failed[sym] = 'no data'
