@@ -438,6 +438,8 @@ func (p *PaperFuturesTrader) slipped(price float64, side string) float64 {
 	return price * (1 - p.cfg.SlippageBps/10000)
 }
 
+const advanceFetchConcurrency = 6
+
 // Advance obtains observations without holding mu and rechecks the version
 // before using them. Errors preserve the cursor so missed candles can retry.
 func (p *PaperFuturesTrader) Advance(now time.Time) error {
@@ -484,23 +486,52 @@ func (p *PaperFuturesTrader) advance(now time.Time, fetchFunding bool) error {
 		}
 		list := make([]observation, 0, len(symbols))
 		for symbol := range symbols {
-			mark, err := p.price.Price(symbol)
+			list = append(list, observation{symbol: symbol})
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].symbol < list[j].symbol })
+		fetch := func(v *observation) error {
+			mark, err := p.price.Price(v.symbol)
 			if err != nil {
 				return err
 			}
 			if !positive(mark) {
-				return fmt.Errorf("invalid mark price for %s", symbol)
+				return fmt.Errorf("invalid mark price for %s", v.symbol)
 			}
-			bars, err := p.price.Candles1m(symbol, since)
+			bars, err := p.price.Candles1m(v.symbol, since)
 			if err != nil {
 				return err
 			}
 			for _, c := range bars {
 				if !positive(c.High) || !positive(c.Low) || !positive(c.Close) || c.Low > c.High || c.Close < c.Low || c.Close > c.High || c.Time.IsZero() {
-					return fmt.Errorf("invalid candle for %s", symbol)
+					return fmt.Errorf("invalid candle for %s", v.symbol)
 				}
 			}
-			list = append(list, observation{symbol, mark, bars})
+			v.mark, v.candles = mark, bars
+			return nil
+		}
+		// Each worker fetches and validates one symbol at a time. Results have
+		// fixed, sorted slots so completion order cannot affect error selection.
+		errs := make([]error, len(list))
+		jobs := make(chan int)
+		var workers sync.WaitGroup
+		for i := 0; i < advanceFetchConcurrency && i < len(list); i++ {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for i := range jobs {
+					errs[i] = fetch(&list[i])
+				}
+			}()
+		}
+		for i := range list {
+			jobs <- i
+		}
+		close(jobs)
+		workers.Wait()
+		for _, err := range errs {
+			if err != nil {
+				return err
+			}
 		}
 		p.mu.Lock()
 		if version != p.row.Version {
@@ -559,7 +590,6 @@ func (p *PaperFuturesTrader) advance(now time.Time, fetchFunding bool) error {
 			// Settlements up to now (cache only holds published events); the
 			// freshest quote is the mark fallback when the venue omitted it.
 			p.settleFundingLocked(now)
-			sort.Slice(list, func(i, j int) bool { return list[i].symbol < list[j].symbol })
 			for _, v := range list {
 				trades = append(trades, p.match(v.symbol, 0, v.mark, v.mark, now, now, true)...)
 			}
@@ -750,6 +780,8 @@ func (p *PaperFuturesTrader) liquidate(now time.Time) []store.PaperLedgerTrade {
 }
 
 const (
+	// readFreshWindow lets nearby account queries reuse a successful advance.
+	readFreshWindow = 20 * time.Second
 	// readRetryCooldown spaces re-attempts after a failed market sync so an
 	// outage costs one timeout per window, not one per API call.
 	readRetryCooldown = 30 * time.Second
@@ -760,17 +792,21 @@ const (
 )
 
 // advanceForRead is Advance for read-only account queries (balance, positions,
-// orders, summary). A failed market sync no longer fails the read: within
-// readStaleLimit of the last successful advance it logs and serves the cached
-// ledger, and further attempts are suppressed for readRetryCooldown. The
-// background order sync keeps catching up on its own tick. Reads settle cached
-// funding events but never fetch funding from the venue.
+// orders, summary). Reads reuse the cached ledger while the last successful
+// advance is younger than readFreshWindow. A failed market sync logs and serves
+// the cached ledger within readStaleLimit of the last successful advance, and
+// further attempts are suppressed for readRetryCooldown. Explicit Advance calls
+// and background order sync bypass the freshness window. Reads that advance
+// settle cached funding events but never fetch funding from the venue.
 func (p *PaperFuturesTrader) advanceForRead() error {
 	now := p.cfg.Now()
 	p.mu.Lock()
 	lastOK, failAt := p.s.LastAdvance, p.advFailAt
 	p.mu.Unlock()
 	age := now.Sub(lastOK)
+	if age < readFreshWindow {
+		return nil
+	}
 	if !failAt.IsZero() && now.Sub(failAt) < readRetryCooldown && age <= readStaleLimit {
 		return nil
 	}
