@@ -103,8 +103,9 @@ func (Strategy) TableName() string { return "strategies" }
 
 // StrategyConfig strategy configuration details (JSON structure)
 type StrategyConfig struct {
-	// Strategy type: "ai_trading" (default), "grid_trading" or "us_stock"
-	// (US equities via Binance spot bStock pairs, see StockConfig).
+	// Strategy type: "ai_trading" (default), "grid_trading", "us_stock"
+	// (US equities via Binance spot bStock pairs, see StockConfig) or
+	// "factor_quant" (programmatic paper-only factor rebalancing, no LLM).
 	StrategyType string `json:"strategy_type,omitempty"`
 
 	// language setting: "zh" for Chinese, "en" for English
@@ -143,6 +144,9 @@ type StrategyConfig struct {
 
 	// US-stock configuration (only used when StrategyType == "us_stock").
 	StockConfig *StockConfig `json:"stock_config,omitempty"`
+
+	// Factor-quant configuration (only used when StrategyType == "factor_quant").
+	FactorQuantConfig *FactorQuantConfig `json:"factor_quant_config,omitempty"`
 }
 
 // StrategyTypeUSStock selects the US-equity strategy: long-only spot trading

@@ -30,6 +30,23 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'factor-quant-paper',
+    date: '2026-11-01',
+    title: '因子量化交易员（程序化模拟盘，不经过大模型）',
+    domain: '加密 + 美股 · 因子挖掘第二路输出',
+    verdict: 'running',
+    verdictText: '模拟盘前向检验中',
+    idea: '因子挖掘的输出分成两路：一路照旧作为 factor_ensemble 提示词参考；另一路由每晚挖掘生成 quant_targets.json 目标权重，新策略类型 factor_quant 的交易员按调仓周期在模拟账户自动调仓，不调用大模型，代码层只允许模拟账户。加密规则 ls_invvol_protected_v1：h=3 ensemble 做多前 20%、做空后 20%，1/σ 加权，空头排除近 7 日涨幅前 10% 与上市不足 90 天的币，单币上限 10%，空头 50% 灾难止损，每 3 天调仓；美股 long_invvol_v1 只做多，目前没有通过验证的因子，保持空仓等待。',
+    bullets: [
+      '描述性回测（Backtrader，5bp+3bp 与真实资金费，当前 h=3 成分历史重放）：val 2025-05～2026-04 保护规则 +27.1%（Sharpe 0.94，回撤 16.5%），朴素等权 −1.6%；forward 2026-05～10 保护规则 −12.7%（Sharpe −0.65，回撤 29.3%），朴素等权 −19.2%。val 有选择偏差，forward 是当前成分的历史重放，模拟盘才是真正的前向检验。',
+      '已知风险来自 ensemble 前向研究：因子排最后的一档会混入暴涨币，空头保护只能减轻、不能消除；空头灾难止损未计入回测。',
+    ],
+    conclusion:
+      '运行中：两个模拟交易员（加密、美股）上线后按模拟盘结果判断；不接入实盘。',
+    source:
+      'scripts/factor_mining/quant_targets.py · trader/auto_trader_factor_quant*.go · store/strategy_factor_quant.go · docs/architecture/FACTOR_QUANT_TRADER_DESIGN_2026-11-01.md',
+  },
+  {
     id: 'ensemble-forward',
     date: '2026-11-01',
     title: '加密因子 ensemble 前向校验（市场中性组合可行性）',

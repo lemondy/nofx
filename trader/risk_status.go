@@ -79,6 +79,9 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	if at.IsStockStrategy() { // us_stock: futures-only breakers do not apply
 		return at.stockRiskStatus()
 	}
+	if at.IsFactorQuantStrategy() { // factor_quant: no AI-path breakers
+		return at.factorQuantRiskStatus()
+	}
 	out := RiskStatus{GeneratedAt: time.Now().UTC(), InitialBalance: at.initialBalance}
 	if balance, err := at.trader.GetBalance(); err == nil {
 		out.Equity = gridAccountEquity(balance)

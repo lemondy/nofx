@@ -39,8 +39,9 @@ export interface PromptSectionsConfig {
 }
 
 export interface StrategyConfig {
-  // Strategy type: "ai_trading" (default), "grid_trading" or "us_stock"
-  strategy_type?: 'ai_trading' | 'grid_trading' | 'us_stock'
+  // Strategy type: "ai_trading" (default), "grid_trading", "us_stock" or
+  // "factor_quant"
+  strategy_type?: 'ai_trading' | 'grid_trading' | 'us_stock' | 'factor_quant'
   // Language setting: "zh" for Chinese, "en" for English
   // Determines the language used for data formatting and prompt generation
   language?: 'zh' | 'en'
@@ -56,6 +57,41 @@ export interface StrategyConfig {
   grid_config?: GridStrategyConfig
   // US-stock (Binance bStock spot) configuration (only used when strategy_type is 'us_stock')
   stock_config?: StockConfig
+  // Factor-quant (programmatic, no-LLM) configuration (only used when
+  // strategy_type is 'factor_quant')
+  factor_quant_config?: FactorQuantConfig
+}
+
+// Factor-quant (programmatic, no-LLM) strategy configuration; mirrors the Go
+// store.FactorQuantConfig JSON tags. Numeric 0 / omitted = use the preset
+// default (see FactorQuantConfigEditor placeholders). Paper accounts only.
+export interface FactorQuantConfig {
+  // Required: "crypto" (paper perpetuals) or "us" (bStock paper ledger)
+  market: 'crypto' | 'us'
+  // Must equal the targets file's horizon; us 0 = accept whatever the file says
+  horizon?: number
+  // Fraction of equity executed against the target weights, (0, 1]
+  capital_fraction?: number
+  // Crypto only: paper-futures leverage kept for margin headroom (1-10)
+  leverage?: number
+  // Skip a leg when |target − current| < target × band (0.10 = 10%, fee saver)
+  rebalance_band_pct?: number
+  // Minimum order notional in USDT
+  min_order_usdt?: number
+  // Crypto only: short disaster stop at entry × (1 + pct); 0 = disabled
+  short_stop_pct?: number
+  // US only: per-fill fee of the bStock paper ledger in basis points (10 = 0.1%).
+  // omitted/null = default 10; 0 = no fee; valid 0-100
+  us_fee_bps?: number | null
+  // US only: per-fill adverse slippage in basis points (buys fill higher, sells
+  // lower). omitted/null = default 3; 0 = none; valid 0-100
+  us_slippage_bps?: number | null
+  // Targets older than this many days (UTC) are not traded
+  // 0/omitted = horizon + 2
+  max_stale_days?: number
+  // Override of the default data/factor_mining/{market}/quant_targets.json
+  // path (testing only; empty = default)
+  targets_path?: string
 }
 
 // US-stock strategy configuration; mirrors Go store.StockConfig JSON tags.

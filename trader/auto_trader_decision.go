@@ -109,6 +109,9 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	if at.IsStockStrategy() { // us_stock: spot / paper account, not futures margin
 		return at.stockAccountInfo()
 	}
+	if at.isFactorQuantUS() { // factor_quant US: bStock paper ledger, not the futures simulator
+		return at.factorQuantUSAccountInfo()
+	}
 	balance, err := at.trader.GetBalance()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance: %w", err)
@@ -208,6 +211,9 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 	if at.IsStockStrategy() { // us_stock: program-owned spot positions
 		return at.stockPositionsAPI()
+	}
+	if at.isFactorQuantUS() {
+		return at.factorQuantUSPositions()
 	}
 	positions, err := at.trader.GetPositions()
 	if err != nil {
@@ -542,6 +548,9 @@ func (at *AutoTrader) recordOrderFill(orderRecordID int64, exchangeOrderID, symb
 func (at *AutoTrader) GetOpenOrders(symbol string) ([]OpenOrder, error) {
 	if at.IsStockStrategy() {
 		return at.stockOpenOrders(symbol)
+	}
+	if at.isFactorQuantUS() { // paper ledger positions carry no resting orders
+		return []OpenOrder{}, nil
 	}
 	return at.trader.GetOpenOrders(symbol)
 }

@@ -42,6 +42,15 @@ func validateStrategyConfig(config *store.StrategyConfig) []string {
 		return warnings
 	}
 
+	// factor_quant is programmatic (no LLM, no NofxOS); hard errors are
+	// rejected earlier by StrategyConfig.Validate.
+	if config.StrategyType == store.StrategyTypeFactorQuant {
+		if err := config.FactorQuantConfig.Validate(); err != nil {
+			warnings = append(warnings, "Factor quant config invalid: "+err.Error())
+		}
+		return warnings
+	}
+
 	// Validate NofxOS API key if any NofxOS feature is enabled
 	if (config.Indicators.EnableQuantData || config.Indicators.EnableOIRanking ||
 		config.Indicators.EnableNetFlowRanking || config.Indicators.EnablePriceRanking) &&

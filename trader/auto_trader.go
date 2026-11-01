@@ -255,6 +255,11 @@ type AutoTrader struct {
 	stockNow    func() time.Time
 	stock       stockRuntime
 
+	// factor_quant (design 2026-11-01): programmatic paper-only strategy; fqNow
+	// is an injectable clock (nil = time.Now).
+	fq    factorQuantRuntime
+	fqNow func() time.Time
+
 	// keepRestingOnStop: set by StopForRestart — the trader is about to come
 	// back (process restart / config reload), so us_stock resting limit entries
 	// stay on the exchange and are restored + reconciled on the next start.
@@ -286,6 +291,10 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		return nil, err
 	}
 	if err := store.ValidateExchangeEnvironment(config.Exchange, config.HyperliquidTestnet || config.LighterTestnet); err != nil {
+		return nil, err
+	}
+	// factor_quant is paper-only; refuse any other account before building anything.
+	if err := factorQuantGuard(&config); err != nil {
 		return nil, err
 	}
 	// Set default values
@@ -468,6 +477,11 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		trader = indodax.NewIndodaxTrader(config.IndodaxAPIKey, config.IndodaxSecretKey)
 	default:
 		return nil, fmt.Errorf("unsupported trading platform: %s", config.Exchange)
+	}
+
+	// factor_quant (US): prepare the bStock paper ledger and adopt its baseline.
+	if err := factorQuantInitLedger(&config, st); err != nil {
+		return nil, err
 	}
 
 	// Validate initial balance configuration, auto-fetch from exchange if 0
@@ -681,6 +695,11 @@ func (at *AutoTrader) run() (err error) {
 	case <-at.stopMonitorCh:
 		return nil
 	default:
+	}
+	// factor_quant (design 2026-11-01): own loop, no AI cycle / LLM / futures AI monitors.
+	if at.IsFactorQuantStrategy() {
+		at.seedConfigVersionBaseline()
+		return at.runFactorQuantLoop()
 	}
 	logger.Info("🚀 AI-driven automatic trading system started")
 	logger.Infof("💰 Initial balance: %.2f USDT", at.initialBalance)
