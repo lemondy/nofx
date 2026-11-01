@@ -56,6 +56,35 @@ class RebalancePolicy:
     max_annual_turnover: float | None = None
 
 
+@dataclass(frozen=True)
+class PerNameExitPolicy:
+    """Optional daily-bar exits; tier fractions refer to the restored quantity.
+
+    Volatility stops consume a strictly prior 30-return sample standard deviation.
+    Thresholds are measured from Backtrader's actual average acquisition price.
+    """
+    long_stop: float | None = None
+    short_stop: float | None = None
+    volatility_stop: bool = False
+    take_profit: tuple[tuple[float, float], ...] = ()
+    trailing_activation: float | None = None
+    trailing_distance: float | None = None
+    breakeven_after_tier: bool = False
+
+    def __post_init__(self):
+        for value in (self.long_stop, self.short_stop, self.trailing_activation,
+                      self.trailing_distance):
+            if value is not None and not 0 < value < 1:
+                raise ValueError('Exit percentages must be in (0, 1)')
+        if (self.trailing_activation is None) != (self.trailing_distance is None):
+            raise ValueError('Trailing activation and distance are required together')
+        if (any(not 0 < level < 1 or not 0 < fraction <= 1
+                for level, fraction in self.take_profit)
+                or sum(fraction for _, fraction in self.take_profit) > 1
+                or list(self.take_profit) != sorted(self.take_profit)):
+            raise ValueError('Invalid take-profit tiers')
+
+
 def calendar_flags(index, policy):
     """QJ business-end anchors and within-week backwards holiday snap.
 
@@ -770,6 +799,161 @@ class WeightStrategy(bt.Strategy):
         self.last_nav = nav
 
 
+class PerNameExitBroker(CarryBroker):
+    """Match opening rebalances first, then daily exits, before close valuation.
+
+    The strategy only chooses triggers/priority. Native BackBroker Stop/Limit
+    matching, commissions, positions, cash and trade notifications do the rest.
+    This hook also protects positions on their entry bar (native brackets would
+    otherwise activate one bar later).
+    """
+    def __init__(self):
+        super().__init__()
+        self.exit_strategy = None
+
+    def next(self):
+        super().next()
+        if self.exit_strategy is not None:
+            self.exit_strategy.check_exits()
+            self._get_value()
+
+    def match_exit(self, order, reference_open):
+        self.check_submitted()
+        self.pending.remove(order)
+        d = order.data
+        if order.exectype == bt.Order.Stop:
+            self._try_exec_stop(order, reference_open, float(d.high[0]),
+                                float(d.low[0]), order.created.price, float(d.close[0]))
+        else:
+            self._try_exec_limit(order, reference_open, float(d.high[0]),
+                                 float(d.low[0]), order.created.price)
+        if order.status != order.Completed:
+            raise RuntimeError('Daily exit failed native Backtrader matching')
+        self._bracketize(order)
+
+
+class PerNameExitStrategy(WeightStrategy):
+    params = (('exit_policy', None), ('exit_volatility', None))
+
+    def __init__(self):
+        super().__init__()
+        self.broker.exit_strategy = self
+        self.exit_states, self.exit_counts, self.exit_events = {}, Counter(), []
+        self.exit_locked = np.zeros(len(self.datas), dtype=bool)
+        self.exit_target, self.exit_epoch = None, 0
+        self.slippage_paid = 0.
+
+    def _submit(self, intent, i, prices, *, close=False):
+        target = self.p.targets[i-1]
+        if self.exit_target is None or not np.array_equal(target, self.exit_target):
+            self.exit_locked[:] = False
+            self.exit_epoch += 1
+        self.exit_target = target.copy()
+        desired, keep, reason = intent
+        super()._submit((desired, keep | self.exit_locked, reason), i, prices, close=close)
+
+    def notify_order(self, order):
+        super().notify_order(order)
+        if order.status == order.Completed:
+            reference = order.info.get('reference_price', float(order.data.open[0]))
+            self.slippage_paid += order.executed.size * (order.executed.price - reference)
+
+    def _exit(self, j, quantity, trigger, kind, *, limit=False, fresh=False):
+        d, i = self.datas[j], len(self.data) - 1
+        side = 1 if self.getposition(d).size > 0 else -1
+        opening = float(d.open[0])
+        # A stop armed by this bar's TP/extremum did not exist at its open.
+        reference_open = trigger if fresh else opening
+        gap = (reference_open >= trigger if side < 0 else reference_open <= trigger)
+        if limit:
+            gap = opening <= trigger if side < 0 else opening >= trigger
+        reference = reference_open if gap else trigger
+        prices = self._marks('open')
+        prices[j] = reference
+        nav = self._nav_at(prices)
+        before = self.getposition(d).size
+        submit = self.sell if side > 0 else self.buy
+        order = submit(data=d, size=min(quantity, abs(before)), price=trigger,
+                       exectype=bt.Order.Limit if limit else bt.Order.Stop,
+                       nav=nav, reason=kind, signal_bar=i-1, execution_bar=i,
+                       reference_price=reference)
+        self.broker.match_exit(order, reference_open)
+        self.exit_locked[j] = True
+        self.exit_counts[kind] += 1
+        self.exit_events.append(dict(symbol=d._name, date=d.datetime.date(0).isoformat(),
+                                     side='long' if side > 0 else 'short', kind=kind,
+                                     trigger=trigger, reference_price=reference,
+                                     price=order.executed.price, size=order.executed.size,
+                                     quantity_before=before,
+                                     quantity_after=self.getposition(d).size))
+
+    def check_exits(self):
+        p, i = self.p.exit_policy, len(self.data) - 1
+        for j, d in enumerate(self.datas):
+            pos = self.getposition(d)
+            if not pos.size:
+                self.exit_states.pop(j, None)
+                continue
+            if not self.p.available[i, j]:
+                continue  # forward-filled marks are never execution bars
+            side = 1 if pos.size > 0 else -1
+            state = self.exit_states.get(j)
+            if state is None or state['side'] != side:
+                pct = p.long_stop if side > 0 else p.short_stop
+                if p.volatility_stop:
+                    sigma = self.p.exit_volatility[i, j]
+                    if not math.isfinite(sigma) or sigma < 0:
+                        raise ValueError(f'Missing prior 30-day sigma at entry: {d._name} {d.datetime.date(0)}')
+                    pct = float(np.clip(2.5 * sigma * math.sqrt(3), .05, .50))
+                state = dict(side=side, pct=pct, best=pos.price, epoch=-1,
+                             trailing=False)
+                self.exit_states[j] = state
+            if state['epoch'] != self.exit_epoch:
+                state.update(epoch=self.exit_epoch, quantity=abs(pos.size), tiers=set(), breakeven=False)
+            entry = pos.price  # native average updates after rebalance additions
+            stop = entry - side * entry * state['pct'] if state['pct'] is not None else None
+            kind = 'stop_loss'
+            if state['breakeven']:
+                stop, kind = entry, 'breakeven_stop'
+            if state['trailing']:
+                trail = state['best'] * (1 - side * p.trailing_distance)
+                if stop is None or side * (trail - stop) > 0:
+                    stop, kind = trail, 'trailing_stop'
+            adverse = float(d.low[0] if side > 0 else d.high[0])
+            if stop is not None and side * (adverse - stop) <= 0:
+                self._exit(j, abs(pos.size), stop, kind)
+                self.exit_states.pop(j, None)
+                continue
+            # Daily path convention: existing stop first, then favorable
+            # extremum, then a newly armed/ratcheted stop on the same bar.
+            favorable = float(d.high[0] if side > 0 else d.low[0])
+            state['best'] = max(state['best'], favorable) if side > 0 else min(state['best'], favorable)
+            if p.trailing_activation is not None:
+                activation = entry + side * entry * p.trailing_activation
+                state['trailing'] |= side * (state['best'] - activation) >= 0
+                if state['trailing']:
+                    trail = state['best'] * (1 - side * p.trailing_distance)
+                    if side * (adverse - trail) <= 0:
+                        self._exit(j, abs(pos.size), trail, 'trailing_stop', fresh=True)
+                        self.exit_states.pop(j, None)
+                        continue
+            for tier, (level, fraction) in enumerate(p.take_profit):
+                trigger = entry + side * entry * level
+                if tier in state['tiers'] or side * (favorable - trigger) < 0:
+                    continue
+                self._exit(j, state['quantity'] * fraction, trigger, 'take_profit', limit=True)
+                state['tiers'].add(tier)
+                if p.breakeven_after_tier and pos.size:
+                    state['breakeven'] = True
+                    if side * (adverse - entry) <= 0:
+                        self._exit(j, abs(pos.size), entry, 'breakeven_stop', fresh=True)
+                        break
+                if not pos.size:
+                    break
+            if not pos.size:
+                self.exit_states.pop(j, None)
+
+
 def curve_metrics(equity, ppy=252, initial=CAPITAL, *, rf=0.):
     s = pd.Series(equity, dtype=float).sort_index()
     if s.empty:
@@ -805,7 +989,8 @@ def daily_logs(run, *, end=None):
 
 def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
                 commission=None, slippage=None, funding=None, charge_carry=True,
-                benchmark_returns=None, keep_fills=False, exposure_end=None):
+                benchmark_returns=None, keep_fills=False, exposure_end=None,
+                exit_policy=None, exit_volatility=None):
     """All executable paths use native Backtrader orders/positions/cash/P&L.
 
     next_open only sizes the cached previous-close decision, using current open
@@ -813,6 +998,8 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
     """
     if mode not in ('evaluation', 'reproduction') or market not in ('us', 'crypto'):
         raise ValueError('Invalid mode or market')
+    if exit_policy is not None and (mode != 'evaluation' or not isinstance(exit_policy, PerNameExitPolicy)):
+        raise ValueError('Per-name exit policies require evaluation mode')
     if not frames or not isinstance(targets.index, pd.DatetimeIndex) or targets.empty:
         raise ValueError('Nonempty frames and dated targets required')
     if not targets.index.is_unique or not targets.index.is_monotonic_increasing:
@@ -826,7 +1013,8 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
     if not 0 <= commission < 1 or not 0 <= slippage < 1:
         raise ValueError('Invalid costs')
     cerebro = bt.Cerebro(stdstats=False, cheat_on_open=True)
-    broker = CarryBroker(rates=funding, market=market, charge=charge_carry and mode == 'evaluation',
+    broker_type = CarryBroker if exit_policy is None else PerNameExitBroker
+    broker = broker_type(rates=funding, market=market, charge=charge_carry and mode == 'evaluation',
                          offset=VIRTUAL_CASH - CAPITAL)
     broker.setcash(VIRTUAL_CASH)
     broker.setcommission(commission=commission)
@@ -848,11 +1036,21 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
     available = np.column_stack(availability)
     if benchmark_returns is not None:
         benchmark_returns = benchmark_returns.reindex(targets.index).fillna(0.).to_numpy()
-    cerebro.addstrategy(WeightStrategy, targets=targets.to_numpy(), available=available,
+    exit_kwargs = {}
+    if exit_policy is not None:
+        if exit_policy.volatility_stop:
+            if exit_volatility is None:
+                exit_volatility = pd.DataFrame({s: f['close'].pct_change(fill_method=None)
+                                               .rolling(30, min_periods=30).std(ddof=1).shift(1)
+                                               for s, f in frames.items()})
+            exit_volatility = exit_volatility.reindex(index=targets.index, columns=targets.columns).to_numpy()
+        exit_kwargs = dict(exit_policy=exit_policy, exit_volatility=exit_volatility)
+    strategy_type = WeightStrategy if exit_policy is None else PerNameExitStrategy
+    cerebro.addstrategy(strategy_type, targets=targets.to_numpy(), available=available,
                         calendar=calendar_flags(targets.index, policy), policy=policy,
                         mode=mode, ppy=ppy, benchmark_returns=benchmark_returns,
                         keep_fills=keep_fills, offset=VIRTUAL_CASH-CAPITAL,
-                        exposure_end=exposure_end)
+                        exposure_end=exposure_end, **exit_kwargs)
     s = cerebro.run()[0]
     metrics = curve_metrics(s.equity, ppy, rf=.02 if mode == 'reproduction' else 0.)
     metrics.update(turnover=s.turnover, average_exposure=s.exposure_sum / s.observations if s.observations else 0.,
@@ -867,6 +1065,11 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
                   daily_equity=s.equity, metrics=metrics)
     if keep_fills:
         result['fills'] = s.fills
+    if exit_policy is not None:
+        metrics.update(exit_trigger_counts=dict(s.exit_counts), slippage_paid=s.slippage_paid,
+                       stop_trigger_count=sum(v for k, v in s.exit_counts.items() if k != 'take_profit'),
+                       tp_trigger_count=s.exit_counts['take_profit'])
+        result['exit_events'] = s.exit_events
     return result
 
 
