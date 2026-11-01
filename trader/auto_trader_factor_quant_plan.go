@@ -18,13 +18,14 @@ import (
 
 // Decision codes (also used as skip-record keys).
 const (
-	fqCodeRebalance = "rebalance"
-	fqCodeStatus    = "status"
-	fqCodeInvalid   = "invalid"
-	fqCodeStale     = "stale"
-	fqCodeHorizon   = "horizon"
-	fqCodeTooSoon   = "too_soon"
-	fqCodeUnmanaged = "unmanaged_positions"
+	fqCodeRebalance      = "rebalance"
+	fqCodeStatus         = "status"
+	fqCodeInvalid        = "invalid"
+	fqCodeStale          = "stale"
+	fqCodeHorizon        = "horizon"
+	fqCodeTooSoon        = "too_soon"
+	fqCodeUnmanaged      = "unmanaged_positions"
+	fqCodeRetryExhausted = "retry_exhausted"
 )
 
 // fqDecision is the outcome of the rebalance gate.
@@ -183,6 +184,7 @@ type fqPlanInput struct {
 	Band            float64 // fraction of the target notional
 	MinOrder        float64 // USDT
 	LongOnly        bool    // us: negative weights are ignored
+	Flatten         bool    // stale flatten: close every held side with empty weights
 	// Format rounds a quantity to the venue's lot size (nil = identity). It
 	// returns 0 when the quantity is below the venue minimum; an error marks
 	// the symbol unplannable.
@@ -213,6 +215,28 @@ func fqSideOf(sign int) string {
 	return fqSideShort
 }
 
+// fqPlanRetryOrders also reconciles both sides left by a failed flip: the
+// original pass can fail to close the old side while opening the target side.
+// Keep that target holding in the ordinary band calculation, and plan full
+// closes for every unwanted side independently of the symbol-keyed planner.
+func fqPlanRetryOrders(in fqPlanInput) fqPlan {
+	var wanted, unwanted []fqPosition
+	for _, p := range in.Positions {
+		w := in.Weights[p.Symbol]
+		if w == 0 || (in.LongOnly && w < 0) || p.Side != fqSideOf(fqSign(w)) {
+			unwanted = append(unwanted, p)
+		} else {
+			wanted = append(wanted, p)
+		}
+	}
+	in.Positions = wanted
+	plan := fqPlanOrders(in)
+	in.Positions, in.Weights, in.Flatten = unwanted, nil, true
+	closes := fqPlanOrders(in)
+	plan.Orders = append(closes.Orders, plan.Orders...)
+	return plan
+}
+
 // fqPlanOrders turns current holdings + target weights into ordered orders:
 // closes (absent symbols, opposite side) first, then reductions, then
 // increases / opens, so margin is released before it is consumed.
@@ -223,6 +247,28 @@ func fqPlanOrders(in fqPlanInput) fqPlan {
 		cf = 1
 	}
 	plan.Budget = in.Equity * cf
+	// Empty targets close every position, including both sides of a hedged
+	// symbol. Full closes bypass lot-size, minimum-order and rebalance bands.
+	if in.Flatten && len(in.Weights) == 0 {
+		for _, p := range in.Positions {
+			if p.Qty <= 0 {
+				continue
+			}
+			price := in.Prices[p.Symbol]
+			if price <= 0 {
+				price = p.Mark
+			}
+			plan.Orders = append(plan.Orders, fqOrder{Symbol: p.Symbol, Kind: fqKindClose, Side: p.Side, Qty: p.Qty,
+				CloseAll: true, Price: price, Notional: p.Qty * price, Reason: "不在目标权重中，平仓"})
+		}
+		sort.SliceStable(plan.Orders, func(i, j int) bool {
+			if plan.Orders[i].Symbol != plan.Orders[j].Symbol {
+				return plan.Orders[i].Symbol < plan.Orders[j].Symbol
+			}
+			return plan.Orders[i].Side < plan.Orders[j].Side
+		})
+		return plan
+	}
 	format := in.Format
 	if format == nil {
 		format = func(_ string, qty, _ float64) (float64, error) { return qty, nil }

@@ -149,3 +149,85 @@ func TestFactorQuantStatePersists(t *testing.T) {
 		t.Fatal("state leaked across traders")
 	}
 }
+
+func TestFactorQuantFlattenConfig(t *testing.T) {
+	for days := -2; days <= 61; days++ {
+		cfg := &FactorQuantConfig{Market: "crypto", FlattenAfterDays: days}
+		err := cfg.Validate()
+		if (err == nil) != (days >= -1 && days <= 60) {
+			t.Errorf("days=%d: validation=%v", days, err)
+		}
+	}
+	for _, tc := range []struct {
+		name              string
+		cfg               FactorQuantConfig
+		fileHorizon, want int
+	}{
+		{"crypto default", FactorQuantConfig{Market: "crypto"}, 3, 8},
+		{"crypto ignores file horizon", FactorQuantConfig{Market: "crypto"}, 7, 8},
+		{"us follows file", FactorQuantConfig{Market: "us"}, 5, 12},
+		{"missing file fallback", FactorQuantConfig{Market: "us"}, 0, 5},
+		{"configured horizon", FactorQuantConfig{Market: "us", Horizon: 7}, 3, 16},
+		{"custom stale", FactorQuantConfig{Market: "crypto", MaxStaleDays: 9}, 3, 12},
+		{"configured flatten", FactorQuantConfig{Market: "crypto", FlattenAfterDays: 60}, 3, 60},
+		{"disabled", FactorQuantConfig{Market: "crypto", FlattenAfterDays: -1}, 3, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.EffectiveFlattenAfterDays(tc.fileHorizon); got != tc.want {
+				t.Fatalf("effective flatten=%d want=%d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFactorQuantRetryStateUpsertsAndClears(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retry.db")
+	st, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Retry can create a row; the other setters must preserve it.
+	if err := st.FactorQuant().SetRetry("t1", "2026-10-31", 2); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := st.FactorQuant().SetRebalanced("t1", "2026-10-31", "run", "rule", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FactorQuant().SetSkipKey("t1", "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	row, err := st.FactorQuant().Get("t1")
+	if err != nil || row == nil || row.RetryAsOf != "2026-10-31" || row.RetryAttempts != 2 {
+		t.Fatalf("retry lost on restart/other setters: %+v %v", row, err)
+	}
+	for _, retry := range []struct {
+		asOf     string
+		attempts int
+	}{{"2026-10-31", 3}, {"", 0}} {
+		if err := st.FactorQuant().SetRetry("t1", retry.asOf, retry.attempts); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.FactorQuant().Get("t1")
+		if err != nil || got == nil || got.RetryAsOf != retry.asOf || got.RetryAttempts != retry.attempts {
+			t.Fatalf("retry update=%+v %v", got, err)
+		}
+		if got.LastAsOf != row.LastAsOf || got.LastRule != row.LastRule || got.LastRunID != row.LastRunID || got.RebalanceAt != row.RebalanceAt || got.LastSkipKey != row.LastSkipKey || got.UpdatedAt == 0 {
+			t.Fatalf("SetRetry clobbered other columns: before=%+v after=%+v", row, got)
+		}
+	}
+	if err := st.FactorQuant().SetSkipKey("defaults", "skip"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.FactorQuant().Get("defaults"); err != nil || got == nil || got.RetryAsOf != "" || got.RetryAttempts != 0 {
+		t.Fatalf("retry column defaults: %+v %v", got, err)
+	}
+}

@@ -50,6 +50,9 @@ type FactorQuantConfig struct {
 	// MaxStaleDays: targets whose as_of is older than this many days (UTC)
 	// are not traded; default horizon+2.
 	MaxStaleDays int `json:"max_stale_days,omitempty"`
+	// FlattenAfterDays: flatten owned positions when no rebalance is possible
+	// and last_as_of is older than this; 0 = horizon+max_stale_days, -1 = off.
+	FlattenAfterDays int `json:"flatten_after_days,omitempty"`
 	// USFeeBps / USSlippageBps: US only, trading costs of the bStock paper
 	// ledger, in basis points per fill. Buys fill at quote*(1+slippage), sells
 	// at quote*(1-slippage); the fee is a fraction of the notional deducted from
@@ -158,6 +161,22 @@ func (f *FactorQuantConfig) EffectiveMaxStaleDays(fileHorizon int) int {
 	return h + 2
 }
 
+// EffectiveFlattenAfterDays: -1 disables flattening; 0 uses horizon plus the
+// stale allowance. Without a configured/file horizon, the age anchor uses 3.
+func (f *FactorQuantConfig) EffectiveFlattenAfterDays(fileHorizon int) int {
+	if f != nil && f.FlattenAfterDays != 0 {
+		return f.FlattenAfterDays
+	}
+	h := f.EffectiveHorizon()
+	if h <= 0 {
+		h = fileHorizon
+	}
+	if h <= 0 {
+		h = defaultFactorQuantCryptoHorizon
+	}
+	return h + f.EffectiveMaxStaleDays(fileHorizon)
+}
+
 // Validate rejects unusable input; zero retains the documented defaults.
 func (f *FactorQuantConfig) Validate() error {
 	if f == nil {
@@ -192,6 +211,9 @@ func (f *FactorQuantConfig) Validate() error {
 	if f.MaxStaleDays < 0 {
 		return fmt.Errorf("factor_quant max_stale_days must be >= 0")
 	}
+	if f.FlattenAfterDays < -1 || f.FlattenAfterDays > 60 {
+		return fmt.Errorf("factor_quant flatten_after_days must be -1 or 0..60")
+	}
 	if strings.ContainsRune(f.TargetsPath, 0) {
 		return fmt.Errorf("factor_quant targets_path is invalid")
 	}
@@ -207,13 +229,15 @@ func fqBadFloat(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
 
 // FactorQuantState is one row per trader.
 type FactorQuantState struct {
-	TraderID    string `gorm:"column:trader_id;primaryKey" json:"trader_id"`
-	LastAsOf    string `gorm:"column:last_as_of;not null;default:''" json:"last_as_of"` // YYYY-MM-DD of the targets last rebalanced to
-	LastRunID   string `gorm:"column:last_run_id;default:''" json:"last_run_id"`
-	LastRule    string `gorm:"column:last_rule;default:''" json:"last_rule"`
-	RebalanceAt int64  `gorm:"column:rebalance_at;default:0" json:"rebalance_at"`    // Unix ms UTC
-	LastSkipKey string `gorm:"column:last_skip_key;default:''" json:"last_skip_key"` // last skip reason already recorded (dedup across restarts)
-	UpdatedAt   int64  `gorm:"column:updated_at;default:0" json:"updated_at"`        // Unix ms UTC
+	TraderID      string `gorm:"column:trader_id;primaryKey" json:"trader_id"`
+	LastAsOf      string `gorm:"column:last_as_of;not null;default:''" json:"last_as_of"` // YYYY-MM-DD of the targets last rebalanced to
+	LastRunID     string `gorm:"column:last_run_id;default:''" json:"last_run_id"`
+	LastRule      string `gorm:"column:last_rule;default:''" json:"last_rule"`
+	RebalanceAt   int64  `gorm:"column:rebalance_at;default:0" json:"rebalance_at"`    // Unix ms UTC
+	LastSkipKey   string `gorm:"column:last_skip_key;default:''" json:"last_skip_key"` // last skip reason already recorded (dedup across restarts)
+	RetryAsOf     string `gorm:"column:retry_as_of;not null;default:''" json:"retry_as_of"`
+	RetryAttempts int    `gorm:"column:retry_attempts;not null;default:0" json:"retry_attempts"`
+	UpdatedAt     int64  `gorm:"column:updated_at;default:0" json:"updated_at"` // Unix ms UTC
 }
 
 func (FactorQuantState) TableName() string { return "factor_quant_state" }
@@ -257,5 +281,17 @@ func (s *FactorQuantStore) SetSkipKey(traderID, key string) error {
 	return s.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "trader_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"last_skip_key", "updated_at"}),
+	}).Create(row).Error
+}
+
+// SetRetry records a pending retry; an empty asOf clears it.
+func (s *FactorQuantStore) SetRetry(traderID, asOf string, attempts int) error {
+	if asOf == "" {
+		attempts = 0
+	}
+	row := &FactorQuantState{TraderID: traderID, RetryAsOf: asOf, RetryAttempts: attempts, UpdatedAt: time.Now().UTC().UnixMilli()}
+	return s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "trader_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"retry_as_of", "retry_attempts", "updated_at"}),
 	}).Create(row).Error
 }

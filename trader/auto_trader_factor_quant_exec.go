@@ -194,17 +194,19 @@ func (b *fqFuturesBroker) Place(o fqOrder) fqResult {
 	// Opening or growing a short wipes the side's protective orders; re-place
 	// the catastrophic stop from the position's average entry.
 	if o.opens() && o.Side == fqSideShort && b.shortStopPct > 0 {
-		b.placeShortStop(&res)
+		stop, err := b.placeShortStop(o.Symbol)
+		res.StopPrice = stop
+		if err != nil {
+			res.StopErr = err.Error()
+		}
 	}
 	return res
 }
 
-func (b *fqFuturesBroker) placeShortStop(res *fqResult) {
-	sym := res.Order.Symbol
+func (b *fqFuturesBroker) placeShortStop(sym string) (float64, error) {
 	rows, err := b.t.GetPositions()
 	if err != nil {
-		res.StopErr = fmt.Sprintf("读取持仓以放置空头止损失败：%v", err)
-		return
+		return 0, fmt.Errorf("读取持仓以放置空头止损失败：%w", err)
 	}
 	for _, row := range rows {
 		if s, _ := row["symbol"].(string); s != sym {
@@ -220,13 +222,43 @@ func (b *fqFuturesBroker) placeShortStop(res *fqResult) {
 		}
 		stop := entry * (1 + b.shortStopPct)
 		if err := b.t.SetStopLoss(sym, "SHORT", qty, stop); err != nil {
-			res.StopErr = fmt.Sprintf("空头灾难止损 %.8g 放置失败：%v", stop, err)
-			return
+			return 0, fmt.Errorf("空头灾难止损 %.8g 放置失败：%w", stop, err)
 		}
-		res.StopPrice = stop
-		return
+		return stop, nil
 	}
-	res.StopErr = "开空后未找到空头持仓，无法放置灾难止损"
+	return 0, fmt.Errorf("未找到空头持仓，无法放置灾难止损")
+}
+
+type fqStopResult struct {
+	Symbol string
+	Price  float64
+	Err    string
+}
+
+// ensureShortStops also repairs protection when the planner leaves an already
+// filled short inside the rebalance band. Paper SetStopLoss replaces that side's
+// previous STOP_MARKET, so repeated checks are safe.
+func (b *fqFuturesBroker) ensureShortStops() []fqStopResult {
+	if b.shortStopPct <= 0 {
+		return nil
+	}
+	acct, err := b.Account()
+	if err != nil {
+		return []fqStopResult{{Err: err.Error()}}
+	}
+	var out []fqStopResult
+	for _, p := range acct.Positions {
+		if p.Side != fqSideShort {
+			continue
+		}
+		stop, err := b.placeShortStop(p.Symbol)
+		res := fqStopResult{Symbol: p.Symbol, Price: stop}
+		if err != nil {
+			res.Err = err.Error()
+		}
+		out = append(out, res)
+	}
+	return out
 }
 
 // ------------------------------------------------------------ us: bStock paper ledger
@@ -371,6 +403,7 @@ type fqRebalanceReport struct {
 	After   *fqAccount
 	Plan    fqPlan
 	Results []fqResult
+	Stops   []fqStopResult // retry-only protection checks, independent of market orders
 	// PriceErrs: symbols whose price could not be read (planned around).
 	PriceErrs map[string]string
 	// Err: the attempt aborted before any order (account or plan inputs unavailable).
@@ -381,6 +414,11 @@ func (r *fqRebalanceReport) failedCount() int {
 	n := 0
 	for _, res := range r.Results {
 		if res.failed() {
+			n++
+		}
+	}
+	for _, stop := range r.Stops {
+		if stop.Err != "" {
 			n++
 		}
 	}
@@ -396,7 +434,7 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 		rep.Err = err
 		return rep
 	}
-	if before.Equity <= 0 || math.IsNaN(before.Equity) || math.IsInf(before.Equity, 0) {
+	if (before.Equity <= 0 && !bandCfg.Flatten) || math.IsNaN(before.Equity) || math.IsInf(before.Equity, 0) {
 		rep.Err = fmt.Errorf("账户权益 %.4f 无效，不调仓", before.Equity)
 		return rep
 	}
@@ -433,7 +471,11 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 	if bandCfg.CostRate > 0 {
 		planEquity /= 1 + bandCfg.CostRate
 	}
-	rep.Plan = fqPlanOrders(fqPlanInput{
+	planOrders := fqPlanOrders
+	if bandCfg.Retry {
+		planOrders = fqPlanRetryOrders
+	}
+	rep.Plan = planOrders(fqPlanInput{
 		Positions:       before.Positions,
 		Equity:          planEquity,
 		Prices:          prices,
@@ -442,6 +484,7 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 		Band:            bandCfg.Band,
 		MinOrder:        bandCfg.MinOrder,
 		LongOnly:        bandCfg.LongOnly,
+		Flatten:         bandCfg.Flatten,
 		Format:          b.FormatQty,
 	})
 	for _, o := range rep.Plan.Orders {
@@ -463,6 +506,8 @@ type fqPlanConfig struct {
 	Band            float64
 	MinOrder        float64
 	LongOnly        bool
+	Flatten         bool // risk reduction only: close all sides even with nonpositive equity
+	Retry           bool // reconcile both sides left by a partially failed direction flip
 	// CostRate (fraction) is the round-trip-ish cost buffer of fee-charging
 	// venues: the planner sizes against equity/(1+CostRate) so a fully invested
 	// target is still affordable once slippage and fees are paid from cash.

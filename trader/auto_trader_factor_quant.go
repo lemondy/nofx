@@ -21,16 +21,21 @@ import (
 const (
 	factorQuantTickInterval = 5 * time.Minute
 	factorQuantRuleFallback = "未知规则"
+	fqMaxRetryAttempts      = 6
 )
 
 // factorQuantRuntime is the loop's in-memory state (only touched under the
 // execution mutex or by the single loop goroutine).
 type factorQuantRuntime struct {
-	mu          sync.Mutex
-	memAsOf     string // as_of of the last attempt in this process (covers a failing state store)
-	lastLog     string // last tick log line (suppresses 5-minute repeats)
-	skipKey     string // last skip/failure reason already written to a decision record
-	skipKeyLoad bool
+	mu            sync.Mutex
+	memAsOf       string // as_of of the last attempt in this process (covers a failing state store)
+	memRule       string
+	retrySet      bool // in-process retry state supersedes a failed store write
+	retryAsOf     string
+	retryAttempts int
+	lastLog       string // last tick log line (suppresses 5-minute repeats)
+	skipKey       string // last skip/failure reason already written to a decision record
+	skipKeyLoad   bool
 }
 
 // IsFactorQuantStrategy reports whether this trader runs the factor_quant strategy.
@@ -177,24 +182,44 @@ func (at *AutoTrader) fqLogOnce(line string) {
 	}
 }
 
-// fqLastAsOf returns the durable (and in-process) as_of of the last rebalance.
-func (at *AutoTrader) fqLastAsOf() (string, error) {
-	last := ""
+// fqState merges durable state with attempts made in this process, so a failed
+// store write does not cause the next tick to repeat a completed operation.
+func (at *AutoTrader) fqState() (*store.FactorQuantState, error) {
+	state := &store.FactorQuantState{}
 	if at.store != nil {
 		st, err := at.store.FactorQuant().Get(at.id)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if st != nil {
-			last = st.LastAsOf
+			state = st
 		}
 	}
 	at.fq.mu.Lock()
-	if at.fq.memAsOf > last {
-		last = at.fq.memAsOf
+	defer at.fq.mu.Unlock()
+	if at.fq.memAsOf > state.LastAsOf {
+		state.LastAsOf = at.fq.memAsOf
+		state.LastRule = at.fq.memRule
 	}
+	if at.fq.retrySet {
+		state.RetryAsOf = at.fq.retryAsOf
+		state.RetryAttempts = at.fq.retryAttempts
+	}
+	return state, nil
+}
+
+func (at *AutoTrader) fqSetRetry(asOf string, attempts int) {
+	if asOf == "" {
+		attempts = 0
+	}
+	at.fq.mu.Lock()
+	at.fq.retrySet, at.fq.retryAsOf, at.fq.retryAttempts = true, asOf, attempts
 	at.fq.mu.Unlock()
-	return last, nil
+	if at.store != nil {
+		if err := at.store.FactorQuant().SetRetry(at.id, asOf, attempts); err != nil {
+			logger.Warnf("⚠️ [%s] factor_quant 无法持久化重试状态：%v", at.name, err)
+		}
+	}
 }
 
 // fqSkipSeen reports whether key is the last skip reason already recorded, and
@@ -223,17 +248,24 @@ func (at *AutoTrader) fqSkipSeen(key string) bool {
 func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) {
 	fq := at.config.StrategyConfig.FactorQuantConfig
 	path := factorQuantTargetsPath(fq)
-	targets, err := loadQuantTargets(path, fq.Market)
-	if err != nil {
-		at.fqLogOnce(fmt.Sprintf("本轮跳过：%v", err))
-		return
-	}
-	lastAsOf, err := at.fqLastAsOf()
+	targets, loadErr := loadQuantTargets(path, fq.Market)
+	state, err := at.fqState()
 	if err != nil {
 		// Fail safe: without the durable marker a restart could double-rebalance.
 		logger.Warnf("⚠️ [%s] factor_quant 读取调仓状态失败，本轮跳过：%v", at.name, err)
 		return
 	}
+	if targets != nil && state.RetryAsOf != "" && targets.AsOf != state.RetryAsOf {
+		logger.Infof("📐 [%s] factor_quant 目标 as_of 已从 %s 变为 %s，清除旧目标重试", at.name, state.RetryAsOf, targets.AsOf)
+		at.fqSetRetry("", 0)
+		state.RetryAsOf, state.RetryAttempts = "", 0
+	}
+	if loadErr != nil {
+		at.fqLogOnce(fmt.Sprintf("本轮跳过：%v", loadErr))
+		at.factorQuantFlattenCheck(broker, targets, state, now)
+		return
+	}
+	lastAsOf := state.LastAsOf
 	hasPositions := false
 	if lastAsOf == "" {
 		acct, aerr := broker.Account()
@@ -245,6 +277,13 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	}
 	dec := fqShouldRebalance(targets, fq, lastAsOf, hasPositions, now)
 	if !dec.Rebalance {
+		if dec.Code == fqCodeTooSoon && state.RetryAsOf != "" && state.RetryAsOf == lastAsOf && targets.AsOf == state.RetryAsOf {
+			at.factorQuantRetry(broker, targets, state, dec, now)
+			return
+		}
+		if at.factorQuantFlattenCheck(broker, targets, state, now) {
+			return
+		}
 		at.fqLogOnce(fmt.Sprintf("不调仓 [%s] as_of=%s：%s", dec.Code, targets.AsOf, dec.Reason))
 		if dec.noisy() {
 			key := fmt.Sprintf("%s|%s|%s", dec.Code, targets.AsOf, targets.Status)
@@ -256,14 +295,11 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	}
 
 	logger.Infof("📐 [%s] factor_quant 开始调仓 as_of=%s rule=%s：%s", at.name, targets.AsOf, targets.Rule.Name, dec.Reason)
-	rep := fqRunRebalance(broker, targets, fqPlanConfig{
-		CapitalFraction: fq.EffectiveCapitalFraction(),
-		Band:            fq.EffectiveBand(),
-		MinOrder:        fq.EffectiveMinOrderUSDT(),
-		LongOnly:        fq.IsUS(),
-		CostRate:        fqUSCostRate(fq),
-	})
+	rep := fqRunRebalance(broker, targets, fqResolvedPlanConfig(fq))
 	if rep.Err != nil {
+		if at.factorQuantFlattenCheck(broker, targets, state, now) {
+			return
+		}
 		// Nothing was traded: keep the gate open, but write one record per as_of.
 		at.fqLogOnce(fmt.Sprintf("调仓中止：%v", rep.Err))
 		if !at.fqSkipSeen("error|" + targets.AsOf) {
@@ -273,16 +309,123 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	}
 	at.fq.mu.Lock()
 	at.fq.memAsOf = targets.AsOf
+	at.fq.memRule = targets.Rule.Name
 	at.fq.mu.Unlock()
 	if at.store != nil {
 		if err := at.store.FactorQuant().SetRebalanced(at.id, targets.AsOf, targets.RunID, targets.Rule.Name, now); err != nil {
 			logger.Errorf("❌ [%s] factor_quant 无法持久化调仓 as_of=%s：%v（本进程内不会重复调仓，重启后可能重复）", at.name, targets.AsOf, err)
 		}
 	}
+	if rep.failedCount() > 0 {
+		at.fqSetRetry(targets.AsOf, 0)
+	} else {
+		at.fqSetRetry("", 0)
+	}
 	rec := fqBuildRecord(rep, dec, fq, at.initialBalance, now)
 	at.saveFactorQuantRecord(rec)
 	logger.Infof("📐 [%s] factor_quant 调仓完成 as_of=%s：%d 笔下单，%d 笔失败，%d 个跳过", at.name, targets.AsOf, len(rep.Results), rep.failedCount(), len(rep.Plan.Skips))
 	at.fqSkipSeen("done|" + targets.AsOf) // a finished rebalance supersedes older skip/failure keys
+}
+
+func fqResolvedPlanConfig(fq *store.FactorQuantConfig) fqPlanConfig {
+	return fqPlanConfig{
+		CapitalFraction: fq.EffectiveCapitalFraction(), Band: fq.EffectiveBand(),
+		MinOrder: fq.EffectiveMinOrderUSDT(), LongOnly: fq.IsUS(), CostRate: fqUSCostRate(fq),
+	}
+}
+
+// factorQuantRetry is reached only through too_soon: the gate has already
+// checked status, freshness and horizon, and the caller matched both as_ofs.
+func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, state *store.FactorQuantState, dec fqDecision, now time.Time) {
+	fq := at.config.StrategyConfig.FactorQuantConfig
+	if state.RetryAttempts >= fqMaxRetryAttempts {
+		// Recover a crash after the final attempt was persisted but before clear.
+		at.fqSetRetry("", 0)
+		dec.Code = fqCodeRetryExhausted
+		dec.Reason = fmt.Sprintf("失败重试次数已耗尽（%d 次），等待下一次正常调仓", fqMaxRetryAttempts)
+		logger.Warnf("⚠️ [%s] factor_quant as_of=%s：%s", at.name, targets.AsOf, dec.Reason)
+		if !at.fqSkipSeen("retry_exhausted|" + targets.AsOf) {
+			rec := fqBuildSkipRecord(targets, dec, fq, now)
+			rec.Success = false
+			at.saveFactorQuantRecord(rec)
+		}
+		return
+	}
+	attempt := state.RetryAttempts + 1
+	dec.Reason = fmt.Sprintf("重试第 %d 次（as_of=%s，上次调仓有订单或止损失败）", attempt, targets.AsOf)
+	planCfg := fqResolvedPlanConfig(fq)
+	planCfg.Retry = true
+	rep := fqRunRebalance(broker, targets, planCfg)
+	if fq.IsCrypto() && fq.EffectiveShortStopPct() > 0 {
+		if protector, ok := broker.(interface{ ensureShortStops() []fqStopResult }); ok {
+			rep.Stops = protector.ensureShortStops()
+		}
+	}
+	at.fqSetRetry(targets.AsOf, attempt)
+	failed := rep.Err != nil || rep.failedCount() > 0
+	if !failed {
+		at.fqSetRetry("", 0)
+	} else if attempt == fqMaxRetryAttempts {
+		at.fqSetRetry("", 0)
+		dec.Code = fqCodeRetryExhausted
+		dec.Reason += fmt.Sprintf("；失败重试次数已耗尽（%d 次），等待下一次正常调仓", fqMaxRetryAttempts)
+		logger.Warnf("⚠️ [%s] factor_quant as_of=%s：%s", at.name, targets.AsOf, dec.Reason)
+		at.fqSkipSeen("retry_exhausted|" + targets.AsOf)
+	}
+	if len(rep.Results) > 0 || len(rep.Stops) > 0 || failed {
+		at.saveFactorQuantRecord(fqBuildRecord(rep, dec, fq, at.initialBalance, now))
+	}
+	logger.Infof("📐 [%s] factor_quant %s：%d 笔下单，%d 笔失败，中止=%v", at.name, dec.Reason, len(rep.Results), rep.failedCount(), rep.Err)
+}
+
+// factorQuantFlattenCheck handles ticks that cannot rebalance. Only positions
+// owned by a previous rebalance may be flattened; last_as_of stays unchanged.
+// Returning true suppresses ordinary skip records throughout failed attempts,
+// preserving the durable flatten dedupe key across ticks and restarts.
+func (at *AutoTrader) factorQuantFlattenCheck(broker fqBroker, targets *quantTargets, state *store.FactorQuantState, now time.Time) bool {
+	fq := at.config.StrategyConfig.FactorQuantConfig
+	fileHorizon := 0
+	if targets != nil {
+		fileHorizon = targets.Horizon
+	}
+	threshold := fq.EffectiveFlattenAfterDays(fileHorizon)
+	if state.LastAsOf == "" || threshold < 0 {
+		return false
+	}
+	last, err := time.Parse(factorDateFmt, state.LastAsOf)
+	if err != nil || fqDaysBetween(last, now) <= threshold {
+		return false
+	}
+	acct, err := broker.Account()
+	if err != nil {
+		logger.Warnf("⚠️ [%s] factor_quant 过期清仓读取账户失败：%v", at.name, err)
+		return true
+	}
+	if len(acct.Positions) == 0 {
+		return false
+	}
+	at.fqSetRetry("", 0)
+	reason := fmt.Sprintf("目标已 %d 天未更新（上次调仓 as_of=%s，阈值 %d 天），自动清仓", fqDaysBetween(last, now), state.LastAsOf, threshold)
+	first := !at.fqSkipSeen("flatten|" + state.LastAsOf)
+	horizon := fq.EffectiveHorizon()
+	if horizon == 0 {
+		horizon = fileHorizon
+	}
+	synthetic := &quantTargets{Version: quantTargetsVersion, Market: fq.Market, Status: quantStatusOK,
+		AsOf: state.LastAsOf, asOfDate: last, Horizon: horizon, Rule: quantRule{Name: state.LastRule}, Weights: map[string]float64{}}
+	planCfg := fqResolvedPlanConfig(fq)
+	planCfg.Flatten = true
+	rep := fqRunRebalance(broker, synthetic, planCfg)
+	complete := rep.Err == nil && rep.failedCount() == 0
+	if first || complete {
+		at.saveFactorQuantRecord(fqBuildRecord(rep, fqDecision{Code: "flatten", Horizon: horizon, Reason: reason}, fq, at.initialBalance, now))
+	}
+	if !complete {
+		logger.Warnf("⚠️ [%s] factor_quant %s：%d 笔失败，中止=%v；下个周期继续清仓", at.name, reason, rep.failedCount(), rep.Err)
+	} else {
+		logger.Infof("📐 [%s] factor_quant %s：清仓完成", at.name, reason)
+	}
+	return true
 }
 
 // fqUSCostRate is the planner's cost buffer: fee + slippage of the US ledger.
@@ -395,12 +538,25 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 	fmt.Fprintf(&sb, "as_of=%s 规则=%s horizon=%d 天 run_id=%s\n", t.AsOf, fqRuleName(t), dec.Horizon, t.RunID)
 	fmt.Fprintf(&sb, "触发：%s\n", dec.Reason)
 
+	for _, stop := range rep.Stops {
+		line := fmt.Sprintf("补放空头灾难止损 %s：%.8g", stop.Symbol, stop.Price)
+		if stop.Err != "" {
+			line = fmt.Sprintf("补放空头灾难止损 %s 失败：%s", stop.Symbol, stop.Err)
+		}
+		sb.WriteString(line + "\n")
+		rec.ExecutionLog = append(rec.ExecutionLog, "[factor_quant] "+line)
+	}
+
 	if rep.Err != nil {
-		fmt.Fprintf(&sb, "调仓中止：%v\n本轮未下任何订单，将在下个检查周期重试。", rep.Err)
+		next := "将在下个检查周期重试。"
+		if dec.Code == fqCodeRetryExhausted {
+			next = "重试次数已耗尽，等待下一次正常调仓。"
+		}
+		fmt.Fprintf(&sb, "调仓中止：%v\n本轮未下任何市价订单，%s", rep.Err, next)
 		rec.CoTTrace = sb.String()
 		rec.Success = false
 		rec.ErrorMessage = rep.Err.Error()
-		rec.ExecutionLog = []string{"[factor_quant] 调仓中止：" + rep.Err.Error()}
+		rec.ExecutionLog = append(rec.ExecutionLog, "[factor_quant] 调仓中止："+rep.Err.Error())
 		return rec
 	}
 
