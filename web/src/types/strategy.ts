@@ -80,6 +80,12 @@ export interface FactorQuantConfig {
   min_order_usdt?: number
   // Crypto only: short disaster stop at entry × (1 + pct); 0 = disabled
   short_stop_pct?: number
+  // US only: per-fill fee of the bStock paper ledger in basis points (10 = 0.1%).
+  // omitted/null = default 10; 0 = no fee; valid 0-100
+  us_fee_bps?: number | null
+  // US only: per-fill adverse slippage in basis points (buys fill higher, sells
+  // lower). omitted/null = default 3; 0 = none; valid 0-100
+  us_slippage_bps?: number | null
   // Targets older than this many days (UTC) are not traded
   // 0/omitted = horizon + 2
   max_stale_days?: number

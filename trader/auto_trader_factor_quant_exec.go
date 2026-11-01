@@ -35,6 +35,7 @@ type fqResult struct {
 	FillQty   float64
 	FillPrice float64
 	OrderID   string
+	Fee       float64 // trading fee paid (USDT), paper-ledger fills
 	StopPrice float64 // short catastrophic stop re-placed after the order (0 = none)
 	StopErr   string
 	Note      string
@@ -234,6 +235,9 @@ func (b *fqFuturesBroker) placeShortStop(res *fqResult) {
 // reference to any live spot executor: at.stockTrader is never touched.
 type fqStockBroker struct {
 	at *AutoTrader
+	// Costs applied to every fill (basis points): slippage moves the fill price
+	// against the trade, the fee is a fraction of the notional taken from cash.
+	feeBps, slipBps float64
 }
 
 func (b *fqStockBroker) now() time.Time {
@@ -323,35 +327,38 @@ func (b *fqStockBroker) Place(o fqOrder) fqResult {
 	}
 	now := b.now()
 	led := at.store.StockPaper()
+	note := fmt.Sprintf("模拟账本成交（滑点 %.4g bp，手续费 %.4g bp）", b.slipBps, b.feeBps)
 	if o.opens() {
+		fill := o.Price * (1 + b.slipBps/10000) // buy: adverse = higher
 		acct, err := led.GetAccount(at.id)
 		if err != nil || acct == nil {
 			res.Err = fmt.Sprintf("读取模拟现金失败：%v", err)
 			return res
 		}
-		cost := o.Qty * o.Price
-		if cost > acct.Cash+1e-9 {
-			res.Err = fmt.Sprintf("模拟现金不足：需要 %.2f，可用 %.2f", cost, acct.Cash)
+		cost := o.Qty * fill
+		fee := cost * b.feeBps / 10000
+		if cost+fee > acct.Cash+1e-9 {
+			res.Err = fmt.Sprintf("模拟现金不足：需要 %.2f（含手续费 %.2f），可用 %.2f", cost+fee, fee, acct.Cash)
 			return res
 		}
-		if _, err := led.OpenOrAdd(at.id, o.Symbol, o.Qty, o.Price, 0, 0, now); err != nil {
+		if _, fee, err = led.OpenOrAddWithFee(at.id, o.Symbol, o.Qty, fill, 0, 0, b.feeBps, now); err != nil {
 			res.Err = err.Error()
 			return res
 		}
-		res.OK, res.FillQty, res.FillPrice = true, o.Qty, o.Price
-		res.Note = "模拟账本成交（无手续费/滑点）"
+		res.OK, res.FillQty, res.FillPrice, res.Fee, res.Note = true, o.Qty, fill, fee, note
 		return res
 	}
 	qty := o.Qty
 	if o.CloseAll {
 		qty = 0
 	}
-	if _, _, err := led.Reduce(at.id, o.Symbol, qty, o.Price, now, "factor_quant_rebalance"); err != nil {
+	fill := o.Price * (1 - b.slipBps/10000) // sell: adverse = lower
+	_, _, fee, err := led.ReduceWithFee(at.id, o.Symbol, qty, fill, b.feeBps, now, "factor_quant_rebalance")
+	if err != nil {
 		res.Err = err.Error()
 		return res
 	}
-	res.OK, res.FillQty, res.FillPrice = true, o.Qty, o.Price
-	res.Note = "模拟账本成交（无手续费/滑点）"
+	res.OK, res.FillQty, res.FillPrice, res.Fee, res.Note = true, o.Qty, fill, fee, note
 	return res
 }
 
@@ -422,9 +429,13 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 		prices[s] = p
 	}
 
+	planEquity := before.Equity
+	if bandCfg.CostRate > 0 {
+		planEquity /= 1 + bandCfg.CostRate
+	}
 	rep.Plan = fqPlanOrders(fqPlanInput{
 		Positions:       before.Positions,
-		Equity:          before.Equity,
+		Equity:          planEquity,
 		Prices:          prices,
 		Weights:         t.Weights,
 		CapitalFraction: bandCfg.CapitalFraction,
@@ -452,6 +463,10 @@ type fqPlanConfig struct {
 	Band            float64
 	MinOrder        float64
 	LongOnly        bool
+	// CostRate (fraction) is the round-trip-ish cost buffer of fee-charging
+	// venues: the planner sizes against equity/(1+CostRate) so a fully invested
+	// target is still affordable once slippage and fees are paid from cash.
+	CostRate float64
 }
 
 // compile-time guard: the crypto broker only ever wraps the paper simulator

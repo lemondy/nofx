@@ -80,6 +80,16 @@ const fq = {
     zh: '仅加密：触发价 = 入场价 ×(1+N)；填 0 关闭',
     en: 'Crypto only: stop at entry × (1+N); 0 = disabled',
   },
+  usFee: { zh: '美股手续费 (bp)', en: 'US fee (bp)' },
+  usFeeDesc: {
+    zh: '仅美股：每笔成交手续费，基点（10 = 0.1%），从模拟现金扣除；0 = 无手续费；留空 = 默认 10',
+    en: 'US only: per-fill fee in basis points (10 = 0.1%) taken from paper cash; 0 = none; empty = default 10',
+  },
+  usSlippage: { zh: '美股滑点 (bp)', en: 'US slippage (bp)' },
+  usSlippageDesc: {
+    zh: '仅美股：买入价高于报价、卖出价低于报价的基点数；0 = 无滑点；留空 = 默认 3',
+    en: 'US only: basis points a buy fills above / a sell fills below the quote; 0 = none; empty = default 3',
+  },
   maxStale: { zh: '目标过期天数', en: 'Max stale days' },
   maxStaleDesc: {
     zh: 'as_of 落后今天（UTC）超过这么多天就不按它调仓并告警；留空 = 默认 horizon+2',
@@ -181,6 +191,40 @@ export function FactorQuantConfigEditor({
           min={opts.min}
           max={opts.max}
           step={opts.step ?? 1}
+          className="w-full px-3 bg-surface-2 border border-line text-fg num text-right"
+        />
+      </div>
+    )
+  }
+
+  // Basis-point input where 0 is a real value (no cost) and empty means the
+  // backend default: empty clears the field to null so a merged PUT drops any
+  // stored value.
+  const bpsField = (
+    key: 'us_fee_bps' | 'us_slippage_bps',
+    label: string,
+    defaultValue: number,
+    desc: string
+  ) => {
+    const value = config[key]
+    return (
+      <div className="p-3 rounded-lg bg-surface-2 border border-line">
+        <label className="block text-[13px] mb-1 text-fg-2">{label}</label>
+        <p className="text-xs mb-2 text-fg-3">{desc}</p>
+        <Input
+          type="number"
+          data-testid={`factor-${key}`}
+          value={value ?? ''}
+          placeholder={`${ts(fq.defaultHint, language)} ${defaultValue}`}
+          onChange={(e) => {
+            const raw = e.target.value
+            const n = parseFloat(raw)
+            updateField(key, raw === '' || !Number.isFinite(n) ? null : n)
+          }}
+          disabled={disabled}
+          min={0}
+          max={100}
+          step={0.5}
           className="w-full px-3 bg-surface-2 border border-line text-fg num text-right"
         />
       </div>
@@ -297,6 +341,20 @@ export function FactorQuantConfigEditor({
                 min: 0,
                 desc: ts(fq.shortStopDesc, language),
               }
+            )}
+          {market === 'us' &&
+            bpsField(
+              'us_fee_bps',
+              ts(fq.usFee, language),
+              10,
+              ts(fq.usFeeDesc, language)
+            )}
+          {market === 'us' &&
+            bpsField(
+              'us_slippage_bps',
+              ts(fq.usSlippage, language),
+              3,
+              ts(fq.usSlippageDesc, language)
             )}
           {numField('max_stale_days', ts(fq.maxStale, language), staleDefault, {
             step: 1,

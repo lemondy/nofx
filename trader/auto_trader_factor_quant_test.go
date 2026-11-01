@@ -963,6 +963,8 @@ func TestFactorQuantUSPaperLedgerLongOnly(t *testing.T) {
 	if !at.isFactorQuantUS() {
 		t.Fatal("us detection")
 	}
+	at.config.StrategyConfig.FactorQuantConfig.USFeeBps = fqPtr(0) // this test is about the ledger mechanics; costs have their own test
+	at.config.StrategyConfig.FactorQuantConfig.USSlippageBps = fqPtr(0)
 	broker, err := at.newFactorQuantBroker()
 	if err != nil {
 		t.Fatal(err)
@@ -1090,4 +1092,89 @@ func TestRunFactorQuantBranchSkipsAIAndFuturesMonitors(t *testing.T) {
 	if recs, _ := st.Decision().GetLatestRecords(at.id, 10); len(recs) != 1 || recs[0].SystemPrompt != "" {
 		t.Fatalf("records %+v", recs)
 	}
+}
+
+func TestFactorQuantUSCostsSlippageFeeAndCashCheck(t *testing.T) {
+	st := fqTestStore(t)
+	fqStubUS(t, map[string]float64{"AAPLBUSDT": 200, "MSFTBUSDT": 400})
+	at := fqPaperTrader(t, st, "fq-us-costs", "us", &paperTestPrices{mark: 100})
+	// Defaults: fee 10 bp, slippage 3 bp.
+	b, err := at.newFactorQuantBroker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := b.(*fqStockBroker)
+	if sb.feeBps != 10 || sb.slipBps != 3 {
+		t.Fatalf("default costs fee=%v slip=%v", sb.feeBps, sb.slipBps)
+	}
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("us", "ok", "2026-11-01", 5, `{"AAPLBUSDT":0.6,"MSFTBUSDT":0.4}`))
+	at.factorQuantTick(b, fqDay("2026-11-02"))
+
+	open, err := st.StockPaper().ListOpen(at.id)
+	if err != nil || len(open) != 2 {
+		t.Fatalf("open = %+v %v", open, err)
+	}
+	cash0 := 10000.0
+	spent, fees := 0.0, 0.0
+	for _, p := range open {
+		quote := map[string]float64{"AAPLBUSDT": 200, "MSFTBUSDT": 400}[p.Symbol]
+		fqNear(t, p.AvgPrice, quote*1.0003, p.Symbol+" fill price (buy slips up)")
+		wantFee := p.Quantity * p.AvgPrice * 0.001
+		fqNear(t, p.Fee, wantFee, p.Symbol+" recorded fee")
+		spent += p.Quantity * p.AvgPrice
+		fees += p.Fee
+	}
+	acct, _ := st.StockPaper().GetAccount(at.id)
+	fqNear(t, acct.Cash, cash0-spent-fees, "cash = start - cost - fees")
+	if acct.Cash < -1e-9 {
+		t.Fatalf("cost buffer should keep a fully invested target affordable, cash=%v", acct.Cash)
+	}
+	if fees <= 0 {
+		t.Fatal("no fee recorded")
+	}
+	recs, _ := st.Decision().GetLatestRecords(at.id, 5)
+	if len(recs) != 1 || !strings.Contains(recs[0].CoTTrace, "手续费") || !strings.Contains(recs[0].CoTTrace, "1+成本") {
+		t.Fatalf("record lacks cost detail: %+v", recs)
+	}
+
+	// Selling slips down and pays the fee.
+	cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("us", "ok", "2026-11-06", 5, `{"AAPLBUSDT":0.6}`))
+	cashBefore := acct.Cash
+	at.factorQuantTick(b, fqDay("2026-11-07"))
+	closed, _ := st.StockPaper().ListClosed(at.id, 5)
+	if len(closed) != 1 || closed[0].Symbol != "MSFTBUSDT" {
+		t.Fatalf("closed = %+v", closed)
+	}
+	c := closed[0]
+	fqNear(t, c.ExitPrice, 400*(1-0.0003), "sell fill price slips down")
+	buyFee := 0.0
+	for _, p := range open {
+		if p.Symbol == "MSFTBUSDT" {
+			buyFee = p.Fee
+		}
+	}
+	sellFee := c.ExitedQty * c.ExitPrice * 0.001
+	fqNear(t, c.Fee, buyFee+sellFee, "closed row carries buy + sell fees")
+	acct2, _ := st.StockPaper().GetAccount(at.id)
+	fqNear(t, acct2.Cash, cashBefore+c.ExitedQty*c.ExitPrice-sellFee, "cash after the sell")
+}
+
+func TestStockBrokerCashCheckIncludesFee(t *testing.T) {
+	st := fqTestStore(t)
+	fqStubUS(t, map[string]float64{"AAPLBUSDT": 100})
+	at := fqPaperTrader(t, st, "fq-us-cashfee", "us", &paperTestPrices{mark: 100})
+	b := &fqStockBroker{at: at, feeBps: 100, slipBps: 0} // 1% fee
+	// Notional 10000 == cash, but the fee pushes the cost over: must be refused.
+	res := b.Place(fqOrder{Symbol: "AAPLBUSDT", Kind: fqKindOpen, Side: fqSideLong, Qty: 100, Price: 100, Notional: 10000})
+	if res.OK || !strings.Contains(res.Err, "含手续费") {
+		t.Fatalf("cost + fee > cash accepted: %+v", res)
+	}
+	res = b.Place(fqOrder{Symbol: "AAPLBUSDT", Kind: fqKindOpen, Side: fqSideLong, Qty: 99, Price: 100, Notional: 9900})
+	if !res.OK {
+		t.Fatalf("affordable order refused: %+v", res)
+	}
+	fqNear(t, res.Fee, 99, "fee")
+	acct, _ := st.StockPaper().GetAccount(at.id)
+	fqNear(t, acct.Cash, 10000-9900-99, "cash")
 }

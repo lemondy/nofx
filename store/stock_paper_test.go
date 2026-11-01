@@ -155,3 +155,43 @@ func TestStockWeekHaltPersistsPerTraderAndMode(t *testing.T) {
 		t.Fatalf("after clear: %+v", h)
 	}
 }
+
+func TestStockPaperFeeHooks(t *testing.T) {
+	st := newTestStore(t)
+	sp := st.StockPaper()
+	now := time.Now()
+	if _, err := sp.EnsureAccount("fee", 10000); err != nil {
+		t.Fatal(err)
+	}
+	pos, fee, err := sp.OpenOrAddWithFee("fee", "AAPLBUSDT", 10, 100, 0, 0, 10, now) // 10 bps of 1000
+	if err != nil || math.Abs(fee-1) > 1e-9 || math.Abs(pos.Fee-1) > 1e-9 {
+		t.Fatalf("open fee %v pos=%+v err=%v", fee, pos, err)
+	}
+	acct, _ := sp.GetAccount("fee")
+	if math.Abs(acct.Cash-(10000-1000-1)) > 1e-9 {
+		t.Fatalf("cash after buy %v", acct.Cash)
+	}
+	if _, fee, err = sp.OpenOrAddWithFee("fee", "AAPLBUSDT", 10, 110, 0, 0, 10, now); err != nil || math.Abs(fee-1.1) > 1e-9 {
+		t.Fatalf("add fee %v %v", fee, err)
+	}
+	pnl, closed, fee, err := sp.ReduceWithFee("fee", "AAPLBUSDT", 0, 120, 10, now, "x") // sells all 20 @120 = 2400
+	if err != nil || !closed || math.Abs(fee-2.4) > 1e-9 || math.Abs(pnl-(120-105)*20) > 1e-9 {
+		t.Fatalf("sell pnl=%v closed=%v fee=%v err=%v", pnl, closed, fee, err)
+	}
+	acct, _ = sp.GetAccount("fee")
+	want := 10000 - 1000 - 1 - 1100 - 1.1 + 2400 - 2.4
+	if math.Abs(acct.Cash-want) > 1e-9 {
+		t.Fatalf("cash %v want %v", acct.Cash, want)
+	}
+	closedRows, _ := sp.ListClosed("fee", 5)
+	if len(closedRows) != 1 || math.Abs(closedRows[0].Fee-(1+1.1+2.4)) > 1e-9 {
+		t.Fatalf("closed rows %+v", closedRows)
+	}
+	// The legacy entry points stay fee-free.
+	if _, err := sp.OpenOrAdd("fee", "MSFTBUSDT", 1, 100, 0, 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := sp.ListOpen("fee"); len(rows) != 1 || rows[0].Fee != 0 {
+		t.Fatalf("legacy OpenOrAdd charged a fee: %+v", rows)
+	}
+}

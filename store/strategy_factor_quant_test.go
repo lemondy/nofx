@@ -35,6 +35,10 @@ func TestFactorQuantValidate(t *testing.T) {
 		"min order negative":  {Market: "crypto", MinOrderUSDT: -1},
 		"short stop negative": {Market: "crypto", ShortStopPct: fqf(-0.1)},
 		"stale negative":      {Market: "crypto", MaxStaleDays: -1},
+		"us fee negative":     {Market: "us", USFeeBps: fqf(-1)},
+		"us fee above 100":    {Market: "us", USFeeBps: fqf(100.5)},
+		"us slip negative":    {Market: "us", USSlippageBps: fqf(-0.1)},
+		"us slip above 100":   {Market: "us", USSlippageBps: fqf(101)},
 	}
 	for name, cfg := range bad {
 		cfg := cfg
@@ -42,7 +46,7 @@ func TestFactorQuantValidate(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	ok := FactorQuantConfig{Market: "crypto", Horizon: 3, CapitalFraction: 1, Leverage: 10, RebalanceBandPct: 0.99, MinOrderUSDT: 0, ShortStopPct: fqf(0), MaxStaleDays: 5}
+	ok := FactorQuantConfig{Market: "crypto", Horizon: 3, CapitalFraction: 1, Leverage: 10, RebalanceBandPct: 0.99, MinOrderUSDT: 0, ShortStopPct: fqf(0), MaxStaleDays: 5, USFeeBps: fqf(100), USSlippageBps: fqf(0)}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("boundary values rejected: %v", err)
 	}
@@ -61,6 +65,13 @@ func TestFactorQuantDefaults(t *testing.T) {
 	}
 	if us.EffectiveMaxStaleDays(5) != 7 {
 		t.Fatalf("us max stale follows file horizon: %d", us.EffectiveMaxStaleDays(5))
+	}
+	if us.EffectiveUSFeeBps() != 10 || us.EffectiveUSSlippageBps() != 3 {
+		t.Fatalf("us cost defaults: fee=%v slip=%v", us.EffectiveUSFeeBps(), us.EffectiveUSSlippageBps())
+	}
+	us2 := &FactorQuantConfig{Market: "us", USFeeBps: fqf(0), USSlippageBps: fqf(7.5)}
+	if us2.EffectiveUSFeeBps() != 0 || us2.EffectiveUSSlippageBps() != 7.5 {
+		t.Fatalf("explicit us costs (including 0) not honoured: %v %v", us2.EffectiveUSFeeBps(), us2.EffectiveUSSlippageBps())
 	}
 	c2 := &FactorQuantConfig{Market: "crypto", Horizon: 7, CapitalFraction: 0.4, Leverage: 2, RebalanceBandPct: 0.2, MinOrderUSDT: 25, ShortStopPct: fqf(0), MaxStaleDays: 9}
 	if c2.EffectiveHorizon() != 7 || c2.EffectiveCapitalFraction() != 0.4 || c2.EffectiveLeverage() != 2 || c2.EffectiveBand() != 0.2 ||

@@ -25,8 +25,24 @@
 //     every symbol of that minute is valued at its Low, then at its High, and a
 //     breach liquidates at that extreme. Positions opened inside the minute
 //     keep the close mark. Hedges therefore see one correlated move.
-//   - Funding, tiered margin, liquidation penalties, insurance/ADL, latency,
-//     post-only rejection and venue price filters are not simulated.
+//   - Perpetual funding is simulated when the PriceSource (or Config.Funding)
+//     provides settlement events (the market source reads Binance's public
+//     /fapi/v1/fundingRate). Every event with fundingTime in (watermark, now]
+//     and fundingTime >= the position's open time is charged ONCE to each open
+//     hedge side: amount = quantity x markPrice(event; latest simulator mark if
+//     the venue omitted it) x rate, paid by LONG when the rate is positive and
+//     received when negative, the opposite for SHORT. The wallet change commits
+//     atomically with the ledger snapshot and an account_income FUNDING_FEE row
+//     (account kind "paper"), so equity, available margin, liquidation tests and
+//     the closed-position net P&L all see it. The per-position watermark lives in
+//     the persisted ledger state: restarts neither double-charge nor skip events
+//     of positions that stayed open, and a reopened position starts clean.
+//     Settlements are fetched only when one could exist (after a UTC boundary of
+//     the symbol's settlement interval, learned from event spacing and hourly
+//     until learned, polling through a short publication grace window); a failed
+//     fetch only logs and is retried on a later tick.
+//   - Tiered margin, liquidation penalties, insurance/ADL, latency, post-only
+//     rejection and venue price filters are not simulated.
 //
 // State has one mutex. Quotes, candles and symbol-rule requests run outside it;
 // Advance discards stale observations using an optimistic version check. Each
@@ -44,6 +60,7 @@ import (
 	"sync"
 	"time"
 
+	"nofx/fundsledger"
 	"nofx/logger"
 	"nofx/store"
 	"nofx/trader/types"
@@ -58,7 +75,10 @@ type Config struct {
 	// Optional deterministic dependencies; a PriceSource may itself implement
 	// SymbolRules. Explicit rules take precedence over the public SDK lookup.
 	SymbolRules SymbolRules
-	Now         func() time.Time
+	// Funding supplies perpetual funding settlements; it may instead be
+	// implemented by the PriceSource. nil = funding is not simulated.
+	Funding FundingSource
+	Now     func() time.Time
 }
 
 type position struct {
@@ -66,6 +86,11 @@ type position struct {
 	Quantity, EntryPrice float64
 	Leverage             int
 	OpenedAt             time.Time
+	// FundingThrough is the fundingTime (UTC ms) of the last funding event
+	// charged to this position (0 = none yet); Funding is the cumulative
+	// funding it received (positive) or paid (negative).
+	FundingThrough int64
+	Funding        float64
 }
 
 type order struct {
@@ -78,15 +103,17 @@ type order struct {
 
 type ledgerState struct {
 	Wallet, Realized, Fees float64
-	TradeCount             int
-	Sequence               int64
-	LastAdvance            time.Time
-	Positions              map[string]*position
-	Orders                 map[string]*order // includes terminal orders for restart-safe status
-	Marks                  map[string]float64
-	Leverage               map[string]int
-	CrossMargin            map[string]bool
-	Closed                 []types.ClosedPnLRecord
+	// FundingFees: cumulative perpetual funding received (positive) or paid.
+	FundingFees float64
+	TradeCount  int
+	Sequence    int64
+	LastAdvance time.Time
+	Positions   map[string]*position
+	Orders      map[string]*order // includes terminal orders for restart-safe status
+	Marks       map[string]float64
+	Leverage    map[string]int
+	CrossMargin map[string]bool
+	Closed      []types.ClosedPnLRecord
 }
 
 type PaperFuturesTrader struct {
@@ -107,6 +134,15 @@ type PaperFuturesTrader struct {
 	// reads inside readRetryCooldown serve the cached ledger instead of paying
 	// the HTTP timeout again.
 	advFailAt time.Time
+
+	// Funding (all guarded by mu). The cache only ever grows by fetched events;
+	// the watermark that prevents double charges is in the persisted positions.
+	funding       FundingSource
+	fundCache     map[string][]FundingEvent
+	fundQueried   map[string]time.Time // last successful query per symbol
+	fundIntervalH map[string]int       // learned settlement interval (hours), default 1 = unknown
+	fundWarnAt    map[string]time.Time
+	pendingIncome []fundsledger.Income // written in the next successful commit
 }
 
 var _ types.GridTrader = (*PaperFuturesTrader)(nil)
@@ -150,7 +186,12 @@ func New(cfg Config, st *store.Store, price PriceSource) *PaperFuturesTrader {
 	if price == nil {
 		price = NewMarketPriceSource()
 	}
-	p := &PaperFuturesTrader{cfg: cfg, st: st, price: price, rules: cfg.SymbolRules, lotSteps: map[string]float64{}}
+	p := &PaperFuturesTrader{cfg: cfg, st: st, price: price, rules: cfg.SymbolRules, lotSteps: map[string]float64{},
+		funding: cfg.Funding, fundCache: map[string][]FundingEvent{}, fundQueried: map[string]time.Time{},
+		fundIntervalH: map[string]int{}, fundWarnAt: map[string]time.Time{}}
+	if p.funding == nil {
+		p.funding, _ = price.(FundingSource)
+	}
 	if p.rules == nil {
 		p.rules, _ = price.(SymbolRules)
 	}
@@ -209,7 +250,10 @@ func (p *PaperFuturesTrader) mutateLocked(fn func() ([]store.PaperLedgerTrade, e
 		return err
 	}
 	previous := *p.row
+	p.pendingIncome = nil
 	trades, err := fn()
+	income := p.pendingIncome
+	p.pendingIncome = nil
 	if err == nil {
 		var b []byte
 		b, err = json.Marshal(p.s)
@@ -225,7 +269,7 @@ func (p *PaperFuturesTrader) mutateLocked(fn func() ([]store.PaperLedgerTrade, e
 					changes[symbol] = leverage
 				}
 			}
-			err = p.st.PaperLedger().Commit(p.row, &previous, trades, changes)
+			err = p.st.PaperLedger().CommitWithIncome(p.row, &previous, trades, changes, income)
 		}
 	}
 	if err != nil {
@@ -417,7 +461,11 @@ func (p *PaperFuturesTrader) Advance(now time.Time) error {
 				symbols[o.Symbol] = true
 			}
 		}
+		fundingNeeds := p.fundingNeedsLocked(now)
 		p.mu.Unlock()
+		// Funding settlements are fetched outside the mutex and cached; a
+		// failure is logged inside and never fails the advance.
+		p.fetchFunding(fundingNeeds, now)
 		type observation struct {
 			symbol  string
 			mark    float64
@@ -474,6 +522,9 @@ func (p *PaperFuturesTrader) Advance(now time.Time) error {
 				for end < len(events) && events[end].c.Time.Equal(events[i].c.Time) {
 					end++
 				}
+				// Funding settled before this minute's close is charged against
+				// the positions as they stood before the minute's fills.
+				p.settleFundingLocked(events[i].c.Time.Add(time.Minute - time.Nanosecond))
 				// Account equity must use the whole timestamp's marks. A
 				// losing leg must not liquidate before its hedge is repriced.
 				for _, e := range events[i:end] {
@@ -494,6 +545,9 @@ func (p *PaperFuturesTrader) Advance(now time.Time) error {
 			for _, v := range list {
 				p.s.Marks[v.symbol] = v.mark
 			}
+			// Settlements up to now (cache only holds published events); the
+			// freshest quote is the mark fallback when the venue omitted it.
+			p.settleFundingLocked(now)
 			sort.Slice(list, func(i, j int) bool { return list[i].symbol < list[j].symbol })
 			for _, v := range list {
 				trades = append(trades, p.match(v.symbol, 0, v.mark, v.mark, now, now, true)...)

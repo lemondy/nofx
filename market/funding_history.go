@@ -1,7 +1,12 @@
 package market
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"nofx/market/bnweight"
 	"nofx/market/usstock"
+	"nofx/security"
 	"strconv"
 	"strings"
 	"sync"
@@ -267,4 +272,82 @@ func IsBStockSymbol(symbol string) bool {
 		return false
 	}
 	return set[strings.ToUpper(symbol)]
+}
+
+// ============================================================================
+// Funding settlement events for a time range (paper futures simulator).
+// ============================================================================
+
+// FundingSettlement is one SETTLED funding event of a perpetual contract.
+type FundingSettlement struct {
+	Time      time.Time // fundingTime (UTC)
+	Rate      float64   // settled funding rate for the interval (decimal, +ve = longs pay)
+	MarkPrice float64   // mark price at settlement; 0 when the venue omitted it
+}
+
+// fundingRatePageLimit is the documented maximum of /fapi/v1/fundingRate.
+const fundingRatePageLimit = 1000
+
+const binanceFuturesFundingURL = "https://fapi.binance.com/fapi/v1/fundingRate"
+
+// GetFundingSettlementsPriority returns the symbol's settled funding events with
+// fundingTime in [start, end], oldest first, via the public endpoint
+// GET /fapi/v1/fundingRate (own bnweight bucket, registered by the transport
+// wrapper like every other public call). It returns at most one page
+// (fundingRatePageLimit events); callers continue from the last event time.
+func GetFundingSettlementsPriority(symbol string, start, end time.Time, prio bnweight.Priority) ([]FundingSettlement, error) {
+	symbol = Normalize(symbol)
+	if !end.After(start) {
+		return nil, nil
+	}
+	client := &http.Client{Timeout: 15 * time.Second, Transport: bnweight.Wrap(nil, prio)}
+	req, err := http.NewRequest("GET", binanceFuturesFundingURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	q := req.URL.Query()
+	q.Set("symbol", symbol)
+	q.Set("startTime", strconv.FormatInt(start.UnixMilli(), 10))
+	q.Set("endTime", strconv.FormatInt(end.UnixMilli(), 10))
+	q.Set("limit", strconv.Itoa(fundingRatePageLimit))
+	req.URL.RawQuery = q.Encode()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	body, err := security.ReadResponseBody(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("binance fundingRate api returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return parseFundingSettlements(body)
+}
+
+// parseFundingSettlements decodes the fundingRate payload; entries with an
+// unparsable rate are an error (a silently skipped event would never be charged).
+func parseFundingSettlements(body []byte) ([]FundingSettlement, error) {
+	var raw []struct {
+		FundingRate string `json:"fundingRate"`
+		FundingTime int64  `json:"fundingTime"`
+		MarkPrice   string `json:"markPrice"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]FundingSettlement, 0, len(raw))
+	for i, r := range raw {
+		rate, err := strconv.ParseFloat(r.FundingRate, 64)
+		if err != nil || r.FundingTime <= 0 {
+			return nil, fmt.Errorf("invalid funding event %d: rate=%q time=%d", i, r.FundingRate, r.FundingTime)
+		}
+		mark := 0.0
+		if r.MarkPrice != "" {
+			mark, _ = strconv.ParseFloat(r.MarkPrice, 64)
+		}
+		out = append(out, FundingSettlement{Time: time.UnixMilli(r.FundingTime).UTC(), Rate: rate, MarkPrice: mark})
+	}
+	return out, nil
 }

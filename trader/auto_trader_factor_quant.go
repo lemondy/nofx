@@ -98,7 +98,7 @@ func (at *AutoTrader) newFactorQuantBroker() (fqBroker, error) {
 		return nil, fmt.Errorf("因子量化策略只允许模拟盘账户（当前交易所类型 %q）", at.exchange)
 	}
 	if fq.IsUS() {
-		return &fqStockBroker{at: at}, nil
+		return &fqStockBroker{at: at, feeBps: fq.EffectiveUSFeeBps(), slipBps: fq.EffectiveUSSlippageBps()}, nil
 	}
 	pt, ok := at.trader.(*paper.PaperFuturesTrader)
 	if !ok {
@@ -261,6 +261,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 		Band:            fq.EffectiveBand(),
 		MinOrder:        fq.EffectiveMinOrderUSDT(),
 		LongOnly:        fq.IsUS(),
+		CostRate:        fqUSCostRate(fq),
 	})
 	if rep.Err != nil {
 		// Nothing was traded: keep the gate open, but write one record per as_of.
@@ -282,6 +283,14 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	at.saveFactorQuantRecord(rec)
 	logger.Infof("📐 [%s] factor_quant 调仓完成 as_of=%s：%d 笔下单，%d 笔失败，%d 个跳过", at.name, targets.AsOf, len(rep.Results), rep.failedCount(), len(rep.Plan.Skips))
 	at.fqSkipSeen("done|" + targets.AsOf) // a finished rebalance supersedes older skip/failure keys
+}
+
+// fqUSCostRate is the planner's cost buffer: fee + slippage of the US ledger.
+func fqUSCostRate(fq *store.FactorQuantConfig) float64 {
+	if !fq.IsUS() {
+		return 0
+	}
+	return (fq.EffectiveUSFeeBps() + fq.EffectiveUSSlippageBps()) / 10000
 }
 
 func (at *AutoTrader) saveFactorQuantRecord(rec *store.DecisionRecord) {
@@ -395,7 +404,11 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 		return rec
 	}
 
-	fmt.Fprintf(&sb, "权益 %.2f × 资金比例 %.2f = 预算 %.2f USDT\n", rep.Before.Equity, fq.EffectiveCapitalFraction(), rep.Plan.Budget)
+	if cr := fqUSCostRate(fq); cr > 0 {
+		fmt.Fprintf(&sb, "权益 %.2f ÷ (1+成本 %.4f) × 资金比例 %.2f = 预算 %.2f USDT\n", rep.Before.Equity, cr, fq.EffectiveCapitalFraction(), rep.Plan.Budget)
+	} else {
+		fmt.Fprintf(&sb, "权益 %.2f × 资金比例 %.2f = 预算 %.2f USDT\n", rep.Before.Equity, fq.EffectiveCapitalFraction(), rep.Plan.Budget)
+	}
 	counts := map[string]int{}
 	for _, o := range rep.Plan.Orders {
 		counts[o.Kind]++
@@ -424,6 +437,9 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 			}
 			if r.StopPrice > 0 {
 				line += fmt.Sprintf("，灾难止损 %.6g", r.StopPrice)
+			}
+			if r.Fee > 0 {
+				line += fmt.Sprintf("，手续费 %.4f USDT", r.Fee)
 			}
 		}
 		sb.WriteString(line + "\n")
