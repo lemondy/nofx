@@ -71,6 +71,22 @@ th{color:var(--mut);font-weight:600}
 
 <div id="log">
 
+<div class="day">2026-11-01</div>
+
+<article data-v="no" data-id="probability-martingale">
+<h2>数学家视角：鞅、赌徒破产与 Kelly 检验 <span class="tag t-no">无可融合策略</span><span class="dom">加密 + 美股 ETF · 概率论</span></h2>
+<p class="k">思路：用户给出 CMU 教材 bws_book.pdf，要求从数学家角度、基于概率论尝试交易。核对后该书是证明写作入门（逻辑、归纳、集合、函数、模算术、组合计数），不讲期望、方差、随机游走、鞅或 Kelly；因此借用书中“精确命题 + 找反例 + 鸽笼式多重检验”的方法，概率工具来自标准概率论：可选停止定理说明价格为鞅时任何止盈止损/加减仓都无正期望，优势只能来自对鞅的偏离。</p>
+<ul>
+<li>P1 方差比（Lo–MacKinlay 稳健 z*，222 个检验，Holm 校正，前 60%/后 40% 同号才算稳定）：显著且稳定 0 个；BTC/ETH 日线与小时线 VR 0.93–1.16 均不显著，美股日线仅有轻微均值回归倾向。</li>
+<li>P2 双障碍（先碰止盈 2s 还是止损 1s 等 6 组，528 个检验）：命中率只有 EFA 多头 (2,1) 显著（0.402 对鞅 0.333），但 10 只 ETF 普遍偏高、约一半是权益漂移，另有向下跳空造成的偏差；按实际跳空成交价的期望检验 z=0.89。预声明 Backtrader 策略 BARRIER_LONG FAIL（后段 Sharpe 0.47 对同敞口持有 0.55，DSR 0.13，平台 3/15，ETF 1/10）。</li>
+<li>期望检验在加密篮子上找到 BNB/DOGE/XLM 带止损空头的 6 个稳定偏离；预声明 BARRIER_SHORT（32 币等权）FAIL：年化 −16%、回撤 85%、两半 −59%/−31%。原因是空头凸性：跌 2s 只赚 1−e^(−2s)、涨 1s 亏 e^(s)−1，按对数价格取反计量把 σ²/2 的方差拖累算成了优势（DOGE 约 0.07s，与观测 0.08s 吻合）。</li>
+<li>P3 Kelly：前段估的 f* 95% 区间大多跨 0（BTC −0.26～2.64），TLT 估出 4.5 倍、后段回撤 98%；ETH 半 Kelly 增长高于全 Kelly。公式没错，错在 μ 估不准，应使用半 Kelly 或更小。</li>
+<li>P4 nofx 实盘（ai_managed=1，293 笔可算 R，R 已扣手续费）：胜率 48.1%、赔率 0.78、E[R]=−0.077R（95% 区间 −0.147～−0.007，P(E[R]&gt;0)=1.6%），6 个 trader 全部为负，Kelly f*=−0.18：最优仓位为 0，问题在入场优势而非仓位。</li>
+</ul>
+<p><b>结论：</b>没有可融合的策略，不改交易代码。留下四条检查清单：止盈止损比例本身不创造期望；评估止盈止损规则看实际成交价的期望而不是命中率；高波动币做空每天承担约 σ²/2 的凸性拖累；先证明 E[R]&gt;0 再谈 Kelly，且只用半 Kelly 或更小。</p>
+<p class="src">来源：<code>scripts/backtest/probability_study.py</code> · <code>scripts/backtest/barrier_strategy.py</code> · <code>scripts/backtest/live_kelly.py</code> · <code>docs/research/2026-11-01-probability-martingale-study.md</code> · <code>data/math_book/</code></p>
+</article>
+
 <div class="day">2026-10-31</div>
 
 <article data-v="no" data-id="quantjourney-bt">
