@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'ensemble-forward',
+    date: '2026-11-01',
+    title: '加密因子 ensemble 前向校验（市场中性组合可行性）',
+    domain: '加密 · 因子挖掘',
+    verdict: 'none',
+    verdictText: '前向未通过',
+    idea: '因子分数目前只作为 factor_ensemble 写进 AI 提示词当参考：预测目标是截面相对收益，而交易员做的是少数币的方向性交易，信号宽度被浪费，A/B 模拟盘也测不出差异（10 个配对日，日差 −0.45%±1.09%）。替代方案是把 ensemble 做成独立的市场中性组合直接交易。前提是 ensemble 样本外有效，因此冻结当前成分（h=1/3/7 分别为 7/14/14 个因子），只读 2026-05-04 之后约 180 天从未参与选择的数据做预声明检验。',
+    bullets: [
+      'A1 信号层：前向 RankIC 均为正且显著，h=1/3/7 分别为 0.065（t 4.02）、0.070（t 2.86）、0.075（t 2.42），前后两半同号，IC 水平与 train/val 相当。',
+      'A2 五分位多空扣手续费和资金费：每期均值年化 −129%/−85%/−196%，全部未通过；按预声明，B 部分（Backtrader 市场中性组合、6 道门槛）没有运行。',
+      '诊断：两腿中位数之差为正（h=3 +1.26%/期，h=7 +1.61%/期），排序方向对；但因子排最后的一档混入暴涨币（AKEUSDT 一周 +196%/+264%，QUSDT +343%，BRUSDT +108%），h=7 五分位均值从 Q1 到 Q5 为 4.1%、2.3%、1.3%、1.4%、0.5%，单调递减。秩相关不受右尾影响，等权做空却正好吃下右尾。',
+    ],
+    conclusion:
+      '不做独立组合，维持仅作参考。风险提示：factor_ensemble 低 pct（因子看空）集中了暴涨币，据此做空等于承担右尾，提示词是否追加说明由用户决定。后续方向（只做多腿、空头剔除暴涨/新币或按波动率缩仓、挖掘目标改为截尾收益）需要新的预声明实验，并计入 K。',
+    source:
+      'scripts/factor_mining/ensemble_forward_study.py · docs/research/2026-11-01-ensemble-forward-study.md',
+  },
+  {
     id: 'alpha101',
     date: '2026-11-01',
     title: 'WorldQuant Alpha101 因子（BigQuant 复现文章）',
