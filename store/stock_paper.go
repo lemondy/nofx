@@ -156,37 +156,43 @@ func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, 
 	var out StockPaperPosition
 	cost := qty * price
 	fee := cost * feeBps / 10000
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
-			"cash": gorm.Expr("cash - ?", cost+fee), "updated_at": nowMs})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return fmt.Errorf("paper account for %s does not exist", traderID)
-		}
-		err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&out).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			out = StockPaperPosition{TraderID: traderID, Symbol: symbol, Quantity: qty, EntryQty: qty, AvgPrice: price,
-				InitialStop: stop, Stop: stop, TakeProfit: takeProfit, OpenedAt: nowMs, UpdatedAt: nowMs, Status: StockPaperOpen, Fee: fee}
-			return tx.Create(&out).Error
-		}
-		if err != nil {
-			return err
-		}
-		newQty := out.Quantity + qty
-		out.AvgPrice = (out.AvgPrice*out.Quantity + price*qty) / newQty
-		out.Quantity, out.EntryQty = newQty, out.EntryQty+qty
-		if out.InitialStop <= 0 {
-			out.InitialStop = stop
-		}
-		if stop > 0 {
-			out.Stop = stop
-		}
-		out.TakeProfit = takeProfit
-		out.UpdatedAt = nowMs
-		out.Fee += fee
-		return tx.Save(&out).Error
+	// A transient SQLITE_BUSY is retried once. Replay-safe: a busy error means
+	// the transaction rolled back (with _txlock=immediate it fires at BEGIN),
+	// and out is reset so the retry's First() is not keyed by a stale id.
+	err := retryOnceOnBusy(func() error {
+		out = StockPaperPosition{}
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			res := tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
+				"cash": gorm.Expr("cash - ?", cost+fee), "updated_at": nowMs})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("paper account for %s does not exist", traderID)
+			}
+			err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&out).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				out = StockPaperPosition{TraderID: traderID, Symbol: symbol, Quantity: qty, EntryQty: qty, AvgPrice: price,
+					InitialStop: stop, Stop: stop, TakeProfit: takeProfit, OpenedAt: nowMs, UpdatedAt: nowMs, Status: StockPaperOpen, Fee: fee}
+				return tx.Create(&out).Error
+			}
+			if err != nil {
+				return err
+			}
+			newQty := out.Quantity + qty
+			out.AvgPrice = (out.AvgPrice*out.Quantity + price*qty) / newQty
+			out.Quantity, out.EntryQty = newQty, out.EntryQty+qty
+			if out.InitialStop <= 0 {
+				out.InitialStop = stop
+			}
+			if stop > 0 {
+				out.Stop = stop
+			}
+			out.TakeProfit = takeProfit
+			out.UpdatedAt = nowMs
+			out.Fee += fee
+			return tx.Save(&out).Error
+		})
 	})
 	if err != nil {
 		return nil, 0, err
@@ -216,32 +222,38 @@ func (s *StockPaperStore) ReduceWithFee(traderID, symbol string, qty, price, fee
 	nowMs := now.UTC().UnixMilli()
 	var pnl, fee float64
 	closed := false
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		var pos StockPaperPosition
-		if err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&pos).Error; err != nil {
-			return err
-		}
-		if qty <= 0 || qty >= pos.Quantity-stockPaperQtyEpsilon {
-			qty = pos.Quantity
-		}
-		pnl = (price - pos.AvgPrice) * qty
-		fee = qty * price * feeBps / 10000
-		pos.Fee += fee
-		pos.Quantity -= qty
-		pos.ExitedQty += qty
-		pos.ExitValue += qty * price
-		pos.ExitPrice = pos.ExitValue / pos.ExitedQty
-		pos.RealizedPnL += pnl
-		pos.UpdatedAt = nowMs
-		if pos.Quantity <= stockPaperQtyEpsilon {
-			pos.Quantity, pos.Status, pos.ClosedAt, pos.CloseReason = 0, StockPaperClosed, nowMs, reason
-			closed = true
-		}
-		if err := tx.Save(&pos).Error; err != nil {
-			return err
-		}
-		return tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
-			"cash": gorm.Expr("cash + ?", qty*price-fee), "updated_at": nowMs}).Error
+	// Retried once on SQLITE_BUSY (the transaction rolled back); per-attempt
+	// state is reset and the requested qty is never mutated across attempts.
+	err := retryOnceOnBusy(func() error {
+		pnl, fee, closed = 0, 0, false
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			var pos StockPaperPosition
+			if err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&pos).Error; err != nil {
+				return err
+			}
+			qty := qty
+			if qty <= 0 || qty >= pos.Quantity-stockPaperQtyEpsilon {
+				qty = pos.Quantity
+			}
+			pnl = (price - pos.AvgPrice) * qty
+			fee = qty * price * feeBps / 10000
+			pos.Fee += fee
+			pos.Quantity -= qty
+			pos.ExitedQty += qty
+			pos.ExitValue += qty * price
+			pos.ExitPrice = pos.ExitValue / pos.ExitedQty
+			pos.RealizedPnL += pnl
+			pos.UpdatedAt = nowMs
+			if pos.Quantity <= stockPaperQtyEpsilon {
+				pos.Quantity, pos.Status, pos.ClosedAt, pos.CloseReason = 0, StockPaperClosed, nowMs, reason
+				closed = true
+			}
+			if err := tx.Save(&pos).Error; err != nil {
+				return err
+			}
+			return tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
+				"cash": gorm.Expr("cash + ?", qty*price-fee), "updated_at": nowMs}).Error
+		})
 	})
 	return pnl, closed, fee, err
 }
