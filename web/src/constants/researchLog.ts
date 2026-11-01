@@ -30,6 +30,25 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-stop-tp',
+    date: '2026-11-01',
+    title: '因子量化-加密：单币止损阈值与分批止盈',
+    domain: '加密 · 因子量化程序化交易员',
+    verdict: 'partial',
+    verdictText: '保留 20% 止损 · 止盈无增量',
+    idea: '用户要求把因子量化-加密的空单止损从 +50% 降到 20%、多单加 −20% 止损，并问止损阈值是否合理、能否分批止盈。预注册 11 个变体，用 Backtrader 重放 ls_invvol_protected_v1（冻结 h=3 ensemble，5bp+3bp 加真实资金费，日线，同根 K 线先止损）：无止损、现行空 50%、多空 30/20/15/10%、波动缩放 2.5σ√3，以及在 20% 之上叠加的 4 种止盈：10% 止盈一半、10%/20% 各 1/3、移动止损、止盈一半后保本。判定以 forward（2026-05 起）为主，要求块自助法 P≥0.90 且 val 同向。',
+    bullets: [
+      'S0 重放复现此前描述性回测（val +27.1%，forward −12.7%），撮合与记账未被扩展改变。',
+      '20% 优于现行空 50%：forward −8.3% 对 −17.3%，Sharpe −0.56 对 −1.20，回撤 25.8% 对 31.3%；val +38.4% 对 +25.3%。两段同向，但 P(差<0)=0.14，不显著。forward 中约 11% 的空单持仓触发 20% 止损。',
+      '其他止损无一达标：10% 在 forward 最好（−2.8%），但 val 变差；15% 与波动缩放都不稳定。',
+      '分批止盈 T1/T2 在 val 与 20% 持平，在 forward 更差，净收益更低；保本止损和移动止损两段都更差。但移动止损受日线“同根先高后低”的悲观假设影响很大，不能据此断定无效。',
+    ],
+    conclusion:
+      '保留用户选择的多空 20% 止损（PR #60），不接入止盈。所有变体 forward 都为负，问题在入场信号而非出场。移动止损若要公平评估，需用 1h K 线重做并另行预注册。',
+    source:
+      'scripts/backtest/fq_stop_tp_study.py · scripts/backtest/quantjourney.py · docs/research/2026-11-01-fq-stop-tp-prereg.md · docs/research/2026-11-01-fq-stop-tp-study.md',
+  },
+  {
     id: 'orderflow-vwap',
     date: '2026-11-01',
     title: '主动买卖差（delta/CVD）与 VWAP 偏离：相对已有指标的增量',

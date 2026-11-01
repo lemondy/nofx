@@ -73,6 +73,19 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-01</div>
 
+<article data-v="part" data-id="fq-stop-tp">
+<h2>因子量化-加密：单币止损阈值与分批止盈 <span class="tag t-part">保留 20% 止损 · 止盈无增量</span><span class="dom">加密 · 因子量化程序化交易员</span></h2>
+<p class="k">思路：用户要求把因子量化-加密的空单止损从 +50% 降到 20%、多单加 −20% 止损，并问止损阈值是否合理、能否分批止盈。预注册 11 个变体，用 Backtrader 重放 ls_invvol_protected_v1（冻结 h=3 ensemble，5bp+3bp 加真实资金费，日线，同根 K 线先止损）：无止损、现行空 50%、多空 30/20/15/10%、波动缩放 2.5σ√3，以及在 20% 之上叠加的 4 种止盈：10% 止盈一半、10%/20% 各 1/3、移动止损、止盈一半后保本。判定以 forward（2026-05 起）为主，要求块自助法 P≥0.90 且 val 同向。</p>
+<ul>
+<li>S0 重放复现此前描述性回测（val +27.1%，forward −12.7%），撮合与记账未被扩展改变。</li>
+<li>20% 优于现行空 50%：forward −8.3% 对 −17.3%，Sharpe −0.56 对 −1.20，回撤 25.8% 对 31.3%；val +38.4% 对 +25.3%。两段同向，但 P(差&lt;0)=0.14，不显著。forward 中约 11% 的空单持仓触发 20% 止损。</li>
+<li>其他止损无一达标：10% 在 forward 最好（−2.8%），但 val 变差；15% 与波动缩放都不稳定。</li>
+<li>分批止盈 T1/T2 在 val 与 20% 持平，在 forward 更差，净收益更低；保本止损和移动止损两段都更差。但移动止损受日线“同根先高后低”的悲观假设影响很大，不能据此断定无效。</li>
+</ul>
+<p><b>结论：</b>保留用户选择的多空 20% 止损（PR #60），不接入止盈。所有变体 forward 都为负，问题在入场信号而非出场。移动止损若要公平评估，需用 1h K 线重做并另行预注册。</p>
+<p class="src">来源：<code>scripts/backtest/fq_stop_tp_study.py</code> · <code>scripts/backtest/quantjourney.py</code> · <code>docs/research/2026-11-01-fq-stop-tp-prereg.md</code> · <code>docs/research/2026-11-01-fq-stop-tp-study.md</code></p>
+</article>
+
 <article data-v="no" data-id="orderflow-vwap">
 <h2>主动买卖差（delta/CVD）与 VWAP 偏离：相对已有指标的增量 <span class="tag t-no">无增量</span><span class="dom">加密 · 大模型提示词指标</span></h2>
 <p class="k">思路：用户问能否给大模型交易链路加均线、VWAP、布林带、RSI、MACD、成交量、delta、CVD、成交量分布和大单。前五项提示词已有；成交量分布 10-26 研究已关闭；大单需要逐笔数据、成本高。剩下的 delta/CVD 和 VWAP 能从已拉取的 K 线零成本算出，于是先做预注册离线验证：100 币 1h K 线（2025-10-15～2026-10-16），6 个特征（4h/24h 主动买卖失衡、价格未解释的资金流、距 24h/当日/7 日 VWAP 的 ATR 倍数）× 未来 4h/24h 截面超额收益，门槛为 G0 零假设校准、G1 开发集（|t|≥3 且扣除 RSI/MACD/EMA/布林/量比/近期涨跌后的偏 IC 同号 |t|≥2）、G2 留出集（2026-07 起同向）、G3 五分位多空扣 0.16% 往返成本仍为正。</p>
