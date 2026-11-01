@@ -430,7 +430,7 @@ func TestLiquidationClosesEntireAccountAtMarks(t *testing.T) {
 	_, err = p.OpenLong("ETHUSDT", 4, 10)
 	must(t, err)
 	limit(t, p, "BUY", "LONG", 1, 10, false)
-	f.step(time.Second, 89)
+	f.step(readFreshWindow+time.Second, 89)
 	pos, err := p.GetPositions()
 	must(t, err)
 	if len(pos) != 0 {
@@ -787,7 +787,7 @@ func TestPlacementMinuteDoesNotUseOldExtremes(t *testing.T) {
 	if summary(t, p).TradeCount != 1 {
 		t.Fatal("pre-order low fired SL")
 	}
-	f.step(time.Second, 89) // a sampled live quote is valid, even within a minute
+	f.step(readFreshWindow+time.Second, 89) // a sampled live quote is valid, even within a minute
 	if summary(t, p).TradeCount != 2 {
 		t.Fatal("live quote failed to trigger")
 	}
@@ -1135,7 +1135,7 @@ func TestReadsServeCachedLedgerDuringFeedOutage(t *testing.T) {
 	f.mu.Lock()
 	calls := f.priceCalls
 	f.mu.Unlock()
-	f.step(5 * time.Second, 100)
+	f.step(5*time.Second, 100)
 	if _, err := p.GetPositions(); err != nil {
 		t.Fatalf("positions during outage must serve cache, got %v", err)
 	}
