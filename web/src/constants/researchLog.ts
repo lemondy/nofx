@@ -30,6 +30,25 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'orderflow-vwap',
+    date: '2026-11-01',
+    title: '主动买卖差（delta/CVD）与 VWAP 偏离：相对已有指标的增量',
+    domain: '加密 · 大模型提示词指标',
+    verdict: 'none',
+    verdictText: '无增量',
+    idea: '用户问能否给大模型交易链路加均线、VWAP、布林带、RSI、MACD、成交量、delta、CVD、成交量分布和大单。前五项提示词已有；成交量分布 10-26 研究已关闭；大单需要逐笔数据、成本高。剩下的 delta/CVD 和 VWAP 能从已拉取的 K 线零成本算出，于是先做预注册离线验证：100 币 1h K 线（2025-10-15～2026-10-16），6 个特征（4h/24h 主动买卖失衡、价格未解释的资金流、距 24h/当日/7 日 VWAP 的 ATR 倍数）× 未来 4h/24h 截面超额收益，门槛为 G0 零假设校准、G1 开发集（|t|≥3 且扣除 RSI/MACD/EMA/布林/量比/近期涨跌后的偏 IC 同号 |t|≥2）、G2 留出集（2026-07 起同向）、G3 五分位多空扣 0.16% 往返成本仍为正。',
+    bullets: [
+      'G0 通过：标签置换 100 次 0 次误报（上限 10），合成随机游走面板 12 格全不通过。',
+      '原始方向是短期均值回归：价格在 VWAP 之上、主动买入偏多的币随后 4–24h 跑输，dev 与 holdout 都显著（vwap24_dist/h4 IC −0.033 t −10.1 → −0.023 t −5.2）。',
+      '但信息已被已有指标覆盖：vwap24_dist 与 (close−EMA20)/ATR 秩相关 0.93、与 RSI14 0.89；扣除后偏 IC 反号或≈0，G1 全部不通过。主动买卖失衡与已有指标相关仅 0.1–0.4，但偏 IC 在 holdout 不显著且方向反转。',
+      '经济性：|IC|≈0.02–0.03，4h 多空毛收益每期 0.02%–0.05%，远低于 0.16% 往返成本；vwap24_dist/h24 净 +0.12%/期但 P(均值>0)=0.67<0.90。',
+    ],
+    conclusion:
+      '0/12 通过，不加入提示词、不开 A/B。线索（未预注册，不作结论）：vwap24_dist 控制已有指标后偏 IC 在 dev/holdout 均为正（t 2.8/2.6），若要验证需新预注册并计入 K。',
+    source:
+      'scripts/backtest/orderflow_vwap_study.py · docs/research/2026-11-01-orderflow-vwap-prereg.md · docs/research/2026-11-01-orderflow-vwap-study.md',
+  },
+  {
     id: 'factor-quant-paper',
     date: '2026-11-01',
     title: '因子量化交易员（程序化模拟盘，不经过大模型）',
