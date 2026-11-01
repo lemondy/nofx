@@ -70,6 +70,15 @@ test('switching market applies per-market defaults and toggles crypto-only field
   )
   expect(screen.queryByTestId('factor-leverage')).not.toBeInTheDocument()
   expect(screen.queryByTestId('factor-short_stop_pct')).not.toBeInTheDocument()
+  // the US-only cost inputs appear
+  expect(screen.getByTestId('factor-us_fee_bps')).toHaveAttribute(
+    'placeholder',
+    expect.stringContaining('10')
+  )
+  expect(screen.getByTestId('factor-us_slippage_bps')).toHaveAttribute(
+    'placeholder',
+    expect.stringContaining('3')
+  )
   // stale default = horizon 0 + 2
   expect(screen.getByTestId('factor-max_stale_days')).toHaveAttribute(
     'placeholder',
@@ -88,6 +97,33 @@ test('switching market applies per-market defaults and toggles crypto-only field
   )
   expect(screen.getByTestId('factor-leverage')).toBeInTheDocument()
   expect(screen.getByTestId('factor-short_stop_pct')).toBeInTheDocument()
+  expect(screen.queryByTestId('factor-us_fee_bps')).not.toBeInTheDocument()
+  expect(screen.queryByTestId('factor-us_slippage_bps')).not.toBeInTheDocument()
+})
+
+test('US cost inputs: 0 is a real value, empty clears to null (backend default)', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  fireEvent.click(screen.getByTestId('factor-market-us'))
+
+  fireEvent.change(screen.getByTestId('factor-us_fee_bps'), {
+    target: { value: '0' },
+  })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ us_fee_bps: 0 })
+  )
+  fireEvent.change(screen.getByTestId('factor-us_slippage_bps'), {
+    target: { value: '7.5' },
+  })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ us_slippage_bps: 7.5 })
+  )
+  fireEvent.change(screen.getByTestId('factor-us_fee_bps'), {
+    target: { value: '' },
+  })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ us_fee_bps: null })
+  )
 })
 
 test('numeric and text fields emit updates', () => {

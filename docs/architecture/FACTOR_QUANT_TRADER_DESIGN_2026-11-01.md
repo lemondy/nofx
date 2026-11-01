@@ -93,8 +93,15 @@
 | `rebalance_band_pct` | float | 0.10 | 某个币的目标名义与当前持仓之差小于目标的 10% 时不交易（减少手续费） |
 | `min_order_usdt` | float | 10 | 单笔最小名义 |
 | `short_stop_pct` | float | 0.5 | 仅加密：空头灾难止损，触发价 = 入场价 ×(1+0.5)；填 0 关闭 |
+| `us_fee_bps` | float | 10 | 仅美股：每笔成交手续费（基点，10 = Binance 现货 0.1%），从模拟现金扣除并记在持仓行 `fee`；填 0 关闭；范围 0–100 |
+| `us_slippage_bps` | float | 3 | 仅美股：每笔成交滑点（基点）。买入价 = 报价×(1+bps)，卖出价 = 报价×(1−bps)；填 0 关闭；范围 0–100 |
 | `max_stale_days` | int | horizon+2 | `as_of` 落后今天（UTC）超过这么多天，就不按它调仓，并告警 |
 | `targets_path` | string | `$FACTOR_MINING_DIR/{market}/quant_targets.json`，未设置时为 `<repo>/data/factor_mining/...` | 覆盖路径，测试用 |
+
+**交易成本（2026-11-01 补充）**
+
+- 加密：模拟合约撮合已计入 taker 手续费与滑点（见 paper 账户配置），并且从 2026-11-01 起结算永续**资金费率**：持仓每跨过一次币安资金费结算（00/08/16 UTC，个别币种 4h/1h），按「数量 × 当次标记价 × 费率」多头付、空头收（费率为负则相反），写入钱包与 `account_income`（FUNDING_FEE，账户类型 paper），平仓后体现在持仓的 `funding_fee` / `net_pnl`。
+- 美股：成交按上表两个字段计滑点与手续费。买入的现金检查包含手续费；规划器按 `权益 ÷ (1 + (费率+滑点))` 定仓位规模，保证满仓目标在扣完成本后仍买得起。
 
 ### 运行循环
 

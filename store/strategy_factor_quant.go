@@ -50,6 +50,13 @@ type FactorQuantConfig struct {
 	// MaxStaleDays: targets whose as_of is older than this many days (UTC)
 	// are not traded; default horizon+2.
 	MaxStaleDays int `json:"max_stale_days,omitempty"`
+	// USFeeBps / USSlippageBps: US only, trading costs of the bStock paper
+	// ledger, in basis points per fill. Buys fill at quote*(1+slippage), sells
+	// at quote*(1-slippage); the fee is a fraction of the notional deducted from
+	// paper cash. nil = defaults (fee 10 = Binance spot 0.1%, slippage 3);
+	// explicit 0 disables. Valid 0..100.
+	USFeeBps      *float64 `json:"us_fee_bps,omitempty"`
+	USSlippageBps *float64 `json:"us_slippage_bps,omitempty"`
 	// TargetsPath overrides $FACTOR_MINING_DIR/{market}/quant_targets.json.
 	TargetsPath string `json:"targets_path,omitempty"`
 }
@@ -60,6 +67,9 @@ const (
 	defaultFactorQuantBand          = 0.10
 	defaultFactorQuantMinOrder      = 10.0
 	defaultFactorQuantShortStop     = 0.5
+	defaultFactorQuantUSFeeBps      = 10.0
+	defaultFactorQuantUSSlippageBps = 3.0
+	maxFactorQuantUSCostBps         = 100.0
 )
 
 func (f *FactorQuantConfig) IsCrypto() bool { return f != nil && f.Market == FactorQuantMarketCrypto }
@@ -119,6 +129,22 @@ func (f *FactorQuantConfig) EffectiveShortStopPct() float64 {
 	return *f.ShortStopPct
 }
 
+// EffectiveUSFeeBps: per-fill fee of the US paper ledger, basis points.
+func (f *FactorQuantConfig) EffectiveUSFeeBps() float64 {
+	if f == nil || f.USFeeBps == nil {
+		return defaultFactorQuantUSFeeBps
+	}
+	return *f.USFeeBps
+}
+
+// EffectiveUSSlippageBps: per-fill adverse slippage of the US paper ledger, basis points.
+func (f *FactorQuantConfig) EffectiveUSSlippageBps() float64 {
+	if f == nil || f.USSlippageBps == nil {
+		return defaultFactorQuantUSSlippageBps
+	}
+	return *f.USSlippageBps
+}
+
 // EffectiveMaxStaleDays: configured value, else horizon+2. fileHorizon is the
 // horizon given by the targets file, used when the config follows the file.
 func (f *FactorQuantConfig) EffectiveMaxStaleDays(fileHorizon int) int {
@@ -157,6 +183,11 @@ func (f *FactorQuantConfig) Validate() error {
 	}
 	if f.ShortStopPct != nil && (fqBadFloat(*f.ShortStopPct) || *f.ShortStopPct < 0) {
 		return fmt.Errorf("factor_quant short_stop_pct must be >= 0")
+	}
+	for name, v := range map[string]*float64{"us_fee_bps": f.USFeeBps, "us_slippage_bps": f.USSlippageBps} {
+		if v != nil && (fqBadFloat(*v) || *v < 0 || *v > maxFactorQuantUSCostBps) {
+			return fmt.Errorf("factor_quant %s must be in [0,%g]", name, maxFactorQuantUSCostBps)
+		}
 	}
 	if f.MaxStaleDays < 0 {
 		return fmt.Errorf("factor_quant max_stale_days must be >= 0")

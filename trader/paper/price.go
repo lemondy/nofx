@@ -37,7 +37,41 @@ type SymbolRules interface {
 	QuantityRules(symbol string) (QuantityRule, error)
 }
 
+// FundingEvent is one settled perpetual funding payment time. Rate is the
+// decimal rate for the interval (positive: longs pay shorts). MarkPrice is the
+// venue's mark price at settlement (0 = unknown; the simulator then falls back
+// to its latest mark).
+type FundingEvent struct {
+	Time      time.Time
+	Rate      float64
+	MarkPrice float64
+}
+
+// FundingSource is optionally implemented by a PriceSource (or injected through
+// Config.Funding). FundingEvents returns the settlements with Time in
+// [from, to], oldest first. Without a source no funding is simulated.
+type FundingSource interface {
+	FundingEvents(symbol string, from, to time.Time) ([]FundingEvent, error)
+}
+
 type marketPriceSource struct{ client *futures.Client }
+
+// getFundingSettlements is a seam so tests can observe the bnweight priority.
+var getFundingSettlements = market.GetFundingSettlementsPriority
+
+// FundingEvents reads Binance's public /fapi/v1/fundingRate (Normal priority:
+// settlement is applied inside Advance, which order placement waits on).
+func (s *marketPriceSource) FundingEvents(symbol string, from, to time.Time) ([]FundingEvent, error) {
+	rows, err := getFundingSettlements(symbol, from, to, bnweight.Normal)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FundingEvent, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, FundingEvent{Time: r.Time, Rate: r.Rate, MarkPrice: r.MarkPrice})
+	}
+	return out, nil
+}
 
 // getKlinesRange is a seam so tests can observe the bnweight priority used.
 var getKlinesRange = market.GetKlinesRangePriority

@@ -151,10 +151,25 @@ func (p *PaperFuturesTrader) GetOrderBook(symbol string, depth int) ([][]float64
 	return nil, nil, fmt.Errorf("price source does not provide an order book")
 }
 
+// PositionFunding returns the cumulative funding of each open position keyed
+// "SYMBOL:SIDE" (positive = received). Kept off GetPositions so that map stays
+// Binance-shaped.
+func (p *PaperFuturesTrader) PositionFunding() map[string]float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]float64, len(p.s.Positions))
+	for key, v := range p.s.Positions {
+		out[key] = v.Funding
+	}
+	return out
+}
+
 type AccountSummary struct {
 	InitialBalance, WalletBalance, Equity float64
 	RealizedPnL, UnrealizedPnL, TotalFees float64
-	TradeCount                            int
+	// TotalFunding: cumulative perpetual funding, positive = received.
+	TotalFunding float64
+	TradeCount   int
 }
 
 func (p *PaperFuturesTrader) Summary() (AccountSummary, error) {
@@ -164,5 +179,5 @@ func (p *PaperFuturesTrader) Summary() (AccountSummary, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	u, _, _ := p.account()
-	return AccountSummary{InitialBalance: p.row.InitialBalance, WalletBalance: p.s.Wallet, Equity: p.s.Wallet + u, RealizedPnL: p.s.Realized, UnrealizedPnL: u, TotalFees: p.s.Fees, TradeCount: p.s.TradeCount}, nil
+	return AccountSummary{InitialBalance: p.row.InitialBalance, WalletBalance: p.s.Wallet, Equity: p.s.Wallet + u, RealizedPnL: p.s.Realized, UnrealizedPnL: u, TotalFees: p.s.Fees, TotalFunding: p.s.FundingFees, TradeCount: p.s.TradeCount}, nil
 }
