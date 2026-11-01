@@ -50,6 +50,23 @@ vi.mock('../components/strategy/StockConfigEditor', () => ({
     paper_trading: true,
   },
 }))
+vi.mock('../components/strategy/FactorQuantConfigEditor', () => ({
+  FactorQuantConfigEditor: ({ config }: any) => (
+    <pre data-testid="factor-editor">{JSON.stringify(config)}</pre>
+  ),
+  defaultFactorQuantConfig: {
+    market: 'crypto',
+    horizon: 3,
+    leverage: 3,
+    short_stop_pct: 0.5,
+  },
+  factorQuantTexts: {
+    typeLabel: { zh: '因子量化（程序化）', en: 'Factor Quant (programmatic)' },
+    typeDesc: { zh: '因子量化描述', en: 'factor quant desc' },
+    sectionTitle: { zh: '因子量化配置', en: 'Factor quant configuration' },
+    runtimeNote: { zh: 'factorRuntimeNote', en: 'factorRuntimeNote' },
+  },
+}))
 vi.mock('../components/strategy/VersionsPanel', () => ({
   VersionsPanel: () => <div data-testid="versions-panel" />,
 }))
@@ -296,6 +313,46 @@ test('selecting US stocks shows StockConfigEditor with paper-on defaults and hid
     'promptSections',
     'customPrompt',
     'gridConfig',
+  ]) {
+    expect(screen.queryByText(hidden)).not.toBeInTheDocument()
+  }
+  // publish settings stay available for every strategy type
+  expect(screen.getByText('publishSettings')).toBeInTheDocument()
+})
+
+test('selecting factor quant shows the program editor and hides AI sections/tabs', async () => {
+  installFetch()
+  render(<StrategyStudioPage />)
+  await screen.findByText('Saved Custom')
+  // ai_trading: crypto sections visible, factor editor absent
+  expect(screen.getByText('coinSource')).toBeInTheDocument()
+  expect(screen.queryByTestId('factor-editor')).not.toBeInTheDocument()
+
+  fireEvent.click(screen.getByTestId('strategy-type-factor-quant'))
+
+  // factor_quant is programmatic: the crypto-engine tabs are hidden
+  expect(screen.queryByText('promptPreview')).not.toBeInTheDocument()
+  expect(screen.queryByText('aiTestRun')).not.toBeInTheDocument()
+  expect(screen.getByText('factorRuntimeNote')).toBeInTheDocument()
+  expect(screen.getByTestId('versions-panel')).toBeInTheDocument()
+
+  // a fresh config is initialized with the crypto defaults
+  expect(screen.getByTestId('factor-editor')).toHaveTextContent(
+    '"market":"crypto"'
+  )
+  expect(screen.getByTestId('factor-editor')).toHaveTextContent('"horizon":3')
+  expect(screen.getByTestId('factor-editor')).toHaveTextContent(
+    '"leverage":3,"short_stop_pct":0.5'
+  )
+  expect(screen.getByText('因子量化配置')).toBeInTheDocument()
+  for (const hidden of [
+    'coinSource',
+    'indicators',
+    'riskControl',
+    'promptSections',
+    'customPrompt',
+    'gridConfig',
+    'stockConfig',
   ]) {
     expect(screen.queryByText(hidden)).not.toBeInTheDocument()
   }

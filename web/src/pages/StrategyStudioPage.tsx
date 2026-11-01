@@ -26,6 +26,7 @@ import {
   Zap,
   Activity,
   Save,
+  Sigma,
   Sparkles,
   Eye,
   Play,
@@ -57,6 +58,11 @@ import {
   StockConfigEditor,
   defaultStockConfig,
 } from '../components/strategy/StockConfigEditor'
+import {
+  FactorQuantConfigEditor,
+  defaultFactorQuantConfig,
+  factorQuantTexts,
+} from '../components/strategy/FactorQuantConfigEditor'
 import { TokenEstimateBar } from '../components/strategy/TokenEstimateBar'
 import { VersionsPanel } from '../components/strategy/VersionsPanel'
 import { t } from '../i18n/translations'
@@ -102,6 +108,7 @@ export function StrategyStudioPage() {
   const [expandedSections, setExpandedSections] = useState({
     gridConfig: true,
     stockConfig: true,
+    factorConfig: true,
     coinSource: true,
     indicators: false,
     riskControl: false,
@@ -667,11 +674,13 @@ export function StrategyStudioPage() {
 
   // Get current strategy type (default to ai_trading if not set)
   const currentStrategyType = editingConfig?.strategy_type || 'ai_trading'
-  // us_stock prompts are built at run time by the program, so the crypto
-  // prompt preview / AI test (which call the crypto engine) are not offered.
-  const isStockStrategy = currentStrategyType === 'us_stock'
+  // us_stock and factor_quant are programmatic: their prompts are built at
+  // run time by the program (or not at all), so the crypto-engine prompt
+  // preview / AI test tabs are not offered.
+  const isProgramStrategy =
+    currentStrategyType === 'us_stock' || currentStrategyType === 'factor_quant'
   const effectiveRightTab =
-    isStockStrategy && activeRightTab !== 'versions'
+    isProgramStrategy && activeRightTab !== 'versions'
       ? 'versions'
       : activeRightTab
 
@@ -701,6 +710,23 @@ export function StrategyStudioPage() {
         <StockConfigEditor
           config={editingConfig.stock_config}
           onChange={(stockConfig) => updateConfig('stock_config', stockConfig)}
+          disabled={selectedStrategy?.is_default}
+          language={language}
+        />
+      ),
+    },
+    // Factor Quant Config - only for factor_quant (programmatic, no LLM)
+    {
+      key: 'factorConfig' as const,
+      icon: Sigma,
+      title: ts(factorQuantTexts.sectionTitle, language),
+      forStrategyType: 'factor_quant' as const,
+      content: editingConfig?.factor_quant_config && (
+        <FactorQuantConfigEditor
+          config={editingConfig.factor_quant_config}
+          onChange={(factorQuantConfig) =>
+            updateConfig('factor_quant_config', factorQuantConfig)
+          }
           disabled={selectedStrategy?.is_default}
           language={language}
         />
@@ -1105,14 +1131,15 @@ export function StrategyStudioPage() {
                       {tr('strategyType')}
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
                     <button
                       onClick={() => {
                         if (!selectedStrategy?.is_default) {
                           updateConfig('strategy_type', 'ai_trading')
-                          // Clear grid config when switching to AI trading
+                          // Clear program configs when switching to AI trading
                           updateConfig('grid_config', undefined)
                           updateConfig('stock_config', undefined)
+                          updateConfig('factor_quant_config', undefined)
                         }
                       }}
                       disabled={selectedStrategy?.is_default}
@@ -1198,6 +1225,42 @@ export function StrategyStudioPage() {
                         {tr('usStockDesc')}
                       </p>
                     </button>
+                    <button
+                      data-testid="strategy-type-factor-quant"
+                      onClick={() => {
+                        if (!selectedStrategy?.is_default) {
+                          updateConfig('strategy_type', 'factor_quant')
+                          // Initialize factor quant config if not exists
+                          // (crypto, 3-day rebalance, paper leverage 3,
+                          // short stop on)
+                          if (!editingConfig.factor_quant_config) {
+                            updateConfig(
+                              'factor_quant_config',
+                              defaultFactorQuantConfig
+                            )
+                          }
+                        }
+                      }}
+                      disabled={selectedStrategy?.is_default}
+                      className={cn(
+                        `p-3 rounded-md border transition-colors text-left ${
+                          editingConfig.strategy_type === 'factor_quant'
+                            ? 'border-brand bg-brand-soft'
+                            : 'border-line hover:border-brand/50'
+                        }`,
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50'
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Sigma className="w-4 h-4 text-brand" />
+                        <span className="text-sm font-medium text-fg">
+                          {ts(factorQuantTexts.typeLabel, language)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-fg-3 text-left">
+                        {ts(factorQuantTexts.typeDesc, language)}
+                      </p>
+                    </button>
                   </div>
                 </div>
               )}
@@ -1251,7 +1314,7 @@ export function StrategyStudioPage() {
             onChange={setActiveRightTab}
             className="shrink-0 gap-3 overflow-x-auto px-3"
             items={[
-              ...(!isStockStrategy
+              ...(!isProgramStrategy
                 ? [
                     {
                       key: 'prompt' as const,
@@ -1273,9 +1336,11 @@ export function StrategyStudioPage() {
             ]}
           />
 
-          {isStockStrategy && (
+          {isProgramStrategy && (
             <p className="flex-shrink-0 px-3 py-2 text-xs text-fg-3 border-b border-line">
-              {tr('stockPromptRuntimeNote')}
+              {currentStrategyType === 'factor_quant'
+                ? ts(factorQuantTexts.runtimeNote, language)
+                : tr('stockPromptRuntimeNote')}
             </p>
           )}
 

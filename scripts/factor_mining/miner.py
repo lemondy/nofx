@@ -615,6 +615,12 @@ class Miner:
             except Exception as exc:
                 import sys
                 print(f'live_scores export failed for {market}: {type(exc).__name__}: {exc}', file=sys.stderr)
+            try:
+                from .quant_targets import write_targets
+                write_targets(market, self.root, panels=panels)
+            except Exception as exc:
+                import sys
+                print(f'quant_targets export failed for {market}: {type(exc).__name__}: {exc}', file=sys.stderr)
             return output
         except BaseException as exc:
             error = f'{type(exc).__name__}: {exc}'
