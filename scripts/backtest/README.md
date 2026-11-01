@@ -250,3 +250,15 @@ $P us SPY QQQ IWM                       # data/quantjourney/prices/<SYM>.json
 $P klines BTCUSDT 1h --start 2019-12-01 # data/volrix/klines/<SYM>_<interval>.json（已有文件时无需 --start）
 $P check --cross-check                  # 校验全部缓存；--cross-check 对照纳斯达克 / 币安官方数据
 ```
+
+## 概率论检验（probability_study / barrier_strategy / live_kelly）
+
+出发点是可选停止定理：价格（扣成本后）若为鞅，任何止盈止损或加减仓规则都没有正期望。结论见 `docs/research/2026-11-01-probability-martingale-study.md`。
+
+| 命令 | 内容 |
+|---|---|
+| `python -m scripts.backtest.probability_study --out .prob_out/report.md --json .prob_out/report.json [--parts P1,P2,P3]` | P1 方差比（Lo–MacKinlay 稳健 z*）；P2 双障碍命中率与跳空感知期望检验；P3 Kelly 前段估计、后段 Backtrader 每日再平衡实测。统计检验不下单，只有 P3 走 Backtrader |
+| `python -m scripts.backtest.barrier_strategy --out .prob_out/barrier.md --json .prob_out/barrier.json` | 由 P2 偏离预声明的 BARRIER_LONG（美股 ETF）与 BARRIER_SHORT（加密 32 币篮子），原生 OCO，同敞口基准，G1–G5 门槛 |
+| `python -m scripts.backtest.live_kelly --db data/data.db --out .prob_out/live_kelly.md --json .prob_out/live_kelly.json` | 只读数据库，实盘已平仓交易的 R 值、Kelly、Beta 后验与所需样本量 |
+
+注意：做空的收益不是对数价格变化取反（跌 2s 赚 1−e^(−2s)，涨 1s 亏 e^(s)−1）。用对数价格衡量空头会把 σ²/2 的凸性拖累算成优势，评估空头一律以 Backtrader 仓位收益为准。

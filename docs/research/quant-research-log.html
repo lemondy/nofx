@@ -84,6 +84,45 @@ th{color:var(--mut);font-weight:600}
 <p class="src">来源：<code>scripts/factor_mining/quant_targets.py</code> · <code>trader/auto_trader_factor_quant*.go</code> · <code>store/strategy_factor_quant.go</code> · <code>docs/architecture/FACTOR_QUANT_TRADER_DESIGN_2026-11-01.md</code></p>
 </article>
 
+<article data-v="no" data-id="ensemble-forward">
+<h2>加密因子 ensemble 前向校验（市场中性组合可行性） <span class="tag t-no">前向未通过</span><span class="dom">加密 · 因子挖掘</span></h2>
+<p class="k">思路：因子分数目前只作为 factor_ensemble 写进 AI 提示词当参考：预测目标是截面相对收益，而交易员做的是少数币的方向性交易，信号宽度被浪费，A/B 模拟盘也测不出差异（10 个配对日，日差 −0.45%±1.09%）。替代方案是把 ensemble 做成独立的市场中性组合直接交易。前提是 ensemble 样本外有效，因此冻结当前成分（h=1/3/7 分别为 7/14/14 个因子），只读 2026-05-04 之后约 180 天从未参与选择的数据做预声明检验。</p>
+<ul>
+<li>A1 信号层：前向 RankIC 均为正且显著，h=1/3/7 分别为 0.065（t 4.02）、0.070（t 2.86）、0.075（t 2.42），前后两半同号，IC 水平与 train/val 相当。</li>
+<li>A2 五分位多空扣手续费和资金费：每期均值年化 −129%/−85%/−196%，全部未通过；按预声明，B 部分（Backtrader 市场中性组合、6 道门槛）没有运行。</li>
+<li>诊断：两腿中位数之差为正（h=3 +1.26%/期，h=7 +1.61%/期），排序方向对；但因子排最后的一档混入暴涨币（AKEUSDT 一周 +196%/+264%，QUSDT +343%，BRUSDT +108%），h=7 五分位均值从 Q1 到 Q5 为 4.1%、2.3%、1.3%、1.4%、0.5%，单调递减。秩相关不受右尾影响，等权做空却正好吃下右尾。</li>
+</ul>
+<p><b>结论：</b>不做独立组合，维持仅作参考。风险提示：factor_ensemble 低 pct（因子看空）集中了暴涨币，据此做空等于承担右尾，提示词是否追加说明由用户决定。后续方向（只做多腿、空头剔除暴涨/新币或按波动率缩仓、挖掘目标改为截尾收益）需要新的预声明实验，并计入 K。</p>
+<p class="src">来源：<code>scripts/factor_mining/ensemble_forward_study.py</code> · <code>docs/research/2026-11-01-ensemble-forward-study.md</code></p>
+</article>
+
+<article data-v="no" data-id="alpha101">
+<h2>WorldQuant Alpha101 因子（BigQuant 复现文章） <span class="tag t-no">无可融合因子</span><span class="dom">加密 + 美股 · 截面因子</span></h2>
+<p class="k">思路：用户给出 BigQuant 三篇文章（Alpha101 复现与解析、附录三 SQL、附录四 Alpha#100 因子分析），问能否融合进本系统。系统已有 qlib 风格因子挖掘（Alpha158 种子 + 每晚变异/LLM 搜索 + 前向校验，分数仅作 factor_ensemble 提示参考），因此融合路径是把 Alpha101 作为种子进入 zoo，门槛与 zoo 完全一致：冻结评估器、K=现有 ledger 试验数+本批（t_req≈4.6）、val 达标、与已接受因子相关&lt;0.8、加密扣资金费后仍达标。</p>
+<ul>
+<li>按论文原式手工翻译 100 个公式（#56 缺市值跳过；小数窗口 floor、scale 保留符号、行业中性化无行业数据改为截面去均值），测试覆盖算子手算、逐个因果性、原文逐字一致；附录三 SQL 由用户登录后只读核对，发现 scale 丢符号、#54/#60/#29/#64 笔误、#96 残留调试过滤，不能当标准答案。</li>
+<li>加密（60 币池，h=1/3/7）：截面 IC 存在，h=1 有 9 个过多重检验门槛（#5/#38/#33/#49/#44/#51/#35/#84/#90，IC 0.02–0.04），但都是高换手短周期因子（每次调仓约 40% 换手、单边 0.08%），五分位多空扣费后 train −18%～−70%/年，全部停在 candidate；最接近的 #20 在 h=7 val t=5.3，但 train t 4.31 &lt; 4.59。</li>
+<li>美股（100 只 bStock 正股，h=5/10/20）：train t 最高 3.74（#36），val 全不显著；Alpha101 原设计持有期 0.6–6.4 天，本系统美股持有期≥5 天，且 vwap 只是 (H+L+C)/3 近似。</li>
+<li>与现有因子重叠：#33=rank(open/close) 与 Alpha158 的 OPEN0 相关 1.000，#38/OPEN0 0.88，#54/KSFT2 0.94，#40/CORR10 0.82；有效部分大多已被 zoo 覆盖。</li>
+</ul>
+<p><b>结论：</b>0 个可融合（accepted 0、redundant 0），不改挖掘流程与交易代码。若要再试，需先降低换手（decay 平滑或延长调仓）作为新的预声明实验，并计入 K。</p>
+<p class="src">来源：<code>scripts/factor_mining/alpha101.py</code> · <code>scripts/factor_mining/alpha101_study.py</code> · <code>docs/research/2026-11-01-alpha101-study.md</code> · <code>data/alpha101/</code></p>
+</article>
+
+<article data-v="no" data-id="probability-martingale">
+<h2>数学家视角：鞅、赌徒破产与 Kelly 检验 <span class="tag t-no">无可融合策略</span><span class="dom">加密 + 美股 ETF · 概率论</span></h2>
+<p class="k">思路：用户给出 CMU 教材 bws_book.pdf，要求从数学家角度、基于概率论尝试交易。核对后该书是证明写作入门（逻辑、归纳、集合、函数、模算术、组合计数），不讲期望、方差、随机游走、鞅或 Kelly；因此借用书中“精确命题 + 找反例 + 鸽笼式多重检验”的方法，概率工具来自标准概率论：可选停止定理说明价格为鞅时任何止盈止损/加减仓都无正期望，优势只能来自对鞅的偏离。</p>
+<ul>
+<li>P1 方差比（Lo–MacKinlay 稳健 z*，222 个检验，Holm 校正，前 60%/后 40% 同号才算稳定）：显著且稳定 0 个；BTC/ETH 日线与小时线 VR 0.93–1.16 均不显著，美股日线仅有轻微均值回归倾向。</li>
+<li>P2 双障碍（先碰止盈 2s 还是止损 1s 等 6 组，528 个检验）：命中率只有 EFA 多头 (2,1) 显著（0.402 对鞅 0.333），但 10 只 ETF 普遍偏高、约一半是权益漂移，另有向下跳空造成的偏差；按实际跳空成交价的期望检验 z=0.89。预声明 Backtrader 策略 BARRIER_LONG FAIL（后段 Sharpe 0.47 对同敞口持有 0.55，DSR 0.13，平台 3/15，ETF 1/10）。</li>
+<li>期望检验在加密篮子上找到 BNB/DOGE/XLM 带止损空头的 6 个稳定偏离；预声明 BARRIER_SHORT（32 币等权）FAIL：年化 −16%、回撤 85%、两半 −59%/−31%。原因是空头凸性：跌 2s 只赚 1−e^(−2s)、涨 1s 亏 e^(s)−1，按对数价格取反计量把 σ²/2 的方差拖累算成了优势（DOGE 约 0.07s，与观测 0.08s 吻合）。</li>
+<li>P3 Kelly：前段估的 f* 95% 区间大多跨 0（BTC −0.26～2.64），TLT 估出 4.5 倍、后段回撤 98%；ETH 半 Kelly 增长高于全 Kelly。公式没错，错在 μ 估不准，应使用半 Kelly 或更小。</li>
+<li>P4 nofx 实盘（ai_managed=1，293 笔可算 R，R 已扣手续费）：胜率 48.1%、赔率 0.78、E[R]=−0.077R（95% 区间 −0.147～−0.007，P(E[R]&gt;0)=1.6%），6 个 trader 全部为负，Kelly f*=−0.18：最优仓位为 0，问题在入场优势而非仓位。</li>
+</ul>
+<p><b>结论：</b>没有可融合的策略，不改交易代码。留下四条检查清单：止盈止损比例本身不创造期望；评估止盈止损规则看实际成交价的期望而不是命中率；高波动币做空每天承担约 σ²/2 的凸性拖累；先证明 E[R]&gt;0 再谈 Kelly，且只用半 Kelly 或更小。</p>
+<p class="src">来源：<code>scripts/backtest/probability_study.py</code> · <code>scripts/backtest/barrier_strategy.py</code> · <code>scripts/backtest/live_kelly.py</code> · <code>docs/research/2026-11-01-probability-martingale-study.md</code> · <code>data/math_book/</code></p>
+</article>
+
 <div class="day">2026-10-31</div>
 
 <article data-v="no" data-id="quantjourney-bt">

@@ -350,7 +350,7 @@ def equity_statistics(equity, initial=1000.):
 
 
 def run_rule(df, positions, *, notional=1000, commission, slippage, funding=None,
-             sizing='compound'):
+             sizing='compound', max_abs_target=1.0):
     """Independent Cerebro/BackBroker run, sized only when the target changes.
 
     New quantity = target * capital / signal close; fill at the next open.
@@ -360,7 +360,7 @@ def run_rule(df, positions, *, notional=1000, commission, slippage, funding=None
     """
     validate_frame(df)
     targets = np.asarray(positions, dtype=float)
-    if targets.shape != (len(df),) or not np.isfinite(targets).all() or (abs(targets) > 1+1e-12).any():
+    if targets.shape != (len(df),) or not np.isfinite(targets).all() or (abs(targets) > max_abs_target+1e-12).any():
         raise ValueError('positions 必须与 K 线等长、有限且位于 [-1,1]')
     if not all(math.isfinite(x) for x in (notional, commission, slippage)) or notional <= 0 or not 0 <= commission < 1 or not 0 <= slippage < 1:
         raise ValueError('notional/commission/slippage 参数不合法')
