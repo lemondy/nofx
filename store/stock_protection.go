@@ -41,7 +41,9 @@ func (s *StockPaperStore) SaveProtectionOrders(rows []StockProtectionOrder) erro
 	if len(rows) == 0 {
 		return fmt.Errorf("protection response has no order IDs")
 	}
-	return s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
+	return retryOnceOnBusy(func() error {
+		return s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
+	})
 }
 
 func (s *StockPaperStore) ListProtectionOrders(traderID, symbol string) ([]StockProtectionOrder, error) {
@@ -57,13 +59,26 @@ func (s *StockPaperStore) ListProtectionOrders(traderID, symbol string) ([]Stock
 // RetireProtectionOrders is called only after every leg has a verified terminal
 // status. Keeping the rows preserves the watermark and last protective prices.
 func (s *StockPaperStore) RetireProtectionOrders(traderID, symbol string) error {
-	return s.db.Model(&StockProtectionOrder{}).Where("trader_id = ? AND symbol = ?", traderID, symbol).Update("retired", true).Error
+	return retryOnceOnBusy(func() error {
+		return s.db.Model(&StockProtectionOrder{}).Where("trader_id = ? AND symbol = ?", traderID, symbol).Update("retired", true).Error
+	})
 }
 
 // BookProtectionStatus books only the new cumulative execution delta. Quote is
 // cumulative exchange quote proceeds, NOT the order's limit/trigger price.
 // CANCELED/EXPIRED can carry fills too (notably a partially filled OCO sibling).
+// A transient SQLITE_BUSY from an aligned crypto-cycle write burst is retried
+// once; the committed watermark makes the replay book nothing twice.
 func (s *StockPaperStore) BookProtectionStatus(key StockProtectionOrder, executed, quote, fee float64, status string, now time.Time) (qty, price, pnl float64, closed bool, err error) {
+	err = retryOnceOnBusy(func() error {
+		var e error
+		qty, price, pnl, closed, e = s.bookProtectionStatusOnce(key, executed, quote, fee, status, now)
+		return e
+	})
+	return
+}
+
+func (s *StockPaperStore) bookProtectionStatusOnce(key StockProtectionOrder, executed, quote, fee float64, status string, now time.Time) (qty, price, pnl float64, closed bool, err error) {
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		var leg StockProtectionOrder
 		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("trader_id = ? AND symbol = ? AND order_id = ?", key.TraderID, key.Symbol, key.OrderID).First(&leg).Error; e != nil {
@@ -188,6 +203,8 @@ func (s *StockPaperStore) UpdateProtectionClientID(traderID, symbol, orderID, cl
 	if clientID == "" {
 		return nil
 	}
-	return s.db.Model(&StockProtectionOrder{}).Where("trader_id = ? AND symbol = ? AND order_id = ?", traderID, symbol, orderID).
-		Update("client_order_id", clientID).Error
+	return retryOnceOnBusy(func() error {
+		return s.db.Model(&StockProtectionOrder{}).Where("trader_id = ? AND symbol = ? AND order_id = ?", traderID, symbol, orderID).
+			Update("client_order_id", clientID).Error
+	})
 }
