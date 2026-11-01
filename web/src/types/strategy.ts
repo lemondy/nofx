@@ -89,6 +89,8 @@ export interface FactorQuantConfig {
   // Targets older than this many days (UTC) are not traded
   // 0/omitted = horizon + 2
   max_stale_days?: number
+  // Flatten owned positions after last as_of ages past this; 0 = default, -1 = off
+  flatten_after_days?: number
   // Override of the default data/factor_mining/{market}/quant_targets.json
   // path (testing only; empty = default)
   targets_path?: string

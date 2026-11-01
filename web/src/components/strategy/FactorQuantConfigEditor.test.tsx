@@ -44,6 +44,7 @@ test('renders the intro and the crypto numeric fields', () => {
     'factor-min_order_usdt',
     'factor-short_stop_pct',
     'factor-max_stale_days',
+    'factor-flatten_after_days',
     'factor-targets_path',
   ]) {
     expect(screen.getByTestId(id)).toBeInTheDocument()
@@ -83,6 +84,11 @@ test('switching market applies per-market defaults and toggles crypto-only field
   expect(screen.getByTestId('factor-max_stale_days')).toHaveAttribute(
     'placeholder',
     expect.stringContaining('2')
+  )
+
+  expect(screen.getByTestId('factor-flatten_after_days')).toHaveAttribute(
+    'placeholder',
+    '默认 5'
   )
 
   // → back to crypto: defaults restored
@@ -204,4 +210,57 @@ test('numeric and text fields emit updates', () => {
     target: { value: '' },
   })
   expect(onChange.mock.lastCall?.[0].targets_path).toBeUndefined()
+})
+
+test('flatten field follows horizon and stale defaults, and accepts explicit days, disabled and default', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  const input = screen.getByTestId('factor-flatten_after_days')
+  expect(screen.getByText('目标过期自动清仓（天）')).toBeInTheDocument()
+  expect(
+    screen.getByText(/0=默认（horizon\+max_stale_days），-1=关闭/)
+  ).toBeInTheDocument()
+  expect(input).toHaveAttribute('placeholder', '默认 8')
+  expect(input).toHaveAttribute('min', '-1')
+  expect(input).toHaveAttribute('max', '60')
+  expect(input).toHaveAttribute('step', '1')
+  fireEvent.change(screen.getByTestId('factor-horizon'), {
+    target: { value: '5' },
+  })
+  expect(input).toHaveAttribute('placeholder', '默认 12')
+  fireEvent.change(screen.getByTestId('factor-max_stale_days'), {
+    target: { value: '10' },
+  })
+  expect(input).toHaveAttribute('placeholder', '默认 15')
+  for (const value of ['1', '60', '-1']) {
+    fireEvent.change(input, { target: { value } })
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ flatten_after_days: Number(value) })
+    )
+    expect(input).toHaveValue(Number(value))
+  }
+  fireEvent.change(input, { target: { value: '' } })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ flatten_after_days: 0 })
+  )
+})
+
+test('flatten field renders English and respects disabled', () => {
+  const onChange = vi.fn()
+  render(
+    <FactorQuantConfigEditor
+      config={{ market: 'crypto', horizon: 0, flatten_after_days: -1 }}
+      language="en"
+      disabled
+      onChange={onChange}
+    />
+  )
+  expect(screen.getByText('Flatten expired targets (days)')).toBeInTheDocument()
+  expect(screen.getByText(/-1=disabled/)).toBeInTheDocument()
+  const input = screen.getByTestId('factor-flatten_after_days')
+  expect(input).toBeDisabled()
+  expect(input).toHaveValue(-1)
+  expect(input).toHaveAttribute('placeholder', 'Default 8')
+  fireEvent.change(input, { target: { value: '12' } })
+  expect(onChange).not.toHaveBeenCalled()
 })

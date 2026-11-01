@@ -1178,3 +1178,448 @@ func TestStockBrokerCashCheckIncludesFee(t *testing.T) {
 	acct, _ := st.StockPaper().GetAccount(at.id)
 	fqNear(t, acct.Cash, 10000-9900-99, "cash")
 }
+
+// ------------------------------------------------------------ retries and stale flatten
+
+func fqSetOwned(t *testing.T, at *AutoTrader, asOf string) {
+	t.Helper()
+	if err := at.store.FactorQuant().SetRebalanced(at.id, asOf, "owned-run", "owned-rule", fqDay(asOf)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fqCheckRetry(t *testing.T, at *AutoTrader, asOf string, attempts int) *store.FactorQuantState {
+	t.Helper()
+	state, err := at.store.FactorQuant().Get(at.id)
+	if err != nil || state == nil || state.RetryAsOf != asOf || state.RetryAttempts != attempts {
+		t.Fatalf("retry state=%+v err=%v, want as_of=%q attempts=%d", state, err, asOf, attempts)
+	}
+	return state
+}
+
+func fqRecords(t *testing.T, at *AutoTrader) []*store.DecisionRecord {
+	t.Helper()
+	recs, err := at.store.Decision().GetLatestRecords(at.id, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Store returns oldest first; these checks inspect the most recent pass.
+	for i, j := 0, len(recs)-1; i < j; i, j = i+1, j-1 {
+		recs[i], recs[j] = recs[j], recs[i]
+	}
+	return recs
+}
+
+func fqCountCalls(f *fakeFutures, prefix string) int {
+	n := 0
+	for _, call := range f.calls {
+		if strings.HasPrefix(call, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestFactorQuantRetryReplansAndRepairsShortStops(t *testing.T) {
+	st := fqTestStore(t)
+	at := fqPaperTrader(t, st, "fq-retry", "crypto", &paperTestPrices{mark: 10})
+	fqSetOwned(t, at, "2026-10-28")
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"LONGUSDT":0.5,"SHORTUSDT":-0.5}`))
+	f := newFakeFutures(1000, map[string]float64{"FAILUSDT": 10, "CLOSEDUSDT": 10, "LONGUSDT": 10, "SHORTUSDT": 10})
+	f.pos["FAILUSDT:long"] = &fakePos{"FAILUSDT", "long", 10, 10}
+	f.pos["CLOSEDUSDT:long"] = &fakePos{"CLOSEDUSDT", "long", 10, 10}
+	f.failClose["FAILUSDT"], f.failStop["SHORTUSDT"] = true, true
+	b := newFQFuturesBroker(f, 3, 0.5)
+	now := fqDay("2026-11-01")
+	at.factorQuantTick(b, now)
+	state := fqCheckRetry(t, at, "2026-10-31", 0)
+	if state.LastAsOf != "2026-10-31" || len(f.pos) != 3 {
+		t.Fatalf("first pass state=%+v positions=%+v", state, f.pos)
+	}
+
+	// Recover from a restart using only the persisted retry marker.
+	restarted := fqPaperTrader(t, st, at.id, "crypto", &paperTestPrices{mark: 10})
+	restarted.config.StrategyConfig.FactorQuantConfig.TargetsPath = cfg.TargetsPath
+	f.failClose["FAILUSDT"] = false
+	restarted.factorQuantTick(b, now.Add(5*time.Minute))
+	fqCheckRetry(t, restarted, "2026-10-31", 1) // stop still fails, despite zero failed market orders
+	if fqCountCalls(f, "open_long LONGUSDT") != 1 || fqCountCalls(f, "open_short SHORTUSDT") != 1 || fqCountCalls(f, "close_long CLOSEDUSDT") != 1 || fqCountCalls(f, "close_long FAILUSDT") != 2 {
+		t.Fatalf("retry resent successful orders or missed failed close: %v", f.calls)
+	}
+	recs := fqRecords(t, restarted)
+	if len(recs) != 2 || recs[0].Success || !strings.Contains(recs[0].CoTTrace, "重试第 1 次") || !strings.Contains(recs[0].CoTTrace, "补放空头灾难止损 SHORTUSDT 失败") {
+		t.Fatalf("failed protection retry record=%+v", recs)
+	}
+
+	f.failStop["SHORTUSDT"] = false
+	restarted.factorQuantTick(b, now.Add(10*time.Minute))
+	state = fqCheckRetry(t, restarted, "", 0)
+	if state.LastAsOf != "2026-10-31" || fqCountCalls(f, "stop SHORTUSDT") != 3 {
+		t.Fatalf("stop was not retried once per pass: state=%+v calls=%v", state, f.calls)
+	}
+	fqNear(t, f.stops["SHORTUSDT:SHORT"], 15, "repaired stop")
+	recs = fqRecords(t, restarted)
+	if len(recs) != 3 || !recs[0].Success || !strings.Contains(recs[0].CoTTrace, "重试第 2 次") {
+		t.Fatalf("successful protection retry record=%+v", recs)
+	}
+	calls := len(f.calls)
+	restarted.factorQuantTick(b, now.Add(15*time.Minute))
+	if len(f.calls) != calls || len(fqRecords(t, restarted)) != 3 {
+		t.Fatal("successful retry was not cleared")
+	}
+}
+
+func TestFactorQuantRetryFailedCloseThenSuccess(t *testing.T) {
+	st := fqTestStore(t)
+	at := fqPaperTrader(t, st, "fq-close-retry", "crypto", &paperTestPrices{mark: 10})
+	fqSetOwned(t, at, "2026-10-28")
+	at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"NEWUSDT":0.5}`))
+	f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10, "NEWUSDT": 10})
+	f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
+	f.failClose["OLDUSDT"] = true
+	b := newFQFuturesBroker(f, 3, 0.5)
+	now := fqDay("2026-11-01")
+	at.factorQuantTick(b, now)
+	fqCheckRetry(t, at, "2026-10-31", 0)
+	f.failClose["OLDUSDT"] = false
+	at.factorQuantTick(b, now.Add(5*time.Minute))
+	fqCheckRetry(t, at, "", 0)
+	if fqCountCalls(f, "open_long NEWUSDT") != 1 || fqCountCalls(f, "close_long OLDUSDT") != 2 || len(f.pos) != 1 {
+		t.Fatalf("retry plan calls=%v positions=%v", f.calls, f.pos)
+	}
+	recs := fqRecords(t, at)
+	if len(recs) != 2 || !recs[0].Success || !strings.Contains(recs[0].CoTTrace, "调仓带内") || !strings.Contains(recs[0].CoTTrace, "重试第 1 次") {
+		t.Fatalf("retry record=%+v", recs)
+	}
+}
+
+func TestFactorQuantRetryCap(t *testing.T) {
+	st := fqTestStore(t)
+	at := fqPaperTrader(t, st, "fq-retry-cap", "crypto", &paperTestPrices{mark: 10})
+	fqSetOwned(t, at, "2026-10-28")
+	at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{}`))
+	f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10})
+	f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
+	f.failClose["OLDUSDT"] = true
+	b := newFQFuturesBroker(f, 3, 0.5)
+	now := fqDay("2026-11-01")
+	at.factorQuantTick(b, now)
+	for i := 1; i <= fqMaxRetryAttempts; i++ {
+		at.factorQuantTick(b, now.Add(time.Duration(i)*5*time.Minute))
+		if i < fqMaxRetryAttempts {
+			fqCheckRetry(t, at, "2026-10-31", i)
+		}
+	}
+	fqCheckRetry(t, at, "", 0)
+	for i := 7; i < 10; i++ {
+		at.factorQuantTick(b, now.Add(time.Duration(i)*5*time.Minute))
+	}
+	if fqCountCalls(f, "close_long OLDUSDT") != 7 {
+		t.Fatalf("expected initial + 6 retries: %v", f.calls)
+	}
+	recs := fqRecords(t, at)
+	exhausted := 0
+	for _, r := range recs {
+		if strings.Contains(r.CoTTrace, "重试次数已耗尽") {
+			exhausted++
+		}
+	}
+	if len(recs) != 7 || exhausted != 1 {
+		t.Fatalf("records=%d exhausted=%d", len(recs), exhausted)
+	}
+}
+
+func TestFactorQuantRetryRequiresSameFreshOKTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, asOf, lastAsOf, now string
+		horizon                           int
+		cleared                           bool
+	}{
+		{"file moved on", "ok", "2026-11-01", "2026-10-31", "2026-11-01", 3, true},
+		{"status not ok", "stale_scores", "2026-10-31", "2026-10-31", "2026-11-01", 3, false},
+		{"stale", "ok", "2026-10-31", "2026-10-31", "2026-11-06", 3, false},
+		{"last differs", "ok", "2026-10-31", "2026-11-01", "2026-11-01", 3, false},
+		{"horizon differs", "ok", "2026-10-31", "2026-10-31", "2026-11-01", 5, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := fqPaperTrader(t, fqTestStore(t), "fq-retry-gate", "crypto", &paperTestPrices{mark: 10})
+			fqSetOwned(t, at, tc.lastAsOf)
+			if err := at.store.FactorQuant().SetRetry(at.id, "2026-10-31", 2); err != nil {
+				t.Fatal(err)
+			}
+			at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", tc.status, tc.asOf, tc.horizon, `{}`))
+			f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10})
+			f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
+			at.factorQuantTick(newFQFuturesBroker(f, 3, 0.5), fqDay(tc.now))
+			if len(f.calls) != 0 {
+				t.Fatalf("unexpected orders: %v", f.calls)
+			}
+			if tc.cleared {
+				fqCheckRetry(t, at, "", 0)
+				if len(fqRecords(t, at)) != 0 {
+					t.Fatal("file move must silently clear retry")
+				}
+			} else {
+				fqCheckRetry(t, at, "2026-10-31", 2)
+			}
+		})
+	}
+}
+
+func TestFactorQuantStaleFlatten(t *testing.T) {
+	for _, source := range []string{"stale", "missing", "corrupt", "status"} {
+		t.Run(source, func(t *testing.T) {
+			at := fqPaperTrader(t, fqTestStore(t), "fq-flatten", "crypto", &paperTestPrices{mark: 10})
+			fqSetOwned(t, at, "2026-10-23")
+			if err := at.store.FactorQuant().SetRetry(at.id, "2026-10-23", 2); err != nil {
+				t.Fatal(err)
+			}
+			cfg := at.config.StrategyConfig.FactorQuantConfig
+			dir := t.TempDir()
+			switch source {
+			case "missing":
+				cfg.TargetsPath = filepath.Join(dir, "missing.json")
+			case "corrupt":
+				cfg.TargetsPath = writeTargetsFile(t, dir, "{broken")
+			case "status":
+				cfg.TargetsPath = writeTargetsFile(t, dir, targetsJSON("crypto", "stale_scores", "2026-10-23", 3, `{}`))
+			default:
+				cfg.TargetsPath = writeTargetsFile(t, dir, targetsJSON("crypto", "ok", "2026-10-23", 3, `{"IGNOREDUSDT":0.5}`))
+			}
+			// Both sides of one symbol, including dust: every position must close.
+			f := newFakeFutures(1000, map[string]float64{"BOTHUSDT": 10, "DUSTUSDT": 10})
+			f.pos["BOTHUSDT:long"] = &fakePos{"BOTHUSDT", "long", 10, 10}
+			f.pos["BOTHUSDT:short"] = &fakePos{"BOTHUSDT", "short", 5, 10}
+			f.pos["DUSTUSDT:long"] = &fakePos{"DUSTUSDT", "long", 0.00001, 10}
+			b := newFQFuturesBroker(f, 3, 0.5)
+			now := fqDay("2026-11-01")
+			at.factorQuantTick(b, now) // age 9 > default 8
+			state := fqCheckRetry(t, at, "", 0)
+			if len(f.pos) != 0 || len(f.calls) != 3 || state.LastAsOf != "2026-10-23" {
+				t.Fatalf("flatten positions=%+v calls=%v state=%+v", f.pos, f.calls, state)
+			}
+			recs := fqRecords(t, at)
+			if len(recs) != 1 || !recs[0].Success || !strings.Contains(recs[0].CoTTrace, "目标已 9 天未更新（上次调仓 as_of=2026-10-23，阈值 8 天），自动清仓") || !strings.Contains(recs[0].CoTTrace, "owned-rule") {
+				t.Fatalf("flatten record=%+v", recs)
+			}
+			for i := 1; i <= 3; i++ {
+				at.factorQuantTick(b, now.Add(time.Duration(i)*5*time.Minute))
+			}
+			flattenRecords := 0
+			for _, r := range fqRecords(t, at) {
+				if strings.Contains(r.CoTTrace, "自动清仓") {
+					flattenRecords++
+				}
+			}
+			if flattenRecords != 1 || len(f.calls) != 3 {
+				t.Fatal("repeated flatten after positions were closed")
+			}
+
+			// The unchanged last_as_of leaves the normal gate open for fresh targets.
+			f.prices["NEWUSDT"] = 10
+			cfg.TargetsPath = writeTargetsFile(t, dir, targetsJSON("crypto", "ok", "2026-10-31", 3, `{"NEWUSDT":0.5}`))
+			at.factorQuantTick(b, now.Add(20*time.Minute))
+			if state, _ := at.store.FactorQuant().Get(at.id); state.LastAsOf != "2026-10-31" || f.pos["NEWUSDT:long"] == nil || fqCountCalls(f, "open_long NEWUSDT") != 1 {
+				t.Fatalf("fresh targets did not normally rebalance: state=%+v calls=%v", state, f.calls)
+			}
+		})
+	}
+}
+
+func TestFactorQuantFlattenSafetyAndBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, lastAsOf string
+		flattenDays    int
+	}{
+		{"disabled", "2026-10-01", -1},
+		{"unmanaged", "", 1},
+		{"threshold equality", "2026-10-24", 0}, // age 8 is still allowed
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := fqPaperTrader(t, fqTestStore(t), "fq-no-flatten", "crypto", &paperTestPrices{mark: 10})
+			if tc.lastAsOf != "" {
+				fqSetOwned(t, at, tc.lastAsOf)
+			}
+			cfg := at.config.StrategyConfig.FactorQuantConfig
+			cfg.FlattenAfterDays = tc.flattenDays
+			cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-01", 3, `{}`))
+			f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10})
+			f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
+			at.factorQuantTick(newFQFuturesBroker(f, 3, 0.5), fqDay("2026-11-01"))
+			if len(f.calls) != 0 || len(f.pos) != 1 {
+				t.Fatalf("unsafe flatten calls=%v positions=%v", f.calls, f.pos)
+			}
+		})
+	}
+}
+
+func TestFactorQuantFlattenFailureRetriesWithoutRecordSpam(t *testing.T) {
+	st := fqTestStore(t)
+	at := fqPaperTrader(t, st, "fq-flatten-retry", "crypto", &paperTestPrices{mark: 10})
+	fqSetOwned(t, at, "2026-10-23")
+	path := writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-23", 3, `{}`))
+	at.config.StrategyConfig.FactorQuantConfig.TargetsPath = path
+	f := newFakeFutures(1000, map[string]float64{"FAILUSDT": 10, "CLOSEDUSDT": 10})
+	f.pos["FAILUSDT:short"] = &fakePos{"FAILUSDT", "short", 10, 10}
+	f.pos["CLOSEDUSDT:long"] = &fakePos{"CLOSEDUSDT", "long", 10, 10}
+	f.failClose["FAILUSDT"] = true
+	b := newFQFuturesBroker(f, 3, 0.5)
+	now := fqDay("2026-11-01")
+	at.factorQuantTick(b, now)
+	if recs := fqRecords(t, at); len(recs) != 1 || recs[0].Success {
+		t.Fatalf("initial flatten failure records=%+v", recs)
+	}
+	// A restart must preserve the first-attempt dedupe, even if the file changes status.
+	restarted := fqPaperTrader(t, st, at.id, "crypto", &paperTestPrices{mark: 10})
+	restarted.config.StrategyConfig.FactorQuantConfig.TargetsPath = path
+	writeTargetsFile(t, filepath.Dir(path), targetsJSON("crypto", "stale_scores", "2026-10-24", 3, `{}`))
+	for i := 1; i <= 3; i++ {
+		restarted.factorQuantTick(b, now.Add(time.Duration(i)*5*time.Minute))
+	}
+	if len(fqRecords(t, restarted)) != 1 || fqCountCalls(f, "close_short FAILUSDT") != 4 || fqCountCalls(f, "close_long CLOSEDUSDT") != 1 {
+		t.Fatalf("flatten retries spammed records or resent filled closes: calls=%v", f.calls)
+	}
+	f.failClose["FAILUSDT"] = false
+	restarted.factorQuantTick(b, now.Add(20*time.Minute))
+	recs := fqRecords(t, restarted)
+	if len(recs) != 2 || !recs[0].Success || len(f.pos) != 0 || !strings.Contains(recs[0].CoTTrace, "自动清仓") {
+		t.Fatalf("missing successful flatten completion: recs=%+v positions=%v", recs, f.pos)
+	}
+	if state, _ := st.FactorQuant().Get(at.id); state.LastAsOf != "2026-10-23" {
+		t.Fatalf("flatten advanced last_as_of: %+v", state)
+	}
+}
+
+func TestFactorQuantPaperFlattenCancelsShortStop(t *testing.T) {
+	at := fqPaperTrader(t, fqTestStore(t), "fq-flatten-paper", "crypto", &paperTestPrices{mark: 100})
+	b, err := at.newFactorQuantBroker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-23", 3, `{"SHORTUSDT":-0.5}`))
+	at.factorQuantTick(b, fqDay("2026-10-24"))
+	if orders, err := at.trader.GetOpenOrders("SHORTUSDT"); err != nil || len(orders) != 1 {
+		t.Fatalf("initial short stop=%+v %v", orders, err)
+	}
+	at.factorQuantTick(b, fqDay("2026-11-01"))
+	if positions, err := at.trader.GetPositions(); err != nil || len(positions) != 0 {
+		t.Fatalf("paper flatten positions=%+v %v", positions, err)
+	}
+	if orders, err := at.trader.GetOpenOrders("SHORTUSDT"); err != nil || len(orders) != 0 {
+		t.Fatalf("paper flatten left stops=%+v %v", orders, err)
+	}
+}
+
+// A transient rebalance preflight error must not suppress retry protection.
+type fqPreflightFailureBroker struct {
+	*fqFuturesBroker
+	failAccount bool
+}
+
+func (b *fqPreflightFailureBroker) Account() (*fqAccount, error) {
+	if b.failAccount {
+		b.failAccount = false
+		return nil, errors.New("transient account failure")
+	}
+	return b.fqFuturesBroker.Account()
+}
+
+func TestFactorQuantRetryProtectsShortsAfterPreflightError(t *testing.T) {
+	at := fqPaperTrader(t, fqTestStore(t), "fq-retry-preflight", "crypto", &paperTestPrices{mark: 10})
+	fqSetOwned(t, at, "2026-10-31")
+	if err := at.store.FactorQuant().SetRetry(at.id, "2026-10-31", 0); err != nil {
+		t.Fatal(err)
+	}
+	at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"SHORTUSDT":-0.5}`))
+	f := newFakeFutures(1000, map[string]float64{"SHORTUSDT": 10})
+	f.pos["SHORTUSDT:short"] = &fakePos{"SHORTUSDT", "short", 50, 10}
+	b := &fqPreflightFailureBroker{fqFuturesBroker: newFQFuturesBroker(f, 3, 0.5), failAccount: true}
+	at.factorQuantTick(b, fqDay("2026-11-01"))
+	fqCheckRetry(t, at, "2026-10-31", 1)
+	fqNear(t, f.stops["SHORTUSDT:SHORT"], 15, "stop after preflight error")
+	recs := fqRecords(t, at)
+	if len(recs) != 1 || recs[0].Success || !strings.Contains(recs[0].CoTTrace, "transient account failure") || !strings.Contains(recs[0].CoTTrace, "补放空头灾难止损 SHORTUSDT") {
+		t.Fatalf("preflight retry record=%+v", recs)
+	}
+	at.factorQuantTick(b, fqDay("2026-11-01").Add(5*time.Minute))
+	fqCheckRetry(t, at, "", 0)
+	if fqCountCalls(f, "open_short") != 0 {
+		t.Fatalf("protection retry reopened short: %v", f.calls)
+	}
+}
+
+func TestFactorQuantFlattenOnTooSoonWithZeroEquity(t *testing.T) {
+	at := fqPaperTrader(t, fqTestStore(t), "fq-flatten-too-soon", "crypto", &paperTestPrices{mark: 10})
+	fqSetOwned(t, at, "2026-10-30")
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.FlattenAfterDays = 1
+	cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"NEWUSDT":0.5}`))
+	f := newFakeFutures(0, map[string]float64{"OLDUSDT": 10})
+	f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
+	at.factorQuantTick(newFQFuturesBroker(f, 3, 0.5), fqDay("2026-11-01"))
+	if len(f.pos) != 0 || fqCountCalls(f, "close_long OLDUSDT") != 1 {
+		t.Fatalf("zero-equity position was not flattened: positions=%v calls=%v", f.pos, f.calls)
+	}
+	if recs := fqRecords(t, at); len(recs) != 1 || !recs[0].Success || !strings.Contains(recs[0].CoTTrace, "阈值 1 天") {
+		t.Fatalf("configured threshold/too-soon flatten records=%+v", recs)
+	}
+}
+
+func TestFactorQuantUSStaleFlattenUsesFileHorizon(t *testing.T) {
+	fqStubUS(t, map[string]float64{"AAPLBUSDT": 100})
+	at := fqPaperTrader(t, fqTestStore(t), "fq-us-flatten", "us", &paperTestPrices{mark: 100})
+	b, err := at.newFactorQuantBroker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("us", "ok", "2026-10-19", 5, `{"AAPLBUSDT":1}`))
+	at.factorQuantTick(b, fqDay("2026-10-20"))
+	// h=5 + stale=7 => flatten after 12 days, strictly greater than the threshold.
+	at.factorQuantTick(b, fqDay("2026-10-31"))
+	if positions, err := at.store.StockPaper().ListOpen(at.id); err != nil || len(positions) != 1 {
+		t.Fatalf("US flattened at threshold equality: %+v %v", positions, err)
+	}
+	at.factorQuantTick(b, fqDay("2026-11-01"))
+	if positions, err := at.store.StockPaper().ListOpen(at.id); err != nil || len(positions) != 0 {
+		t.Fatalf("US stale positions=%+v %v", positions, err)
+	}
+	recs := fqRecords(t, at)
+	if !recs[0].Success || !strings.Contains(recs[0].CoTTrace, "阈值 12 天") || !strings.Contains(recs[0].CoTTrace, "close_long AAPLBUSDT") {
+		t.Fatalf("US flatten record=%+v", recs[0])
+	}
+	if state, _ := at.store.FactorQuant().Get(at.id); state.LastAsOf != "2026-10-19" {
+		t.Fatalf("US flatten advanced last_as_of: %+v", state)
+	}
+}
+
+func TestFactorQuantRetryFailedFlipCloseKeepsFilledTargetSide(t *testing.T) {
+	for _, oldSide := range []string{fqSideLong, fqSideShort} {
+		t.Run(oldSide, func(t *testing.T) {
+			at := fqPaperTrader(t, fqTestStore(t), "fq-retry-flip", "crypto", &paperTestPrices{mark: 10})
+			fqSetOwned(t, at, "2026-10-28")
+			weight, targetSide := "0.5", fqSideLong
+			if oldSide == fqSideLong {
+				weight, targetSide = "-0.5", fqSideShort
+			}
+			at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"FLIPUSDT":`+weight+`}`))
+			f := newFakeFutures(1000, map[string]float64{"FLIPUSDT": 10})
+			f.pos["FLIPUSDT:"+oldSide] = &fakePos{"FLIPUSDT", oldSide, 10, 10}
+			f.failClose["FLIPUSDT"] = true
+			b := newFQFuturesBroker(f, 3, 0.5)
+			now := fqDay("2026-11-01")
+			at.factorQuantTick(b, now)
+			fqCheckRetry(t, at, "2026-10-31", 0)
+			if len(f.pos) != 2 {
+				t.Fatalf("expected both sides after failed flip close: %+v", f.pos)
+			}
+			f.failClose["FLIPUSDT"] = false
+			at.factorQuantTick(b, now.Add(5*time.Minute))
+			fqCheckRetry(t, at, "", 0)
+			if len(f.pos) != 1 || f.pos["FLIPUSDT:"+targetSide] == nil || fqCountCalls(f, "close_"+oldSide+" FLIPUSDT") != 2 || fqCountCalls(f, "open_"+targetSide+" FLIPUSDT") != 1 {
+				t.Fatalf("failed flip close not reconciled: positions=%+v calls=%v", f.pos, f.calls)
+			}
+		})
+	}
+}

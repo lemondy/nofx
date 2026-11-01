@@ -95,6 +95,14 @@ const fq = {
     zh: 'as_of 落后今天（UTC）超过这么多天就不按它调仓并告警；留空 = 默认 horizon+2',
     en: 'Targets with as_of older than this (UTC) are not traded; empty = horizon+2',
   },
+  flattenAfter: {
+    zh: '目标过期自动清仓（天）',
+    en: 'Flatten expired targets (days)',
+  },
+  flattenAfterDesc: {
+    zh: '上次调仓的 as_of 距今超过该天数且无法调仓时清仓；0=默认（horizon+max_stale_days），-1=关闭',
+    en: 'Flatten when the last rebalance as_of is older than this and rebalancing is unavailable; 0=default (horizon+max_stale_days), -1=disabled',
+  },
   advanced: { zh: '高级', en: 'Advanced' },
   targetsPath: {
     zh: 'quant_targets.json 路径覆盖',
@@ -157,7 +165,8 @@ export function FactorQuantConfigEditor({
       | 'rebalance_band_pct'
       | 'min_order_usdt'
       | 'short_stop_pct'
-      | 'max_stale_days',
+      | 'max_stale_days'
+      | 'flatten_after_days',
     label: string,
     defaultValue: number,
     opts: {
@@ -232,8 +241,10 @@ export function FactorQuantConfigEditor({
   }
 
   // Default max_stale_days = horizon + 2 (the backend resolver).
-  const effectiveHorizon = config.horizon ?? MARKET_DEFAULTS[market].horizon
+  const effectiveHorizon = config.horizon || MARKET_DEFAULTS[market].horizon
   const staleDefault = effectiveHorizon + 2
+  const flattenDefault =
+    (effectiveHorizon || 3) + (config.max_stale_days || staleDefault)
 
   return (
     <div className="space-y-4" data-testid="factor-config-editor">
@@ -362,6 +373,18 @@ export function FactorQuantConfigEditor({
             integer: true,
             desc: ts(fq.maxStaleDesc, language),
           })}
+          {numField(
+            'flatten_after_days',
+            ts(fq.flattenAfter, language),
+            flattenDefault,
+            {
+              step: 1,
+              min: -1,
+              max: 60,
+              integer: true,
+              desc: ts(fq.flattenAfterDesc, language),
+            }
+          )}
         </div>
       </div>
 
