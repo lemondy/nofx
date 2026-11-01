@@ -30,6 +30,25 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'alpha101',
+    date: '2026-11-01',
+    title: 'WorldQuant Alpha101 因子（BigQuant 复现文章）',
+    domain: '加密 + 美股 · 截面因子',
+    verdict: 'none',
+    verdictText: '无可融合因子',
+    idea: '用户给出 BigQuant 三篇文章（Alpha101 复现与解析、附录三 SQL、附录四 Alpha#100 因子分析），问能否融合进本系统。系统已有 qlib 风格因子挖掘（Alpha158 种子 + 每晚变异/LLM 搜索 + 前向校验，分数仅作 factor_ensemble 提示参考），因此融合路径是把 Alpha101 作为种子进入 zoo，门槛与 zoo 完全一致：冻结评估器、K=现有 ledger 试验数+本批（t_req≈4.6）、val 达标、与已接受因子相关<0.8、加密扣资金费后仍达标。',
+    bullets: [
+      '按论文原式手工翻译 100 个公式（#56 缺市值跳过；小数窗口 floor、scale 保留符号、行业中性化无行业数据改为截面去均值），测试覆盖算子手算、逐个因果性、原文逐字一致；附录三 SQL 由用户登录后只读核对，发现 scale 丢符号、#54/#60/#29/#64 笔误、#96 残留调试过滤，不能当标准答案。',
+      '加密（60 币池，h=1/3/7）：截面 IC 存在，h=1 有 9 个过多重检验门槛（#5/#38/#33/#49/#44/#51/#35/#84/#90，IC 0.02–0.04），但都是高换手短周期因子（每次调仓约 40% 换手、单边 0.08%），五分位多空扣费后 train −18%～−70%/年，全部停在 candidate；最接近的 #20 在 h=7 val t=5.3，但 train t 4.31 < 4.59。',
+      '美股（100 只 bStock 正股，h=5/10/20）：train t 最高 3.74（#36），val 全不显著；Alpha101 原设计持有期 0.6–6.4 天，本系统美股持有期≥5 天，且 vwap 只是 (H+L+C)/3 近似。',
+      '与现有因子重叠：#33=rank(open/close) 与 Alpha158 的 OPEN0 相关 1.000，#38/OPEN0 0.88，#54/KSFT2 0.94，#40/CORR10 0.82；有效部分大多已被 zoo 覆盖。',
+    ],
+    conclusion:
+      '0 个可融合（accepted 0、redundant 0），不改挖掘流程与交易代码。若要再试，需先降低换手（decay 平滑或延长调仓）作为新的预声明实验，并计入 K。',
+    source:
+      'scripts/factor_mining/alpha101.py · scripts/factor_mining/alpha101_study.py · docs/research/2026-11-01-alpha101-study.md · data/alpha101/',
+  },
+  {
     id: 'probability-martingale',
     date: '2026-11-01',
     title: '数学家视角：鞅、赌徒破产与 Kelly 检验',
