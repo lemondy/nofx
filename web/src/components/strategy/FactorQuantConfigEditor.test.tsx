@@ -23,12 +23,13 @@ function Harness({ onChange }: { onChange: (c: FactorQuantConfig) => void }) {
   )
 }
 
-test('defaults: crypto market, horizon 3, leverage 3, short stop 0.5', () => {
+test('defaults: crypto market, horizon 3, leverage 3, both stops 0.2', () => {
   expect(defaultFactorQuantConfig).toEqual({
     market: 'crypto',
     horizon: 3,
     leverage: 3,
-    short_stop_pct: 0.5,
+    long_stop_pct: 0.2,
+    short_stop_pct: 0.2,
   })
 })
 
@@ -42,6 +43,7 @@ test('renders the intro and the crypto numeric fields', () => {
     'factor-leverage',
     'factor-rebalance_band_pct',
     'factor-min_order_usdt',
+    'factor-long_stop_pct',
     'factor-short_stop_pct',
     'factor-max_stale_days',
     'factor-flatten_after_days',
@@ -64,12 +66,13 @@ test('switching market applies per-market defaults and toggles crypto-only field
   const onChange = vi.fn()
   render(<Harness onChange={onChange} />)
 
-  // → US stocks: horizon 0 (accept the file's), leverage/short stop hidden
+  // → US stocks: horizon 0 (accept the file's), leverage/both stops hidden
   fireEvent.click(screen.getByTestId('factor-market-us'))
   expect(onChange).toHaveBeenLastCalledWith(
     expect.objectContaining({ market: 'us', horizon: 0 })
   )
   expect(screen.queryByTestId('factor-leverage')).not.toBeInTheDocument()
+  expect(screen.queryByTestId('factor-long_stop_pct')).not.toBeInTheDocument()
   expect(screen.queryByTestId('factor-short_stop_pct')).not.toBeInTheDocument()
   // the US-only cost inputs appear
   expect(screen.getByTestId('factor-us_fee_bps')).toHaveAttribute(
@@ -98,7 +101,8 @@ test('switching market applies per-market defaults and toggles crypto-only field
       market: 'crypto',
       horizon: 3,
       leverage: 3,
-      short_stop_pct: 0.5,
+      long_stop_pct: 0.2,
+      short_stop_pct: 0.2,
     })
   )
   expect(screen.getByTestId('factor-leverage')).toBeInTheDocument()
@@ -262,5 +266,50 @@ test('flatten field renders English and respects disabled', () => {
   expect(input).toHaveValue(-1)
   expect(input).toHaveAttribute('placeholder', 'Default 8')
   fireEvent.change(input, { target: { value: '12' } })
+  expect(onChange).not.toHaveBeenCalled()
+})
+
+test('both stop inputs preserve zero, show 20% defaults and restore defaults when cleared', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  for (const key of ['long_stop_pct', 'short_stop_pct'] as const) {
+    const input = screen.getByTestId(`factor-${key}`)
+    expect(input).toHaveValue(0.2)
+    expect(input).toHaveAttribute('placeholder', '默认 0.2')
+    fireEvent.change(input, { target: { value: '0' } })
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ [key]: 0 })
+    )
+    expect(input).toHaveValue(0)
+    fireEvent.change(input, { target: { value: '' } })
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ [key]: 0.2 })
+    )
+    expect(input).toHaveValue(0.2)
+    fireEvent.change(input, { target: { value: '0.15' } })
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ [key]: 0.15 })
+    )
+  }
+  expect(screen.getAllByText(/默认 0.2（20%）/)).toHaveLength(2)
+})
+
+test('stop inputs show English defaults and respect disabled', () => {
+  const onChange = vi.fn()
+  render(
+    <FactorQuantConfigEditor
+      config={{ market: 'crypto' }}
+      language="en"
+      disabled
+      onChange={onChange}
+    />
+  )
+  expect(screen.getAllByText(/default 0.2 \(20%\)/)).toHaveLength(2)
+  for (const key of ['long_stop_pct', 'short_stop_pct']) {
+    const input = screen.getByTestId(`factor-${key}`)
+    expect(input).toBeDisabled()
+    expect(input).toHaveAttribute('placeholder', 'Default 0.2')
+    fireEvent.change(input, { target: { value: '0' } })
+  }
   expect(onChange).not.toHaveBeenCalled()
 })

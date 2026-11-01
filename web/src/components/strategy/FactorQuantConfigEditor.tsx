@@ -39,8 +39,8 @@ const fq = {
   marketSection: { zh: '市场', en: 'Market' },
   marketCrypto: { zh: '加密（模拟合约）', en: 'Crypto (paper futures)' },
   marketCryptoDesc: {
-    zh: '多空中性：做多因子排名前 20%、做空后 20%，空头带灾难止损',
-    en: 'Market-neutral: long top-20% / short bottom-20% factor ranks, shorts carry a disaster stop',
+    zh: '多空中性：做多因子排名前 20%、做空后 20%，多空均带止损',
+    en: 'Market-neutral: long top-20% / short bottom-20% factor ranks, both sides carry stops',
   },
   marketUs: {
     zh: '美股（bStock 模拟账本）',
@@ -75,10 +75,15 @@ const fq = {
     zh: '低于该金额的订单不下；留空 = 默认 10',
     en: 'Orders below this notional are skipped; empty = default 10',
   },
-  shortStop: { zh: '空头灾难止损 %', en: 'Short disaster stop %' },
+  longStop: { zh: '止损（多）比例', en: 'Long stop fraction' },
+  longStopDesc: {
+    zh: '仅加密：触发价 = 持仓均价 ×(1−N)；默认 0.2（20%）；填 0 关闭，范围 [0,1)',
+    en: 'Crypto only: stop at average entry × (1−N); default 0.2 (20%); 0 = disabled, range [0,1)',
+  },
+  shortStop: { zh: '止损（空）比例', en: 'Short stop fraction' },
   shortStopDesc: {
-    zh: '仅加密：触发价 = 入场价 ×(1+N)；填 0 关闭',
-    en: 'Crypto only: stop at entry × (1+N); 0 = disabled',
+    zh: '仅加密：触发价 = 持仓均价 ×(1+N)；默认 0.2（20%）；填 0 关闭，范围 [0,10]',
+    en: 'Crypto only: stop at average entry × (1+N); default 0.2 (20%); 0 = disabled, range [0,10]',
   },
   usFee: { zh: '美股手续费 (bp)', en: 'US fee (bp)' },
   usFeeDesc: {
@@ -116,9 +121,9 @@ const fq = {
 }
 
 // Defaults applied when the market switches (crypto: 3-day horizon, 3x paper
-// leverage, short stop on; us: horizon 0 = accept the file's horizon).
+// leverage, both stops on; us: horizon 0 = accept the file's horizon).
 const MARKET_DEFAULTS = {
-  crypto: { horizon: 3, leverage: 3, short_stop_pct: 0.5 },
+  crypto: { horizon: 3, leverage: 3, long_stop_pct: 0.2, short_stop_pct: 0.2 },
   us: { horizon: 0 },
 } as const
 
@@ -130,7 +135,8 @@ export const defaultFactorQuantConfig: FactorQuantConfig = {
   market: 'crypto',
   horizon: 3,
   leverage: 3,
-  short_stop_pct: 0.5,
+  long_stop_pct: 0.2,
+  short_stop_pct: 0.2,
 }
 
 export function FactorQuantConfigEditor({
@@ -156,7 +162,8 @@ export function FactorQuantConfigEditor({
     onChange({ ...config, market: next, ...MARKET_DEFAULTS[next] })
   }
 
-  // Numeric input: empty -> 0 ("use default"), otherwise the parsed number.
+  // Numeric input: empty restores the default; stop defaults are explicit
+  // because 0 disables protection and omitted fields survive merged PUTs.
   const numField = (
     key:
       | 'horizon'
@@ -164,6 +171,7 @@ export function FactorQuantConfigEditor({
       | 'leverage'
       | 'rebalance_band_pct'
       | 'min_order_usdt'
+      | 'long_stop_pct'
       | 'short_stop_pct'
       | 'max_stale_days'
       | 'flatten_after_days',
@@ -174,6 +182,7 @@ export function FactorQuantConfigEditor({
       min?: number
       max?: number
       integer?: boolean
+      stop?: boolean
       desc?: string
     }
   ) => {
@@ -185,12 +194,12 @@ export function FactorQuantConfigEditor({
         <Input
           type="number"
           data-testid={`factor-${key}`}
-          value={value ? value : ''}
+          value={opts.stop ? (value ?? '') : value || ''}
           placeholder={`${ts(fq.defaultHint, language)} ${defaultValue}`}
           onChange={(e) => {
             const raw = e.target.value
             if (raw === '' || raw === '-') {
-              updateField(key, 0)
+              updateField(key, opts.stop ? defaultValue : 0)
               return
             }
             const n = opts.integer ? parseInt(raw, 10) : parseFloat(raw)
@@ -343,13 +352,23 @@ export function FactorQuantConfigEditor({
             desc: ts(fq.minOrderDesc, language),
           })}
           {market === 'crypto' &&
+            numField('long_stop_pct', ts(fq.longStop, language), 0.2, {
+              stop: true,
+              step: 0.01,
+              min: 0,
+              max: 0.99,
+              desc: ts(fq.longStopDesc, language),
+            })}
+          {market === 'crypto' &&
             numField(
               'short_stop_pct',
               ts(fq.shortStop, language),
               MARKET_DEFAULTS.crypto.short_stop_pct,
               {
-                step: 0.1,
+                stop: true,
+                step: 0.01,
                 min: 0,
+                max: 10,
                 desc: ts(fq.shortStopDesc, language),
               }
             )}

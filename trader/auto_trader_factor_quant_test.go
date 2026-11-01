@@ -94,6 +94,7 @@ func (f *fakeFutures) open(sym, side string, q float64, lev int) (map[string]int
 		return nil, errors.New("margin insufficient")
 	}
 	key := sym + ":" + side
+	delete(f.stops, sym+":"+strings.ToUpper(side))
 	px := f.prices[sym]
 	if p := f.pos[key]; p != nil {
 		p.entry = (p.entry*p.qty + px*q) / (p.qty + q)
@@ -126,6 +127,7 @@ func (f *fakeFutures) closePos(sym, side string, q float64) (map[string]interfac
 	if q == 0 || q >= p.qty {
 		q = p.qty
 		delete(f.pos, sym+":"+side)
+		delete(f.stops, sym+":"+strings.ToUpper(side))
 	} else {
 		p.qty -= q
 	}
@@ -162,6 +164,12 @@ func (f *fakeFutures) SetStopLoss(s, side string, q, price float64) error {
 		return errors.New("stop rejected")
 	}
 	f.stops[s+":"+side] = price
+	return nil
+}
+func (f *fakeFutures) CancelStopLossOrdersForSide(sym, side string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.stops, sym+":"+side)
 	return nil
 }
 func (f *fakeFutures) FormatQuantity(s string, q float64) (string, error) {
@@ -534,10 +542,10 @@ func TestPlannerReduceCoveringWholePositionBecomesClose(t *testing.T) {
 
 // ------------------------------------------------------------ crypto executor
 
-func TestFuturesBrokerExecutesPlanAndPlacesShortStops(t *testing.T) {
+func TestFuturesBrokerExecutesPlanAndPlacesBothStops(t *testing.T) {
 	f := newFakeFutures(10000, map[string]float64{"LUSDT": 10, "SUSDT": 20, "OLDUSDT": 5})
 	f.pos["OLDUSDT:long"] = &fakePos{sym: "OLDUSDT", side: "long", qty: 100, entry: 5}
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	tg := fqTestTargets("2026-10-31", map[string]float64{"LUSDT": 0.5, "SUSDT": -0.5})
 	rep := fqRunRebalance(b, tg, fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
 	if rep.Err != nil {
@@ -563,19 +571,17 @@ func TestFuturesBrokerExecutesPlanAndPlacesShortStops(t *testing.T) {
 		t.Fatalf("leverage not set per symbol: %v", f.lev)
 	}
 	stop, ok := f.stops["SUSDT:SHORT"]
-	if !ok || math.Abs(stop-30) > 1e-9 { // entry 20 * 1.5
+	if !ok || math.Abs(stop-24) > 1e-9 { // entry 20 * 1.2
 		t.Fatalf("short stop = %v (%v) calls=%v", stop, ok, f.calls)
 	}
-	if _, ok := f.stops["LUSDT:LONG"]; ok {
-		t.Fatal("longs get no catastrophic stop")
-	}
+	fqNear(t, f.stops["LUSDT:LONG"], 8, "long stop")
 	var shortRes fqResult
 	for _, r := range rep.Results {
 		if r.Order.Symbol == "SUSDT" {
 			shortRes = r
 		}
 	}
-	fqNear(t, shortRes.StopPrice, 30, "recorded stop")
+	fqNear(t, shortRes.StopPrice, 24, "recorded stop")
 	if rep.After == nil || len(rep.After.Positions) != 2 {
 		t.Fatalf("after snapshot = %+v", rep.After)
 	}
@@ -583,32 +589,32 @@ func TestFuturesBrokerExecutesPlanAndPlacesShortStops(t *testing.T) {
 
 func TestFuturesBrokerRestopsAfterIncreasingShort(t *testing.T) {
 	f := newFakeFutures(10000, map[string]float64{"SUSDT": 20})
-	f.pos["SUSDT:short"] = &fakePos{sym: "SUSDT", side: "short", qty: 100, entry: 10} // 2000 held at mark 20 -> 2000... avg entry 10
-	b := newFQFuturesBroker(f, 3, 0.5)
+	f.pos["SUSDT:short"] = &fakePos{sym: "SUSDT", side: "short", qty: 100, entry: 18} // 2000 held at mark 20, average entry 18
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	tg := fqTestTargets("2026-10-31", map[string]float64{"SUSDT": -0.5})
 	rep := fqRunRebalance(b, tg, fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
 	if rep.Err != nil || len(rep.Results) != 1 || rep.Results[0].Order.Kind != fqKindIncrease {
 		t.Fatalf("%+v %v", rep.Results, rep.Err)
 	}
-	// increase 150 @20 -> avg entry = (10*100+20*150)/250 = 16 -> stop 24
-	if stop := f.stops["SUSDT:SHORT"]; math.Abs(stop-24) > 1e-9 {
+	// increase 150 @20 -> avg entry = (18*100+20*150)/250 = 19.2 -> stop 23.04
+	if stop := f.stops["SUSDT:SHORT"]; math.Abs(stop-23.04) > 1e-9 {
 		t.Fatalf("stop after increase = %v", stop)
 	}
 }
 
-func TestFuturesBrokerNoStopWhenDisabledOrReducing(t *testing.T) {
+func TestFuturesBrokerDisabledAndReducing(t *testing.T) {
 	f := newFakeFutures(10000, map[string]float64{"SUSDT": 20})
-	b := newFQFuturesBroker(f, 3, 0) // stop disabled
+	b := newFQFuturesBroker(f, 3, 0, 0) // stop disabled
 	rep := fqRunRebalance(b, fqTestTargets("2026-10-31", map[string]float64{"SUSDT": -0.5}), fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
 	if rep.failedCount() != 0 || len(f.stops) != 0 {
 		t.Fatalf("stop placed with short_stop_pct=0: %v", f.stops)
 	}
 	f2 := newFakeFutures(10000, map[string]float64{"SUSDT": 20})
 	f2.pos["SUSDT:short"] = &fakePos{sym: "SUSDT", side: "short", qty: 1000, entry: 20}
-	b2 := newFQFuturesBroker(f2, 3, 0.5)
+	b2 := newFQFuturesBroker(f2, 3, 0.2, 0.2)
 	rep = fqRunRebalance(b2, fqTestTargets("2026-10-31", map[string]float64{"SUSDT": -0.5}), fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
-	if len(rep.Results) != 1 || rep.Results[0].Order.Kind != fqKindReduce || len(f2.stops) != 0 {
-		t.Fatalf("reduce must not re-place stops: %+v %v", rep.Results, f2.stops)
+	if len(rep.Results) != 1 || rep.Results[0].Order.Kind != fqKindReduce || len(f2.stops) != 1 {
+		t.Fatalf("reduce must re-place stops: %+v %v", rep.Results, f2.stops)
 	}
 }
 
@@ -616,7 +622,7 @@ func TestFuturesBrokerFailureContinues(t *testing.T) {
 	f := newFakeFutures(10000, map[string]float64{"AUSDT": 10, "BUSDT": 10, "CUSDT": 10, "DUSDT": 10})
 	f.failOpen["AUSDT"] = true
 	f.failStop["CUSDT"] = true
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	tg := fqTestTargets("2026-10-31", map[string]float64{"AUSDT": 0.2, "BUSDT": 0.2, "CUSDT": -0.2, "DUSDT": -0.2})
 	rep := fqRunRebalance(b, tg, fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
 	if rep.Err != nil || len(rep.Results) != 4 {
@@ -642,7 +648,7 @@ func TestFuturesBrokerFailureContinues(t *testing.T) {
 
 func TestRebalancePriceFailureSkipsOnlyThatSymbol(t *testing.T) {
 	f := newFakeFutures(10000, map[string]float64{"AUSDT": 10}) // BUSDT has no price
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	tg := fqTestTargets("2026-10-31", map[string]float64{"AUSDT": 0.3, "BUSDT": 0.3})
 	rep := fqRunRebalance(b, tg, fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
 	if len(rep.Results) != 1 || rep.PriceErrs["BUSDT"] == "" {
@@ -652,7 +658,7 @@ func TestRebalancePriceFailureSkipsOnlyThatSymbol(t *testing.T) {
 
 func TestRebalanceAbortsOnBadEquity(t *testing.T) {
 	f := newFakeFutures(0, map[string]float64{"AUSDT": 10})
-	rep := fqRunRebalance(newFQFuturesBroker(f, 3, 0.5), fqTestTargets("2026-10-31", map[string]float64{"AUSDT": 0.3}), fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
+	rep := fqRunRebalance(newFQFuturesBroker(f, 3, 0.2, 0.2), fqTestTargets("2026-10-31", map[string]float64{"AUSDT": 0.3}), fqPlanConfig{CapitalFraction: 1, Band: 0.1, MinOrder: 10})
 	if rep.Err == nil || len(rep.Results) != 0 {
 		t.Fatalf("%+v", rep)
 	}
@@ -671,7 +677,7 @@ func fqTestStore(t *testing.T) *store.Store {
 }
 
 func fqStrategy(market string) *store.StrategyConfig {
-	return &store.StrategyConfig{StrategyType: store.StrategyTypeFactorQuant, FactorQuantConfig: &store.FactorQuantConfig{Market: market, ShortStopPct: fqPtr(0.5)}}
+	return &store.StrategyConfig{StrategyType: store.StrategyTypeFactorQuant, FactorQuantConfig: &store.FactorQuantConfig{Market: market}}
 }
 
 func TestFactorQuantRejectsLiveExchanges(t *testing.T) {
@@ -781,9 +787,9 @@ func TestFactorQuantTickOnPaperAccount(t *testing.T) {
 	if !sawShort {
 		t.Fatal("no short opened")
 	}
-	// The catastrophic stop sits on the paper account at entry*1.5.
+	// The short stop sits on the paper account at entry*1.2.
 	orders, err := at.trader.GetOpenOrders("SHORTUSDT")
-	if err != nil || len(orders) != 1 || !strings.Contains(orders[0].Type, "STOP") || math.Abs(orders[0].StopPrice-150) > 1e-6 {
+	if err != nil || len(orders) != 1 || !strings.Contains(orders[0].Type, "STOP") || math.Abs(orders[0].StopPrice-120) > 1e-6 {
 		t.Fatalf("short stop orders %+v %v", orders, err)
 	}
 	state, err := st.FactorQuant().Get(at.id)
@@ -795,7 +801,7 @@ func TestFactorQuantTickOnPaperAccount(t *testing.T) {
 		t.Fatalf("decision records %d %v", len(recs), err)
 	}
 	r := recs[0]
-	for _, want := range []string{"2026-10-31", "ls_invvol_protected_v1", "horizon=3", "open_short", "SHORTUSDT", "灾难止损", "仅模拟盘"} {
+	for _, want := range []string{"2026-10-31", "ls_invvol_protected_v1", "horizon=3", "open_short", "SHORTUSDT", "止损（空）", "仅模拟盘"} {
 		if !strings.Contains(r.CoTTrace, want) {
 			t.Errorf("record summary lacks %q:\n%s", want, r.CoTTrace)
 		}
@@ -1230,7 +1236,7 @@ func TestFactorQuantRetryReplansAndRepairsShortStops(t *testing.T) {
 	f.pos["FAILUSDT:long"] = &fakePos{"FAILUSDT", "long", 10, 10}
 	f.pos["CLOSEDUSDT:long"] = &fakePos{"CLOSEDUSDT", "long", 10, 10}
 	f.failClose["FAILUSDT"], f.failStop["SHORTUSDT"] = true, true
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	now := fqDay("2026-11-01")
 	at.factorQuantTick(b, now)
 	state := fqCheckRetry(t, at, "2026-10-31", 0)
@@ -1248,17 +1254,17 @@ func TestFactorQuantRetryReplansAndRepairsShortStops(t *testing.T) {
 		t.Fatalf("retry resent successful orders or missed failed close: %v", f.calls)
 	}
 	recs := fqRecords(t, restarted)
-	if len(recs) != 2 || recs[0].Success || !strings.Contains(recs[0].CoTTrace, "重试第 1 次") || !strings.Contains(recs[0].CoTTrace, "补放空头灾难止损 SHORTUSDT 失败") {
+	if len(recs) != 2 || recs[0].Success || !strings.Contains(recs[0].CoTTrace, "重试第 1 次") || !strings.Contains(recs[0].CoTTrace, "补放止损（空） SHORTUSDT 失败") {
 		t.Fatalf("failed protection retry record=%+v", recs)
 	}
 
 	f.failStop["SHORTUSDT"] = false
 	restarted.factorQuantTick(b, now.Add(10*time.Minute))
 	state = fqCheckRetry(t, restarted, "", 0)
-	if state.LastAsOf != "2026-10-31" || fqCountCalls(f, "stop SHORTUSDT") != 3 {
-		t.Fatalf("stop was not retried once per pass: state=%+v calls=%v", state, f.calls)
+	if state.LastAsOf != "2026-10-31" || fqCountCalls(f, "stop SHORTUSDT") != 4 {
+		t.Fatalf("stop missing after open, rebalance or retry: state=%+v calls=%v", state, f.calls)
 	}
-	fqNear(t, f.stops["SHORTUSDT:SHORT"], 15, "repaired stop")
+	fqNear(t, f.stops["SHORTUSDT:SHORT"], 12, "repaired stop")
 	recs = fqRecords(t, restarted)
 	if len(recs) != 3 || !recs[0].Success || !strings.Contains(recs[0].CoTTrace, "重试第 2 次") {
 		t.Fatalf("successful protection retry record=%+v", recs)
@@ -1278,7 +1284,7 @@ func TestFactorQuantRetryFailedCloseThenSuccess(t *testing.T) {
 	f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10, "NEWUSDT": 10})
 	f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
 	f.failClose["OLDUSDT"] = true
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	now := fqDay("2026-11-01")
 	at.factorQuantTick(b, now)
 	fqCheckRetry(t, at, "2026-10-31", 0)
@@ -1302,7 +1308,7 @@ func TestFactorQuantRetryCap(t *testing.T) {
 	f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10})
 	f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
 	f.failClose["OLDUSDT"] = true
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	now := fqDay("2026-11-01")
 	at.factorQuantTick(b, now)
 	for i := 1; i <= fqMaxRetryAttempts; i++ {
@@ -1351,7 +1357,7 @@ func TestFactorQuantRetryRequiresSameFreshOKTargets(t *testing.T) {
 			at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", tc.status, tc.asOf, tc.horizon, `{}`))
 			f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10})
 			f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
-			at.factorQuantTick(newFQFuturesBroker(f, 3, 0.5), fqDay(tc.now))
+			at.factorQuantTick(newFQFuturesBroker(f, 3, 0.2, 0.2), fqDay(tc.now))
 			if len(f.calls) != 0 {
 				t.Fatalf("unexpected orders: %v", f.calls)
 			}
@@ -1392,7 +1398,7 @@ func TestFactorQuantStaleFlatten(t *testing.T) {
 			f.pos["BOTHUSDT:long"] = &fakePos{"BOTHUSDT", "long", 10, 10}
 			f.pos["BOTHUSDT:short"] = &fakePos{"BOTHUSDT", "short", 5, 10}
 			f.pos["DUSTUSDT:long"] = &fakePos{"DUSTUSDT", "long", 0.00001, 10}
-			b := newFQFuturesBroker(f, 3, 0.5)
+			b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 			now := fqDay("2026-11-01")
 			at.factorQuantTick(b, now) // age 9 > default 8
 			state := fqCheckRetry(t, at, "", 0)
@@ -1446,7 +1452,7 @@ func TestFactorQuantFlattenSafetyAndBoundary(t *testing.T) {
 			cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-01", 3, `{}`))
 			f := newFakeFutures(1000, map[string]float64{"OLDUSDT": 10})
 			f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
-			at.factorQuantTick(newFQFuturesBroker(f, 3, 0.5), fqDay("2026-11-01"))
+			at.factorQuantTick(newFQFuturesBroker(f, 3, 0.2, 0.2), fqDay("2026-11-01"))
 			if len(f.calls) != 0 || len(f.pos) != 1 {
 				t.Fatalf("unsafe flatten calls=%v positions=%v", f.calls, f.pos)
 			}
@@ -1464,7 +1470,7 @@ func TestFactorQuantFlattenFailureRetriesWithoutRecordSpam(t *testing.T) {
 	f.pos["FAILUSDT:short"] = &fakePos{"FAILUSDT", "short", 10, 10}
 	f.pos["CLOSEDUSDT:long"] = &fakePos{"CLOSEDUSDT", "long", 10, 10}
 	f.failClose["FAILUSDT"] = true
-	b := newFQFuturesBroker(f, 3, 0.5)
+	b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 	now := fqDay("2026-11-01")
 	at.factorQuantTick(b, now)
 	if recs := fqRecords(t, at); len(recs) != 1 || recs[0].Success {
@@ -1534,12 +1540,12 @@ func TestFactorQuantRetryProtectsShortsAfterPreflightError(t *testing.T) {
 	at.config.StrategyConfig.FactorQuantConfig.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"SHORTUSDT":-0.5}`))
 	f := newFakeFutures(1000, map[string]float64{"SHORTUSDT": 10})
 	f.pos["SHORTUSDT:short"] = &fakePos{"SHORTUSDT", "short", 50, 10}
-	b := &fqPreflightFailureBroker{fqFuturesBroker: newFQFuturesBroker(f, 3, 0.5), failAccount: true}
+	b := &fqPreflightFailureBroker{fqFuturesBroker: newFQFuturesBroker(f, 3, 0.2, 0.2), failAccount: true}
 	at.factorQuantTick(b, fqDay("2026-11-01"))
 	fqCheckRetry(t, at, "2026-10-31", 1)
-	fqNear(t, f.stops["SHORTUSDT:SHORT"], 15, "stop after preflight error")
+	fqNear(t, f.stops["SHORTUSDT:SHORT"], 12, "stop after preflight error")
 	recs := fqRecords(t, at)
-	if len(recs) != 1 || recs[0].Success || !strings.Contains(recs[0].CoTTrace, "transient account failure") || !strings.Contains(recs[0].CoTTrace, "补放空头灾难止损 SHORTUSDT") {
+	if len(recs) != 1 || recs[0].Success || !strings.Contains(recs[0].CoTTrace, "transient account failure") || !strings.Contains(recs[0].CoTTrace, "补放止损（空） SHORTUSDT") {
 		t.Fatalf("preflight retry record=%+v", recs)
 	}
 	at.factorQuantTick(b, fqDay("2026-11-01").Add(5*time.Minute))
@@ -1557,7 +1563,7 @@ func TestFactorQuantFlattenOnTooSoonWithZeroEquity(t *testing.T) {
 	cfg.TargetsPath = writeTargetsFile(t, t.TempDir(), targetsJSON("crypto", "ok", "2026-10-31", 3, `{"NEWUSDT":0.5}`))
 	f := newFakeFutures(0, map[string]float64{"OLDUSDT": 10})
 	f.pos["OLDUSDT:long"] = &fakePos{"OLDUSDT", "long", 10, 10}
-	at.factorQuantTick(newFQFuturesBroker(f, 3, 0.5), fqDay("2026-11-01"))
+	at.factorQuantTick(newFQFuturesBroker(f, 3, 0.2, 0.2), fqDay("2026-11-01"))
 	if len(f.pos) != 0 || fqCountCalls(f, "close_long OLDUSDT") != 1 {
 		t.Fatalf("zero-equity position was not flattened: positions=%v calls=%v", f.pos, f.calls)
 	}
@@ -1607,7 +1613,7 @@ func TestFactorQuantRetryFailedFlipCloseKeepsFilledTargetSide(t *testing.T) {
 			f := newFakeFutures(1000, map[string]float64{"FLIPUSDT": 10})
 			f.pos["FLIPUSDT:"+oldSide] = &fakePos{"FLIPUSDT", oldSide, 10, 10}
 			f.failClose["FLIPUSDT"] = true
-			b := newFQFuturesBroker(f, 3, 0.5)
+			b := newFQFuturesBroker(f, 3, 0.2, 0.2)
 			now := fqDay("2026-11-01")
 			at.factorQuantTick(b, now)
 			fqCheckRetry(t, at, "2026-10-31", 0)

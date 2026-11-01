@@ -55,7 +55,7 @@ func TestFactorQuantValidate(t *testing.T) {
 func TestFactorQuantDefaults(t *testing.T) {
 	c := &FactorQuantConfig{Market: "crypto"}
 	if c.EffectiveHorizon() != 3 || c.EffectiveCapitalFraction() != 1 || c.EffectiveLeverage() != 3 ||
-		c.EffectiveBand() != 0.10 || c.EffectiveMinOrderUSDT() != 10 || c.EffectiveShortStopPct() != 0.5 ||
+		c.EffectiveBand() != 0.10 || c.EffectiveMinOrderUSDT() != 10 || c.EffectiveShortStopPct() != 0.2 || c.EffectiveLongStopPct() != 0.2 ||
 		c.EffectiveMaxStaleDays(3) != 5 {
 		t.Fatalf("crypto defaults wrong: %+v", c)
 	}
@@ -73,9 +73,9 @@ func TestFactorQuantDefaults(t *testing.T) {
 	if us2.EffectiveUSFeeBps() != 0 || us2.EffectiveUSSlippageBps() != 7.5 {
 		t.Fatalf("explicit us costs (including 0) not honoured: %v %v", us2.EffectiveUSFeeBps(), us2.EffectiveUSSlippageBps())
 	}
-	c2 := &FactorQuantConfig{Market: "crypto", Horizon: 7, CapitalFraction: 0.4, Leverage: 2, RebalanceBandPct: 0.2, MinOrderUSDT: 25, ShortStopPct: fqf(0), MaxStaleDays: 9}
+	c2 := &FactorQuantConfig{Market: "crypto", Horizon: 7, CapitalFraction: 0.4, Leverage: 2, RebalanceBandPct: 0.2, MinOrderUSDT: 25, ShortStopPct: fqf(0), LongStopPct: fqf(0), MaxStaleDays: 9}
 	if c2.EffectiveHorizon() != 7 || c2.EffectiveCapitalFraction() != 0.4 || c2.EffectiveLeverage() != 2 || c2.EffectiveBand() != 0.2 ||
-		c2.EffectiveMinOrderUSDT() != 25 || c2.EffectiveShortStopPct() != 0 || c2.EffectiveMaxStaleDays(7) != 9 {
+		c2.EffectiveMinOrderUSDT() != 25 || c2.EffectiveShortStopPct() != 0 || c2.EffectiveLongStopPct() != 0 || c2.EffectiveMaxStaleDays(7) != 9 {
 		t.Fatalf("explicit values not honoured: %+v", c2)
 	}
 }
@@ -95,6 +95,7 @@ func TestFactorQuantStrategyConfigValidation(t *testing.T) {
 	}
 	// JSON round trip keeps the type, the pointer-valued stop and its explicit zero.
 	cfg.FactorQuantConfig.ShortStopPct = fqf(0)
+	cfg.FactorQuantConfig.LongStopPct = fqf(0)
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestFactorQuantStrategyConfigValidation(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back.StrategyType != StrategyTypeFactorQuant || back.FactorQuantConfig == nil || back.FactorQuantConfig.ShortStopPct == nil || back.FactorQuantConfig.EffectiveShortStopPct() != 0 {
+	if back.StrategyType != StrategyTypeFactorQuant || back.FactorQuantConfig == nil || back.FactorQuantConfig.ShortStopPct == nil || back.FactorQuantConfig.EffectiveShortStopPct() != 0 || back.FactorQuantConfig.LongStopPct == nil || back.FactorQuantConfig.EffectiveLongStopPct() != 0 {
 		t.Fatalf("round trip lost factor_quant config: %s", raw)
 	}
 }
