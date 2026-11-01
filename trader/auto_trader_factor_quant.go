@@ -109,7 +109,7 @@ func (at *AutoTrader) newFactorQuantBroker() (fqBroker, error) {
 	if !ok {
 		return nil, fmt.Errorf("因子量化加密策略需要模拟合约执行器，实际为 %T", at.trader)
 	}
-	return newFQFuturesBroker(pt, fq.EffectiveLeverage(), fq.EffectiveShortStopPct()), nil
+	return newFQFuturesBroker(pt, fq.EffectiveLeverage(), fq.EffectiveLongStopPct(), fq.EffectiveShortStopPct()), nil
 }
 
 // runFactorQuantLoop is the factor_quant run loop (dispatched from run()).
@@ -126,7 +126,11 @@ func (at *AutoTrader) runFactorQuantLoop() error {
 	logger.Infof("📐 [%s] factor_quant 启动：market=%s horizon=%d 资金比例=%.2f 目标文件=%s（仅模拟盘，不调用大模型）",
 		at.name, fq.Market, fq.EffectiveHorizon(), fq.EffectiveCapitalFraction(), factorQuantTargetsPath(fq))
 
-	// Paper fills (including the short catastrophic stop) resolve on the
+	// Migrate existing crypto positions before either order sync or the first
+	// rebalance check can act. Protection failures only warn and leave the loop running.
+	at.factorQuantInitStops(broker)
+
+	// Paper fills (including stops on both sides) resolve on the
 	// simulator's order-sync tick; run()'s defer stops it.
 	if fq.IsCrypto() && at.store != nil {
 		if syncer, ok := at.trader.(interface {
@@ -149,6 +153,50 @@ func (at *AutoTrader) runFactorQuantLoop() error {
 			return nil
 		case <-ticker.C:
 			at.factorQuantTickSafe(broker)
+		}
+	}
+}
+
+// factorQuantInitStops also runs when the rebalance gate is closed or targets
+// cannot be loaded, so a restart/config reload applies the configured stops.
+func (at *AutoTrader) factorQuantInitStops(broker fqBroker) {
+	if !at.config.StrategyConfig.FactorQuantConfig.IsCrypto() {
+		return
+	}
+	mu := at.executionMutex()
+	mu.Lock()
+	defer mu.Unlock()
+	placed, exited, failed := 0, 0, 0
+	for _, res := range at.factorQuantEnsureStops(broker) {
+		switch {
+		case res.Err != "":
+			failed++
+			logger.Warnf("⚠️ [%s] factor_quant 启动止损（%s）%s：%s", at.name, fqStopSideLabel(res.Side), res.Symbol, res.Err)
+		case res.Exited:
+			exited++
+			logger.Infof("📐 [%s] factor_quant 止损（%s）%s：%s", at.name, fqStopSideLabel(res.Side), res.Symbol, res.Note)
+		case res.Price > 0:
+			placed++
+		}
+	}
+	logger.Infof("📐 [%s] factor_quant 启动止损检查：%d 个已放置，%d 个已平仓，%d 个失败", at.name, placed, exited, failed)
+}
+
+func (at *AutoTrader) factorQuantEnsureStops(broker fqBroker) []fqStopResult {
+	if at.config.StrategyConfig.FactorQuantConfig.IsCrypto() {
+		if protector, ok := broker.(interface{ ensureStops() []fqStopResult }); ok {
+			return protector.ensureStops()
+		}
+	}
+	return nil
+}
+
+func (at *AutoTrader) factorQuantProtectReport(broker fqBroker, rep *fqRebalanceReport) {
+	rep.Stops = append(rep.Stops, at.factorQuantEnsureStops(broker)...)
+	// A breached stop can close a position after the order execution snapshot.
+	if len(rep.Stops) > 0 && rep.Err == nil {
+		if after, err := broker.Account(); err == nil {
+			rep.After = after
 		}
 	}
 }
@@ -307,6 +355,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 		}
 		return
 	}
+	at.factorQuantProtectReport(broker, rep)
 	at.fq.mu.Lock()
 	at.fq.memAsOf = targets.AsOf
 	at.fq.memRule = targets.Rule.Name
@@ -356,11 +405,7 @@ func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, s
 	planCfg := fqResolvedPlanConfig(fq)
 	planCfg.Retry = true
 	rep := fqRunRebalance(broker, targets, planCfg)
-	if fq.IsCrypto() && fq.EffectiveShortStopPct() > 0 {
-		if protector, ok := broker.(interface{ ensureShortStops() []fqStopResult }); ok {
-			rep.Stops = protector.ensureShortStops()
-		}
-	}
+	at.factorQuantProtectReport(broker, rep)
 	at.fqSetRetry(targets.AsOf, attempt)
 	failed := rep.Err != nil || rep.failedCount() > 0
 	if !failed {
@@ -539,9 +584,12 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 	fmt.Fprintf(&sb, "触发：%s\n", dec.Reason)
 
 	for _, stop := range rep.Stops {
-		line := fmt.Sprintf("补放空头灾难止损 %s：%.8g", stop.Symbol, stop.Price)
+		label := "止损（" + fqStopSideLabel(stop.Side) + "）"
+		line := fmt.Sprintf("补放%s %s：%.8g", label, stop.Symbol, stop.Price)
 		if stop.Err != "" {
-			line = fmt.Sprintf("补放空头灾难止损 %s 失败：%s", stop.Symbol, stop.Err)
+			line = fmt.Sprintf("补放%s %s 失败：%s", label, stop.Symbol, stop.Err)
+		} else if stop.Exited {
+			line = fmt.Sprintf("%s %s：%s（止损价 %.8g）", label, stop.Symbol, stop.Note, stop.Price)
 		}
 		sb.WriteString(line + "\n")
 		rec.ExecutionLog = append(rec.ExecutionLog, "[factor_quant] "+line)
@@ -592,7 +640,10 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 				line += "）"
 			}
 			if r.StopPrice > 0 {
-				line += fmt.Sprintf("，灾难止损 %.6g", r.StopPrice)
+				line += fmt.Sprintf("，止损（%s）%.6g", fqStopSideLabel(o.Side), r.StopPrice)
+				if r.StopExited {
+					line += "，" + r.Note
+				}
 			}
 			if r.Fee > 0 {
 				line += fmt.Sprintf("，手续费 %.4f USDT", r.Fee)

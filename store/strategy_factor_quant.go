@@ -25,7 +25,7 @@ const (
 
 // FactorQuantConfig is the factor_quant strategy configuration. Zero values
 // mean "use the documented default" (see the Effective* resolvers), except
-// ShortStopPct where an explicit 0 disables the stop.
+// stop percentages where an explicit 0 disables that side's stop.
 type FactorQuantConfig struct {
 	// Market: "crypto" (paper futures account, long/short) or "us" (bStock paper
 	// ledger, long-only). Required.
@@ -44,8 +44,11 @@ type FactorQuantConfig struct {
 	RebalanceBandPct float64 `json:"rebalance_band_pct,omitempty"`
 	// MinOrderUSDT: smallest order notional; default 10.
 	MinOrderUSDT float64 `json:"min_order_usdt,omitempty"`
-	// ShortStopPct: crypto only, catastrophic stop on shorts at
-	// entry*(1+ShortStopPct). nil = default 0.5; explicit 0 disables.
+	// LongStopPct: crypto only, stop on longs at entry*(1-LongStopPct).
+	// nil = default 0.2; explicit 0 disables. Valid [0,1).
+	LongStopPct *float64 `json:"long_stop_pct,omitempty"`
+	// ShortStopPct: crypto only, stop on shorts at entry*(1+ShortStopPct).
+	// nil = default 0.2; explicit 0 disables. Valid [0,10].
 	ShortStopPct *float64 `json:"short_stop_pct,omitempty"`
 	// MaxStaleDays: targets whose as_of is older than this many days (UTC)
 	// are not traded; default horizon+2.
@@ -69,7 +72,8 @@ const (
 	defaultFactorQuantLeverage      = 3
 	defaultFactorQuantBand          = 0.10
 	defaultFactorQuantMinOrder      = 10.0
-	defaultFactorQuantShortStop     = 0.5
+	defaultFactorQuantLongStop      = 0.2
+	defaultFactorQuantShortStop     = 0.2
 	defaultFactorQuantUSFeeBps      = 10.0
 	defaultFactorQuantUSSlippageBps = 3.0
 	maxFactorQuantUSCostBps         = 100.0
@@ -124,7 +128,15 @@ func (f *FactorQuantConfig) EffectiveMinOrderUSDT() float64 {
 	return f.MinOrderUSDT
 }
 
-// EffectiveShortStopPct: 0 = no stop.
+// EffectiveLongStopPct: nil = default 0.2; 0 = no stop.
+func (f *FactorQuantConfig) EffectiveLongStopPct() float64 {
+	if f == nil || f.LongStopPct == nil {
+		return defaultFactorQuantLongStop
+	}
+	return *f.LongStopPct
+}
+
+// EffectiveShortStopPct: nil = default 0.2; 0 = no stop.
 func (f *FactorQuantConfig) EffectiveShortStopPct() float64 {
 	if f == nil || f.ShortStopPct == nil {
 		return defaultFactorQuantShortStop
@@ -200,8 +212,11 @@ func (f *FactorQuantConfig) Validate() error {
 	if fqBadFloat(f.MinOrderUSDT) || f.MinOrderUSDT < 0 {
 		return fmt.Errorf("factor_quant min_order_usdt must be >= 0")
 	}
-	if f.ShortStopPct != nil && (fqBadFloat(*f.ShortStopPct) || *f.ShortStopPct < 0) {
-		return fmt.Errorf("factor_quant short_stop_pct must be >= 0")
+	if f.LongStopPct != nil && (fqBadFloat(*f.LongStopPct) || *f.LongStopPct < 0 || *f.LongStopPct >= 1) {
+		return fmt.Errorf("factor_quant long_stop_pct must be in [0,1)")
+	}
+	if f.ShortStopPct != nil && (fqBadFloat(*f.ShortStopPct) || *f.ShortStopPct < 0 || *f.ShortStopPct > 10) {
+		return fmt.Errorf("factor_quant short_stop_pct must be in [0,10]")
 	}
 	for name, v := range map[string]*float64{"us_fee_bps": f.USFeeBps, "us_slippage_bps": f.USSlippageBps} {
 		if v != nil && (fqBadFloat(*v) || *v < 0 || *v > maxFactorQuantUSCostBps) {

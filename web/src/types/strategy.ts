@@ -64,7 +64,7 @@ export interface StrategyConfig {
 
 // Factor-quant (programmatic, no-LLM) strategy configuration; mirrors the Go
 // store.FactorQuantConfig JSON tags. Numeric 0 / omitted = use the preset
-// default (see FactorQuantConfigEditor placeholders). Paper accounts only.
+// default, except stop percentages: 0 disables that side. Paper accounts only.
 export interface FactorQuantConfig {
   // Required: "crypto" (paper perpetuals) or "us" (bStock paper ledger)
   market: 'crypto' | 'us'
@@ -78,7 +78,9 @@ export interface FactorQuantConfig {
   rebalance_band_pct?: number
   // Minimum order notional in USDT
   min_order_usdt?: number
-  // Crypto only: short disaster stop at entry × (1 + pct); 0 = disabled
+  // Crypto only: stop at average entry × (1 - pct); default 0.2; 0 = disabled
+  long_stop_pct?: number
+  // Crypto only: stop at average entry × (1 + pct); default 0.2; 0 = disabled
   short_stop_pct?: number
   // US only: per-fill fee of the bStock paper ledger in basis points (10 = 0.1%).
   // omitted/null = default 10; 0 = no fee; valid 0-100

@@ -29,16 +29,17 @@ type fqAccount struct {
 
 // fqResult is the outcome of one planned order.
 type fqResult struct {
-	Order     fqOrder
-	OK        bool
-	Err       string
-	FillQty   float64
-	FillPrice float64
-	OrderID   string
-	Fee       float64 // trading fee paid (USDT), paper-ledger fills
-	StopPrice float64 // short catastrophic stop re-placed after the order (0 = none)
-	StopErr   string
-	Note      string
+	Order      fqOrder
+	OK         bool
+	Err        string
+	FillQty    float64
+	FillPrice  float64
+	OrderID    string
+	Fee        float64 // trading fee paid (USDT), paper-ledger fills
+	StopPrice  float64 // stop level checked after the order (0 = none)
+	StopExited bool    // protection closed an already breached position at market
+	StopErr    string
+	Note       string
 }
 
 // failed reports whether the order or its protection did not complete.
@@ -67,18 +68,20 @@ type fqFuturesTrader interface {
 	SetLeverage(symbol string, leverage int) error
 	GetMarketPrice(symbol string) (float64, error)
 	SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error
+	CancelStopLossOrdersForSide(symbol, positionSide string) error
 	FormatQuantity(symbol string, quantity float64) (string, error)
 }
 
 type fqFuturesBroker struct {
 	t            fqFuturesTrader
 	leverage     int
+	longStopPct  float64 // 0 = no stop
 	shortStopPct float64 // 0 = no stop
 	levSet       map[string]bool
 }
 
-func newFQFuturesBroker(t fqFuturesTrader, leverage int, shortStopPct float64) *fqFuturesBroker {
-	return &fqFuturesBroker{t: t, leverage: leverage, shortStopPct: shortStopPct, levSet: map[string]bool{}}
+func newFQFuturesBroker(t fqFuturesTrader, leverage int, longStopPct, shortStopPct float64) *fqFuturesBroker {
+	return &fqFuturesBroker{t: t, leverage: leverage, longStopPct: longStopPct, shortStopPct: shortStopPct, levSet: map[string]bool{}}
 }
 
 func fqFloat(m map[string]interface{}, keys ...string) float64 {
@@ -191,72 +194,116 @@ func (b *fqFuturesBroker) Place(o fqOrder) fqResult {
 	if id, ok := raw["orderId"]; ok && id != nil {
 		res.OrderID = fmt.Sprint(id)
 	}
-	// Opening or growing a short wipes the side's protective orders; re-place
-	// the catastrophic stop from the position's average entry.
-	if o.opens() && o.Side == fqSideShort && b.shortStopPct > 0 {
-		stop, err := b.placeShortStop(o.Symbol)
-		res.StopPrice = stop
-		if err != nil {
-			res.StopErr = err.Error()
-		}
-	}
+	// Paper opens/increases cancel protection; reductions retain it. Refresh
+	// both sides from the remaining full quantity and average entry after any
+	// fill. A full close already cancels that side's protection in paper.execute.
+	stop := b.placeStop(o.Symbol, o.Side)
+	res.StopPrice, res.StopErr, res.StopExited = stop.Price, stop.Err, stop.Exited
+	res.Note = stop.Note
 	return res
 }
 
-func (b *fqFuturesBroker) placeShortStop(sym string) (float64, error) {
+type fqStopResult struct {
+	Symbol string
+	Side   string
+	Price  float64
+	Exited bool
+	Note   string
+	Err    string
+}
+
+func fqStopSideLabel(side string) string {
+	if side == fqSideLong {
+		return "多"
+	}
+	return "空"
+}
+
+func (b *fqFuturesBroker) placeStop(sym, side string) fqStopResult {
+	res := fqStopResult{Symbol: sym, Side: side}
+	label := "止损（" + fqStopSideLabel(side) + "）"
+	pct := b.shortStopPct
+	if side == fqSideLong {
+		pct = b.longStopPct
+	}
+	if pct == 0 {
+		// Config changes can disable a stop that was already resting.
+		if err := b.t.CancelStopLossOrdersForSide(sym, strings.ToUpper(side)); err != nil {
+			res.Err = fmt.Sprintf("%s取消失败：%v", label, err)
+		}
+		return res
+	}
 	rows, err := b.t.GetPositions()
 	if err != nil {
-		return 0, fmt.Errorf("读取持仓以放置空头止损失败：%w", err)
+		res.Err = fmt.Sprintf("读取持仓以放置%s失败：%v", label, err)
+		return res
 	}
 	for _, row := range rows {
 		if s, _ := row["symbol"].(string); s != sym {
 			continue
 		}
-		if side, _ := row["side"].(string); strings.ToLower(side) != fqSideShort {
+		ps, _ := row["side"].(string)
+		if strings.ToLower(ps) != side {
 			continue
 		}
 		entry := fqFloat(row, "entryPrice")
 		qty := math.Abs(fqFloat(row, "positionAmt"))
-		if entry <= 0 || qty <= 0 {
+		if qty <= 0 {
 			continue
 		}
-		stop := entry * (1 + b.shortStopPct)
-		if err := b.t.SetStopLoss(sym, "SHORT", qty, stop); err != nil {
-			return 0, fmt.Errorf("空头灾难止损 %.8g 放置失败：%w", stop, err)
+		if entry <= 0 || math.IsNaN(entry) || math.IsInf(entry, 0) {
+			res.Err = fmt.Sprintf("%s持仓均价无效：%v", label, entry)
+			return res
 		}
-		return stop, nil
+		stop := entry * (1 + pct)
+		if side == fqSideLong {
+			stop = entry * (1 - pct)
+		}
+		mark := fqFloat(row, "markPrice")
+		if mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
+			mark, err = b.t.GetMarketPrice(sym)
+			if err != nil || mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
+				res.Err = fmt.Sprintf("%s读取标记价格失败：%v（价格 %v）", label, err, mark)
+				return res
+			}
+		}
+		res.Price = stop
+		if (side == fqSideLong && mark <= stop) || (side == fqSideShort && mark >= stop) {
+			if side == fqSideLong {
+				_, err = b.t.CloseLong(sym, 0)
+			} else {
+				_, err = b.t.CloseShort(sym, 0)
+			}
+			if err != nil {
+				res.Err = fmt.Sprintf("%s止损价已越过，市价平仓失败：%v", label, err)
+			} else {
+				res.Exited = true
+				res.Note = "止损价已越过，已市价平仓"
+			}
+			return res
+		}
+		if err := b.t.SetStopLoss(sym, strings.ToUpper(side), qty, stop); err != nil {
+			res.Err = fmt.Sprintf("%s %.8g 放置失败：%v", label, stop, err)
+		}
+		return res
 	}
-	return 0, fmt.Errorf("未找到空头持仓，无法放置灾难止损")
+	// A filled close or a simulator-triggered exit can leave no position.
+	return res
 }
 
-type fqStopResult struct {
-	Symbol string
-	Price  float64
-	Err    string
-}
-
-// ensureShortStops also repairs protection when the planner leaves an already
-// filled short inside the rebalance band. Paper SetStopLoss replaces that side's
-// previous STOP_MARKET, so repeated checks are safe.
-func (b *fqFuturesBroker) ensureShortStops() []fqStopResult {
-	if b.shortStopPct <= 0 {
-		return nil
-	}
+// ensureStops migrates and repairs both sides, including positions left inside
+// the rebalance band. Paper SetStopLoss replaces only that side's STOP_MARKET.
+func (b *fqFuturesBroker) ensureStops() []fqStopResult {
 	acct, err := b.Account()
 	if err != nil {
 		return []fqStopResult{{Err: err.Error()}}
 	}
 	var out []fqStopResult
 	for _, p := range acct.Positions {
-		if p.Side != fqSideShort {
-			continue
+		res := b.placeStop(p.Symbol, p.Side)
+		if res.Price > 0 || res.Err != "" || res.Exited {
+			out = append(out, res)
 		}
-		stop, err := b.placeShortStop(p.Symbol)
-		res := fqStopResult{Symbol: p.Symbol, Price: stop}
-		if err != nil {
-			res.Err = err.Error()
-		}
-		out = append(out, res)
 	}
 	return out
 }
@@ -403,7 +450,7 @@ type fqRebalanceReport struct {
 	After   *fqAccount
 	Plan    fqPlan
 	Results []fqResult
-	Stops   []fqStopResult // retry-only protection checks, independent of market orders
+	Stops   []fqStopResult // protection checks, independent of planned market orders
 	// PriceErrs: symbols whose price could not be read (planned around).
 	PriceErrs map[string]string
 	// Err: the attempt aborted before any order (account or plan inputs unavailable).
