@@ -30,6 +30,25 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fib-fvg-bos',
+    date: '2026-11-01',
+    title: '斐波那契 + FVG + BOS 入场模型',
+    domain: '加密 · 程序化入场模型',
+    verdict: 'none',
+    verdictText: '无可交易 edge',
+    idea: '用户问能否在自动量化交易员中融合：等结构突破（BOS），回撤进入 FVG，FVG 与斐波那契 0.618–0.786 重叠处挂限价，止损放在结构外，目标为下一个流动性池。10-18 的 ICT 研究已测过其中 5 步，这次只补斐波那契过滤和“不要求先扫流动性”两点。预注册 4 个变体 × 2 种出场：V1 用户版、V2 去掉斐波那契、V3 10-18 “full” 加斐波那契、V4 “full” 原样。100 币 5m K 线（2025-10-15～2026-10-17），Backtrader，0.05%+0.03% 成本，同几何随机错位对照。',
+    bullets: [
+      'G0 随机游走校准通过（与对照差 t −1.1）；G1/G2/G3 全部不通过：V1/ERL 净 avgR −1.13（周聚类 t −7.6），比随机对照还差 0.50R（t −3.2），开发段和留出段都为负。',
+      '5m 结构止损很窄（中位 0.36%），R 口径被成本放大。换成每笔收益率：V1 毛收益约 −0.05%、净 −0.22%，扣费前就亏。',
+      '斐波那契过滤没有增量：V1 与 V2 每笔净收益 −0.216% 对 −0.214%；V3 − V4 t −0.15。',
+      '止损至少 1×1h ATR（参考列）时，毛收益约 +0.05%/笔，略好于随机对照，但覆盖不了 0.16% 成本。“先扫流动性”的版本只有 34/67 笔成交，无法判断。',
+    ],
+    conclusion:
+      '无可交易 edge，不并入因子量化交易员，也不单独做程序化交易员。10-18 的 ICT 结论在加入斐波那契共振、去掉扫荡前提后仍然成立。',
+    source:
+      'scripts/backtest/fib_fvg_study.py · docs/research/2026-11-01-fib-fvg-bos-prereg.md · docs/research/2026-11-01-fib-fvg-bos-study.md',
+  },
+  {
     id: 'fq-stop-tp',
     date: '2026-11-01',
     title: '因子量化-加密：单币止损阈值与分批止盈',
