@@ -20,11 +20,17 @@ func (at *AutoTrader) actualFillRisk(d *kernel.Decision, fill, quantity, equity 
 	if fill <= 0 || quantity <= 0 || math.IsNaN(fill) || math.IsInf(fill, 0) || math.IsNaN(quantity) || math.IsInf(quantity, 0) {
 		return fmt.Errorf("actual fill price/quantity unavailable")
 	}
-	risk, reward := fill-d.StopLoss, d.TakeProfit-fill
+	// review 2026-10-28 #8: the exchange stop rests on the tick-rounded trigger
+	// (adapter math.Round to tick), not on the plan value. Re-check the risk
+	// against THAT price: a 0.04% rounding step is under the protection
+	// verifier's 0.1% band, so it would otherwise pass unseen while the real
+	// risk sits ~10% over budget. Adapters without the hook keep the raw plan.
+	stopLoss := at.tickRoundedStopPrice(d.Symbol, d.StopLoss)
+	risk, reward := fill-stopLoss, d.TakeProfit-fill
 	if strings.HasPrefix(d.Action, "open_short") {
-		risk, reward = d.StopLoss-fill, fill-d.TakeProfit
+		risk, reward = stopLoss-fill, fill-d.TakeProfit
 	}
-	if d.StopLoss <= 0 || d.TakeProfit <= 0 || math.IsNaN(risk) || math.IsInf(risk, 0) || math.IsNaN(reward) || math.IsInf(reward, 0) || risk <= 0 || reward <= 0 {
+	if stopLoss <= 0 || d.TakeProfit <= 0 || math.IsNaN(risk) || math.IsInf(risk, 0) || math.IsNaN(reward) || math.IsInf(reward, 0) || risk <= 0 || reward <= 0 {
 		return fmt.Errorf("actual fill crossed structural SL/TP")
 	}
 	if d.Leverage > 0 && risk/fill*100 >= 72/float64(d.Leverage) {
@@ -54,6 +60,25 @@ func (at *AutoTrader) actualFillRisk(d *kernel.Decision, fill, quantity, equity 
 		return fmt.Errorf("actual fill risk %.6g exceeds budget %.6g (+%.0f%% tolerance)", quantity*(risk+cost), budget, fillRiskBudgetTolerance*100)
 	}
 	return nil
+}
+
+// tickRoundedStopPrice returns the stop trigger as the exchange adapter will
+// actually place it (tick-rounded). Falls back to the plan price when the
+// adapter exposes no quantizer or the rounding fails.
+func (at *AutoTrader) tickRoundedStopPrice(symbol string, planned float64) float64 {
+	if planned <= 0 || math.IsNaN(planned) || math.IsInf(planned, 0) {
+		return planned
+	}
+	q, ok := at.trader.(interface {
+		QuantizeTriggerPrice(string, float64) (float64, error)
+	})
+	if !ok {
+		return planned
+	}
+	if v, err := q.QuantizeTriggerPrice(symbol, planned); err == nil && v > 0 {
+		return v
+	}
+	return planned
 }
 
 func (at *AutoTrader) rejectMarketFill(d *kernel.Decision, side string, quantity float64, cause error) error {

@@ -3,6 +3,7 @@ package trader
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -31,9 +32,9 @@ type positionState struct {
 //
 // Algorithm:
 // 1. Sort trades by time
-// 2. For each trade, determine if it's opening or closing based on RealizedPnL
-// 3. Opening trade (RealizedPnL == 0): Add to open trades list
-// 4. Closing trade (RealizedPnL != 0): Match with open trades using FIFO, generate position record
+// 2. Prefer OrderAction, then hedge PositionSide+Side, then one-way inventory
+// 3. Add opening trades to the FIFO inventory
+// 4. Match closing trades against that inventory, including breakeven exits
 //
 // The algorithm handles:
 // - Partial opens (multiple trades to build a position)
@@ -45,7 +46,7 @@ func RebuildPositionsFromTrades(trades []TradeRecord) []ClosedPnLRecord {
 	}
 
 	// Sort trades by time
-	sort.Slice(trades, func(i, j int) bool {
+	sort.SliceStable(trades, func(i, j int) bool {
 		return trades[i].Time.Before(trades[j].Time)
 	})
 
@@ -54,8 +55,10 @@ func RebuildPositionsFromTrades(trades []TradeRecord) []ClosedPnLRecord {
 	var records []ClosedPnLRecord
 
 	for _, trade := range trades {
-		// Determine position side
-		side := determinePositionSide(trade)
+		if trade.Quantity <= 0 {
+			continue
+		}
+		side, opening := classifyRebuildTrade(trade, positions)
 		if side == "" {
 			continue // Skip invalid trades
 		}
@@ -66,7 +69,7 @@ func RebuildPositionsFromTrades(trades []TradeRecord) []ClosedPnLRecord {
 		}
 		state := positions[key]
 
-		if trade.RealizedPnL == 0 {
+		if opening {
 			// Opening trade: add to open trades list
 			state.OpenTrades = append(state.OpenTrades, openTradeEntry{
 				Price:    trade.Price,
@@ -88,34 +91,44 @@ func RebuildPositionsFromTrades(trades []TradeRecord) []ClosedPnLRecord {
 	return records
 }
 
-// determinePositionSide determines the position side from a trade
-func determinePositionSide(trade TradeRecord) string {
-	// Hedge mode: use PositionSide directly
-	switch trade.PositionSide {
-	case "LONG", "long":
-		return "long"
-	case "SHORT", "short":
-		return "short"
+// Explicit exchange intent takes precedence over inferred direction. In hedge
+// mode a SELL/LONG or BUY/SHORT is a close even when realized PnL is zero.
+func classifyRebuildTrade(trade TradeRecord, positions map[string]*positionState) (side string, opening bool) {
+	switch strings.ToLower(trade.OrderAction) {
+	case "open_long", "open_long_limit":
+		return "long", true
+	case "open_short", "open_short_limit":
+		return "short", true
+	case "close_long", "partial_close_long":
+		return "long", false
+	case "close_short", "partial_close_short":
+		return "short", false
 	}
-
-	// One-way mode (BOTH or empty): determine from trade direction and RealizedPnL
-	if trade.RealizedPnL == 0 {
-		// Opening trade
-		if trade.Side == "BUY" || trade.Side == "Buy" {
-			return "long"
-		} else if trade.Side == "SELL" || trade.Side == "Sell" {
-			return "short"
-		}
-	} else {
-		// Closing trade
-		if trade.Side == "BUY" || trade.Side == "Buy" {
-			return "short" // Buy to close short
-		} else if trade.Side == "SELL" || trade.Side == "Sell" {
-			return "long" // Sell to close long
-		}
+	direction := strings.ToUpper(trade.Side)
+	if direction != "BUY" && direction != "SELL" {
+		return "", false
 	}
-
-	return ""
+	switch strings.ToUpper(trade.PositionSide) {
+	case "LONG":
+		return "long", direction == "BUY"
+	case "SHORT":
+		return "short", direction == "SELL"
+	}
+	// One-way trades without intent close the existing opposite inventory.
+	// With incomplete history and no inventory, direction is the only evidence.
+	side, opposite := "long", "short"
+	if direction == "SELL" {
+		side, opposite = "short", "long"
+	}
+	if p := positions[trade.Symbol+"_"+opposite]; p != nil && p.TotalQty > 0 {
+		return opposite, false
+	}
+	// In incomplete one-way history, a nonzero realized PnL is positive
+	// evidence of a close. Zero PnL alone never proves an opening trade.
+	if trade.RealizedPnL != 0 {
+		return opposite, false
+	}
+	return side, true
 }
 
 // buildClosedPosition builds a closed position record from a closing trade
@@ -139,7 +152,9 @@ func buildClosedPosition(trade TradeRecord, side string, state *positionState) *
 
 			weightedSum += ot.Price * matchQty
 			matchedQty += matchQty
-			totalEntryFee += ot.Fee * (matchQty / ot.Quantity)
+			matchedFee := ot.Fee * (matchQty / ot.Quantity)
+			totalEntryFee += matchedFee
+			ot.Fee -= matchedFee
 
 			if entryTime.IsZero() {
 				entryTime = ot.Time

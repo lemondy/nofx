@@ -270,13 +270,27 @@ func (at *AutoTrader) entryExecutionBlocked(symbol, side string) error {
 	if reason := at.protectionFaultReason(); reason != "" {
 		return fmt.Errorf("entry blocked: %s", reason)
 	}
+	// review 2026-10-28 #12: protection tolerates unknown ownership, entries do not.
+	if _, known := at.aiManagedStatus(symbol, side); !known {
+		return fmt.Errorf("entry blocked: AI_MANAGED_UNAVAILABLE")
+	}
+	if at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.LossStreakBanEnabled {
+		n := at.config.StrategyConfig.RiskControl.LossStreakMaxLosses
+		if n <= 0 {
+			n = lossStreakDefaultN
+		}
+		if blocked, reason := at.lossStreakBlocks(symbol, n); blocked {
+			return fmt.Errorf("entry blocked: %s", reason)
+		}
+	}
 	if gs := at.cycleGateStates[market.Normalize(symbol)]; gs != nil {
-		failed := gs.LongFailed
+		allowed, failed := gs.LongAllowed, gs.LongFailed
 		if strings.EqualFold(side, "short") {
-			failed = gs.ShortFailed
+			allowed, failed = gs.ShortAllowed, gs.ShortFailed
 		}
 		for _, code := range failed {
-			if absoluteBanCode(code) {
+			// review 2026-10-28 #13: mirror the extended-pump ban for market defaults too.
+			if absoluteBanCode(code) || (!allowed && code == "EXTENDED_PUMP_UNCONFIRMED") {
 				return fmt.Errorf("entry blocked: %s", code)
 			}
 		}

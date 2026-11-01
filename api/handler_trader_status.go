@@ -2,7 +2,9 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -225,6 +227,7 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 
 	var posQty float64
 	var entryPrice float64
+	var markPrice float64
 	for _, pos := range positions {
 		if pos["symbol"] == req.Symbol && pos["side"] == strings.ToLower(req.Side) {
 			if amt, ok := pos["positionAmt"].(float64); ok {
@@ -236,6 +239,7 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 			if price, ok := pos["entryPrice"].(float64); ok {
 				entryPrice = price
 			}
+			markPrice, _ = pos["markPrice"].(float64)
 			break
 		}
 	}
@@ -262,6 +266,9 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	logger.Infof("✅ Position closed successfully: symbol=%s, side=%s, qty=%.6f, result=%v", req.Symbol, req.Side, posQty, result)
 
 	// Record order to database (for chart markers and history)
+	if usableCloseRecordPrice(markPrice) {
+		entryPrice = markPrice
+	}
 	s.recordClosePositionOrder(traderID, exchangeCfg.ID, exchangeCfg.ExchangeType, req.Symbol, req.Side, posQty, entryPrice, result)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -314,9 +321,17 @@ func (s *Server) recordClosePositionOrder(traderID, exchangeID, exchangeType, sy
 		orderAction = "close_short"
 	}
 
-	// Use entry price if exit price not available
-	if exitPrice == 0 {
-		exitPrice = quantity * 100 // Rough estimate if we don't have price
+	// Prefer a real execution receipt over the pre-close mark/entry fallback.
+	for _, key := range []string{"avgPrice", "fillPrice", "price"} {
+		price := closeRecordNumber(result[key])
+		if usableCloseRecordPrice(price) {
+			exitPrice = price
+			break
+		}
+	}
+	if !usableCloseRecordPrice(exitPrice) {
+		logger.Warnf("Close %s %s order %s: no execution/mark/entry price; skipping order/fill records, waiting for OrderSync", symbol, side, orderID)
+		return
 	}
 
 	// Estimate fee (0.04% for Lighter taker)
@@ -484,4 +499,19 @@ func getSideFromAction(action string) string {
 	default:
 		return "BUY"
 	}
+}
+
+func usableCloseRecordPrice(price float64) bool {
+	return price > 0 && !math.IsNaN(price) && !math.IsInf(price, 0)
+}
+
+func closeRecordNumber(value interface{}) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case string:
+		n, _ := strconv.ParseFloat(v, 64)
+		return n
+	}
+	return 0
 }

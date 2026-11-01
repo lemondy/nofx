@@ -1,6 +1,7 @@
 import contextlib
 import copy
 import datetime as dt
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -35,6 +36,23 @@ def factor(key='f_close', h=1, t=5., **extra):
 
 
 class LiveScoresTests(unittest.TestCase):
+    def test_review20261029_snapshot_identity_and_evaluator_hash(self):
+        panels = panels_for_scores()
+        expected_hash = hashlib.sha256(Path(live_scores.__file__).with_name('evaluate.py').read_bytes()).hexdigest()
+        local_now = NOW.astimezone(dt.timezone(dt.timedelta(hours=8)))
+        for market in ('crypto', 'us'):
+            with self.subTest(market=market), tempfile.TemporaryDirectory() as root:
+                factors = [factor(h=live_scores.MARKETS[market]['horizons'][0])]
+                first = live_scores.export_live_scores(market, factors, panels, root=root, now=local_now)
+                self.assertRegex(first['run_id'], rf'^{market}-20261020T010000000000Z-[0-9a-f]{{8}}$')
+                self.assertEqual(first['evaluator_sha256'], expected_hash)
+                self.assertEqual(store.read_json(Path(root) / market / 'live_scores.json'), first)
+                second = live_scores.export_live_scores(market, factors, panels, root=root, now=local_now)
+                self.assertNotEqual(second['run_id'], first['run_id'])
+                self.assertEqual(second['evaluator_sha256'], expected_hash)
+                # Legacy snapshots have no expression list; do not add one.
+                self.assertNotIn('factors', first)
+
     def test_as_of_excludes_today_and_future_using_utc(self):
         panels = panels_for_scores()
         for now, expected in (

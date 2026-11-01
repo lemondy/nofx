@@ -44,7 +44,6 @@ import type {
   AccountInfo,
   Position,
   DecisionRecord,
-  Statistics,
   TraderInfo,
   Exchange,
 } from '../types'
@@ -139,7 +138,6 @@ interface TraderDashboardPageProps {
   decisionsFailed?: boolean
   decisionsLimit: number
   onDecisionsLimitChange: (limit: number) => void
-  stats?: Statistics
   lastUpdate: string
   language: Language
   exchanges?: Exchange[]
@@ -509,11 +507,13 @@ export function TraderDashboardPage({
       key: 'pnlpct',
       header: hdr(
         t('traderDashboard.pnlPct', language),
-        t('unrealizedPnL', language)
+        t('traderDashboard.pnlPctHint', language)
       ),
       numeric: true,
+      // 字段缺失时显示「—」（Change 组件对 null/undefined 的默认渲染），
+      // 不再显示成 0.00%（review A11）；该值 = 浮盈 / 占用保证金（ROE）
       render: (pos) => (
-        <Change value={pos.unrealized_pnl_pct ?? 0} className="font-semibold" />
+        <Change value={pos.unrealized_pnl_pct} className="font-semibold" />
       ),
     },
     {

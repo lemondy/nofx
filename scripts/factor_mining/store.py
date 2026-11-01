@@ -1,7 +1,8 @@
-"""Atomic, finite JSON storage and a process-wide nonblocking advisory lock."""
+"""Atomic JSON replacement, durable JSONL append and a nonblocking process lock."""
 import datetime as dt
 import fcntl
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -86,21 +87,40 @@ def read_jsonl(path):
     path = Path(path)
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    rows = []
+    with path.open('rb') as stream:
+        for number, line in enumerate(stream, 1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except (ValueError, UnicodeDecodeError):
+                # A crash can leave an incomplete tail (even half a UTF-8
+                # character). Later appends leave that damaged row in place.
+                logging.getLogger(__name__).warning('Skipping invalid JSONL row %s:%d (possible torn append)', path, number)
+    return rows
 
 
 def append_jsonl(path, rows):
     path = Path(path)
     rows = list(rows)
-    def write(stream):
-        if path.exists():
-            with path.open(encoding='utf-8') as old:
-                for line in old:
-                    stream.write(line)
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Do not join the next valid record onto an incomplete pre-crash tail.
+    needs_newline = False
+    if path.exists() and path.stat().st_size:
+        with path.open('rb') as old:
+            old.seek(-1, os.SEEK_END)
+            needs_newline = old.read(1) != b'\n'
+    with path.open('a', encoding='utf-8') as stream:
+        if needs_newline:
+            stream.write('\n')
         for row in rows:
             stream.write(json.dumps(finite(row), allow_nan=False, ensure_ascii=False,
                                     separators=(',', ':')) + '\n')
-    _replace(path, write)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def read_ledger(market, root=ROOT):
@@ -109,6 +129,14 @@ def read_ledger(market, root=ROOT):
 
 def append_ledger(market, rows, root=ROOT):
     append_jsonl(Path(root) / market / 'ledger.jsonl', rows)
+
+
+def read_status_events(market, root=ROOT):
+    return read_jsonl(Path(root) / market / 'status_events.jsonl')
+
+
+def append_status_events(market, rows, root=ROOT):
+    append_jsonl(Path(root) / market / 'status_events.jsonl', rows)
 
 
 def write_zoo(market, zoo, root=ROOT):

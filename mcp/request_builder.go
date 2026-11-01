@@ -10,6 +10,7 @@ type RequestBuilder struct {
 	messages         []Message
 	stream           bool
 	temperature      *float64
+	reasoningEffort  string
 	maxTokens        *int
 	topP             *float64
 	frequencyPenalty *float64
@@ -22,11 +23,12 @@ type RequestBuilder struct {
 // NewRequestBuilder creates request builder
 //
 // Usage example:
-//   request := NewRequestBuilder().
-//       WithSystemPrompt("You are helpful").
-//       WithUserPrompt("Hello").
-//       WithTemperature(0.8).
-//       Build()
+//
+//	request := NewRequestBuilder().
+//	    WithSystemPrompt("You are helpful").
+//	    WithUserPrompt("Hello").
+//	    WithTemperature(0.8).
+//	    Build()
 func NewRequestBuilder() *RequestBuilder {
 	return &RequestBuilder{
 		messages: make([]Message, 0),
@@ -134,6 +136,12 @@ func (b *RequestBuilder) WithTemperature(t float64) *RequestBuilder {
 	return b
 }
 
+// WithReasoningEffort overrides the client reasoning effort for this request.
+func (b *RequestBuilder) WithReasoningEffort(effort string) *RequestBuilder {
+	b.reasoningEffort = effort
+	return b
+}
+
 // WithMaxTokens sets maximum token count
 func (b *RequestBuilder) WithMaxTokens(tokens int) *RequestBuilder {
 	if tokens > 0 {
@@ -230,12 +238,13 @@ func (b *RequestBuilder) Build() (*Request, error) {
 
 	// Create request
 	req := &Request{
-		Model:      b.model,
-		Messages:   b.messages,
-		Stream:     b.stream,
-		Stop:       b.stop,
-		Tools:      b.tools,
-		ToolChoice: b.toolChoice,
+		Model:           b.model,
+		Messages:        b.messages,
+		Stream:          b.stream,
+		Stop:            b.stop,
+		Tools:           b.tools,
+		ToolChoice:      b.toolChoice,
+		ReasoningEffort: b.reasoningEffort,
 	}
 
 	// Only set non-nil optional parameters (avoid sending 0 values that override server defaults)

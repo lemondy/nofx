@@ -137,20 +137,21 @@ class AuditReportTests(unittest.TestCase):
 
     def test_append_only_audit_cannot_change_any_existing_field(self):
         self.write_btc()
-        self.populate("candidate", [0.002] * 13)
-        self.populate("control", [0.001] * 13)
+        self.populate("candidate", [0.002] * 40)
+        self.populate("control", [0.001] * 40)
         with sqlite3.connect(self.db) as connection:
             for trader in ("candidate", "control"):
-                for _ in range(20):
+                for _ in range(50):
                     connection.execute(
                         "INSERT INTO trader_positions (trader_id,symbol,status,entry_time,exit_time,"
                         "realized_pnl,fee,initial_stop_loss,entry_price,quantity) VALUES (?,?,?,?,?,?,?,?,?,?)",
                         (trader, "BTCUSDT", "CLOSED", int(START.timestamp() * 1000),
                          int((START + timedelta(days=1)).timestamp() * 1000), 3, 1, 99, 100, 2))
-        audited = promotion.build_report([pair()], self.db, NOW)
+        as_of = START + timedelta(days=41)
+        audited = promotion.build_report([pair()], self.db, as_of)
         self.assertEqual(audited["pairs"][0]["verdict"], "ready")
         self.btc.unlink()
-        missing = promotion.build_report([pair()], self.db, NOW)
+        missing = promotion.build_report([pair()], self.db, as_of)
         for report in (audited, missing):
             del report["pairs"][0]["audit"]
         self.assertEqual(audited, missing)

@@ -14,6 +14,26 @@ import (
 // Grid Order Placement and Management
 // ============================================================================
 
+// review 2026-10-28 #2: one lazy account refresh per decision batch, including
+// failures; submitted entries remain reserved until the batch ends, even if filled.
+type gridEntryBatch struct {
+	ctx       kernel.Context
+	pending   map[string]*pendingEntry
+	refreshed bool
+	err       error
+}
+
+func (batch *gridEntryBatch) refresh(at *AutoTrader) error {
+	if !batch.refreshed {
+		batch.refreshed = true
+		batch.err = at.refreshExecutionAccount(&batch.ctx)
+		if batch.err == nil {
+			batch.pending = at.accountPendingEntries()
+		}
+	}
+	return batch.err
+}
+
 // checkTotalPositionLimit checks if adding a new position would exceed total limits
 // Returns: (allowed bool, currentPositionValue float64, maxAllowed float64)
 func (at *AutoTrader) checkTotalPositionLimit(symbol string, additionalValue float64) (bool, float64, float64) {
@@ -57,9 +77,15 @@ func (at *AutoTrader) checkTotalPositionLimit(symbol string, additionalValue flo
 		currentPositionValue += math.Abs(size) * price
 	}
 
-	// Include every trader's resting entry on the same account and symbol.
+	return at.checkGridPositionValueLimit(symbol, additionalValue, currentPositionValue, at.accountPendingEntries())
+}
+
+// review 2026-10-28 #2: both live and batch checks include account-wide resting entries.
+func (at *AutoTrader) checkGridPositionValueLimit(symbol string, additionalValue, currentPositionValue float64, pending map[string]*pendingEntry) (bool, float64, float64) {
+	gridConfig := at.config.StrategyConfig.GridConfig
+	maxTotalPositionValue := gridConfig.TotalInvestment * float64(gridConfig.Leverage)
 	pendingValue := 0.0
-	for key, pe := range at.accountPendingEntries() {
+	for key, pe := range pending {
 		if key == "unknown" {
 			return false, math.Inf(1), maxTotalPositionValue
 		}
@@ -98,6 +124,10 @@ func (at *AutoTrader) gridOrderFilled(orderID string) (filled, known bool) {
 
 // placeGridLimitOrder places a limit order for grid trading
 func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error {
+	return at.placeGridLimitOrderWithBatch(d, side, &gridEntryBatch{})
+}
+
+func (at *AutoTrader) placeGridLimitOrderWithBatch(d *kernel.Decision, side string, batch *gridEntryBatch) error {
 	// F12 (2026-10-01 review): REFUSE instead of falling back to the
 	// GridTraderAdapter — that adapter fabricated "entries" out of stop/TP
 	// protection orders with synthetic exchange order IDs. Grid requires a
@@ -169,22 +199,50 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 
 	// CRITICAL: Check total position limit before placing order
 	orderValue := quantity * d.Price
-	allowed, currentValue, maxValue := at.checkTotalPositionLimit(d.Symbol, orderValue)
+	if err := batch.refresh(at); err != nil {
+		return fmt.Errorf("grid %w", err)
+	}
+	positionValue, usedMargin := 0.0, 0.0
+	for _, p := range batch.ctx.Positions {
+		mark := p.MarkPrice
+		if mark <= 0 {
+			mark = p.EntryPrice
+		}
+		if p.Symbol == d.Symbol {
+			positionValue += p.Quantity * mark
+		}
+		if p.MarkPrice > 0 && p.Leverage > 0 {
+			usedMargin += p.Quantity * p.MarkPrice / float64(p.Leverage)
+		}
+	}
+	allowed, currentValue, maxValue := at.checkGridPositionValueLimit(d.Symbol, orderValue, positionValue, batch.pending)
 	if !allowed {
 		logger.Errorf("[Grid] TOTAL POSITION LIMIT EXCEEDED: current=$%.2f + order=$%.2f > max=$%.2f. Rejecting order.",
 			currentValue, orderValue, maxValue)
 		return fmt.Errorf("total position value $%.2f would exceed limit $%.2f", currentValue+orderValue, maxValue)
 	}
 
-	balance, err := at.trader.GetBalance()
-	if err != nil || gridAccountEquity(balance) <= 0 {
-		return fmt.Errorf("grid account equity unknown: %v", err)
-	}
 	positionSide := "long"
 	if strings.EqualFold(side, "SELL") {
 		positionSide = "short"
 	}
-	if blocked, reason := at.marginBudgetBlocksOpen(d.Symbol, positionSide, orderValue, float64(gridConfig.Leverage), gridAccountEquity(balance)); blocked {
+	pendingMargin := pendingMarginReservedSnapshot(batch.pending, "")
+	if blocked, reason := at.marginBudgetBlocksSnapshot(orderValue, float64(gridConfig.Leverage), batch.ctx.Account.TotalEquity, usedMargin, pendingMargin); blocked {
+		return fmt.Errorf("grid %s", reason)
+	}
+
+	// review 2026-10-28 #2: these orders always add a hedge-mode position;
+	// reducing grid exits use closeGridLevel and never enter this admission gate.
+	if err := at.entryExecutionBlocked(d.Symbol, positionSide); err != nil {
+		return fmt.Errorf("grid %w", err)
+	}
+	stopPct := gridConfig.StopLossPct
+	if stopPct <= 0 {
+		stopPct = kernel.UnprotectedStopWorstCasePct
+	}
+	entry := &kernel.Decision{Symbol: d.Symbol, Action: "open_" + positionSide, PositionSizeUSD: orderValue}
+	if blocked, reason := at.accountRiskAdmissionBlocks(entry, orderValue*stopPct/100, &batch.ctx, batch.pending, false); blocked {
+		logger.Warnf("[Grid] Entry blocked %s %s: %s", side, d.Symbol, reason)
 		return fmt.Errorf("grid %s", reason)
 	}
 
@@ -203,6 +261,24 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 	if err != nil {
 		return fmt.Errorf("failed to place limit order: %w", err)
 	}
+	// review 2026-10-28 #2: reserve successful submissions before ledger writes
+	// or later decisions can reconcile fills/cancellations against this older snapshot.
+	price, submittedQty := d.Price, quantity
+	if result.Price > 0 {
+		price = result.Price
+	}
+	if result.Quantity > 0 {
+		submittedQty = result.Quantity
+	}
+	stop := price * (1 - stopPct/100)
+	if positionSide == "short" {
+		stop = price * (1 + stopPct/100)
+	}
+	batch.pending[fmt.Sprintf("grid-batch:%d", len(batch.pending))] = &pendingEntry{
+		Symbol: d.Symbol, Side: positionSide, Price: price, Quantity: submittedQty,
+		Leverage: gridConfig.Leverage, HeldRiskUSD: price * submittedQty * stopPct / 100,
+		StopLoss: stop, OrderID: result.OrderID,
+	}
 
 	// Update grid level state
 	at.gridState.mu.Lock()
@@ -218,6 +294,7 @@ func (at *AutoTrader) placeGridLimitOrder(d *kernel.Decision, side string) error
 			at.gridState.Levels[d.LevelIndex].OrderQuantity = quantity
 		}
 		at.gridState.Levels[d.LevelIndex].ExecutedQuantity = 0
+		at.gridState.Levels[d.LevelIndex].Price = d.Price
 		if result.Price > 0 {
 			at.gridState.Levels[d.LevelIndex].Price = result.Price
 		}

@@ -82,8 +82,8 @@ func (s *fastMoveState) observe(now time.Time, price float64, window time.Durati
 
 // processFastMove consumes a fresh mark/position snapshot. No market data
 // or position REST polling here: only actual stop/close order operations.
-// All callers hold executionMutex. Returns true only for a successful trim,
-// updating this snapshot's quantity so later rules cannot use the old size.
+// All callers hold executionMutex. Returns true after a successful or UNKNOWN
+// trim so later rules skip this snapshot. Only confirmed success updates size.
 func (at *AutoTrader) processFastMove(pos map[string]interface{}, mark, atrPct float64, now time.Time) bool {
 	if at.config.StrategyConfig == nil {
 		return false
@@ -148,7 +148,10 @@ func (at *AutoTrader) processFastMove(pos map[string]interface{}, mark, atrPct f
 		}
 		if tighter && legal {
 			if err := at.moveStopExchange(symbol, side, target, qty); err != nil {
-				logger.Warnf("[RISK CONTROL] %s fast favorable stop failed: %v", symbol, err)
+				// review 2026-10-28 #1: a kept tighter exchange stop is not a failure.
+				if _, kept := keptTighterStop(err); !kept {
+					logger.Warnf("[RISK CONTROL] %s fast favorable stop failed: %v", symbol, err)
+				}
 			} else {
 				at.SetRecordedStopLoss(symbol, side, target)
 			}
@@ -167,6 +170,14 @@ func (at *AutoTrader) processFastMove(pos map[string]interface{}, mark, atrPct f
 	snapshot := map[string]interface{}{"symbol": symbol, "side": side, "positionAmt": signedQty, "markPrice": mark}
 	decision := &kernel.Decision{Symbol: symbol, Action: "partial_close_" + side, CloseFraction: fraction}
 	if err := at.executePartialCloseWithRecord(decision, &store.DecisionAction{}, side, snapshot); err != nil {
+		if isReduceUnknown(err) {
+			at.fastMovesMu.Lock()
+			st.lastTrim, st.marks = now, nil
+			at.fastMovesMu.Unlock()
+			at.noteTPLedgerReduction(key, qty*fraction)
+			at.alertReduceUnknown(symbol, side, "快速保护减仓", err)
+			return true
+		}
 		logger.Warnf("[RISK CONTROL] %s fast adverse trim failed: %v", symbol, err)
 		return false
 	}
@@ -174,6 +185,7 @@ func (at *AutoTrader) processFastMove(pos map[string]interface{}, mark, atrPct f
 	st.lastTrim = now
 	st.marks = []fastMark{{now, mark}}
 	at.fastMovesMu.Unlock()
+	at.noteTPLedgerReduction(key, qty*fraction)
 	pos["positionAmt"] = signedQty * (1 - fraction)
 	logger.Infof("[RISK CONTROL] %s %s fast adverse %.2f%% >= %.2f%% — reduced %.0f%%", symbol, side, adverse, adverseLimit, fraction*100)
 	return true

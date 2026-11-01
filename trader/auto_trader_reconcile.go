@@ -144,9 +144,23 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 		switch strings.ToUpper(st) {
 		case "NEW", "PARTIALLY_FILLED":
 			pe := pendingEntryFromRow(row)
+			pe.State = "pending" // acknowledged: a submitting intent was resolved by client ID
 			at.setPendingEntry(&pe)
 			owned[row.Symbol+"|"+row.OrderID] = true
 			logger.Infof("🔧 [%s] Pending-entry re-claimed: %s %s %.6g @ %.6g (order %s)", at.name, pe.Symbol, pe.Side, pe.Quantity, pe.Price, pe.OrderID)
+			// A slice that filled while the process was down is the AI's own:
+			// register ownership and place the recorded plan's SL/TP now rather
+			// than waiting for the first lifecycle pass (idempotent on the
+			// protected-qty watermark). An unreadable position keeps the live
+			// lifecycle as the retry path.
+			// (Skipped when registration just retired the entry, e.g. an
+			// excluded symbol cancelled and cleaned up by setPendingEntry.)
+			if statusFloat(status, "executedQty") > 0 && at.getPendingEntry(pe.Symbol, pe.Side) == &pe {
+				if found, known := at.offlineFillPositionState(row); known && found {
+					at.markAIManaged(row.Symbol, row.Side, row.OrderID)
+					at.protectExecutedSlice(&pe, status)
+				}
+			}
 		case "FILLED":
 			at.finalizePendingFill(row, status)
 		default: // CANCELED / EXPIRED / REJECTED
@@ -160,7 +174,9 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 			// would claim a position that no longer exists (and a manual
 			// successor on the same symbol+side). Confirmed flat → drop the
 			// row and clear only this order's own mark.
-			if statusFloat(status, "executedQty") > 0 {
+			// (Skipped when registration just retired the entry, e.g. an
+			// excluded symbol cancelled and cleaned up by setPendingEntry.)
+			if statusFloat(status, "executedQty") > 0 && at.getPendingEntry(pe.Symbol, pe.Side) == &pe {
 				if found, known := at.offlineFillPositionState(row); known && !found {
 					at.dropPendingEntry(row.Symbol, row.Side)
 					if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
@@ -206,7 +222,9 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 		if !entryOrderOwnedBy(o.ClientID, at.id) {
 			continue // grid, protective, legacy — not ours to judge
 		}
-		if owned[o.Symbol+"|"+o.OrderID] {
+		// A row still keyed by its client-ID reference (status unreadable at
+		// boot) owns the resting order just as one keyed by the exchange ID.
+		if owned[o.Symbol+"|"+o.OrderID] || owned[o.Symbol+"|"+binance.ClientOrderRefPrefix+o.ClientID] {
 			continue
 		}
 		if err := grid.CancelOrder(o.Symbol, o.OrderID); err != nil {
@@ -216,12 +234,53 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 		logger.Infof("🔧 [%s] Orphan limit entry cancelled: %s (order %s, client %s) — no owner after restart, re-evaluated next cycle",
 			at.name, o.Symbol, o.OrderID, o.ClientID)
 		notify.Notify("ORDER", at.name, fmt.Sprintf("<b>🔧 孤儿限价单已撤销 %s</b>\n<i>重启后无主(order %s),已撤单重评</i>", notify.Escape(o.Symbol), o.OrderID))
+		at.settleOrphanCancel(o)
 	}
+}
+
+// settleOrphanCancel closes the cancel-vs-fill race of an orphan sweep: the
+// order may have executed (fully or partly) before the cancel landed. The final
+// status and executedQty are queried; any executed residue is registered as an
+// AI-owned pending entry and sent through the ordinary protection flow, and an
+// unreadable final state keeps a durable, live-polled record for retry instead
+// of silently dropping it. Without a plan row there is no recorded SL/TP, so the
+// residue goes through the invalid-fill recovery path (fail-closed).
+func (at *AutoTrader) settleOrphanCancel(o types.OpenOrder) {
+	side := "long"
+	switch strings.ToUpper(o.PositionSide) {
+	case "SHORT":
+		side = "short"
+	case "LONG":
+	default:
+		if strings.EqualFold(o.Side, "SELL") {
+			side = "short"
+		}
+	}
+	status, err := at.trader.GetOrderStatus(o.Symbol, o.OrderID)
+	if err != nil {
+		logger.Warnf("⚠️ [%s] Orphan entry %s %s (order %s) cancelled but final state unreadable: %v — manual verification needed", at.name, o.Symbol, side, o.OrderID, err)
+		notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 孤儿限价单终态未知 %s</b>\n<i>order %s 已撤单，但无法确认是否有成交(%v)，请人工核查该方向持仓</i>",
+			notify.Escape(o.Symbol), o.OrderID, err))
+		return
+	}
+	executed := statusFloat(status, "executedQty")
+	if executed <= 0 {
+		return // verified clean cancel
+	}
+	// An orphan has no plan (no stop/target): it can neither be protected per
+	// plan nor safely emergency-closed — the user trades this account by hand
+	// and a full symbol+side close would take manual holdings with it. Do not
+	// claim, protect or close it automatically; escalate the exact residue.
+	logger.Errorf("⚠️ [%s] Orphan entry %s %s (order %s) filled %.6g before cancel — no plan to protect it; NOT auto-closed, manual action needed",
+		at.name, o.Symbol, side, o.OrderID, executed)
+	notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 孤儿限价单有成交残量 %s</b>\n<i>order %s(%s)撤单前已成交 %.6g，无计划止损，未自动接管或平仓，请人工处理</i>",
+		notify.Escape(o.Symbol), o.OrderID, side, executed))
 }
 
 // pendingEntryFromRow rebuilds the in-memory plan from a durable shadow row.
 func pendingEntryFromRow(row *store.PendingEntryDB) pendingEntry {
 	return pendingEntry{
+		State: row.State, ClientOrderID: row.ClientOrderID, OriginalR: row.OriginalR,
 		RecoveryReason: row.RecoveryReason,
 		Symbol:         row.Symbol, Side: row.Side, Price: row.Price,
 		Quantity: row.Quantity, StopLoss: row.StopLoss, TakeProfit: row.TakeProfit,

@@ -18,7 +18,7 @@ type oiSample struct {
 
 // These maps share oiDataMu. A bounded circular buffer retains at least
 // three hours at the maximum sample rate (one point / 15s). Cache hits do
-// not fabricate new observations; only successful upstream fetches sample.
+// not fabricate new observations; only real-time exchange observations sample.
 const oiRingCapacity = 721
 
 type oiRing struct {
@@ -54,8 +54,10 @@ func cacheOIPrice(symbol string, price float64) {
 	defer oiDataMu.Unlock()
 	oiPrices[Normalize(symbol)] = oiPrice{price, oiNow()}
 }
-func recordOISampleLocked(symbol string, now time.Time, value float64) {
-	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+
+// sourceAt is the exchange observation time, never the local fetch time.
+func recordOISampleLocked(symbol string, sourceAt time.Time, value float64) {
+	if sourceAt.IsZero() || value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 		return
 	}
 	symbol = Normalize(symbol)
@@ -64,10 +66,12 @@ func recordOISampleLocked(symbol string, now time.Time, value float64) {
 		ring = &oiRing{}
 		oiSamples[symbol] = ring
 	}
-	if len(ring.samples) > 0 && now.Sub(ring.newest(0).at) < 15*time.Second {
+	// Reject duplicates and out-of-order responses before applying the minimum
+	// sampling interval. Re-fetching a cached response cannot refresh its age.
+	if len(ring.samples) > 0 && (!sourceAt.After(ring.newest(0).at) || sourceAt.Sub(ring.newest(0).at) < 15*time.Second) {
 		return
 	}
-	ring.push(oiSample{now, value})
+	ring.push(oiSample{sourceAt, value})
 }
 
 // CachedOpenInterestMillions is nonblocking with respect to network I/O.
@@ -91,7 +95,8 @@ func CachedOpenInterestMillions(symbol string) (float64, bool) {
 // absolute value), avoiding price-driven notional inflation. Use the closest
 // sample at/before NOW-window, not latest.at-window: cache age must not shift
 // the requested window. References may precede the target by max(35% W, 5m),
-// latest must be <=6m old. Cold start, stale samples and gaps fail open.
+// latest must be <=6m old. All ages/tolerances use EXCHANGE observation times.
+// Cold start, stale samples and gaps return unknown; no history is resampled.
 func CachedOIChangePct(symbol string, window time.Duration) (float64, bool) {
 	oiDataMu.Lock()
 	defer oiDataMu.Unlock()

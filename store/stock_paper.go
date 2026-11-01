@@ -63,6 +63,10 @@ type StockPaperPosition struct {
 	RealizedPnL float64 `gorm:"column:realized_pnl;default:0" json:"realized_pnl"`
 	ClosedAt    int64   `gorm:"column:closed_at;default:0" json:"closed_at"`
 	CloseReason string  `gorm:"column:close_reason;default:''" json:"close_reason"`
+	// Fee is the cumulative trading fee (USDT) paid on this position's buys and
+	// sells. Only the factor_quant US executor charges fees (us_stock paper
+	// fills are fee-free), so it stays 0 for us_stock rows.
+	Fee float64 `gorm:"column:fee;default:0" json:"fee"`
 }
 
 func (StockPaperPosition) TableName() string { return "stock_paper_positions" }
@@ -133,15 +137,28 @@ func (s *StockPaperStore) GetAccount(traderID string) (*StockPaperAccount, error
 // OPEN row is created or merged (weighted average cost). stop / takeProfit
 // replace the live protection; InitialStop is write-once. now stamps the row.
 func (s *StockPaperStore) OpenOrAdd(traderID, symbol string, qty, price, stop, takeProfit float64, now time.Time) (*StockPaperPosition, error) {
+	pos, _, err := s.OpenOrAddWithFee(traderID, symbol, qty, price, stop, takeProfit, 0, now)
+	return pos, err
+}
+
+// OpenOrAddWithFee is OpenOrAdd that also charges a trading fee of feeBps basis
+// points of the notional: cash decreases by cost+fee and the fee accumulates on
+// the position row. It returns the fee charged. feeBps 0 behaves exactly like
+// OpenOrAdd.
+func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, stop, takeProfit, feeBps float64, now time.Time) (*StockPaperPosition, float64, error) {
 	if qty <= 0 || price <= 0 {
-		return nil, fmt.Errorf("paper buy needs positive qty and price (qty=%v price=%v)", qty, price)
+		return nil, 0, fmt.Errorf("paper buy needs positive qty and price (qty=%v price=%v)", qty, price)
+	}
+	if feeBps < 0 {
+		feeBps = 0
 	}
 	nowMs := now.UTC().UnixMilli()
 	var out StockPaperPosition
+	cost := qty * price
+	fee := cost * feeBps / 10000
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		cost := qty * price
 		res := tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
-			"cash": gorm.Expr("cash - ?", cost), "updated_at": nowMs})
+			"cash": gorm.Expr("cash - ?", cost+fee), "updated_at": nowMs})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -151,7 +168,7 @@ func (s *StockPaperStore) OpenOrAdd(traderID, symbol string, qty, price, stop, t
 		err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&out).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			out = StockPaperPosition{TraderID: traderID, Symbol: symbol, Quantity: qty, EntryQty: qty, AvgPrice: price,
-				InitialStop: stop, Stop: stop, TakeProfit: takeProfit, OpenedAt: nowMs, UpdatedAt: nowMs, Status: StockPaperOpen}
+				InitialStop: stop, Stop: stop, TakeProfit: takeProfit, OpenedAt: nowMs, UpdatedAt: nowMs, Status: StockPaperOpen, Fee: fee}
 			return tx.Create(&out).Error
 		}
 		if err != nil {
@@ -168,22 +185,36 @@ func (s *StockPaperStore) OpenOrAdd(traderID, symbol string, qty, price, stop, t
 		}
 		out.TakeProfit = takeProfit
 		out.UpdatedAt = nowMs
+		out.Fee += fee
 		return tx.Save(&out).Error
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return &out, nil
+	return &out, fee, nil
 }
 
 // Reduce books a paper sell of qty at price (qty >= held, or <= 0, sells all).
 // Returns the leg's realized PnL and whether the position is now closed.
 func (s *StockPaperStore) Reduce(traderID, symbol string, qty, price float64, now time.Time, reason string) (float64, bool, error) {
+	pnl, closed, _, err := s.ReduceWithFee(traderID, symbol, qty, price, 0, now, reason)
+	return pnl, closed, err
+}
+
+// ReduceWithFee is Reduce that also charges a trading fee of feeBps basis
+// points of the sale proceeds: cash increases by proceeds-fee and the fee
+// accumulates on the position row. The leg's realized PnL stays gross (like
+// the crypto paper ledger, fees are tracked separately). It returns the fee
+// charged. feeBps 0 behaves exactly like Reduce.
+func (s *StockPaperStore) ReduceWithFee(traderID, symbol string, qty, price, feeBps float64, now time.Time, reason string) (float64, bool, float64, error) {
 	if price <= 0 {
-		return 0, false, fmt.Errorf("paper sell needs a positive price")
+		return 0, false, 0, fmt.Errorf("paper sell needs a positive price")
+	}
+	if feeBps < 0 {
+		feeBps = 0
 	}
 	nowMs := now.UTC().UnixMilli()
-	var pnl float64
+	var pnl, fee float64
 	closed := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var pos StockPaperPosition
@@ -194,6 +225,8 @@ func (s *StockPaperStore) Reduce(traderID, symbol string, qty, price float64, no
 			qty = pos.Quantity
 		}
 		pnl = (price - pos.AvgPrice) * qty
+		fee = qty * price * feeBps / 10000
+		pos.Fee += fee
 		pos.Quantity -= qty
 		pos.ExitedQty += qty
 		pos.ExitValue += qty * price
@@ -208,9 +241,9 @@ func (s *StockPaperStore) Reduce(traderID, symbol string, qty, price float64, no
 			return err
 		}
 		return tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
-			"cash": gorm.Expr("cash + ?", qty*price), "updated_at": nowMs}).Error
+			"cash": gorm.Expr("cash + ?", qty*price-fee), "updated_at": nowMs}).Error
 	})
-	return pnl, closed, err
+	return pnl, closed, fee, err
 }
 
 // SetProtection updates the live stop / take-profit of an OPEN paper position.

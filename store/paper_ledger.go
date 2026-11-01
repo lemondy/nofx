@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"nofx/fundsledger"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -65,6 +66,14 @@ type PaperLedgerTrade struct {
 // Before StartOrderSync supplies an owner, rows use paper:<exchangeID>; binding
 // moves only that account's provisional rows to the real trader, atomically.
 func (s *PaperLedgerStore) Commit(next *PaperLedger, previous *PaperLedger, trades []PaperLedgerTrade, leverageChanges map[string]int) error {
+	return s.CommitWithIncome(next, previous, trades, leverageChanges, nil)
+}
+
+// CommitWithIncome is Commit plus account-income rows (perpetual funding
+// settlements, income type FUNDING_FEE, account kind "paper") that must land
+// in the same transaction as the wallet change they explain. Rows are
+// idempotent on (exchange, income type, tran id, time).
+func (s *PaperLedgerStore) CommitWithIncome(next *PaperLedger, previous *PaperLedger, trades []PaperLedgerTrade, leverageChanges map[string]int, income []fundsledger.Income) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&PaperLedger{}).Where("exchange_id = ? AND version = ?", next.ExchangeID, previous.Version).
 			Select("trader_id", "exchange_type", "initial_balance", "wallet_balance", "realized_pnl", "last_advance_at", "version", "state").Updates(next)
@@ -131,6 +140,11 @@ func (s *PaperLedgerStore) Commit(next *PaperLedger, previous *PaperLedger, trad
 			if err := tx.Model(&TraderPosition{}).
 				Where("exchange_id = ? AND trader_id = ? AND symbol = ? AND status = ?", next.ExchangeID, owner, symbol, "OPEN").
 				Update("leverage", leverage).Error; err != nil {
+				return err
+			}
+		}
+		if len(income) > 0 {
+			if err := NewAccountIncomeStore(tx).SaveForKind(next.ExchangeID, fundsledger.Paper, income); err != nil {
 				return err
 			}
 		}

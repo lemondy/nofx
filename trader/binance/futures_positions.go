@@ -208,6 +208,11 @@ func (t *FuturesTrader) GetMarketPrice(symbol string) (float64, error) {
 		return 0, err
 	}
 
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return 0, fmt.Errorf("invalid %s market price %g", symbol, price)
+	}
+	// Reuse normal execution/cycle quote reads; stop preflight never polls REST.
+	t.observeStopPrice(symbol, price, false)
 	return price, nil
 }
 
@@ -219,35 +224,28 @@ func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float6
 	return quantity
 }
 
-// GetMinNotional gets minimum notional value (Binance requirement)
+// GetMinNotional shares the exchange-rule snapshot used by LIMIT orders.
 func (t *FuturesTrader) GetMinNotional(symbol string) float64 {
-	// Use conservative default value of 10 USDT to ensure order passes exchange validation
-	return 10.0
+	s, err := t.cachedSymbolRules(symbol)
+	if err != nil {
+		return t.fallbackMinNotional(symbol, err)
+	}
+	return t.symbolMinNotional(s)
 }
 
-// CheckMinNotional checks if order meets minimum notional value requirement
+// CheckMinNotional applies the exchange floor after market quantity rounding.
+// Reductions deliberately do not call this opening-risk check.
 func (t *FuturesTrader) CheckMinNotional(symbol string, quantity float64) error {
 	price, err := t.GetMarketPrice(symbol)
 	if err != nil {
 		return fmt.Errorf("failed to get market price: %w", err)
 	}
-
-	notionalValue := quantity * price
-	minNotional := t.GetMinNotional(symbol)
-
-	if notionalValue < minNotional {
-		return fmt.Errorf(
-			"order amount %.2f USDT is below minimum requirement %.2f USDT (quantity: %.4f, price: %.4f)",
-			notionalValue, minNotional, quantity, price,
-		)
-	}
-
-	return nil
+	return validateOrderNotional(symbol, quantity, price, t.GetMinNotional(symbol))
 }
 
 // GetSymbolPrecision gets the quantity precision for a trading pair
 func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
-	rules, err := t.getSymbolOrderRules(symbol)
+	rules, err := t.getMarketOrderRules(symbol)
 	if err != nil {
 		return 0, err
 	}
@@ -258,7 +256,7 @@ func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
 
 // FormatQuantity formats quantity to correct precision
 func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
-	rules, err := t.getSymbolOrderRules(symbol)
+	rules, err := t.getMarketOrderRules(symbol)
 	if err != nil {
 		return "", err
 	}
@@ -266,48 +264,76 @@ func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string,
 }
 
 type symbolOrderRules struct {
-	StepSizeText string
-	StepSize     float64
-	MinQty       float64
-	MaxQty       float64
-	MinNotional  float64
+	StepSizeText   string
+	StepSize       float64
+	MinQty         float64
+	MaxQty         float64
+	MinNotional    float64
+	QuantityFilter string
 }
 
+// LIMIT quantities use LOT_SIZE; market sizing and execution use MARKET_LOT_SIZE.
 func (t *FuturesTrader) getSymbolOrderRules(symbol string) (symbolOrderRules, error) {
+	return t.symbolOrderRulesFor(symbol, "LOT_SIZE")
+}
+
+func (t *FuturesTrader) getMarketOrderRules(symbol string) (symbolOrderRules, error) {
+	return t.symbolOrderRulesFor(symbol, "MARKET_LOT_SIZE")
+}
+
+func (t *FuturesTrader) symbolOrderRulesFor(symbol, quantityFilter string) (symbolOrderRules, error) {
 	s, err := t.cachedSymbolRules(symbol)
 	if err != nil {
 		return symbolOrderRules{}, fmt.Errorf("failed to get trading rules: %w", err)
 	}
-	rules := symbolOrderRules{MinNotional: 10}
+	rules := symbolOrderRules{MinNotional: t.symbolMinNotional(s), QuantityFilter: quantityFilter}
 	for _, filter := range s.Filters {
-		filterType, _ := filter["filterType"].(string)
-		switch filterType {
-		case "LOT_SIZE":
-			rules.StepSizeText, _ = filter["stepSize"].(string)
-			rules.StepSize, _ = strconv.ParseFloat(rules.StepSizeText, 64)
-			if v, ok := filter["minQty"].(string); ok {
-				rules.MinQty, _ = strconv.ParseFloat(v, 64)
-			}
-			if v, ok := filter["maxQty"].(string); ok {
-				rules.MaxQty, _ = strconv.ParseFloat(v, 64)
-			}
-		case "MIN_NOTIONAL", "NOTIONAL":
-			if v, ok := filter["notional"].(string); ok {
-				if parsed, parseErr := strconv.ParseFloat(v, 64); parseErr == nil && parsed > 0 {
-					rules.MinNotional = parsed
-				}
-			}
+		if filter["filterType"] != quantityFilter {
+			continue
 		}
+		rules.StepSizeText, _ = filter["stepSize"].(string)
+		rules.StepSize, _ = strconv.ParseFloat(rules.StepSizeText, 64)
+		minText, _ := filter["minQty"].(string)
+		maxText, _ := filter["maxQty"].(string)
+		rules.MinQty, _ = strconv.ParseFloat(minText, 64)
+		rules.MaxQty, _ = strconv.ParseFloat(maxText, 64)
+		if !positiveFinite(rules.StepSize) || math.IsNaN(rules.MinQty) || math.IsNaN(rules.MaxQty) || rules.MinQty < 0 || rules.MaxQty < 0 || (rules.MaxQty > 0 && rules.MaxQty < rules.MinQty) {
+			return symbolOrderRules{}, fmt.Errorf("%s %s trading rule is invalid", symbol, quantityFilter)
+		}
+		return rules, nil
 	}
-	if rules.StepSize <= 0 || rules.StepSizeText == "" {
-		return symbolOrderRules{}, fmt.Errorf("%s LOT_SIZE trading rule is missing", symbol)
+	if quantityFilter == "MARKET_LOT_SIZE" {
+		// A snapshot without MARKET_LOT_SIZE (never seen on real Binance
+		// data) keeps the pre-existing LOT_SIZE basis; the exchange still
+		// rejects an oversize market order, so no risk is added.
+		t.warnRulesOnce(symbol, "market-lot-missing", "MARKET_LOT_SIZE missing; market orders use LOT_SIZE")
+		return t.symbolOrderRulesFor(symbol, "LOT_SIZE")
 	}
-	return rules, nil
+	return symbolOrderRules{}, fmt.Errorf("%s %s trading rule is missing", symbol, quantityFilter)
 }
+
+// Unknown market rules must block additions. Reductions can still use the
+// known LOT_SIZE grid when MARKET_LOT_SIZE is absent from a partial snapshot.
+func (t *FuturesTrader) formatReduceQuantity(symbol string, quantity float64) (string, error) {
+	rules, err := t.getMarketOrderRules(symbol)
+	if err != nil {
+		t.warnRulesOnce(symbol, "reduce-lot-fallback", "MARKET_LOT_SIZE unavailable; reduction uses LOT_SIZE: %v", err)
+		rules, err = t.getSymbolOrderRules(symbol)
+	}
+	if err != nil {
+		return "", err
+	}
+	return formatQuantityWithRules(symbol, quantity, rules)
+}
+
+func positiveFinite(v float64) bool { return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 func formatQuantityWithRules(symbol string, quantity float64, rules symbolOrderRules) (string, error) {
 	if quantity <= 0 || math.IsNaN(quantity) || math.IsInf(quantity, 0) {
 		return "", fmt.Errorf("%s quantity must be positive, got %.8f", symbol, quantity)
+	}
+	if rules.MaxQty > 0 && quantity > rules.MaxQty+rules.StepSize*1e-9 {
+		return "", fmt.Errorf("MAX_QTY: %s %s quantity %.8f exceeds maxQty %.8f (automatic splitting is disabled)", symbol, rules.QuantityFilter, quantity, rules.MaxQty)
 	}
 	// Always round DOWN so exchange precision handling can never increase the
 	// program-owned risk budget.
@@ -320,7 +346,7 @@ func formatQuantityWithRules(symbol string, quantity float64, rules symbolOrderR
 			symbol, quantity, formatted, rules.StepSizeText, precision, rules.MinQty)
 	}
 	if rules.MaxQty > 0 && formattedValue > rules.MaxQty+rules.StepSize*1e-9 {
-		return "", fmt.Errorf("MAX_QTY: %s quantity %s exceeds maxQty %.*f", symbol, formatted, precision, rules.MaxQty)
+		return "", fmt.Errorf("MAX_QTY: %s %s quantity %s exceeds maxQty %.*f (automatic splitting is disabled)", symbol, rules.QuantityFilter, formatted, precision, rules.MaxQty)
 	}
 	return formatted, nil
 }

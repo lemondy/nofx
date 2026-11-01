@@ -3,6 +3,7 @@ package market
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ func TestOpenInterestPubCacheOverlay(t *testing.T) {
 		oiDataMu.Unlock()
 	})
 	clock := time.Now()
+	// Symbols are already normalized (cache keys use Normalize, which drops
+	// separators) and unique per run: the process-wide pubcache outlives -count.
+	runID := strconv.FormatInt(clock.UnixNano(), 10)
 	oiNow = func() time.Time { return clock }
 	parsedMisses, networkCalls := 0, 0
 	oiFetch = func(symbol string) (*OIData, error) {
@@ -30,6 +34,14 @@ func TestOpenInterestPubCacheOverlay(t *testing.T) {
 		return fetchOIData(symbol) // real parsing and NewAPIClient transport chain
 	}
 	http.DefaultTransport = historicalRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		// fetchOIData also reads real-time OI (/fapi/v1/openInterest). That
+		// endpoint is not in the pubcache allowlist, so only the hourly
+		// history counts toward the cache-overlay assertions below.
+		if r.URL.Path == "/fapi/v1/openInterest" {
+			sym := r.URL.Query().Get("symbol")
+			body := `{"symbol":"` + sym + `","openInterest":"20","time":` + strconv.FormatInt(clock.UnixMilli(), 10) + `}`
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		}
 		networkCalls++
 		if r.URL.Path != "/futures/data/openInterestHist" || r.URL.Query().Get("period") != "1h" || r.URL.Query().Get("limit") != "30" {
 			t.Fatalf("unexpected OI request: %s", r.URL)
@@ -47,7 +59,7 @@ func TestOpenInterestPubCacheOverlay(t *testing.T) {
 	}
 
 	t.Run("ParsedCacheServesTwoMinutesWithoutTouchingPubCache", func(t *testing.T) {
-		symbol := "PUBCACHE_OVERLAY_TWO_MINUTES_USDT"
+		symbol := "PUBCACHEOVERLAYTWO" + runID + "USDT"
 		before := pubcache.Stats().Counts
 		read(symbol).Latest = -1
 		afterFetch := pubcache.Stats().Counts
@@ -66,7 +78,7 @@ func TestOpenInterestPubCacheOverlay(t *testing.T) {
 	t.Run("ExpiredParsedCacheUsesRecentlyWarmedPubCache", func(t *testing.T) {
 		// Independent callers can warm the HTTP entry shortly before the
 		// 3-minute parsed entry expires. Seed that state without wall-clock sleeps.
-		symbol := "PUBCACHE_OVERLAY_EXPIRED_USDT"
+		symbol := "PUBCACHEOVERLAYEXP" + runID + "USDT"
 		clock = time.Now()
 		oiDataMu.Lock()
 		oiDataCache[symbol] = oiDataEntry{data: &OIData{Latest: -1}, at: clock.Add(-oiDataTTL)}

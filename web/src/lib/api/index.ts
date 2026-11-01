@@ -6,6 +6,7 @@ import { telegramApi } from './telegram'
 import { reviewApi } from './review'
 import { systemApi } from './system'
 import { netTrafficApi } from './system'
+import { codeReviewApi } from './codeReviews'
 import { fundsApi } from './funds'
 
 export const api = {
@@ -17,5 +18,6 @@ export const api = {
   ...reviewApi,
   ...systemApi,
   ...netTrafficApi,
+  ...codeReviewApi,
   ...fundsApi,
 }

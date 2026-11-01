@@ -156,6 +156,9 @@ type AutoTrader struct {
 	fastMovesMu      sync.Mutex                   // state/cache only; actions use executionMutex
 	fastMoves        map[string]*fastMoveState
 	fastATR          map[string]fastATRValue
+	// marketContextFn, when set (tests), replaces market context enrichment;
+	// nil = live candidate and market-data fetches.
+	marketContextFn func(ctx *kernel.Context)
 	// marketDataFn, when set (tests), replaces the generic execution-quote
 	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
 	marketDataFn               func(symbol string) (*market.Data, error)
@@ -204,6 +207,7 @@ type AutoTrader struct {
 	tpTrimDone                 map[string]bool    // TP ladder: symbol_side -> 1/3 trim already taken
 	r1TrimDone                 map[string]bool    // 1R profit lock: symbol_side -> 50% trim already taken
 	partialTrimmed             map[string]float64 // fallback cumulative fraction of ORIGINAL size reduced by AI/automation (DB EntryQuantity is authoritative when available)
+	tpLedger                   tpLedgerStore
 	tpTrimMutex                sync.Mutex
 	// filterReasons records WHY an actionable proposal was dropped by the
 	// executor gates this cycle (symbol|action -> reason) — the Telegram
@@ -251,6 +255,11 @@ type AutoTrader struct {
 	stockNow    func() time.Time
 	stock       stockRuntime
 
+	// factor_quant (design 2026-11-01): programmatic paper-only strategy; fqNow
+	// is an injectable clock (nil = time.Now).
+	fq    factorQuantRuntime
+	fqNow func() time.Time
+
 	// keepRestingOnStop: set by StopForRestart — the trader is about to come
 	// back (process restart / config reload), so us_stock resting limit entries
 	// stay on the exchange and are restored + reconciled on the next start.
@@ -282,6 +291,10 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		return nil, err
 	}
 	if err := store.ValidateExchangeEnvironment(config.Exchange, config.HyperliquidTestnet || config.LighterTestnet); err != nil {
+		return nil, err
+	}
+	// factor_quant is paper-only; refuse any other account before building anything.
+	if err := factorQuantGuard(&config); err != nil {
 		return nil, err
 	}
 	// Set default values
@@ -464,6 +477,11 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		trader = indodax.NewIndodaxTrader(config.IndodaxAPIKey, config.IndodaxSecretKey)
 	default:
 		return nil, fmt.Errorf("unsupported trading platform: %s", config.Exchange)
+	}
+
+	// factor_quant (US): prepare the bStock paper ledger and adopt its baseline.
+	if err := factorQuantInitLedger(&config, st); err != nil {
+		return nil, err
 	}
 
 	// Validate initial balance configuration, auto-fetch from exchange if 0
@@ -677,6 +695,11 @@ func (at *AutoTrader) run() (err error) {
 	case <-at.stopMonitorCh:
 		return nil
 	default:
+	}
+	// factor_quant (design 2026-11-01): own loop, no AI cycle / LLM / futures AI monitors.
+	if at.IsFactorQuantStrategy() {
+		at.seedConfigVersionBaseline()
+		return at.runFactorQuantLoop()
 	}
 	logger.Info("🚀 AI-driven automatic trading system started")
 	logger.Infof("💰 Initial balance: %.2f USDT", at.initialBalance)
@@ -1053,14 +1076,30 @@ func (at *AutoTrader) unmarkAIManagedIfEntry(symbol, side, orderID string) bool 
 	return false
 }
 
-// isAIManaged reports whether the position belongs to the automation. A
-// missing store reads as AI-managed (degrade to old behavior rather than
-// dropping protection on everything during store outages).
+// review 2026-10-28 #12: unknown ownership must keep existing positions
+// protected. Successful true/false reads are cached per trader/symbol/side.
 func (at *AutoTrader) isAIManaged(symbol, side string) bool {
+	managed, known := at.aiManagedStatus(symbol, side)
+	return !known || managed
+}
+
+func (at *AutoTrader) aiManagedStatus(symbol, side string) (bool, bool) {
 	if at.store == nil {
-		return true
+		return true, true
 	}
-	return at.store.AIManaged().IsMarked(at.id, symbol, strings.ToLower(side))
+	symbol, side = market.Normalize(symbol), strings.ToLower(side)
+	managed, err := at.store.AIManaged().IsMarkedWithError(at.id, symbol, side)
+	if err == nil {
+		return managed, true
+	}
+	managed, known := at.store.AIManaged().LastKnownMarked(at.id, symbol, side)
+	// review 2026-10-28 #12: the existing notification mutex deduplicates
+	// simultaneous watchdog, dashboard and execution lookup failures.
+	if _, push := at.gateNotifyRecord("ownership:"+symbol+"_"+side, time.Now()); push {
+		logger.Warnf("🤖 [%s] AI-managed lookup failed %s %s: %v (cached=%v)", at.name, symbol, side, err, known)
+		notify.Notify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 仓位归属查询失败 %s %s</b>\n已知归属沿用缓存；未知仓位继续保护并阻止新增风险\n%s", notify.Escape(symbol), notify.Escape(side), notify.Escape(err.Error())))
+	}
+	return managed, known
 }
 
 // setFilterReason records why an actionable proposal was dropped by an

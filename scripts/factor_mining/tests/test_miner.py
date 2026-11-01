@@ -4,11 +4,12 @@ import random
 import subprocess
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch, Mock
 
-from scripts.factor_mining import miner, store
+from scripts.factor_mining import evaluate, miner, store
 from scripts.factor_mining.expr import canonical, expr_hash, validate_expr
-from scripts.factor_mining.miner import Miner, family, llm_propose, llm_propose_batches, mutate, summarize_outcomes
+from scripts.factor_mining.miner import Miner, build_status_events, family, llm_propose, llm_propose_batches, mutate, summarize_outcomes
 from scripts.factor_mining.tests.synth import SIGNAL_EXPR, SIGNAL_SEED, write_market
 
 
@@ -331,3 +332,232 @@ class MinerTests(unittest.TestCase):
             self.assertEqual(store.read_ledger('crypto', root), [])
             self.assertTrue(store.read_jsonl(Path(root)/'runs.jsonl')[-1]['budget_exhausted'])
             self.assertFalse(store.read_json(Path(root)/'status.json')['running'])
+
+
+class BuildStatusEventsTests(unittest.TestCase):
+    def test_kinds_fields_and_drops_last(self):
+        factors = {
+            (1, 'new_acc'): dict(status='accepted', first_seen='2026-01-01'),
+            (1, 'new_red'): dict(status='redundant', first_seen='2026-01-01'),
+            (3, 'demo'): dict(status='rejected', first_seen='2025-01-01'),
+            (3, 're'): dict(status='accepted', first_seen='2025-01-01'),
+            (3, 'same'): dict(status='candidate', first_seen='2025-01-01'),
+            (3, 'trans'): dict(status='candidate', first_seen='2025-01-01'),
+        }
+        old = {
+            (3, 'demo'): dict(status='accepted', first_seen='2025-01-01'),
+            (3, 'gone'): dict(status='accepted', first_seen='2024-01-01'),
+            (3, 're'): dict(status='candidate', first_seen='2025-01-01'),
+            (3, 'same'): dict(status='candidate', first_seen='2025-01-01'),
+            (3, 'trans'): dict(status='rejected', first_seen='2025-01-01'),
+            (7, 'gone2'): dict(status='rejected', first_seen='2024-01-01'),
+        }
+        events, promoted = build_status_events(
+            'run-1', 'crypto', 'ts', factors, old,
+            {(1, 'new_acc'): 'accepted', (1, 'new_red'): 'accepted'}, {1: 4, 3: 9, 7: 2},
+            {(1, 'new_acc'), (1, 'new_red'), (3, 'demo'), (3, 're'), (3, 'same'), (3, 'trans')},
+            {(3, 're')})
+        self.assertEqual(len(events), 7)  # 5 transitions + 2 drops, unchanged 'same' skipped
+        self.assertEqual(events[:5], sorted(events[:5], key=lambda e: (e['horizon'], e['id'])))
+        by_key = {(e['horizon'], e['id']): e for e in events}
+        first_acc = by_key[1, 'new_acc']
+        self.assertEqual(first_acc['kind'], 'first_admission')
+        self.assertIsNone(first_acc['from'])
+        self.assertEqual((first_acc['to'], first_acc['ledger_status']), ('accepted', 'accepted'))
+        self.assertEqual((first_acc['K'], first_acc['t_required']), (4, evaluate.t_required(4)))
+        self.assertEqual(first_acc['first_seen'], '2026-01-01')
+        self.assertEqual((first_acc['run_id'], first_acc['market'], first_acc['ts']), ('run-1', 'crypto', 'ts'))
+        # Ledger said accepted at first classify, but the run-final status is redundant.
+        first_red = by_key[1, 'new_red']
+        self.assertEqual((first_red['kind'], first_red['ledger_status'], first_red['to']),
+                         ('first_admission', 'accepted', 'redundant'))
+        self.assertEqual((by_key[3, 're']['kind'], by_key[3, 're']['from'], by_key[3, 're']['to']),
+                         ('re_promotion', 'candidate', 'accepted'))
+        self.assertIsNone(by_key[3, 're']['ledger_status'])
+        self.assertEqual(by_key[3, 'demo']['kind'], 'demotion')
+        self.assertEqual(by_key[3, 'trans']['kind'], 'transition')
+        self.assertEqual(promoted, [(3, 're')])
+        # Drops come last with to=None and the previous run-final status as from.
+        self.assertEqual([e['kind'] for e in events[-2:]], ['dropped', 'dropped'])
+        self.assertEqual([(e['horizon'], e['id']) for e in events[-2:]], [(3, 'gone'), (7, 'gone2')])
+        self.assertEqual(by_key[3, 'gone']['from'], 'accepted')
+        self.assertIsNone(by_key[3, 'gone']['to'])
+        self.assertEqual(by_key[7, 'gone2']['K'], 2)
+        # A first-ever promotion (no earlier acceptance anywhere) is not a re_promotion.
+        events2, promoted2 = build_status_events(
+            'run-2', 'us', 'ts', {(5, 'p'): dict(status='accepted', first_seen='d')},
+            {(5, 'p'): dict(status='candidate', first_seen='d')}, {}, {5: 3}, {(5, 'p')}, set())
+        self.assertEqual((events2[0]['kind'], events2[0]['from'], events2[0]['to']),
+                         ('promotion', 'candidate', 'accepted'))
+        self.assertEqual(promoted2, [(5, 'p')])
+
+
+class StatusEventLogTests(unittest.TestCase):
+    def test_first_run_writes_first_admission_for_every_new_trial(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+            seeds = [SIGNAL_SEED, dict(SIGNAL_SEED, expr=f'2*({SIGNAL_EXPR})')]
+            with patch.object(miner.zoo, 'seed_factors', return_value=seeds):
+                output = search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120,
+                                           seed=1, use_llm=False)
+            events = store.read_status_events('crypto', root)
+            final = {(f['horizon'], f['id']): f for f in output['factors']}
+            self.assertEqual({(e['horizon'], e['id']) for e in events}, set(final))
+            self.assertTrue(all(e['kind'] == 'first_admission' for e in events))
+            run_id = store.read_jsonl(Path(root)/'runs.jsonl')[0]['run_id']
+            ledger = {(r['horizon'], r['id']): r['status'] for r in store.read_ledger('crypto', root)}
+            self.assertEqual(events, sorted(events, key=lambda e: (e['horizon'], e['id'])))
+            for e in events:
+                key = (e['horizon'], e['id'])
+                self.assertIsNone(e['from'])
+                self.assertEqual(e['to'], final[key]['status'])
+                self.assertEqual(e['ledger_status'], ledger[key])
+                self.assertEqual(e['first_seen'], final[key]['first_seen'])
+                self.assertEqual((e['run_id'], e['market']), (run_id, 'crypto'))
+                self.assertEqual(e['K'], output['horizons'][str(e['horizon'])]['trials'])
+                self.assertEqual(e['t_required'], output['horizons'][str(e['horizon'])]['t_req'])
+            # First classify accepted the duplicate; the run-final redundancy
+            # dedupe demotes it, so ledger_status='accepted' but to='redundant'.
+            redundant = [e for e in events if e['horizon'] == 1 and e['to'] == 'redundant']
+            self.assertEqual(len(redundant), 1)
+            self.assertEqual(redundant[0]['ledger_status'], 'accepted')
+            for f in output['factors']:
+                self.assertEqual(f['first_final_status'], f['status'])
+                self.assertEqual(f['promotions'], 1 if f['status'] == 'accepted' else 0)
+
+    def test_second_run_unchanged_writes_nothing_and_changes_get_kinds(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                first = search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120,
+                                          seed=1, use_llm=False)
+                events_1 = store.read_status_events('crypto', root)
+                accepted = next(f for f in first['factors'] if f['status'] == 'accepted')
+                # Same data: nothing changes, so the second run appends nothing.
+                search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+                self.assertEqual(store.read_status_events('crypto', root), events_1)
+                # Weak validation demotes the accepted factor to candidate.
+                evaluator = evaluate.evaluate_factor
+                def weak_val(*args):
+                    metrics = evaluator(*args)
+                    if metrics is not None:
+                        metrics['val']['t'] = 0.
+                    return metrics
+                with patch.object(evaluate, 'evaluate_factor', side_effect=weak_val):
+                    third = search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120,
+                                              seed=1, use_llm=False)
+            run_id = store.read_jsonl(Path(root)/'runs.jsonl')[2]['run_id']
+            new = [e for e in store.read_status_events('crypto', root) if e['run_id'] == run_id]
+            self.assertTrue(new)
+            demotion = next(e for e in new if (e['horizon'], e['id']) == (accepted['horizon'], accepted['id']))
+            self.assertEqual((demotion['kind'], demotion['from'], demotion['to']),
+                             ('demotion', 'accepted', 'candidate'))
+            self.assertEqual(demotion['to'],
+                             next(f['status'] for f in third['factors']
+                                  if (f['horizon'], f['id']) == (accepted['horizon'], accepted['id'])))
+            self.assertIsNone(demotion['ledger_status'])
+            for e in new:
+                self.assertNotEqual(e['kind'], 'first_admission')
+
+    def test_re_promotion_across_three_runs(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+            evaluator = evaluate.evaluate_factor
+            def weak_val(*args):
+                metrics = evaluator(*args)
+                if metrics is not None:
+                    metrics['val']['t'] = 0.
+                return metrics
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+                with patch.object(evaluate, 'evaluate_factor', side_effect=weak_val):
+                    search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+                output = search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120,
+                                           seed=1, use_llm=False)
+            events = store.read_status_events('crypto', root)
+            sequences = {}
+            for e in events:
+                sequences.setdefault((e['horizon'], e['id']), []).append(e)
+            full = [(k, v) for k, v in sequences.items()
+                    if [e['kind'] for e in v] == ['first_admission', 'demotion', 're_promotion']]
+            self.assertTrue(full)
+            for key, seq in full:
+                self.assertEqual([e['to'] for e in seq], ['accepted', 'candidate', 'accepted'])
+                self.assertEqual(seq[2]['from'], 'candidate')
+            key = full[0][0]
+            factor = next(f for f in output['factors'] if (f['horizon'], f['id']) == key)
+            self.assertEqual(factor['promotions'], 2)
+            self.assertEqual(factor['first_final_status'], 'accepted')
+
+    def test_re_promotion_detected_from_zoo_history_without_events(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+            zoo = store.read_json(Path(root)/'crypto/zoo.json')
+            factor = next(f for f in zoo['factors'] if f['status'] == 'accepted')
+            factor['status'] = 'candidate'
+            factor['status_history'] = [dict(ts='earlier', run_id='old', **{'from': 'accepted'}, to='candidate')]
+            store.write_json(Path(root)/'crypto/zoo.json', zoo)
+            # Pre-log era: no status_events file, acceptance only in the truncated history.
+            (Path(root)/'crypto/status_events.jsonl').unlink()
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+            events = store.read_status_events('crypto', root)
+            match = [e for e in events if (e['horizon'], e['id']) == (factor['horizon'], factor['id'])]
+            self.assertEqual([e['kind'] for e in match], ['re_promotion'])
+            self.assertEqual((match[0]['from'], match[0]['to']), ('candidate', 'accepted'))
+            updated = store.read_json(Path(root)/'crypto/zoo.json')['factors']
+            self.assertEqual(next(f for f in updated if f['id'] == factor['id'])['promotions'], 2)
+
+    def test_status_events_are_never_truncated(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+            evaluator = evaluate.evaluate_factor
+            def weak_val(*args):
+                metrics = evaluator(*args)
+                if metrics is not None:
+                    metrics['val']['t'] = 0.
+                return metrics
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+                for i in range(6):  # accepted -> candidate -> accepted, three times over
+                    guard = (patch.object(evaluate, 'evaluate_factor', side_effect=weak_val)
+                             if i % 2 == 0 else nullcontext())
+                    with guard:
+                        search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120,
+                                          seed=1, use_llm=False)
+            zoo = store.read_json(Path(root)/'crypto/zoo.json')
+            key = (1, expr_hash(SIGNAL_EXPR))
+            factor = next(f for f in zoo['factors'] if (f['horizon'], f['id']) == key)
+            events = [e for e in store.read_status_events('crypto', root)
+                      if (e['horizon'], e['id']) == key]
+            self.assertEqual([e['kind'] for e in events],
+                             ['first_admission'] + ['demotion', 're_promotion'] * 3)
+            self.assertEqual(len(events), 7)
+            # The zoo history still truncates at 5; the event log is the full record.
+            self.assertLessEqual(len(factor['status_history']), 5)
+            self.assertEqual(factor['promotions'], 4)
+
+    def test_budget_stop_before_classification_writes_no_events(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_market(root)
+            search = Miner(root)
+            with patch.object(miner.zoo, 'seed_factors', return_value=[SIGNAL_SEED]):
+                search.run_market('crypto', n_mutations=0, n_llm=0, budget_s=120, seed=1, use_llm=False)
+            path = Path(root)/'crypto/status_events.jsonl'
+            before = path.read_bytes()
+            # First monotonic read sets the run clock to 0; every later read is
+            # past the budget, so the run stops during reevaluate, before classify.
+            ticks = iter([0.])
+            with patch.object(miner.time, 'monotonic',
+                              side_effect=lambda: next(ticks, 1e9)), \
+                 patch.object(miner.zoo, 'seed_factors', side_effect=AssertionError('no candidates')):
+                search.run_market('crypto', n_mutations=10, n_llm=1, budget_s=120, seed=2, use_llm=True)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertTrue(store.read_jsonl(Path(root)/'runs.jsonl')[-1]['budget_exhausted'])

@@ -126,6 +126,14 @@ func WithTemperature(temperature float64) ClientOption {
 	}
 }
 
+// WithReasoningEffort sets the Chat Completions reasoning_effort parameter.
+// An empty value leaves the server default without assuming it is "none".
+func WithReasoningEffort(effort string) ClientOption {
+	return func(c *Config) {
+		c.ReasoningEffort = effort
+	}
+}
+
 // ============================================================
 // Provider Configuration Options
 // ============================================================

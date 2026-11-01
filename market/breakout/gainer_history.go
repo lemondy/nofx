@@ -88,9 +88,10 @@ func ResolveShortScanHistoryMax(raw int) int {
 
 // GainerQuote is one row of the live 24h gainer board.
 type GainerQuote struct {
-	Symbol string
-	ChgPct float64
-	Price  float64
+	PriceObservedAt int64
+	Symbol          string
+	ChgPct          float64
+	Price           float64
 }
 
 type gainerHistEntry struct {

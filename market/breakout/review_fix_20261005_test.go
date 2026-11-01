@@ -142,6 +142,11 @@ func TestFix05EnabledWeightResearchStillCannotPublish(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(48 * time.Hour)
 	samples := reviewRankICSamples(now.Add(-82*24*time.Hour), 40, 10)
+	for i := range samples {
+		samples[i].LabelVersion = shortPriceLabelVersion
+		samples[i].PriceSource = "ticker_24h_last"
+		samples[i].PriceObservedAt = samples[i].TS
+	}
 	if err := writeSamples(samples); err != nil {
 		t.Fatal(err)
 	}

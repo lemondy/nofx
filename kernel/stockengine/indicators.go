@@ -1,7 +1,7 @@
 package stockengine
 
 import (
-	"math"
+	"nofx/market"
 	"nofx/market/usstock"
 )
 
@@ -21,25 +21,13 @@ func ema(values []float64, period int) []float64 {
 	return out
 }
 
-// atr uses Wilder's smoothing, seeded with the first period true ranges.
-// The first true range is high-low because no previous close is available.
+// atr uses the market Wilder ATR convention: SMA of TR[1..period], then smoothing.
 func atr(bars []usstock.Bar, period int) float64 {
-	if period <= 0 || len(bars) < period {
-		return 0
-	}
-	value := 0.0
+	h, l, c := make([]float64, len(bars)), make([]float64, len(bars)), make([]float64, len(bars))
 	for i, b := range bars {
-		tr := b.High - b.Low
-		if i > 0 {
-			tr = math.Max(tr, math.Max(math.Abs(b.High-bars[i-1].Close), math.Abs(b.Low-bars[i-1].Close)))
-		}
-		if i < period {
-			value += tr / float64(period)
-		} else {
-			value = (value*float64(period-1) + tr) / float64(period)
-		}
+		h[i], l[i], c[i] = b.High, b.Low, b.Close
 	}
-	return value
+	return last(market.WilderATRSeries(h, l, c, period))
 }
 
 // pivots returns the latest strictly confirmed low/high with width bars on each side.

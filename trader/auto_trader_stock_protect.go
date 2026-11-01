@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"nofx/market/usstock"
 	"strings"
+	"sync"
 	"time"
 
 	"nofx/logger"
@@ -16,16 +17,51 @@ import (
 // us_stock (design 2026-10-09 §5/§6): the 60s protection tick and resting
 // limit-entry reconciliation.
 
+// lockWithContext queues on the mutex; a cancelled waiter releases its acquisition.
+func lockWithContext(ctx context.Context, mu *sync.Mutex) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if mu.TryLock() {
+		return true
+	}
+	// An unbuffered handoff transfers ownership only to a waiting caller.
+	acquired := make(chan struct{})
+	go func() {
+		mu.Lock()
+		select {
+		case acquired <- struct{}{}:
+		case <-ctx.Done():
+			mu.Unlock()
+		}
+	}()
+	select {
+	case <-acquired:
+		if ctx.Err() != nil {
+			mu.Unlock()
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // stockProtectionTick re-places missing protection, sells at market when the
 // price sits below the stop and the stop order has not filled for
 // stockStopFallbackTicks ticks (program fallback), and in paper mode simulates
 // stop / take-profit fills.
 func (at *AutoTrader) stockProtectionTick(ctx context.Context) {
 	mu := at.stockMutex()
-	if !mu.TryLock() { // a decision cycle is running
+	// Stock cycles and ticks share a goroutine; queue behind account peers.
+	started := time.Now()
+	if !lockWithContext(ctx, mu) {
 		return
 	}
 	defer mu.Unlock()
+	if waited := time.Since(started); waited > stockProtectInterval {
+		logger.Warnf("⚠️ [%s] us_stock protection tick waited %s for the account execution lock", at.name, waited)
+	}
 	if !at.stockRunning() || at.stock.cfg == nil || ctx.Err() != nil {
 		return
 	}
@@ -107,6 +143,12 @@ func (at *AutoTrader) stockTickLive(ctx context.Context, now time.Time, logf fun
 		h.Mark = price
 		switch {
 		case h.ProtMissing:
+			// A remainder the exchange cannot sell cannot be protected either:
+			// write it off (no order) instead of retrying placement every tick.
+			if at.stockUnsellable(h.Symbol, h.Owned, price, stockSymbolInfo(ctx, h.Symbol)) {
+				at.stockFallbackSell(ctx, h, now, logf, "remainder below the exchange minimum")
+				continue
+			}
 			stop, tp := at.persistedStop(h.Symbol, h)
 			if stop <= 0 {
 				stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股持仓无保护单且无已知止损 %s</b>\n<i>请人工处理</i>", notify.Escape(h.Symbol)))
@@ -122,6 +164,10 @@ func (at *AutoTrader) stockTickLive(ctx context.Context, now time.Time, logf fun
 			}
 			if err := at.stockPlaceProtection(ctx, h.Symbol, h.Owned, stop, tp, price); err != nil {
 				logf("re-placing protection for %s failed: %v", h.Symbol, err)
+				if stockStopBelowBand(err) {
+					at.stockNotifyBandHeld(h.Symbol, stop, err)
+					continue
+				}
 				stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股保护单缺失且补挂失败 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
 				at.stockBoundFirstProtection(ctx, h, err, now, logf)
 				continue
@@ -137,9 +183,29 @@ func (at *AutoTrader) stockTickLive(ctx context.Context, now time.Time, logf fun
 			at.stock.stopTicks[h.Symbol] = 0
 		}
 	}
+	// A closed position ends its band episode; a later one re-alerts.
+	for sym := range at.stock.bandHeld {
+		if st.Holdings[sym] == nil {
+			delete(at.stock.bandHeld, sym)
+		}
+	}
 	if at.stock.tickCount%stockSnapshotEvery == 0 {
 		at.saveStockEquity(now, st)
 	}
+}
+
+// stockNotifyBandHeld alerts once per episode that the exchange refuses the
+// stop (percent-price band) and the program holds it on the tick instead.
+func (at *AutoTrader) stockNotifyBandHeld(sym string, stop float64, err error) {
+	if at.stock.bandHeld[sym] {
+		return
+	}
+	if at.stock.bandHeld == nil {
+		at.stock.bandHeld = map[string]bool{}
+	}
+	at.stock.bandHeld[sym] = true
+	stockNotify("ALERT", at.name, fmt.Sprintf("<b>⚠️ 美股止损超出交易所卖出价格带 %s</b>\n<i>止损 %.4g 低于交易所允许的卖出价下限，交易所止损单暂时无法挂出；程序每分钟按该止损监控，跌破即市价卖出，价格带允许时自动补挂。%s</i>",
+		notify.Escape(sym), stop, notify.Escape(err.Error())))
 }
 
 // stockBoundFirstProtection bounds the retries of a NEW position's first
@@ -164,6 +230,11 @@ func (at *AutoTrader) stockFallbackSell(ctx context.Context, h *stockHolding, no
 	if err != nil {
 		logf("fallback sell of %s FAILED: %v", h.Symbol, err)
 		stockNotify("ALERT", at.name, fmt.Sprintf("<b>🚨 美股止损兜底卖出失败 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(err.Error())))
+		return
+	}
+	if out.Qty == 0 && out.Closed {
+		logf("fallback sell %s: %s — %s", h.Symbol, why, out.Note)
+		stockNotify("ORDER", at.name, fmt.Sprintf("<b>🧹 美股零头持仓已注销 %s</b>\n<i>%s</i>", notify.Escape(h.Symbol), notify.Escape(out.Note)))
 		return
 	}
 	logf("fallback sell %s: %s — sold %.6f at %.4f (pnl %.2f)", h.Symbol, why, out.Qty, out.Price, out.PnL)

@@ -388,15 +388,27 @@ def _spearman(a: list[float], b: list[float]) -> float:
     ra = _ranks(a)
     rb = _ranks(b)
     n = len(a)
-    d2 = sum((x - y) ** 2 for x, y in zip(ra, rb))
-    return 1 - 6 * d2 / (n * (n * n - 1)) if n > 1 else 0.0
+    if n < 2:
+        return 0.0
+    # Pearson correlation of average ranks remains valid with ties. The
+    # squared-rank-distance shortcut assumes no ties and misflags flat sizes.
+    ma, mb = sum(ra) / n, sum(rb) / n
+    xa, xb = [x - ma for x in ra], [x - mb for x in rb]
+    den = math.sqrt(sum(x*x for x in xa) * sum(x*x for x in xb))
+    return sum(x*y for x, y in zip(xa, xb)) / den if den else 0.0
 
 
 def _ranks(xs: list[float]) -> list[float]:
     order = sorted(range(len(xs)), key=lambda i: xs[i])
     r = [0.0] * len(xs)
-    for rank, i in enumerate(order):
-        r[i] = float(rank)
+    start = 0
+    while start < len(order):
+        end = start + 1
+        while end < len(order) and xs[order[end]] == xs[order[start]]:
+            end += 1
+        for i in order[start:end]:
+            r[i] = (start + end - 1) / 2
+        start = end
     return r
 
 

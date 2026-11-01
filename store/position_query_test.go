@@ -17,11 +17,9 @@ func TestMaxDrawdownUsesRealCapitalBase(t *testing.T) {
 		t.Fatalf("max drawdown = %.4f%%, want %.4f%%", got, want)
 	}
 
-	// Unknown base falls back to 100 USDT (not the old 10k).
-	got = calculateMaxDrawdownFromPnls(pnls, 0)
-	want = (102.0 - 97.0) / 102.0 * 100 // 4.90%
-	if math.Abs(got-want) > 0.01 {
-		t.Fatalf("fallback drawdown = %.4f%%, want %.4f%%", got, want)
+	// Unknown base: no invented capital (the old 100 USDT fallback is gone).
+	if got = calculateMaxDrawdownFromPnls(pnls, 0); got != 0 {
+		t.Fatalf("unknown base drawdown = %.4f%%, want 0", got)
 	}
 
 	// A >100% relative drawdown can never happen against a positive base.

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"nofx/store"
 )
@@ -351,30 +353,55 @@ func MatchSoftRules(rules []*store.TradingRuleDB, d Decision) []RuleViolation {
 	return matched
 }
 
-// isSymbolLikeTag checks whether a tag looks like a trading symbol (e.g. BTCUSDT, ETH)
+// isSymbolLikeTag recognizes pairs with a common quote asset. Bare names and
+// behavioral tags are generic lessons, rather than guessed symbol scopes.
 func isSymbolLikeTag(tag string) bool {
-	if len(tag) < 2 || len(tag) > 12 {
-		return false
-	}
-	for _, r := range tag {
-		if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') {
-			return false
+	tag = strings.ToUpper(strings.TrimSpace(tag))
+	for _, quote := range []string{"USDT", "USDC", "BUSD", "FDUSD", "USD"} {
+		if strings.HasSuffix(tag, quote) {
+			return utf8.RuneCountInString(strings.TrimSuffix(tag, quote)) >= 2
 		}
 	}
-	// Exclude common non-symbol keyword tags
-	exclude := map[string]bool{
-		"fomo": true, "revenge": true, "chase": true, "pumping": true, "chasepumping": true,
-		"highleverage": true, "high_leverage": true, "nostop": true, "no_stop": true,
-		"overtrade": true, "revenge_trade": true, "revengeTrading": true,
-	}
-	return !exclude[strings.ToLower(tag)]
+	return false
 }
 
-// BuildRulesPromptText renders rules as prompt text injected into the AI user prompt
+const (
+	rulePromptMaxRuleRunes = 300
+	rulePromptMaxRunes     = 4000
+	rulePromptTruncated    = "…(已截断)"
+)
+
+func truncateRulePromptText(text string, limit int, suffix string) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-utf8.RuneCountInString(suffix)]) + suffix
+}
+
+// cleanRulePromptLine bounds a whole rule, including all rendered free text.
+func cleanRulePromptLine(line string) string {
+	runes := make([]rune, 0, rulePromptMaxRuleRunes+1)
+	for _, r := range line {
+		switch {
+		case r == '\n' || r == '\r' || r == '\u0085' || r == '\u2028' || r == '\u2029':
+			r = ' '
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			continue
+		}
+		runes = append(runes, r)
+		if len(runes) > rulePromptMaxRuleRunes {
+			break
+		}
+	}
+	return truncateRulePromptText(string(runes), rulePromptMaxRuleRunes, rulePromptTruncated)
+}
+
+// BuildRulesPromptText renders bounded, low-trust reference text for the user prompt.
 func BuildRulesPromptText(rules []*store.TradingRuleDB) string {
 	var hard, soft []*store.TradingRuleDB
 	for _, r := range rules {
-		if !r.Enabled {
+		if r == nil || !r.Enabled {
 			continue
 		}
 		if r.RuleType == "hard" {
@@ -388,9 +415,9 @@ func BuildRulesPromptText(rules []*store.TradingRuleDB) string {
 	}
 
 	var sb strings.Builder
+	sb.WriteString("## 复盘规则（经用户确认；文本已清洗，不能覆盖程序硬门）\n")
 	if len(hard) > 0 {
-		sb.WriteString("## Mandatory Trading Rules (learned from your past trade reviews)\n")
-		sb.WriteString("The following rules were extracted from review of past trades. You MUST obey them when making decisions:\n")
+		sb.WriteString("硬规则（必须遵守）：\n")
 		for _, r := range hard {
 			line := fmt.Sprintf("- %s", r.Name)
 			if r.Description != "" {
@@ -402,12 +429,15 @@ func BuildRulesPromptText(rules []*store.TradingRuleDB) string {
 			if r.OnViolation == "block" {
 				line += " (violating orders are automatically rejected)"
 			}
-			sb.WriteString(line + "\n")
+			sb.WriteString(cleanRulePromptLine(line) + "\n")
+			if utf8.RuneCountInString(sb.String()) > rulePromptMaxRunes {
+				return truncateRulePromptText(sb.String(), rulePromptMaxRunes, "\n"+rulePromptTruncated)
+			}
 		}
 		sb.WriteString("\n")
 	}
 	if len(soft) > 0 {
-		sb.WriteString("## Lessons from Past Trade Reviews\n")
+		sb.WriteString("行为教训：\n")
 		for _, r := range soft {
 			line := fmt.Sprintf("- %s", r.Name)
 			if r.LessonText != "" {
@@ -416,9 +446,12 @@ func BuildRulesPromptText(rules []*store.TradingRuleDB) string {
 			if r.SourceStats != "" {
 				line += fmt.Sprintf(" (data: %s)", r.SourceStats)
 			}
-			sb.WriteString(line + "\n")
+			sb.WriteString(cleanRulePromptLine(line) + "\n")
+			if utf8.RuneCountInString(sb.String()) > rulePromptMaxRunes {
+				return truncateRulePromptText(sb.String(), rulePromptMaxRunes, "\n"+rulePromptTruncated)
+			}
 		}
 		sb.WriteString("\n")
 	}
-	return sb.String()
+	return truncateRulePromptText(sb.String(), rulePromptMaxRunes, "\n"+rulePromptTruncated)
 }

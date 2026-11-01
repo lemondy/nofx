@@ -386,6 +386,7 @@ func (at *AutoTrader) fastProfitPass(r *realtimeProtection, now time.Time) {
 		if !ok || age < 0 || age > 10*time.Second || mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
 			continue
 		}
+		at.noteStopMark(symbol, mark)
 		at.tpTrimMutex.Lock()
 		r1Before := at.r1TrimDone[key]
 		at.tpTrimMutex.Unlock()
@@ -413,6 +414,20 @@ func (at *AutoTrader) fastProfitPass(r *realtimeProtection, now time.Time) {
 		}
 		at.processTrailingForPosition(p.pos, mark, r.atr[symbol])
 	}
+}
+
+// publishReducedPosition replaces the realtime snapshot of one position after a
+// confirmed reduction made outside the fast loop (vol-target reduce), so the
+// next fast tick cannot size a trim off the pre-reduce quantity (review
+// 2026-10-28 #4). Same discipline as fastProfitPass: the newer timestamp keeps
+// older cached/account snapshots from resurrecting the old size. Caller holds
+// the execution mutex, like every other writer of r.positions.
+func (at *AutoTrader) publishReducedPosition(symbol, side string, pos map[string]interface{}) {
+	r := at.realtimeState()
+	if r == nil || pos == nil {
+		return
+	}
+	r.positions[symbol+"_"+side] = realtimePosition{pos, time.Now()}
 }
 
 // Explicit quantity avoids CloseLong/Short(qty=0)'s REST position lookup in the

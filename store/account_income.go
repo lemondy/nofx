@@ -13,13 +13,13 @@ import (
 type AccountIncome struct {
 	AccountKind string `gorm:"not null;default:live_futures;index:idx_account_income_scope"`
 	ID          int64  `gorm:"primaryKey;autoIncrement"`
-	ExchangeID  string `gorm:"not null;uniqueIndex:idx_account_income_identity;index:idx_account_income_time"`
+	ExchangeID  string `gorm:"not null;uniqueIndex:idx_account_income_identity;index:idx_account_income_time;index:idx_account_income_position,priority:1"`
 	IncomeType  string `gorm:"not null;uniqueIndex:idx_account_income_identity"`
 	Category    string `gorm:"not null"`
-	Symbol      string
+	Symbol      string `gorm:"index:idx_account_income_position,priority:2"`
 	Asset       string
 	Amount      float64
-	TimeMS      int64  `gorm:"column:time_ms;not null;uniqueIndex:idx_account_income_identity;index:idx_account_income_time"`
+	TimeMS      int64  `gorm:"column:time_ms;not null;uniqueIndex:idx_account_income_identity;index:idx_account_income_time;index:idx_account_income_position,priority:3"`
 	TranID      string `gorm:"not null;uniqueIndex:idx_account_income_identity"`
 	Info        string
 }
@@ -71,6 +71,34 @@ func (s *AccountIncomeStore) ListForKind(exchangeID, kind string, startMS, endMS
 	}
 	return out, err
 }
+
+// fundingBetween loads FUNDING_FEE rows for the given exchange/symbol/kind sets
+// inside [startMS, endMS] with ONE query on idx_account_income_position
+// (exchange_id, symbol, time_ms). Callers narrow to exact lifecycles in memory.
+func (s *AccountIncomeStore) fundingBetween(exchanges, symbols, kinds []string, startMS, endMS int64) ([]AccountIncome, error) {
+	var rows []AccountIncome
+	if len(exchanges) == 0 || len(symbols) == 0 || len(kinds) == 0 {
+		return rows, nil
+	}
+	err := s.db.Where("income_type = ? AND exchange_id IN ? AND symbol IN ? AND account_kind IN ? AND time_ms >= ? AND time_ms <= ?",
+		"FUNDING_FEE", exchanges, symbols, kinds, startMS, endMS).Order("time_ms ASC, id ASC").Find(&rows).Error
+	return rows, err
+}
+
+// TransfersForKind returns external capital movements (category "transfer":
+// TRANSFER / DEPOSIT / WITHDRAW, ...) in (startMS, endMS], oldest first. These
+// are the cash flows the time-weighted return must neutralise.
+func (s *AccountIncomeStore) TransfersForKind(exchangeID, kind string, startMS, endMS int64) ([]fundsledger.Income, error) {
+	var rows []AccountIncome
+	err := s.db.Where("exchange_id = ? AND account_kind = ? AND category = ? AND time_ms > ? AND time_ms <= ?", exchangeID, kind, "transfer", startMS, endMS).
+		Order("time_ms ASC, id ASC").Find(&rows).Error
+	out := make([]fundsledger.Income, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, fundsledger.Income{TranID: r.TranID, IncomeType: r.IncomeType, Category: r.Category, Symbol: r.Symbol, Asset: r.Asset, Amount: r.Amount, TimeMS: r.TimeMS, Info: r.Info})
+	}
+	return out, err
+}
+
 func (s *Store) AccountIncome() *AccountIncomeStore {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -206,10 +206,10 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		exAction, exPriceField = "open_short", ""
 	}
 	if TPMenuEnabled(&riskControl) {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"%s\", %s\"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"tp_option\": 2, \"exit_mode\": \"range\", \"confidence\": 85},\n",
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"%s\", %s\"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"tp_option\": 2, \"exit_mode\": \"range\", \"confidence\": 85, \"reasoning\": \"区间选②\"},\n",
 			exAction, exPriceField, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
 	} else {
-		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"%s\", %s\"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85},\n",
+		sb.WriteString(fmt.Sprintf("  {\"symbol\": \"SOLUSDT\", \"action\": \"%s\", %s\"leverage\": %d, \"position_size_usd\": %.1f, \"stop_loss\": %.2f, \"take_profit\": %.2f, \"confidence\": 85, \"reasoning\": \"跌破结构\"},\n",
 			exAction, exPriceField, riskControl.BTCETHMaxLeverage, exNotional, exSL, exTP))
 	}
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"wait\", \"wait_bias\": \"short\", \"entry_quality\": 55, \"no_trade_reason\": [\"LIMIT_ANCHOR_SUPPRESSED\", \"MICRO_TREND_NOT_SHORT\"], \"next_trigger\": \"15m 转 down + RECHECK_ALL_HARD_GATES\"},\n")
@@ -224,7 +224,8 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		actions += "(本策略默认市价入场: 开仓只用 open_long/open_short,不要输出 open_*_limit)"
 	}
 	sb.WriteString("- `action`: " + actions + "\n")
-	sb.WriteString(fmt.Sprintf("- 开仓必填: leverage, position_size_usd, stop_loss, take_profit, confidence(0-100且≥%d);限价开仓另需 price。后端会拒绝低 confidence、下调超限 leverage;`risk_usd`、开仓的 `entry_quality` 和硬门 `blocking_factors` 由后端计算/回填,不要输出。\n", riskControl.MinConfidence))
+	sb.WriteString(fmt.Sprintf("- 开仓必填: leverage, position_size_usd, stop_loss, take_profit, confidence(0-100且≥%d);限价开仓另需 price。`risk_usd`、开仓的 `entry_quality` 和硬门 `blocking_factors` 由后端计算/回填,不要输出。\n", riskControl.MinConfidence))
+	sb.WriteString("- open_*/close_*/partial_close_* 另填 `reasoning`(一句,≤60字)。\n")
 	if TPMenuEnabled(&riskControl) {
 		sb.WriteString("- 开仓另填 `tp_option`(rr_scan.tp_options 的编号,1起,缺省=①;take_profit 复制所选 level)+ `exit_mode`(trend|range|quick,缺省 trend)。二者只能改变程序预计算方案的取舍,不能自造价格;偏离 tp_option=① 或选非常规 exit_mode 时必须在 reasoning 说明 regime 依据。\n")
 	}
@@ -240,7 +241,7 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("  - `partial_close_long` / `partial_close_short`(部分平仓): 输出 `close_fraction`(0<frac≤0.5)平掉当前剩余仓位的对应比例。后端按初始数量统计程序自动减仓+LLM减仓,总减仓不得超过75%;若剩余名义价值低于 min size 则拒绝部分平仓,全平用 close_*。\n")
 	sb.WriteString("- hold 必填 no_trade_reason、management_quality(0-100)和 management_flags;枚举: BREAKEVEN_WARRANTED|PARTIAL_WARRANTED|TRAIL_SUFFICIENT|TREND_INTACT|STRUCTURE_WEAKENING|CHOP_RISK|VOL_SPIKE|EVENT_RISK。若已需要保本或减仓,直接输出 adjust_stop_loss/partial_close_*,不要 hold+flag。\n")
 	sb.WriteString("- wait 的 entry_quality 表示偏好方向当前质量;open 只填 confidence,后端会复制为 entry_quality。\n")
-	sb.WriteString("- price/stop_loss/take_profit 为0表示不可交易或被抑制,绝不是占位符;未知时省略并 wait。\n\n")
+	sb.WriteString("- 开仓 price/stop_loss/take_profit 为0或省略=按程序计划填充;不交易就 wait/hold。\n\n")
 
 	// ⑦ Static per-strategy blocks (09-18 token audit): the field legend,
 	// Strategy Parameters and the scanner/candidate boundary rules are
@@ -421,7 +422,7 @@ func (e *StrategyEngine) strategyParamsText() string {
 		}
 		params.WriteString("- 注意: 资金费率极端拥挤时禁止逆势扛单;目标位越过 structure_high/low(历史新高新低区)时注明无历史阻力参考、不确定性大\n")
 		if e.config.RiskControl.VolTargetEnabled {
-			params.WriteString("- 波动率调仓(程序自动): 每周期按 权益×单笔风险%÷ATR(1h)% 重算目标仓位,80/120 滞后带外才调——>120% 程序自动减仓,<80% 时你可在信号仍有效的前提下评估加仓。不要因波动率变化去动 SL/TP\n")
+			params.WriteString("- 波动率调仓(程序自动): 每周期按 权益×单笔风险%÷ATR(1h)% 重算目标仓位,80/120 滞后带外才调——>120% 程序自动减仓,<80% 时程序不会自动加仓,同向加仓会被拒绝,因此不要提出加仓。不要因波动率变化去动 SL/TP\n")
 		}
 		if e.config.RiskControl.CloseRejectBreakoutPct > 0 {
 			params.WriteString(fmt.Sprintf("- 浮亏平仓限制(程序强制): 持仓浮亏时,若最近的反向结构位(做多看上方 resistance/structure_high、做空看下方 support)距离现价 < %.1f%% 且 15m 结构未破坏(未破支撑/未破阻力),\"被阻力拒绝/被支撑拒绝\"不构成平仓理由,该 close 会被程序拦截——给突破留空间;你的合法离场路径是 15m 结构实际破位、止损触发,或浮盈状态下的正常止盈\n", e.config.RiskControl.CloseRejectBreakoutPct))
@@ -524,9 +525,13 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 
 	// BTC market
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD(12/26线,价格绝对值口径): %.4f | RSI(7): %.2f\n\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
+		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%)",
+			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h))
+		if btcData.ClosedTimeframe != "" {
+			sb.WriteString(fmt.Sprintf(" | BTC(%s 收盘): MACD(12/26线,价格绝对值口径)=%.4f RSI7=%.2f",
+				btcData.ClosedTimeframe, btcData.ClosedMACD, btcData.ClosedRSI7))
+		}
+		sb.WriteString("\n\n")
 	}
 
 	// Account information. "Available" is DERIVED (equity − Σposition margin)
@@ -646,7 +651,7 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 			// 最大回撤来自权益曲线快照,峰谷日期让它可对账(可能是早于初始基线
 			// 手动重设的真实历史深回撤)。
 			if ctx.TradingStats.MaxDDPeakAt != "" && ctx.TradingStats.MaxDDTroughAt != "" {
-				sb.WriteString(fmt.Sprintf("总盈亏(净手续费): %+.2f USDT | 手续费合计: %.2f | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(权益曲线峰值 %.2f @ %s → 谷值 %.2f @ %s,窗口内历史;当前净值 vs 初始见账户行 AccountBreaker)\n",
+				sb.WriteString(fmt.Sprintf("总盈亏(净手续费): %+.2f USDT | 手续费合计: %.2f | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%(权益曲线峰值 %.2f @ %s → 谷值 %.2f @ %s,已扣除出入金,窗口内历史;当前净值 vs 初始见账户行 AccountBreaker)\n",
 					ctx.TradingStats.TotalPnL,
 					ctx.TradingStats.TotalFee,
 					ctx.TradingStats.AvgWin,

@@ -12,6 +12,8 @@ package breakout
 import (
 	"math"
 	"sort"
+
+	"nofx/market"
 )
 
 // ema returns the exponential moving average series (seeded with the first value).
@@ -28,26 +30,23 @@ func ema(xs []float64, period int) []float64 {
 	return out
 }
 
-// atr returns Wilder's ATR series over the candles.
+// atr returns the index-aligned Wilder ATR series (market convention). Bars
+// before the first complete value carry the expanding mean of the available
+// true ranges, so a freshly listed symbol keeps a usable scale instead of 0.
 func atr(h, l, c []float64, period int) []float64 {
+	out := market.WilderATRSeries(h, l, c, period)
 	n := len(c)
-	if n == 0 {
-		return nil
+	if n == 0 || len(h) != n || len(l) != n {
+		return out
 	}
-	tr := make([]float64, n)
-	tr[0] = h[0] - l[0]
-	for i := 1; i < n; i++ {
-		pc := c[i-1]
-		tr[i] = math.Max(h[i]-l[i], math.Max(math.Abs(h[i]-pc), math.Abs(l[i]-pc)))
-	}
-	out := make([]float64, n)
-	out[0] = tr[0]
-	for i := 1; i < n; i++ {
-		if i < period {
-			out[i] = out[i-1] + (tr[i]-out[i-1])/float64(i+1)
-		} else {
-			out[i] = (out[i-1]*(float64(period)-1) + tr[i]) / float64(period)
+	sum := 0.0
+	for i := 0; i < n && (i < period || out[i] == 0); i++ {
+		tr := h[i] - l[i]
+		if i > 0 {
+			tr = math.Max(tr, math.Max(math.Abs(h[i]-c[i-1]), math.Abs(l[i]-c[i-1])))
 		}
+		sum += tr
+		out[i] = sum / float64(i+1)
 	}
 	return out
 }
@@ -55,7 +54,7 @@ func atr(h, l, c []float64, period int) []float64 {
 // rsiLast returns the latest Wilder RSI value.
 func rsiLast(c []float64, period int) float64 {
 	n := len(c)
-	if n < period+1 {
+	if period <= 0 || n < period+1 {
 		return 50
 	}
 	var gains, losses float64
@@ -78,6 +77,9 @@ func rsiLast(c []float64, period int) float64 {
 		}
 		ag = (ag*(float64(period)-1) + g) / float64(period)
 		al = (al*(float64(period)-1) + l) / float64(period)
+	}
+	if ag == 0 && al == 0 {
+		return 50
 	}
 	if al == 0 {
 		return 100

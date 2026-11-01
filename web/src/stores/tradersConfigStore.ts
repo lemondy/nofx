@@ -50,15 +50,19 @@ export const useTradersConfigStore = create<TradersConfigState>((set, get) => ({
   setAllExchanges: (exchanges) => {
     set({ allExchanges: exchanges })
     // 更新 configuredExchanges
+    // 2026-10-28 review A7: e.id 是 UUID（不是 'aster'/'hyperliquid' 这样的
+    // 类型标识），必须用 e.exchange_type 判断；后端 SafeExchangeConfig 不返回
+    // apiKey/secretKey，相关条件是永假死代码，一并删除。
     const configuredExchanges = exchanges.filter((e) => {
-      if (e.id === 'aster') {
-        return e.asterUser && e.asterUser.trim() !== ''
+      if (e.exchange_type === 'aster') {
+        return !!(e.asterUser && e.asterUser.trim() !== '')
       }
-      if (e.id === 'hyperliquid') {
-        return e.hyperliquidWalletAddr && e.hyperliquidWalletAddr.trim() !== ''
+      if (e.exchange_type === 'hyperliquid') {
+        return !!(
+          e.hyperliquidWalletAddr && e.hyperliquidWalletAddr.trim() !== ''
+        )
       }
-      // 修复: 添加 enabled 判断,与原始逻辑保持一致
-      return e.enabled || (e.apiKey && e.apiKey.trim() !== '')
+      return e.enabled
     })
     set({ configuredExchanges })
   },

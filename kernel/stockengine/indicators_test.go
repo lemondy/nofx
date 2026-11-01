@@ -26,15 +26,15 @@ func TestEMA(t *testing.T) {
 }
 
 func TestATRWilder(t *testing.T) {
-	// TRs: 2,3,4,6,3. SMA seed=3, then Wilder values=4, 11/3.
+	// TR[1..3]: 3,4,6. SMA seed=13/3, then Wilder value=35/9.
 	bars := []usstock.Bar{
 		{High: 11, Low: 9, Close: 10}, {High: 13, Low: 11, Close: 12},
 		{High: 16, Low: 14, Close: 15}, {High: 21, Low: 18, Close: 20},
 		{High: 20, Low: 17, Close: 18},
 	}
-	near(t, atr(bars[:3], 3), 3)
-	near(t, atr(bars[:4], 3), 4)
-	near(t, atr(bars, 3), 11.0/3)
+	near(t, atr(bars[:3], 3), 0)
+	near(t, atr(bars[:4], 3), 13.0/3)
+	near(t, atr(bars, 3), 35.0/9)
 	near(t, atr(bars[:2], 3), 0)
 	near(t, atr(bars, 0), 0)
 }

@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"nofx/market"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -237,11 +239,21 @@ func tradableSymbol(symbol string) string {
 	return market.Normalize(s)
 }
 
-// NormalizeSymbol normalizes a coin symbol to XXXUSDT format.
+var promptSymbolPattern = regexp.MustCompile(`^[A-Z0-9]{2,20}$`)
+
+// NormalizeSymbol normalizes a coin symbol to XXXUSDT format and validates
+// the result. Interior whitespace/control characters are rejected;
+// xyz: assets are outside this crypto feed's whitelist.
 func NormalizeSymbol(symbol string) string {
-	s := strings.TrimSpace(strings.ToUpper(symbol))
-	if s == "" {
+	// Edge whitespace is harmless and trimmed; interior whitespace/control
+	// characters reject the candidate (prompt-injection boundary).
+	symbol = strings.TrimSpace(symbol)
+	if symbol == "" || strings.ContainsFunc(symbol, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return ""
 	}
-	return market.Normalize(s)
+	s := market.Normalize(symbol)
+	if s == "USDT" || !strings.HasSuffix(s, "USDT") || !promptSymbolPattern.MatchString(s) {
+		return ""
+	}
+	return s
 }

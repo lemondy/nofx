@@ -94,8 +94,8 @@ var DataDictionary = map[string]map[string]BilingualFieldDef{
 			Unit:      "%",
 			FormulaZH: "已用保证金合计 / 总权益 × 100",
 			FormulaEN: "Total Used Margin / Total Equity × 100",
-			DescZH:    "该值越高，账户风险越大。安全值<30%，危险值>70%",
-			DescEN:    "Higher value = higher risk. Safe <30%, Dangerous >70%",
+			DescZH:    "安全<30%；>70%为风险提示（非硬上限，硬上限见策略参数）",
+			DescEN:    "Safe <30%; >70% warning only; cap: strategy config",
 		},
 	},
 

@@ -7,6 +7,7 @@ import (
 
 	"nofx/logger"
 	"nofx/market"
+	nofxstore "nofx/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -294,21 +295,46 @@ func (s *Server) handlePositionHistory(c *gin.Context) {
 		return
 	}
 
-	// Get statistics
-	stats, _ := store.Position().GetFullStats(trader.GetID(), trader.InitialBalance())
+	// Statistics are best-effort for the list itself, but a failing query must
+	// not masquerade as "no data": it is logged and reported in stats_error.
+	stats, symbolStats, directionStats, statsErrors := positionHistoryStats(store.Position(), trader.GetID(), trader.InitialBalance())
 
-	// Get symbol stats
-	symbolStats, _ := store.Position().GetSymbolStats(trader.GetID(), 10)
-
-	// Get direction stats
-	directionStats, _ := store.Position().GetDirectionStats(trader.GetID())
-
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"positions":       positions,
 		"stats":           stats,
 		"symbol_stats":    symbolStats,
 		"direction_stats": directionStats,
-	})
+	}
+	if len(statsErrors) > 0 {
+		resp["stats_error"] = statsErrors
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// positionHistoryStats runs the three history statistics queries. A failing
+// query yields a nil result plus an entry in the returned error map (keyed by
+// response field) instead of being silently discarded.
+func positionHistoryStats(ps *nofxstore.PositionStore, traderID string, initialBalance float64) (*nofxstore.TraderStats, []nofxstore.SymbolStats, []nofxstore.DirectionStats, map[string]string) {
+	statsErrors := map[string]string{}
+	stats, err := ps.GetFullStats(traderID, initialBalance)
+	if err != nil {
+		logger.Warnf("⚠️ [position-history] stats query failed for %s: %v", traderID, err)
+		statsErrors["stats"] = "statistics query failed"
+		stats = nil
+	}
+	symbolStats, err := ps.GetSymbolStats(traderID, 10)
+	if err != nil {
+		logger.Warnf("⚠️ [position-history] symbol stats query failed for %s: %v", traderID, err)
+		statsErrors["symbol_stats"] = "symbol statistics query failed"
+		symbolStats = nil
+	}
+	directionStats, err := ps.GetDirectionStats(traderID)
+	if err != nil {
+		logger.Warnf("⚠️ [position-history] direction stats query failed for %s: %v", traderID, err)
+		statsErrors["direction_stats"] = "direction statistics query failed"
+		directionStats = nil
+	}
+	return stats, symbolStats, directionStats, statsErrors
 }
 
 // handleTrades Historical trades list

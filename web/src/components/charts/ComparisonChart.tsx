@@ -15,6 +15,7 @@ import useSWR from 'swr'
 import { api } from '../../lib/api'
 import type { CompetitionTraderData } from '../../types'
 import { getTraderColor } from '../../utils/traderColors'
+import { parseServerTime } from '../../utils/serverTime'
 import { useLanguage } from '../../contexts/LanguageContext'
 import { t } from '../../i18n/translations'
 import { BarChart3, TrendingUp, TrendingDown, Zap } from 'lucide-react'
@@ -113,7 +114,9 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
 
     // Helper function to normalize timestamp to nearest minute
     const normalizeTimestamp = (ts: string): string => {
-      const date = new Date(ts)
+      // equity 端点旧格式无时区后缀（UTC），必须按 UTC 解析；
+      // 新格式 RFC3339 带偏移，parseServerTime 两种都兼容
+      const date = parseServerTime(ts)
       date.setSeconds(0, 0) // Round to minute
       return date.toISOString()
     }

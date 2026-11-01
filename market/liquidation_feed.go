@@ -25,9 +25,9 @@ import (
 // Semantics: a liquidation of a LONG arrives as a SELL force order; a SHORT
 // liquidation arrives as a BUY. Notional = fill price × filled qty (USDT).
 //
-// Cold start: the window builds from process start — the first 24h after a
-// deploy under-reports and the accessors say so (Events24h == 0 with zero
-// uptime → absent, not zero).
+// Coverage starts at the first successful connection and excludes detected
+// disconnections. The first 24h and any gaps are incomplete observations;
+// an empty event window is absent, not proof of zero liquidations.
 // ============================================================================
 
 type liqEvent struct {
@@ -41,22 +41,45 @@ type LiquidationWindow struct {
 	Long1hUSD, Short1hUSD   float64
 	Long24hUSD, Short24hUSD float64
 	Count1h, Count24h       int
-	WindowHours             float64 // actual covered window (starts at 0 on cold start)
+	WindowHours             float64 // actual online hours within the last 24h; zero before first connection
+	SpanHours               float64 // hours since first successful connection, capped at 24
+	GapCount                int     // detected online-to-offline transitions within the last 24h
+	Complete                bool    // full 24h span and online coverage, with no disconnections in that window
 	Sample                  string  // largest single liquidation in 24h ("LONG 1.2M @ BTCUSDT")
 }
 
 const (
-	liqFeedURL   = "wss://fstream.binance.com/ws/!forceOrder@arr"
-	liqWindow    = 24 * time.Hour
-	liqMaxEvents = 200_000 // hard memory bound; prune drops oldest first
+	liqFeedURL      = "wss://fstream.binance.com/ws/!forceOrder@arr"
+	liqWindow       = 24 * time.Hour
+	liqMaxEvents    = 200_000 // hard memory bound; prune drops oldest first
+	liqReconnectMin = 5 * time.Second
+	// Every connection after the first is preceded by at least this backoff.
+	// This bound retains every 24h interval (including both boundaries) without
+	// merging across gaps, which would lose exact rolling-window coverage.
+	liqMaxCoverageIntervals = int(liqWindow/liqReconnectMin) + 2
 )
+
+type liqOnlineInterval struct {
+	start, end time.Time
+}
+
+// Closed intervals form a bounded chronological ring. Their end timestamps
+// also record disconnections. onlineSince is separate so an ongoing outage
+// cannot accrue online time, even after all closed intervals expire.
+type liqCoverageState struct {
+	intervals   [liqMaxCoverageIntervals]liqOnlineInterval
+	head, count int
+	onlineSince time.Time
+}
 
 var (
 	liqMu       sync.Mutex
 	liqEvents   []liqEvent
-	liqStarted  time.Time
+	liqStarted  time.Time // first successful connection, not feed/process startup
 	liqRunning  bool
 	liqBySymbol = map[string][]liqEvent{}
+	liqCoverage liqCoverageState
+	liqNow      = time.Now
 )
 
 type liqOrder struct {
@@ -87,13 +110,12 @@ func StartLiquidationFeed() {
 		return
 	}
 	liqRunning = true
-	liqStarted = time.Now()
 	liqMu.Unlock()
 	go liqFeedLoop()
 }
 
 func liqFeedLoop() {
-	backoff := 5 * time.Second
+	backoff := liqReconnectMin
 	for {
 		err := liqConsumeOnce()
 		if err == nil {
@@ -124,12 +146,14 @@ func liqConsumeOnce() error {
 	if err != nil {
 		return err
 	}
-	logger.Infof("📡 liquidation feed connected (!forceOrder@arr)")
+	liqSetConnected(true)
 	defer conn.Close()
+	defer liqSetConnected(false)
+	logger.Infof("📡 liquidation feed connected (!forceOrder@arr)")
 	// Refresh the deadline for both data and control traffic. A one-shot
 	// deadline disconnected every healthy stream after exactly ten minutes.
 	const idleTimeout = 10 * time.Minute
-	refreshDeadline := func() error { return conn.SetReadDeadline(time.Now().Add(idleTimeout)) }
+	refreshDeadline := func() error { return conn.SetReadDeadline(liqNow().Add(idleTimeout)) }
 	if err := refreshDeadline(); err != nil {
 		return err
 	}
@@ -151,7 +175,7 @@ func liqConsumeOnce() error {
 			case <-done:
 				return
 			case <-t.C:
-				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+				if err := conn.WriteControl(websocket.PingMessage, nil, liqNow().Add(5*time.Second)); err != nil {
 					return
 				}
 			}
@@ -176,7 +200,7 @@ func liqConsumeOnce() error {
 			if px <= 0 || qty <= 0 {
 				continue
 			}
-			ts := time.Now()
+			ts := liqNow()
 			if order.TradeTime > 0 {
 				ts = time.UnixMilli(order.TradeTime)
 			}
@@ -187,6 +211,97 @@ func liqConsumeOnce() error {
 			})
 		}
 	}
+}
+
+// liqSetConnected records successful connections and their detected ends.
+// Failed dial attempts never open an interval or add another disconnection.
+func liqSetConnected(connected bool) {
+	liqMu.Lock()
+	defer liqMu.Unlock()
+	now := liqNow()
+	liqPruneCoverageLocked(now)
+	if connected {
+		if !liqCoverage.onlineSince.IsZero() {
+			return
+		}
+		if liqStarted.IsZero() {
+			liqStarted = now
+		}
+		liqCoverage.onlineSince = now
+		return
+	}
+	if liqCoverage.onlineSince.IsZero() {
+		return
+	}
+	i := (liqCoverage.head + liqCoverage.count) % liqMaxCoverageIntervals
+	liqCoverage.intervals[i] = liqOnlineInterval{start: liqCoverage.onlineSince, end: now}
+	if liqCoverage.count < liqMaxCoverageIntervals {
+		liqCoverage.count++
+	} else {
+		// The minimum reconnect backoff makes this unreachable for retained
+		// 24h intervals in the feed, but keep the storage bounded regardless.
+		liqCoverage.head = (liqCoverage.head + 1) % liqMaxCoverageIntervals
+	}
+	liqCoverage.onlineSince = time.Time{}
+}
+
+// Caller holds liqMu. Keep an end exactly at cutoff for GapCount even though
+// that interval contributes no online duration at the boundary.
+func liqPruneCoverageLocked(now time.Time) {
+	cutoff := now.Add(-liqWindow)
+	for liqCoverage.count > 0 {
+		oldest := &liqCoverage.intervals[liqCoverage.head]
+		if !oldest.end.Before(cutoff) {
+			if oldest.start.Before(cutoff) {
+				oldest.start = cutoff
+			}
+			break
+		}
+		*oldest = liqOnlineInterval{}
+		liqCoverage.head = (liqCoverage.head + 1) % liqMaxCoverageIntervals
+		liqCoverage.count--
+	}
+}
+
+// Caller holds liqMu. Coverage is based on observed socket connectivity;
+// failures before their detection and exchange-side omissions are unknown.
+func liqCoverageWindowLocked(now time.Time) LiquidationWindow {
+	liqPruneCoverageLocked(now)
+	var w LiquidationWindow
+	if liqStarted.IsZero() || now.Before(liqStarted) {
+		return w
+	}
+	span := now.Sub(liqStarted)
+	if span > liqWindow {
+		span = liqWindow
+	}
+	w.SpanHours = span.Hours()
+	cutoff := now.Add(-liqWindow)
+	var online time.Duration
+	addOnline := func(start, end time.Time) {
+		if start.Before(cutoff) {
+			start = cutoff
+		}
+		if end.After(now) {
+			end = now
+		}
+		if end.After(start) {
+			online += end.Sub(start)
+		}
+	}
+	for n := 0; n < liqCoverage.count; n++ {
+		interval := liqCoverage.intervals[(liqCoverage.head+n)%liqMaxCoverageIntervals]
+		addOnline(interval.start, interval.end)
+		if !interval.end.Before(cutoff) && !interval.end.After(now) {
+			w.GapCount++
+		}
+	}
+	if !liqCoverage.onlineSince.IsZero() {
+		addOnline(liqCoverage.onlineSince, now)
+	}
+	w.WindowHours = online.Hours()
+	w.Complete = span == liqWindow && online == liqWindow && w.GapCount == 0
+	return w
 }
 
 func decodeLiquidationOrders(msg []byte) ([]liqOrder, error) {
@@ -243,7 +358,7 @@ func parseFloatSafe(s string) float64 {
 func recordLiquidation(symbol string, ev liqEvent) {
 	liqMu.Lock()
 	defer liqMu.Unlock()
-	cutoff := time.Now().Add(-liqWindow)
+	cutoff := liqNow().Add(-liqWindow)
 	// Global prune + per-symbol append, bounded.
 	kept := liqEvents[:0]
 	for _, e := range liqEvents {
@@ -267,18 +382,15 @@ func recordLiquidation(symbol string, ev liqEvent) {
 
 // LiquidationStats returns the 24h rolling liquidation picture for one
 // symbol and starts the feed on first call. ok=false → no data yet (cold
-// start or empty window): the prompt renders absent, never zero.
+// start or empty window): the prompt renders absent, never zero. Coverage
+// metadata is returned even when ok=false and excludes detected outages.
 func LiquidationStats(symbol string) (LiquidationWindow, bool) {
 	StartLiquidationFeed()
 	liqMu.Lock()
 	defer liqMu.Unlock()
-	now := time.Now()
+	now := liqNow()
 	c1h, c24h := now.Add(-time.Hour), now.Add(-liqWindow)
-	var w LiquidationWindow
-	w.WindowHours = now.Sub(liqStarted).Hours()
-	if w.WindowHours > 24 {
-		w.WindowHours = 24
-	}
+	w := liqCoverageWindowLocked(now)
 	var top float64
 	for _, e := range liqBySymbol[strings.ToUpper(symbol)] {
 		if e.ts.Before(c24h) {

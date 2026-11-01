@@ -43,6 +43,7 @@ type Store struct {
 	stockPaper     *StockPaperStore
 	stockThesis    *StockThesisStore
 	stockRegime    *StockRegimeScaleStore
+	factorQuant    *FactorQuantStore
 	telegramConfig TelegramConfigStore
 
 	mu sync.RWMutex
@@ -225,6 +226,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.StockRegimeScales().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize us_stock regime scale tables: %w", err)
+	}
+	if err := s.FactorQuant().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize factor_quant state tables: %w", err)
 	}
 	return nil
 }
@@ -429,6 +433,16 @@ func (s *Store) StockPaper() *StockPaperStore {
 		s.stockPaper = NewStockPaperStore(s.gdb)
 	}
 	return s.stockPaper
+}
+
+// FactorQuant gets the factor_quant durable rebalance state store.
+func (s *Store) FactorQuant() *FactorQuantStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.factorQuant == nil {
+		s.factorQuant = NewFactorQuantStore(s.gdb)
+	}
+	return s.factorQuant
 }
 
 // StockThesis gets the us_stock per-position thesis/invalidation store.

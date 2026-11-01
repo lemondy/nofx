@@ -36,24 +36,33 @@ type FundingIntervalCache struct {
 
 var (
 	fundingIntervalMap sync.Map // map[string]*FundingIntervalCache
-	fundingIntervalTTL = 24 * time.Hour
+	fundingIntervalTTL = time.Hour
 )
 
-// fundingIntervalHours returns the symbol's real funding settlement interval
-// in hours, measured from recent settlement timestamps (0 = unknown).
-// The interval is fixed per listing (8h default; some new listings 4h/1h)
-// and changes rarely, so it is cached for a day. The measurement rides on
-// the same /fapi/v1/fundingRate call that feeds the rollover history
-// (funding_history.go) — one endpoint call per 5-minute cache window serves
-// both.
+// fundingIntervalHours prefers the exchange's current settlement schedule,
+// falling back to the median of recent settlement gaps (0 = unknown).
+// History-based estimates are cached for one hour, but a different latest
+// valid gap forces recalculation. fundingHistory shares its five-minute
+// cache with rollover history, so checking the latest gap shares that fetch.
 func fundingIntervalHours(symbol string) float64 {
+	symbol = Normalize(symbol)
+	if hours, ok := FundingScheduleHours(symbol); ok {
+		return hours
+	}
+	_, times, ok := fundingHistory(symbol)
 	if cached, ok := fundingIntervalMap.Load(symbol); ok {
 		c := cached.(*FundingIntervalCache)
 		if time.Since(c.UpdatedAt) < fundingIntervalTTL {
-			return c.Hours
+			latest := 0.0
+			if len(times) >= 2 {
+				latest = float64(times[len(times)-1]-times[len(times)-2]) / 3.6e6
+			}
+			// Settlement timestamps carry millisecond jitter: compare with tolerance.
+			if latest <= 0 || latest > 24 || math.Abs(latest-c.Hours) < 0.01 {
+				return c.Hours
+			}
 		}
 	}
-	_, times, ok := fundingHistory(symbol)
 	if !ok || len(times) < 2 {
 		return 0
 	}
@@ -114,6 +123,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	useHyperliquidAPI := isXyzAsset || strings.ToLower(exchange) == "hyperliquid"
 
 	// Get 3-minute K-line data (or 5-minute for xyz assets as 3m may not be available)
+	shortObservedAt := time.Now()
 	if useHyperliquidAPI {
 		// Use Hyperliquid API for xyz dex assets (use 5m since 3m may not be available)
 		klines3m, err = getKlinesFromHyperliquid(symbol, "5m", 100)
@@ -137,6 +147,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	}
 
 	// Get 4-hour K-line data
+	observed4h := time.Now()
 	if useHyperliquidAPI {
 		klines4h, err = getKlinesFromHyperliquid(symbol, "4h", 100)
 		if err != nil {
@@ -154,6 +165,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// this series those gates silently skipped (the ATR helpers return 0 on
 	// missing data). On failure the floor's fallback chain rides 4h: a
 	// wider but still-enforced floor.
+	observed1h := time.Now()
 	if useHyperliquidAPI {
 		klines1h, err = getKlinesFromHyperliquid(symbol, "1h", 100)
 	} else {
@@ -170,6 +182,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// systematically too-tight stops on them. Fetched for every symbol so
 	// the stock check needs no data-path branch; unused by crypto paths.
 	var klines1d []Kline
+	observed1d := time.Now()
 	if useHyperliquidAPI {
 		klines1d, err = getKlinesFromHyperliquid(symbol, "1d", 100)
 	} else {
@@ -220,6 +233,11 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	currentEMA20 := calculateEMA(klines3m, 20)
 	currentMACD := calculateMACD(klines3m)
 	currentRSI7 := calculateRSI(klines3m, 7)
+	closedTF := "3m"
+	if useHyperliquidAPI {
+		closedTF = "5m"
+	}
+	closedMACD, closedRSI7, closedTF := calculateClosedIndicators(klines3m, closedTF, shortObservedAt)
 
 	// Calculate price change percentage
 	// 1-hour price change = price from 20 3-minute K-lines ago
@@ -231,7 +249,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 		}
 	}
 
-	// 4-hour price change = price from 1 4-hour K-line ago
+	// Keep the previous-boundary value only as a logged short-history fallback.
 	priceChange4h := 0.0
 	if len(klines4h) >= 2 {
 		price4hAgo := klines4h[len(klines4h)-2].Close
@@ -239,6 +257,12 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
 		}
 	}
+	shortBar := 3 * time.Minute
+	if useHyperliquidAPI {
+		shortBar = 5 * time.Minute
+	}
+	priceChange4h = rolling4hPriceChange(symbol, time.Now(), currentPrice, priceChange4h,
+		priceHistory{klines3m, shortBar}, priceHistory{klines1h, time.Hour})
 
 	// Get OI data
 	oiData, oiOK := fetchOIDataOrZero(symbol)
@@ -265,6 +289,14 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// never enforced (09-16 AKEUSDT: a healthy 11.45% structural stop was
 	// rejected by the degenerate 8% cap the prompt never promised).
 	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h, klines1d)
+	for tf, observedAt := range map[string]time.Time{
+		"3m": shortObservedAt, "15m": shortObservedAt,
+		"1h": observed1h, "4h": observed4h, "1d": observed1d,
+	} {
+		if td := TimeframeData[tf]; td != nil {
+			td.ObservedAt = observedAt
+		}
+	}
 
 	return &Data{
 		Symbol:             symbol,
@@ -274,6 +306,9 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 		CurrentEMA20:       currentEMA20,
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,
+		ClosedMACD:         closedMACD,
+		ClosedRSI7:         closedRSI7,
+		ClosedTimeframe:    closedTF,
 		OpenInterest:       oiData,
 		OpenInterestOK:     oiOK,
 		FundingRate:        fundingRate,
@@ -344,6 +379,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	// Store data for all timeframes
 	timeframeData := make(map[string]*TimeframeSeriesData)
 	var primaryKlines []Kline
+	var priceHistories []priceHistory
 
 	// Check if this is an xyz dex asset (use Hyperliquid API)
 	isXyzAsset := IsXyzDexAsset(symbol)
@@ -363,6 +399,7 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	for _, tf := range timeframes {
 		var klines []Kline
 		var err error
+		observedAt := time.Now()
 
 		if useHyperliquidAPI {
 			// Use Hyperliquid API for xyz dex assets
@@ -395,8 +432,12 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		if tf == primaryTimeframe {
 			primaryKlines = klines
 		}
+		if bar := TimeframeDuration(tf); bar > 0 && bar <= time.Hour {
+			priceHistories = append(priceHistories, priceHistory{klines, bar})
+		}
 
 		seriesData := fetchedTimeframeSeries(klines, tf, count)
+		seriesData.ObservedAt = observedAt
 		timeframeData[tf] = seriesData
 	}
 
@@ -404,8 +445,9 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	if len(primaryKlines) == 0 {
 		return nil, fmt.Errorf("Primary timeframe %s K-line data is empty", primaryTimeframe)
 	}
-	// Sampling clock: closed-bar and staleness judgements downstream are made
-	// against this moment, not against whenever the snapshot is processed.
+	// Snapshot clock remains the batch completion time. Candle settlement
+	// prefers each series' request-time ObservedAt; freshness still uses this
+	// clock so a slow batch cannot hide an old feed.
 	sampledAt := time.Now()
 
 	// Data staleness detection
@@ -467,10 +509,12 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 	currentEMA20 := calculateEMA(primaryKlines, 20)
 	currentMACD := calculateMACD(primaryKlines)
 	currentRSI7 := calculateRSI(primaryKlines, 7)
+	closedMACD, closedRSI7, closedTF := calculateClosedIndicators(primaryKlines, primaryTimeframe, timeframeData[primaryTimeframe].ObservedAt)
 
 	// Calculate price changes
 	priceChange1h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 60, currentPrice)  // 1 hour
 	priceChange4h := calculatePriceChangeByBars(primaryKlines, primaryTimeframe, 240, currentPrice) // 4 hours
+	priceChange4h = rolling4hPriceChange(symbol, time.Now(), currentPrice, priceChange4h, priceHistories...)
 
 	// Get OI data
 	oiData, oiOK := fetchOIDataOrZero(symbol)
@@ -493,6 +537,9 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		CurrentEMA20:       currentEMA20,
 		CurrentMACD:        currentMACD,
 		CurrentRSI7:        currentRSI7,
+		ClosedMACD:         closedMACD,
+		ClosedRSI7:         closedRSI7,
+		ClosedTimeframe:    closedTF,
 		OpenInterest:       oiData,
 		OpenInterestOK:     oiOK,
 		FundingRate:        fundingRate,
@@ -503,6 +550,33 @@ func getWithTimeframes(symbol string, timeframes []string, primaryTimeframe stri
 		SampledAt:          sampledAt,
 		StaleTimeframes:    StaleTimeframes(symbol, timeframeData, sampledAt),
 	}, nil
+}
+
+// candleClosedAt is the settlement check shared by live-price patching and
+// closed-only indicators: a candle closes at its open time + timeframe duration.
+func candleClosedAt(openTime int64, duration time.Duration, observedAt time.Time) bool {
+	return !time.UnixMilli(openTime).Add(duration).After(observedAt)
+}
+
+// calculateClosedIndicators pins the existing settlement check to the
+// request's ObservedAt: later fetches must not promote a forming candle to closed.
+func calculateClosedIndicators(klines []Kline, timeframe string, observedAt time.Time) (macd, rsi7 float64, closedTF string) {
+	dur := TimeframeDuration(timeframe)
+	if dur <= 0 || observedAt.IsZero() {
+		return 0, 0, ""
+	}
+	cut := len(klines)
+	for cut > 0 && !candleClosedAt(klines[cut-1].OpenTime, dur, observedAt) {
+		cut--
+	}
+	if cut < 26 {
+		return 0, 0, ""
+	}
+	macd, rsi7 = calculateMACD(klines[:cut]), calculateRSI(klines[:cut], 7)
+	if math.IsNaN(macd) || math.IsInf(macd, 0) || math.IsNaN(rsi7) || math.IsInf(rsi7, 0) {
+		return 0, 0, ""
+	}
+	return macd, rsi7, timeframe
 }
 
 // TimeframeDuration returns the bar duration of a supported timeframe label,
@@ -556,7 +630,7 @@ func applyLivePrice(bar *KlineBar, tf string, livePrice float64) bool {
 	if dur <= 0 || bar == nil || bar.Close <= 0 || livePrice <= 0 {
 		return false
 	}
-	if !time.UnixMilli(bar.Time).Add(dur).After(time.Now()) {
+	if candleClosedAt(bar.Time, dur, time.Now()) {
 		return false // candle already closed
 	}
 	if livePrice > bar.Close*1.8 || livePrice < bar.Close*0.2 {
@@ -594,6 +668,52 @@ func refreshFormingCandle(tf string, sd *TimeframeSeriesData, livePrice float64)
 	return 0, false
 }
 
+type priceHistory struct {
+	klines []Kline
+	bar    time.Duration
+}
+
+var priceChangeFallbackLog = struct {
+	sync.Mutex
+	at map[string]time.Time
+}{at: map[string]time.Time{}}
+
+// rolling4hPriceChange uses the finest available series that reaches NOW-4h.
+// Only closes at/before the target qualify, with at most one bar of error.
+// Full fetched histories are used, before any display truncation.
+func rolling4hPriceChange(symbol string, now time.Time, current, fallback float64, histories ...priceHistory) float64 {
+	sort.Slice(histories, func(i, j int) bool { return histories[i].bar < histories[j].bar })
+	target := now.Add(-4 * time.Hour)
+	if finitePositive(current) {
+		for _, history := range histories {
+			if history.bar <= 0 || history.bar > time.Hour {
+				continue
+			}
+			var ref Kline
+			for _, k := range history.klines {
+				if k.CloseTime > 0 && k.CloseTime <= target.UnixMilli() && k.CloseTime > ref.CloseTime && finitePositive(k.Close) {
+					ref = k
+				}
+			}
+			if ref.CloseTime > 0 && target.Sub(time.UnixMilli(ref.CloseTime)) <= history.bar {
+				return (current/ref.Close - 1) * 100
+			}
+		}
+	}
+	symbol = Normalize(symbol)
+	priceChangeFallbackLog.Lock()
+	last, logged := priceChangeFallbackLog.at[symbol]
+	shouldLog := !logged || now.Sub(last) >= time.Hour
+	if shouldLog {
+		priceChangeFallbackLog.at[symbol] = now
+	}
+	priceChangeFallbackLog.Unlock()
+	if shouldLog {
+		logger.Infof("⚠️ %s rolling 4h price history unavailable within one bar; using legacy change %.4f%%", symbol, fallback)
+	}
+	return fallback
+}
+
 // fetchOIDataOrZero wraps getOpenInterestData with the failure convention:
 // OpenInterest stays non-nil (zero value) so readers never nil-panic, but the
 // ok flag — surfaced as Data.OpenInterestOK — tells level-gating consumers
@@ -609,10 +729,8 @@ func fetchOIDataOrZero(symbol string) (*OIData, bool) {
 	return oiData, true
 }
 
-// oiDataTTL: the same symbol is read once per trader per decision cycle (and
-// again by the candidate pool); the hourly OI history only gains a bucket per
-// hour, so a short cache removes the duplicate /futures/data requests
-// (separate 1000 req / 5 min / IP limit) without serving a stale cycle.
+// oiDataTTL shares the real-time observation and hourly average across callers
+// in one decision cycle. Cache hits never create new risk-ring observations.
 const oiDataTTL = 3 * time.Minute
 
 type oiDataEntry struct {
@@ -624,8 +742,9 @@ var (
 	oiDataMu    sync.Mutex
 	oiDataCache = map[string]oiDataEntry{}
 	// oiNow / oiFetch are test seams.
-	oiNow   = time.Now
-	oiFetch = fetchOIData
+	oiNow     = time.Now
+	oiFetch   = fetchOIData
+	oiGetJSON = binanceGetJSON
 )
 
 // getOpenInterestData retrieves OI data (cached oiDataTTL; failures are never cached).
@@ -648,19 +767,19 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 	}
 	cp := *d
 	oiDataCache[symbol] = oiDataEntry{data: &cp, at: oiNow()}
-	recordOISampleLocked(symbol, oiNow(), cp.Latest)
 	oiDataMu.Unlock()
 	return d, nil
 }
 
 func fetchOIData(symbol string) (*OIData, error) {
+	symbol = Normalize(symbol)
 	// Real average from 30 hourly history points — the previous placeholder
 	// (Average = Latest × 0.999) made oi_vs_avg_pct a constant ~0.1001% for
 	// every symbol, which the model could read as genuine crowding data.
 	var hist []struct {
 		SumOpenInterest string `json:"sumOpenInterest"`
 	}
-	if err := binanceGetJSON("/futures/data/openInterestHist?symbol="+symbol+"&period=1h&limit=30", &hist); err != nil {
+	if err := oiGetJSON("/futures/data/openInterestHist?symbol="+symbol+"&period=1h&limit=30", &hist); err != nil {
 		return nil, err
 	}
 	if len(hist) == 0 {
@@ -674,6 +793,26 @@ func fetchOIData(symbol string) (*OIData, error) {
 		sum += v
 	}
 	avg := sum / float64(len(hist))
+
+	// OIData.Latest is the latest known contract/base-unit OI level: prefer
+	// real-time OI, falling back to the last hourly observation on failure.
+	// OIData.Average is the mean contract/base-unit OI of the hourly history;
+	// it is deliberately NOT an average of the short-window risk ring.
+	// The weight-1 IP endpoint avoids spending another /futures/data request.
+	var live struct {
+		OpenInterest string `json:"openInterest"`
+		Symbol       string `json:"symbol"`
+		Time         int64  `json:"time"`
+	}
+	if err := oiGetJSON("/fapi/v1/openInterest?symbol="+symbol, &live); err == nil && live.Symbol == symbol && live.Time > 0 {
+		v, parseErr := strconv.ParseFloat(live.OpenInterest, 64)
+		if parseErr == nil && v >= 0 && !math.IsNaN(v) && !math.IsInf(v, 0) {
+			latest = v
+			oiDataMu.Lock()
+			recordOISampleLocked(symbol, time.UnixMilli(live.Time), v)
+			oiDataMu.Unlock()
+		}
+	}
 
 	return &OIData{
 		Latest:  latest,

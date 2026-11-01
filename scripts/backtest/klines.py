@@ -5,6 +5,7 @@ import os
 MIN_MS = 60_000
 ONE_M_LIMIT = 1500
 FIVE_M_LIMIT = 1000
+FIVE_M_MS = 5 * MIN_MS
 
 
 def default_cache_dir(repo_root):
@@ -13,6 +14,11 @@ def default_cache_dir(repo_root):
 
 def floor_min(ms):
     return int(ms) // MIN_MS * MIN_MS
+
+
+def ceil_5m(ms):
+    """向上取整到 5m 边界：1m→5m 拼接的 5m 段起点。"""
+    return -(-int(ms) // FIVE_M_MS) * FIVE_M_MS
 
 
 def cache_paths(cache, symbol, t0_ms):
@@ -33,7 +39,12 @@ def _read(path):
 
 
 def load_bars(cache, symbol, t0_ms):
-    """返回 (bars, n_1m):1m 之后追加 5m 扩展(仅取晚于最后一根 1m 的 5m);无 1m 缓存返回 None。"""
+    """返回 (bars, n_1m):1m 之后追加 5m 扩展(仅取晚于最后一根 1m 的 5m);无 1m 缓存返回 None。
+
+    拼接必须无缝：5m 段起点不得晚于最后一根 1m 的收盘时刻，否则两段之间存在价格未知的
+    时间空洞（SL 可能在空洞内被触发又收回，回测结果恒偏乐观），此时直接报错，
+    提示重新 fetch（fetch 会用 1m 补满到 5m 边界）。
+    """
     p1, p5 = cache_paths(cache, symbol, t0_ms)
     b1 = _read(p1)
     if b1 is None:
@@ -42,5 +53,10 @@ def load_bars(cache, symbol, t0_ms):
     b5 = _read(p5)
     if b5 and b1:
         last = b1[-1][0]
-        bars += [b for b in b5 if b[0] > last]
+        upcoming = [b for b in b5 if b[0] > last]
+        if upcoming and upcoming[0][0] > last + MIN_MS:
+            raise ValueError(
+                f"K 线拼接空洞: {symbol} t0={t0_ms} 最后一根 1m 收盘于 {last + MIN_MS},"
+                f"而 5m 段从 {upcoming[0][0]} 才开始;请重新运行 fetch 用 1m 补满到 5m 边界后再回测")
+        bars += upcoming
     return bars, len(b1)

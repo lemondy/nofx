@@ -66,7 +66,7 @@ func TestB2DailyBaselineFailureBlocksOpensAndRecovers(t *testing.T) {
 		t.Fatalf("failed durable read published a baseline: shared=%t local=%s/%.2f", published, at.dayStartDay, at.dayStartEquity)
 	}
 	rc := at.config.StrategyConfig.RiskControl
-	if reason := at.dailyLossHaltBlocks(rc, 100); !strings.Contains(reason, "baseline unknown") {
+	if reason := at.dailyLossHaltBlocks(rc, 100); !strings.Contains(reason, "baseline unknown") && !strings.Contains(reason, "DAILY_HALT_UNAVAILABLE") {
 		t.Fatalf("unknown baseline allowed opens: %q", reason)
 	}
 	decisions := []kernel.Decision{

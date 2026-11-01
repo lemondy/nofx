@@ -14,6 +14,7 @@ import (
 
 const (
 	VerifySupported    = "supported"
+	VerifyInSampleOnly = "in_sample_only"
 	VerifyWeak         = "weak"
 	VerifyContradicted = "contradicted"
 	VerifyUnverifiable = "unverifiable"
@@ -28,14 +29,22 @@ const (
 
 // RuleVerification result of replaying one proposed rule over history.
 type RuleVerification struct {
-	Status              string  `json:"status"`
-	Matched             int     `json:"matched"`
-	Wins                int     `json:"wins"`
-	NetPnL              float64 `json:"net_pnl"`
-	BaselineWinRate     float64 `json:"baseline_win_rate"` // 0..1 over the population
-	BaselineNetPerTrade float64 `json:"baseline_net_per_trade"`
-	Population          int     `json:"population"`
-	Reason              string  `json:"reason,omitempty"`
+	Status                         string  `json:"status"`
+	Matched                        int     `json:"matched"`
+	Wins                           int     `json:"wins"`
+	NetPnL                         float64 `json:"net_pnl"`
+	BaselineWinRate                float64 `json:"baseline_win_rate"` // 0..1 over the population
+	BaselineNetPerTrade            float64 `json:"baseline_net_per_trade"`
+	Population                     int     `json:"population"`
+	InSampleMatched                int     `json:"in_sample_matched"`
+	InSampleNetPnL                 float64 `json:"in_sample_net_pnl"`
+	OutOfSampleMatched             int     `json:"out_of_sample_matched"`
+	OutOfSampleNetPnL              float64 `json:"out_of_sample_net_pnl"`
+	InSamplePopulation             int     `json:"in_sample_population"`
+	OutOfSamplePopulation          int     `json:"out_of_sample_population"`
+	InSampleBaselineNetPerTrade    float64 `json:"in_sample_baseline_net_per_trade"`
+	OutOfSampleBaselineNetPerTrade float64 `json:"out_of_sample_baseline_net_per_trade"`
+	Reason                         string  `json:"reason,omitempty"`
 }
 
 // VerificationPopulation keeps closed AI-managed trades exited within the
@@ -47,7 +56,7 @@ func VerificationPopulation(trades []*store.TradeJournalDB, nowMs int64) []*stor
 		if t == nil || t.AIManaged == nil || !*t.AIManaged {
 			continue
 		}
-		if t.ExitTime <= 0 || t.ExitTime < cutoff {
+		if t.ExitTime <= 0 || t.ExitTime < cutoff || t.ExitTime > nowMs {
 			continue
 		}
 		out = append(out, t)
@@ -98,16 +107,21 @@ func journalDecision(t *store.TradeJournalDB) Decision {
 // VerifyHardRule replays a rule's condition over the trader's closed AI
 // trades. trades may be unfiltered (filtered here). equity is the trader's
 // initial balance (0 = unknown, position_value_pct becomes unverifiable).
+// generatedAtMs is the rule generation/creation time. Only later exits are
+// out of sample; an unknown generation time (<= 0) keeps all trades in sample.
+// The existing aggregate fields retain their whole-window meaning. Each
+// sample is compared with its own population's baseline to avoid mixing eras.
 //
 // Claim of a block/warn rule: trades matching the condition do worse.
-//   - supported:    matched >= 3, matched net < 0 and net/trade < baseline net/trade
-//   - contradicted: matched >= 3 but not supported
-//   - weak:         matched < 3
+//   - supported: out-of-sample matches >= 3, net < 0 and net/trade < its baseline
+//   - in_sample_only: only the in-sample history meets those conditions
+//   - contradicted: a sample has >= 3 matches but neither sample supports the rule
+//   - weak:         each sample has < 3 matches
 //   - unverifiable: bad condition, or the field cannot be rebuilt from the journal
 //   - soft:         soft rule, no machine check
 //
 // Net PnL = RealizedPnL - Fee (same caliber as the journal stats).
-func VerifyHardRule(ruleType, conditionJSON string, trades []*store.TradeJournalDB, equity float64, nowMs int64) RuleVerification {
+func VerifyHardRule(ruleType, conditionJSON string, trades []*store.TradeJournalDB, equity float64, nowMs, generatedAtMs int64) RuleVerification {
 	if ruleType == "soft" {
 		return RuleVerification{Status: VerifySoft, Reason: "soft rule: no machine check"}
 	}
@@ -130,14 +144,23 @@ func VerifyHardRule(ruleType, conditionJSON string, trades []*store.TradeJournal
 	res := RuleVerification{Population: len(eval)}
 	var totalNet float64
 	var totalWins int
+	var inSample, outOfSample ruleVerificationSample
 	for _, t := range eval {
 		net := t.RealizedPnL - t.Fee
+		sample := &inSample
+		if generatedAtMs > 0 && t.ExitTime > generatedAtMs {
+			sample = &outOfSample
+		}
+		sample.population++
+		sample.totalNet += net
 		totalNet += net
 		if net > 0 {
 			totalWins++
 		}
 		c := buildDecisionContext(journalDecision(t), equity, t.EntryPrice)
 		if hit, _ := evalCondition(cond, c); hit {
+			sample.matched++
+			sample.netPnL += net
 			res.Matched++
 			res.NetPnL += net
 			if net > 0 {
@@ -147,16 +170,47 @@ func VerifyHardRule(ruleType, conditionJSON string, trades []*store.TradeJournal
 	}
 	res.BaselineWinRate = float64(totalWins) / float64(len(eval))
 	res.BaselineNetPerTrade = totalNet / float64(len(eval))
+	res.InSampleMatched, res.InSampleNetPnL = inSample.matched, inSample.netPnL
+	res.OutOfSampleMatched, res.OutOfSampleNetPnL = outOfSample.matched, outOfSample.netPnL
+	res.InSamplePopulation, res.OutOfSamplePopulation = inSample.population, outOfSample.population
+	res.InSampleBaselineNetPerTrade = inSample.baselineNetPerTrade()
+	res.OutOfSampleBaselineNetPerTrade = outOfSample.baselineNetPerTrade()
 
-	if res.Matched < RuleVerifyMinMatched {
-		res.Status = VerifyWeak
-		return res
-	}
-	perTrade := res.NetPnL / float64(res.Matched)
-	if res.NetPnL < 0 && perTrade < res.BaselineNetPerTrade && !math.IsNaN(perTrade) {
+	switch {
+	case outOfSample.supports():
 		res.Status = VerifySupported
-	} else {
+	case inSample.supports():
+		res.Status = VerifyInSampleOnly
+		res.Reason = "supported by in-sample history only; out-of-sample verification criteria not met"
+		if generatedAtMs <= 0 {
+			res.Reason = "supported by in-sample history only; rule generation time is unknown"
+		}
+	case inSample.matched < RuleVerifyMinMatched && outOfSample.matched < RuleVerifyMinMatched:
+		res.Status = VerifyWeak
+	default:
 		res.Status = VerifyContradicted
 	}
 	return res
+}
+
+type ruleVerificationSample struct {
+	population int
+	matched    int
+	totalNet   float64
+	netPnL     float64
+}
+
+func (s ruleVerificationSample) baselineNetPerTrade() float64 {
+	if s.population == 0 {
+		return 0
+	}
+	return s.totalNet / float64(s.population)
+}
+
+func (s ruleVerificationSample) supports() bool {
+	if s.matched < RuleVerifyMinMatched {
+		return false
+	}
+	perTrade := s.netPnL / float64(s.matched)
+	return s.netPnL < 0 && perTrade < s.baselineNetPerTrade() && !math.IsNaN(perTrade)
 }

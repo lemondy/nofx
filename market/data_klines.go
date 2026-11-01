@@ -186,6 +186,18 @@ func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *Time
 		start = 0
 	}
 
+	// Keep the warm-up history beyond the display window for indicator
+	// consumers (see TimeframeSeriesData.IndicatorKlines).
+	if start > 0 {
+		data.IndicatorKlines = make([]KlineBar, len(klines))
+		for i, k := range klines {
+			data.IndicatorKlines[i] = KlineBar{
+				Time: k.OpenTime, Open: k.Open, High: k.High,
+				Low: k.Low, Close: k.Close, Volume: k.Volume,
+			}
+		}
+	}
+
 	for i := start; i < len(klines); i++ {
 		// Store full OHLCV kline data
 		data.Klines = append(data.Klines, KlineBar{

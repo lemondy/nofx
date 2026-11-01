@@ -1,5 +1,19 @@
 package types
 
+import "errors"
+
+// ErrStopBelowSellBand marks a protective stop whose stop-limit price sits
+// below the exchange's percent-price SELL band (Binance PERCENT_PRICE /
+// PERCENT_PRICE_BY_SIDE), so the exchange would reject the order.
+var ErrStopBelowSellBand = errors.New("stop-limit below the exchange sell price band")
+
+// SellBand is the SELL limit price range the exchange accepts right now.
+type SellBand struct {
+	Floor, Ceiling               float64 // tick-rounded inward; 0 = unbounded on that side
+	DownMultiplier, UpMultiplier float64 // binding multipliers (max down / min up); 0 = no percent filter
+	Ref                          float64 // reference (average or last) price the band was computed from
+}
+
 // SpotStockTrader is the executor contract of the us_stock strategy (Binance
 // spot bStock pairs). It embeds Trader so the shared execution plumbing keeps
 // working; short/leverage/margin-mode methods return explicit errors. Spot has

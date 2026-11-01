@@ -8,16 +8,9 @@ import (
 	"time"
 )
 
-// Loss-streak circuit breaker: a symbol that closed >= N consecutive losing
-// trades within the last 24h is banned from new opens for 24h. Stateless by
-// design — the ban is recomputed from the persistent closed-trade record on
-// every open decision, so it survives restarts and never needs bookkeeping:
-//   - counting starts at the newest closed trade and stops at the first
-//     profitable (or break-even) trade — "连续亏损";
-//   - only trades that closed within the window count — "24h内";
-//   - the ban expires 24h after the THIRD loss of the streak (the moment the
-//     rule fired) — "接下来24h不准再开仓". Losses #4, #5… during the ban do
-//     not refresh it.
+// review 2026-10-28 #10: evaluate the latest N consecutive losses within
+// 24h, and ban for 24h from the newest (triggering) loss. Keep enough history
+// to retain that verdict throughout the ban even as older losses age out.
 const (
 	lossStreakWindow   = 24 * time.Hour
 	lossStreakBanFor   = 24 * time.Hour
@@ -25,7 +18,7 @@ const (
 )
 
 // lossStreakVerdict evaluates the ban from the symbol's closed positions
-// (newest first, already window-filtered by the caller). maxLosses <= 0
+// (newest first, including the full window plus ban duration). maxLosses <= 0
 // disables. Pure so the streak/ban arithmetic is testable without a DB.
 func lossStreakVerdict(positions []store.TraderPosition, maxLosses int, nowMs int64) (bool, string) {
 	streak, bannedUntil := lossStreakState(positions, maxLosses, nowMs)
@@ -71,10 +64,12 @@ func lossStreakState(positions []store.TraderPosition, maxLosses int, nowMs int6
 	if streak < maxLosses {
 		return streak, time.Time{}
 	}
-	// The streak fired when its Nth loss closed; the ban runs 24h from that
-	// moment. positions[0] is the newest loss, positions[maxLosses-1] is the
-	// Nth (triggering) one.
-	bannedUntil := time.UnixMilli(positions[maxLosses-1].ExitTime).Add(lossStreakBanFor)
+	// review 2026-10-28 #10: positions are newest first; the latest loss
+	// triggers the ban, while the Nth record bounds the formation window.
+	if positions[0].ExitTime-positions[maxLosses-1].ExitTime > lossStreakWindow.Milliseconds() {
+		return streak, time.Time{}
+	}
+	bannedUntil := time.UnixMilli(positions[0].ExitTime).Add(lossStreakBanFor)
 	if nowMs >= bannedUntil.UnixMilli() {
 		return streak, time.Time{}
 	}
@@ -90,7 +85,7 @@ func (at *AutoTrader) lossStreakBannedMap(maxLosses int) map[string]time.Time {
 	if at.store == nil || maxLosses <= 0 {
 		return nil
 	}
-	sinceMs := time.Now().Add(-lossStreakWindow).UnixMilli()
+	sinceMs := time.Now().Add(-(lossStreakWindow + lossStreakBanFor)).UnixMilli()
 	positions, err := at.store.Position().GetClosedPositionsSince(at.id, sinceMs)
 	if err != nil {
 		logger.Infof("⚠️ [%s] loss-streak ban map: query failed (fail-open): %v", at.name, err)
@@ -126,15 +121,19 @@ func (at *AutoTrader) lossStreakBannedMap(maxLosses int) map[string]time.Time {
 }
 
 // lossStreakBlocks queries this trader's closed positions in the window and
-// evaluates the ban for one symbol. Fail-open on any store error.
+// evaluates the ban for one symbol. Unavailable history blocks new risk.
 func (at *AutoTrader) lossStreakBlocks(symbol string, maxLosses int) (bool, string) {
-	if at.store == nil {
+	if maxLosses <= 0 {
 		return false, ""
 	}
-	sinceMs := time.Now().Add(-lossStreakWindow).UnixMilli()
+	// review 2026-10-28 #12: an unreadable history cannot verify admission.
+	if at.store == nil {
+		return true, "LOSS_HISTORY_UNAVAILABLE: position store unavailable"
+	}
+	sinceMs := time.Now().Add(-(lossStreakWindow + lossStreakBanFor)).UnixMilli()
 	positions, err := at.store.Position().GetClosedPositionsSince(at.id, sinceMs)
 	if err != nil {
-		return false, ""
+		return true, "LOSS_HISTORY_UNAVAILABLE: " + err.Error()
 	}
 	normalized := market.Normalize(symbol)
 	filtered := make([]store.TraderPosition, 0, len(positions))

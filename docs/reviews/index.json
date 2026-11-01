@@ -1,0 +1,958 @@
+{
+  "version": 1,
+  "updated_at": "2026-10-31",
+  "repo_url": "https://github.com/lemondy/nofx",
+  "reviews": [
+    {
+      "id": "2026-10-28-quant-system",
+      "date": "2026-10-28",
+      "title": "量化系统全面审查",
+      "title_en": "Comprehensive quant system review",
+      "kind": "quant",
+      "scope": [
+        "行情与指标",
+        "候选排序",
+        "LLM 契约",
+        "执行保护",
+        "组合风控",
+        "回测研究",
+        "因子挖掘",
+        "前端统计"
+      ],
+      "baseline_commit": "",
+      "summary": "六路只读审查并行、主审逐条核对，主报告列出编号 #1–#28 的问题（P0 2 条、P1 26 条），P2 只做摘要不计数。#1–#13 由 PR #36、#14–#16 由 PR #37、#17–#24 由 PR #38、研究类 #25–#28 及各分报告 P2 由 PR #39 修复。之后对另一组 28 条疑似问题做了逐项核实（verification/，22 确认、5 否定、1 无法判定，与 2dbefb42 提交摘要的 21/6/1 略有出入），确认项由 PR #40、#43、#44、#47 继续修复。",
+      "findings": {
+        "total": 28,
+        "high": 28,
+        "medium": null,
+        "low": null,
+        "info": null,
+        "scheme": "P0×2、P1×26（编号 #1–#28）；P2 仅摘要未编号"
+      },
+      "resolution": {
+        "status": "fixed",
+        "fixed": 28,
+        "rejected": 0,
+        "open": 0
+      },
+      "commits": [
+        "f21ed7c5",
+        "a71880c1",
+        "a3aab487",
+        "3643f7f5",
+        "2dd91b5e",
+        "f2ed5097",
+        "f54e0047",
+        "142b19ff",
+        "6ae79806",
+        "2dbefb42",
+        "dfd748ec",
+        "36c86136",
+        "6f1175e6",
+        "0cb9dcec",
+        "bd3f508d"
+      ],
+      "prs": [
+        36,
+        37,
+        38,
+        39,
+        40,
+        43,
+        44,
+        47
+      ],
+      "docs": [
+        {
+          "path": "reviews/2026-10-28/quant-system-review.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "reviews/2026-10-28/raw/01-data-ranking.md",
+          "title": "数据、指标与排序",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-28/raw/02-llm-prompt.md",
+          "title": "LLM 提示词与解析",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-28/raw/03-entry-exit-execution.md",
+          "title": "入场、出场与执行",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-28/raw/04-risk.md",
+          "title": "风险控制",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-28/raw/05-backtest-factor-mining.md",
+          "title": "回测、因子与晋升",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-28/raw/06-frontend.md",
+          "title": "前端与 API 口径",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-28/verification/01-execution-risk.md",
+          "title": "执行与风控核实",
+          "role": "verification"
+        },
+        {
+          "path": "reviews/2026-10-28/verification/02-data-llm.md",
+          "title": "数据与 LLM 核实",
+          "role": "verification"
+        },
+        {
+          "path": "reviews/2026-10-28/verification/03-research-stats.md",
+          "title": "研究与统计核实",
+          "role": "verification"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-24-candidates",
+      "date": "2026-10-24",
+      "title": "候选标的筛选链路审查",
+      "title_en": "Candidate selection pipeline review",
+      "kind": "candidates",
+      "scope": [
+        "加密候选",
+        "美股候选",
+        "榜单缓存",
+        "符号规范",
+        "数据新鲜度",
+        "持仓管理授权",
+        "执行前复核"
+      ],
+      "baseline_commit": "d51e5fbc",
+      "summary": "加密报告确认 12 项（3 HIGH、9 MEDIUM），美股报告确认 7 项（3 HIGH、4 MEDIUM），合计 19 项。C1、C2 和美股修复记录逐项确认并关闭全部问题，集成提交随 PR #13 合并。资金总览实现核对报告不属于本轮代码审查，未收录。",
+      "findings": {
+        "total": 19,
+        "high": 6,
+        "medium": 13,
+        "low": 0,
+        "info": 0,
+        "scheme": "HIGH/MEDIUM"
+      },
+      "resolution": {
+        "status": "fixed",
+        "fixed": 19,
+        "rejected": 0,
+        "open": 0
+      },
+      "commits": [
+        "1abd4164",
+        "4b5f77ba",
+        "5fcbd3fd",
+        "b0b778f3"
+      ],
+      "prs": [
+        13
+      ],
+      "docs": [
+        {
+          "path": "reviews/2026-10-24/crypto-candidates.md",
+          "title": "加密候选报告",
+          "role": "report"
+        },
+        {
+          "path": "reviews/2026-10-24/us-candidates.md",
+          "title": "美股候选报告",
+          "role": "report"
+        },
+        {
+          "path": "reviews/2026-10-24/crypto-candidates-c1-fixes.md",
+          "title": "加密候选 C1 修复",
+          "role": "fixes"
+        },
+        {
+          "path": "reviews/2026-10-24/crypto-candidates-c2-fixes.md",
+          "title": "加密候选 C2 修复",
+          "role": "fixes"
+        },
+        {
+          "path": "reviews/2026-10-24/us-candidates-fixes.md",
+          "title": "美股候选修复",
+          "role": "fixes"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-20-four-areas",
+      "date": "2026-10-20",
+      "title": "四方向全项目审查",
+      "title_en": "Four-area project review",
+      "kind": "fullstack",
+      "scope": [
+        "模拟执行",
+        "合约执行",
+        "美股执行",
+        "决策与风控",
+        "行情新鲜度"
+      ],
+      "baseline_commit": "c7045ac4",
+      "summary": "四份报告分别确认 5、7、12、8 项，合计 32 项；CRITICAL 与 HIGH 合并为 high 25，medium 7。PR #2 的对应批次修复了模拟撮合、未知提交、保护恢复、组合风险、美股对账和陈旧行情等问题。b06947b4 明确说明美股报告第 5 项仍仅保留已成交实盘 pending 并告警，等待下次实盘启动补记和保护，故记 31 条已修、1 条未完整处理。",
+      "findings": {
+        "total": 32,
+        "high": 25,
+        "medium": 7,
+        "low": 0,
+        "info": 0,
+        "scheme": "CRITICAL/HIGH/MEDIUM"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 31,
+        "rejected": 0,
+        "open": 1
+      },
+      "commits": [
+        "8d026da7",
+        "e9cbc645",
+        "1bd95ff8",
+        "5a6577ff",
+        "09ddb124",
+        "b06947b4",
+        "404e5eeb",
+        "4bc66a24"
+      ],
+      "prs": [
+        2
+      ],
+      "docs": [
+        {
+          "path": "reviews/2026-10-20/area1-report.md",
+          "title": "模拟盘撮合与账本",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-20/area2-report.md",
+          "title": "合约执行与保护恢复",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-20/area3-report.md",
+          "title": "美股执行与对账",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-20/area4-report.md",
+          "title": "决策、风控与行情",
+          "role": "raw"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-16-six-areas",
+      "date": "2026-10-16",
+      "title": "交易系统六方向审查",
+      "title_en": "Six-area trading system review",
+      "kind": "fullstack",
+      "scope": [
+        "合约执行",
+        "决策引擎",
+        "美股策略",
+        "行情数据",
+        "存储与安全",
+        "前端展示"
+      ],
+      "baseline_commit": "744da725",
+      "summary": "六份原始报告按 CONFIRMED 标记合计 55 条：归一后 high 23、medium 22、low 10；另 11 条 PLAUSIBLE 仍属待核实，不计入成立数，也不计 rejected。发现集中于未知提交、手动仓归属、保护延迟、决策授权、数据和展示口径。已有明确对应的首批及第二批修复，但 10 月 20 日复审仍确认残留，缺少对全部 55 条的最终关闭台账，修复数量保留未知。",
+      "findings": {
+        "total": 55,
+        "high": 23,
+        "medium": 22,
+        "low": 10,
+        "info": 0,
+        "scheme": "CRITICAL/HIGH/MEDIUM/LOW（仅 CONFIRMED）"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": null,
+        "rejected": 0,
+        "open": null
+      },
+      "commits": [
+        "a1371d79",
+        "2c728150",
+        "1be47481",
+        "14173a58",
+        "8c271d34"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "reviews/2026-10-16/A-report.md",
+          "title": "A 合约执行与风控",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-16/B-report.md",
+          "title": "B 期货决策引擎",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-16/C-report.md",
+          "title": "C 美股策略",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-16/D-report.md",
+          "title": "D 行情数据",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-16/E-report.md",
+          "title": "E 存储、安全与生命周期",
+          "role": "raw"
+        },
+        {
+          "path": "reviews/2026-10-16/F-report.md",
+          "title": "F 前端展示",
+          "role": "raw"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-08-param-iteration",
+      "date": "2026-10-08",
+      "title": "参数自动化迭代机制审查",
+      "title_en": "Parameter iteration mechanism review",
+      "kind": "param",
+      "scope": [
+        "健康门",
+        "回测调参",
+        "做空调权",
+        "影子评估",
+        "入场质量",
+        "版本效果",
+        "复盘规则"
+      ],
+      "baseline_commit": "",
+      "summary": "按 A–K 的 11 个字母编号计数，D/E 分别计为两项；最小样本要求是 A 的补充，不另加计。A、C–K 共 10 项已于 10 月 8–9 日修复，涵盖健康度、影子口径、精确归属、截面 IC、独立交易样本和规则实测。B 的 AI/手动 PF 混算按用户决定维持现状，作为未改项保留，不将其当作复核否定。",
+      "findings": {
+        "total": 11,
+        "high": null,
+        "medium": null,
+        "low": null,
+        "info": null,
+        "scheme": "字母编号 A–K"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 10,
+        "rejected": 0,
+        "open": 1
+      },
+      "commits": [
+        "f8f9fc8c",
+        "5affe864",
+        "aee38665",
+        "81723603",
+        "73efeb89",
+        "981f8998",
+        "bfb23aef",
+        "d2a4cbc2",
+        "3a3741e3",
+        "7e3fa3c3",
+        "8d08e508",
+        "3a30a506"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/PARAM_ITERATION_REVIEW_2026-10-08.md",
+          "title": "主报告",
+          "role": "report"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-07-fullstack-live",
+      "date": "2026-10-07",
+      "title": "全栈深度审查：实盘数据驱动",
+      "title_en": "Live-data-driven full-stack review",
+      "kind": "fullstack",
+      "scope": [
+        "实盘统计",
+        "盈亏记账",
+        "AI 归属",
+        "目标空间",
+        "参数校验",
+        "前端风控",
+        "行情轮询"
+      ],
+      "baseline_commit": "e364d7ec",
+      "summary": "按第 0 节主表及第 4、5 节 P3 清单计 14 条成立发现：3 项 P1、4 项 P2、7 项 P3；S1 出场参数导致亏损的推断被同日回放证伪，另计 rejected=1。同日修复表明确关闭 9 条代码或展示问题；S2 仅增加第一障碍证据，历史数据校正工具尚未执行，配色、组合效果提示等继续保留。挂单秒撤事故诊断针对 74a5daae 的上一轮修复，不属于本轮配套附件。",
+      "findings": {
+        "total": 14,
+        "high": 3,
+        "medium": 4,
+        "low": 7,
+        "info": 0,
+        "scheme": "P1/P2/P3（S1 已证伪）"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 9,
+        "rejected": 1,
+        "open": 5
+      },
+      "commits": [
+        "8e9f7a75",
+        "48978d6f",
+        "74396edb",
+        "23e7dbe3",
+        "f6252526",
+        "f911fd52"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/FULLSTACK_REVIEW_2026-10-07.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "architecture/s1-exit-replay-2026-10-07/README.md",
+          "title": "出场参数回放",
+          "role": "evidence"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-06-round5",
+      "date": "2026-10-06",
+      "title": "全局深度审查第五轮",
+      "title_en": "Fifth global deep review",
+      "kind": "fullstack",
+      "scope": [
+        "内核信号",
+        "提示词契约",
+        "执行风控",
+        "扫描回测",
+        "交易所适配",
+        "存储与安全",
+        "前端配置"
+      ],
+      "baseline_commit": "abba5978",
+      "summary": "以独立复核后的结论计数：原 P0 1 条、P2 中成立的 6 条和 P3 4 条，共 11 条；原 P2-3/4/8/9/10 被否定或降为非缺陷事项，计 rejected=5。74a5daae、8583e59a、6cc2d726 及 e364d7ec 先后修复原问题和复核引出的回归。原 P3-2 的历史 OI/Funding 回放限制仅补充说明并保留发布锁，未实现口径一致，故记 10 条已修、1 条保留。",
+      "findings": {
+        "total": 11,
+        "high": 1,
+        "medium": 6,
+        "low": 4,
+        "info": 0,
+        "scheme": "P0/P2/P3（独立复核后）"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 10,
+        "rejected": 5,
+        "open": 1
+      },
+      "commits": [
+        "113bbb39",
+        "e67685b0",
+        "74a5daae",
+        "144bb209",
+        "8583e59a",
+        "6cc2d726",
+        "77f3838a",
+        "e364d7ec"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/CODE_REVIEW_2026-10-06.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "architecture/CODE_REVIEW_2026-10-06_RECHECK.md",
+          "title": "独立复核",
+          "role": "recheck"
+        },
+        {
+          "path": "architecture/CODE_REVIEW_2026-10-06_FIX_RECHECK.md",
+          "title": "修复后复核",
+          "role": "recheck"
+        },
+        {
+          "path": "architecture/CODE_REVIEW_2026-10-07_RECHECK.md",
+          "title": "次日再次复核",
+          "role": "recheck"
+        },
+        {
+          "path": "architecture/recheck-2026-10-07-77f3838a/README.md",
+          "title": "再次复核证据",
+          "role": "recheck"
+        },
+        {
+          "path": "architecture/review-2026-10-06/evidence/README.md",
+          "title": "独立复核证据",
+          "role": "evidence"
+        },
+        {
+          "path": "architecture/review-2026-10-06/fix-verification/README.md",
+          "title": "修复验证证据",
+          "role": "evidence"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-05-quant",
+      "date": "2026-10-05",
+      "title": "量化策略、执行与风控深度审查",
+      "title_en": "Quant strategy, execution and risk review",
+      "kind": "quant",
+      "scope": [
+        "候选筛选",
+        "入场计划",
+        "止盈止损",
+        "保护恢复",
+        "账户风控",
+        "回测与调参",
+        "复盘规则"
+      ],
+      "baseline_commit": "4cf16c40",
+      "summary": "报告确认 F01–F16 共 16 项问题：8 项 P1、8 项 P2，覆盖不利滑点、禁开规则、保护契约、结构价位及研究发布。配套记录逐项给出修复或阻断自动发布的安全缓解，代码与记录一并进入 abba5978。下一轮发现的空头数量符号回归由 74a5daae 修复；真实订单回放与策略收益验证仍属后续研究。",
+      "findings": {
+        "total": 16,
+        "high": 8,
+        "medium": 8,
+        "low": 0,
+        "info": 0,
+        "scheme": "P1/P2"
+      },
+      "resolution": {
+        "status": "fixed",
+        "fixed": 16,
+        "rejected": 0,
+        "open": 0
+      },
+      "commits": [
+        "abba5978",
+        "74a5daae"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/QUANT_REVIEW_2026-10-05.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "architecture/QUANT_FIXES_2026-10-05.md",
+          "title": "修复记录",
+          "role": "fixes"
+        },
+        {
+          "path": "architecture/review-2026-10-05/evidence/README.md",
+          "title": "复现证据",
+          "role": "evidence"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-04-module",
+      "date": "2026-10-04",
+      "title": "全模块深度审查",
+      "title_en": "Full-module deep review",
+      "kind": "module",
+      "scope": [
+        "行情与候选",
+        "内核决策",
+        "执行风控",
+        "存储状态",
+        "API 安全",
+        "前端与基础设施"
+      ],
+      "baseline_commit": "fce262ff",
+      "summary": "第 2.1 节编号台账列出 44 条：5 项 P0、9 项 P1、24 项 P2、6 项 P3；基线还包含未提交的并行重构。台账中 37 条已有完整修复，后续 a70565a8 关闭 Gate/KuCoin 与 Aster 的两项残留，21cfccfa 修复数量型 TP 重试变全平，累计 40 条。其余 4 条 P3 按报告有意保留，第 2.3 节的附加改进待办未重复加计；数据计算说明和筛选核对包作为配套证据收录。",
+      "findings": {
+        "total": 44,
+        "high": 14,
+        "medium": 24,
+        "low": 6,
+        "info": 0,
+        "scheme": "P0–P3"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 40,
+        "rejected": 0,
+        "open": 4
+      },
+      "commits": [
+        "357eb802",
+        "d7b5c200",
+        "0a6dc638",
+        "16351d79",
+        "3cc92cc4",
+        "02659c49",
+        "6edb7f45",
+        "379cde7d",
+        "549aa6d3",
+        "c761610f",
+        "a70565a8",
+        "11ee538c",
+        "6817bf8d",
+        "4cf16c40",
+        "21cfccfa"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/MODULE_REVIEW_2026-10-04.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "architecture/DATA_COMPUTATION_2026-10-04.md",
+          "title": "数据计算说明",
+          "role": "evidence"
+        },
+        {
+          "path": "_review-attachment/README.md",
+          "title": "筛选核对包",
+          "role": "evidence"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-03-fullstack",
+      "date": "2026-10-03",
+      "title": "全功能深度复审",
+      "title_en": "Full-feature deep re-review",
+      "kind": "fullstack",
+      "scope": [
+        "执行保护",
+        "停机恢复",
+        "账户风险",
+        "网格账本",
+        "统计归属",
+        "策略编辑器",
+        "数据库升级",
+        "外部安全"
+      ],
+      "baseline_commit": "e68ed1fd",
+      "summary": "报告明确确认 20 项问题：12 项 P1、8 项 P2，并以隔离 Go 与真实 React 组件场景复现主要缺口。配套修复记录对 R01–R20 均列出修复或安全缓解，原复现场景转绿。R18 通过禁止发布无法重放验证的评分中心变化缓解，R11 共享锁仍限于同进程、同用户和交易所配置。",
+      "findings": {
+        "total": 20,
+        "high": 12,
+        "medium": 8,
+        "low": 0,
+        "info": 0,
+        "scheme": "P1/P2"
+      },
+      "resolution": {
+        "status": "fixed",
+        "fixed": 20,
+        "rejected": 0,
+        "open": 0
+      },
+      "commits": [
+        "6edb7f45"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/FULLSTACK_REVIEW_2026-10-03.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "architecture/FULLSTACK_FIXES_2026-10-03.md",
+          "title": "修复记录",
+          "role": "fixes"
+        },
+        {
+          "path": "architecture/review-2026-10-03/evidence/README.md",
+          "title": "复现证据",
+          "role": "evidence"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-01-fullstack",
+      "date": "2026-10-01",
+      "title": "前后端深度审查",
+      "title_en": "Frontend and backend deep review",
+      "kind": "fullstack",
+      "scope": [
+        "候选与行情",
+        "AI 决策",
+        "执行风控",
+        "保护与恢复",
+        "网格策略",
+        "API 安全",
+        "参数验证",
+        "前端交互"
+      ],
+      "baseline_commit": "8bff6ef1",
+      "summary": "优先级表及 F01–F21 共列出 21 项问题，其中 13 项 P1、8 项 P2，重点是准入、成交保护、恢复和前端配置一致性。三批明确对应本轮的提交实施了修复；10 月 3 日复验仍指出保护核验、网格、共享风险和编辑器等残留。缺少针对原 21 项的最终逐项关闭汇总，修复数量保留未知。",
+      "findings": {
+        "total": 21,
+        "high": 13,
+        "medium": 8,
+        "low": 0,
+        "info": 0,
+        "scheme": "P1/P2"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": null,
+        "rejected": 0,
+        "open": null
+      },
+      "commits": [
+        "bade35d0",
+        "9415ea89",
+        "28643f8e",
+        "f3c6f8cb"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/FULLSTACK_REVIEW_2026-10-01.md",
+          "title": "主报告",
+          "role": "report"
+        }
+      ]
+    },
+    {
+      "id": "2026-09-30-fullstack-fixes",
+      "date": "2026-09-30",
+      "title": "全栈评审问题修复",
+      "title_en": "Full-stack review remediation",
+      "kind": "fullstack",
+      "scope": [
+        "账号安全",
+        "交易生命周期",
+        "订单与精度",
+        "策略配置",
+        "存储升级",
+        "行情接口",
+        "前端交互",
+        "Telegram"
+      ],
+      "baseline_commit": "",
+      "summary": "这是跨账号、安全、交易、存储和前端的修复记录，未标明对应的独立审查报告；内容也不对应 9 月 26 日执行链的 R1–R11，因此单独收录。按“已实施修复”表的 16 个模块条目计数，原文没有严重度分级。记录称修复及相关检查已完成，真实交易所和 PostgreSQL 环境验收仍有边界。",
+      "findings": {
+        "total": 16,
+        "high": null,
+        "medium": null,
+        "low": null,
+        "info": null,
+        "scheme": "未分级（按模块修复条目）"
+      },
+      "resolution": {
+        "status": "fixed",
+        "fixed": 16,
+        "rejected": 0,
+        "open": 0
+      },
+      "commits": [
+        "cd6a6df4"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/REVIEW_FIXES_2026-09-30.md",
+          "title": "修复记录",
+          "role": "fixes"
+        }
+      ]
+    },
+    {
+      "id": "2026-09-26-execution",
+      "date": "2026-09-26",
+      "title": "执行链复审",
+      "title_en": "Execution lifecycle re-review",
+      "kind": "execution",
+      "scope": [
+        "成交确认",
+        "保护单",
+        "撤单与恢复",
+        "托管归属",
+        "风险预留",
+        "行情契约"
+      ],
+      "baseline_commit": "5e0792e5",
+      "summary": "报告按 R1–R11 列出 11 个问题；R8 同时包含 P2 重复计数和 P1 跨周期漏算，整条按较高级别归为 high。896f9300 明确对应 R1–R11，修复数量、成交价、保护去重、撤单、归属和风险预留，27faea52 又补修首次见仓的归属清理残留。该批提交仍明确保留 R10，后续审查也发现恢复和保护链路残留，无法据提交标题给出完整关闭数量。",
+      "findings": {
+        "total": 11,
+        "high": 10,
+        "medium": 1,
+        "low": 0,
+        "info": 0,
+        "scheme": "P1/P2（R8 含两个级别）"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": null,
+        "rejected": 0,
+        "open": null
+      },
+      "commits": [
+        "935c8280",
+        "896f9300",
+        "27faea52"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/EXECUTION_REVIEW_2026-09-26.md",
+          "title": "主报告",
+          "role": "report"
+        }
+      ]
+    },
+    {
+      "id": "2026-09-22-quant",
+      "date": "2026-09-22",
+      "title": "量化方案评审",
+      "title_en": "Quantitative design review",
+      "kind": "quant",
+      "scope": [
+        "候选筛选",
+        "开仓价格",
+        "止盈止损",
+        "账户风控",
+        "参数迭代"
+      ],
+      "baseline_commit": "4fdc6e01",
+      "summary": "五个子系统汇总表列出 P0 1 项、P1 13 项、P2 11 项、P3 5 项，共 30 项。9 月 23 日两批落地记录覆盖权益口径、市价例外、账户风险、候选池和回放基建等；出场摩擦仍待决策，部分条目仅提供开关、观测或阶段性改进。原汇总与组合修复条目不能逐项一一对应，已修和未修数量保留未知。",
+      "findings": {
+        "total": 30,
+        "high": 14,
+        "medium": 11,
+        "low": 5,
+        "info": 0,
+        "scheme": "P0–P3"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": null,
+        "rejected": 0,
+        "open": null
+      },
+      "commits": [
+        "6e57e9b6",
+        "ebf9f812",
+        "38cb4540",
+        "f7917fab",
+        "824cf5a9",
+        "84279f0d",
+        "23f907ba",
+        "fe62d855",
+        "2d823b8e",
+        "b463a56e",
+        "b353b797",
+        "54ea86f1",
+        "13812acf",
+        "9e9560e6",
+        "20c706e4"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/QUANT_REVIEW_2026-09-22.md",
+          "title": "主报告",
+          "role": "report"
+        }
+      ]
+    },
+    {
+      "id": "2026-09-20-round4",
+      "date": "2026-09-20",
+      "title": "第四轮全量复审",
+      "title_en": "Fourth full code review",
+      "kind": "fullstack",
+      "scope": [
+        "提示词数据",
+        "指标计算",
+        "仓位计算",
+        "风控闸门",
+        "订单与保护",
+        "网页配置"
+      ],
+      "baseline_commit": "f01cb6f8",
+      "summary": "独立统计同一报告第 10 节的 R4-1–R4-29：5 项 P1、10 项 P2、12 项 P3 和 2 项信息记录。全部 P1/P2 已于同日修复，修复表还逐项关闭了 R4-27 的表单与保存语义问题，因此按编号计已修 16 条、保留 13 条。",
+      "findings": {
+        "total": 29,
+        "high": 5,
+        "medium": 10,
+        "low": 12,
+        "info": 2,
+        "scheme": "P1/P2/P3/信息"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 16,
+        "rejected": 0,
+        "open": 13
+      },
+      "commits": [
+        "a3cff4c2",
+        "2c78e277"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/CODE_REVIEW_2026-09-13.md",
+          "title": "第四轮复审（第 10 节）",
+          "role": "report"
+        }
+      ]
+    },
+    {
+      "id": "2026-09-13-code-review",
+      "date": "2026-09-13",
+      "title": "代码审查：提示词数据、风控闸门与止盈止损",
+      "title_en": "Prompt data, risk gates and exit review",
+      "kind": "quant",
+      "scope": [
+        "提示词数据",
+        "风控闸门",
+        "仓位预算",
+        "止盈止损"
+      ],
+      "baseline_commit": "",
+      "summary": "仅统计报告第 1–9 节：第 6 节 7 条发现与第 9 节同日深挖的 6 条缺口，共 13 条，包含 2 条信息记录。11 条代码及维护问题均在同日修复，2 条架构取舍保留记录；第 10 节另列为 9 月 20 日复审。",
+      "findings": {
+        "total": 13,
+        "high": 2,
+        "medium": 5,
+        "low": 4,
+        "info": 2,
+        "scheme": "高/中/低/信息；补充审查 P0–P3"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 11,
+        "rejected": 0,
+        "open": 2
+      },
+      "commits": [
+        "ab8947c6",
+        "a8c4cb79"
+      ],
+      "prs": [],
+      "docs": [
+        {
+          "path": "architecture/CODE_REVIEW_2026-09-13.md",
+          "title": "首轮报告（第 1–9 节）",
+          "role": "report"
+        }
+      ]
+    }
+  ]
+}

@@ -27,7 +27,7 @@ func TestTrendShortQualification(t *testing.T) {
 	now := time.Now().Truncate(time.Hour)
 	down := trendFixture(now, time.Hour, -.1, .7)
 	four := trendFixture(now, 4*time.Hour, -.2, 0)
-	ticker := boardTicker{Symbol: "MONUSDT", QuoteVolume: "20000000", PriceChangePercent: "-3"}
+	ticker := boardTicker{Symbol: "MONUSDT", QuoteVolume: "20000000", PriceChangePercent: "-3", LastPrice: fmt.Sprint(down[len(down)-1].Close), CloseTime: now.UnixMilli()}
 	p, ok := qualifyTrendShort(ticker, down, four)
 	if !ok {
 		t.Fatalf("steady downtrend rejected: %+v", p)
@@ -141,7 +141,7 @@ func TestTrendShortUniverseRankingAndDedupe(t *testing.T) {
 			tickerCalls.Add(1)
 			var tickers []boardTicker
 			for i := 0; i < 70; i++ {
-				ticker := boardTicker{Symbol: fmt.Sprintf("S%02dUSDT", i), QuoteVolume: fmt.Sprint(100_000_000 - i*1_000_000), PriceChangePercent: fmt.Sprint(-3 - float64(i)/10)}
+				ticker := boardTicker{LastPrice: "180", CloseTime: now.UnixMilli(), Symbol: fmt.Sprintf("S%02dUSDT", i), QuoteVolume: fmt.Sprint(100_000_000 - i*1_000_000), PriceChangePercent: fmt.Sprint(-3 - float64(i)/10)}
 				if i == 1 {
 					ticker.QuoteVolume = "15000000"
 					ticker.PriceChangePercent = "-50"
@@ -293,7 +293,8 @@ func TestTrendShortLabelsFundingControlAndMerge(t *testing.T) {
 	if err := labelTrendShadow(base.Add(25 * time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := ReadTrendShortShadow()
+	// Inspect all journal versions to verify the concurrent append survives.
+	rows, err := readAllTrendShortShadow()
 	if err != nil {
 		t.Fatal(err)
 	}

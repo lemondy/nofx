@@ -1,15 +1,18 @@
 package market
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
 func setupOIRisk(t *testing.T) *time.Time {
-	oldNow, oldFetch := oiNow, oiFetch
+	oldNow, oldFetch, oldGet := oiNow, oiFetch, oiGetJSON
 	now := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
 	oiNow = func() time.Time { return now }
 	oiDataMu.Lock()
@@ -18,7 +21,7 @@ func setupOIRisk(t *testing.T) *time.Time {
 	oiPrices = map[string]oiPrice{}
 	oiDataMu.Unlock()
 	t.Cleanup(func() {
-		oiNow, oiFetch = oldNow, oldFetch
+		oiNow, oiFetch, oiGetJSON = oldNow, oldFetch, oldGet
 		oiDataMu.Lock()
 		oiSamples = map[string]*oiRing{}
 		oiDataCache = map[string]oiDataEntry{}
@@ -27,10 +30,30 @@ func setupOIRisk(t *testing.T) *time.Time {
 	})
 	return &now
 }
+
+// fakeOIExchange serves both OI endpoints fetchOIData reads; the real-time
+// observation is stamped with *now as the EXCHANGE time (review 2026-10-28 #20:
+// only exchange observations sample the risk ring).
+func fakeOIExchange(now *time.Time, value *float64) func(string, interface{}) error {
+	return func(path string, out interface{}) error {
+		var body any
+		switch {
+		case strings.HasPrefix(path, "/futures/data/openInterestHist"):
+			body = []map[string]string{{"sumOpenInterest": fmt.Sprint(*value)}}
+		case strings.HasPrefix(path, "/fapi/v1/openInterest"):
+			body = map[string]any{"openInterest": fmt.Sprint(*value), "symbol": path[strings.Index(path, "symbol=")+len("symbol="):], "time": now.UnixMilli()}
+		default:
+			return fmt.Errorf("unexpected path %s", path)
+		}
+		b, _ := json.Marshal(body)
+		return json.Unmarshal(b, out)
+	}
+}
+
 func TestOIRiskSamplingAndMissingHistory(t *testing.T) {
 	now := setupOIRisk(t)
 	value := 100.0
-	oiFetch = func(string) (*OIData, error) { return &OIData{Latest: value}, nil }
+	oiGetJSON = fakeOIExchange(now, &value)
 	if _, ok := CachedOIChange1hPct("XUSDT"); ok {
 		t.Fatal("cold start fabricated history")
 	}
@@ -50,7 +73,7 @@ func TestOIRiskSamplingAndMissingHistory(t *testing.T) {
 	if _, ok := CachedOIChange1hPct("XUSDT"); ok {
 		t.Fatal("stale sample passed")
 	}
-	oiFetch = func(string) (*OIData, error) { return nil, errors.New("offline") }
+	oiGetJSON = func(string, interface{}) error { return errors.New("offline") }
 	if _, err := getOpenInterestData("XUSDT"); err == nil {
 		t.Fatal("failure hidden")
 	}
@@ -193,7 +216,8 @@ func TestOIRiskTargetsNowAndChoosesClosestPriorSample(t *testing.T) {
 
 func TestOIRiskCacheHitDoesNotSampleAndUnknownReference(t *testing.T) {
 	now := setupOIRisk(t)
-	oiFetch = func(string) (*OIData, error) { return &OIData{Latest: 100}, nil }
+	value := 100.0
+	oiGetJSON = fakeOIExchange(now, &value)
 	for i := 0; i < 3; i++ {
 		if _, err := getOpenInterestData("CACHEUSDT"); err != nil {
 			t.Fatal(err)

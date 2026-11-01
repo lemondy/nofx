@@ -183,9 +183,9 @@ func (s *Server) annotateRules(traderID string, rules []*store.TradingRuleDB, no
 
 // verifyRule replays a rule over the trader's closed AI trades of the last
 // 90 days (all of them, not only the reviewed subset — review 2026-10-09 K).
-func (s *Server) verifyRule(userID, traderID, ruleType, condition string) (kernel.RuleVerification, error) {
+func (s *Server) verifyRule(userID, traderID, ruleType, condition string, generatedAtMs int64) (kernel.RuleVerification, error) {
 	if ruleType == "soft" {
-		return kernel.VerifyHardRule(ruleType, condition, nil, 0, 0), nil
+		return kernel.VerifyHardRule(ruleType, condition, nil, 0, 0, generatedAtMs), nil
 	}
 	nowMs := time.Now().UTC().UnixMilli()
 	since := nowMs - int64(kernel.RuleVerifyWindowDays)*24*3600*1000
@@ -197,7 +197,7 @@ func (s *Server) verifyRule(userID, traderID, ruleType, condition string) (kerne
 	if tr, err := s.store.Trader().GetByID(traderID); err == nil && tr != nil {
 		equity = tr.InitialBalance
 	}
-	return kernel.VerifyHardRule(ruleType, condition, trades, equity, nowMs), nil
+	return kernel.VerifyHardRule(ruleType, condition, trades, equity, nowMs, generatedAtMs), nil
 }
 
 // handleRuleReverify POST /api/review/rules/:id/reverify — recompute and store
@@ -217,7 +217,7 @@ func (s *Server) handleRuleReverify(c *gin.Context) {
 		SafeBadRequest(c, "Rule not found")
 		return
 	}
-	v, err := s.verifyRule(c.GetString("user_id"), traderID, rule.RuleType, rule.ConditionJSON)
+	v, err := s.verifyRule(c.GetString("user_id"), traderID, rule.RuleType, rule.ConditionJSON, rule.CreatedAt)
 	if err != nil {
 		SafeInternalError(c, "verify trading rule", err)
 		return
@@ -481,12 +481,13 @@ func (s *Server) handleAIExtractRules(c *gin.Context) {
 		SafeError(c, http.StatusInternalServerError, "Failed to parse AI response: "+err.Error(), err)
 		return
 	}
+	generatedAtMs := time.Now().UTC().UnixMilli()
 
 	// review 2026-10-09 K: code-verify each proposal against ALL closed AI trades
 	// (90d), not the model's free-text claim or the reviewed-only subset.
 	out := make([]proposalView, 0, len(proposals))
 	for _, p := range proposals {
-		v, verr := s.verifyRule(userID, traderID, p.RuleType, p.Condition)
+		v, verr := s.verifyRule(userID, traderID, p.RuleType, p.Condition, generatedAtMs)
 		if verr != nil {
 			v = kernel.RuleVerification{Status: kernel.VerifyUnverifiable, Reason: "verification failed"}
 		}
@@ -536,7 +537,9 @@ func (s *Server) handleAIApplyRules(c *gin.Context) {
 		input.Source = "ai_review"
 		input.VerifiedStats, input.VerifiedAt = "", 0
 		if input.RuleType == "hard" {
-			v, verr := s.verifyRule(c.GetString("user_id"), traderID, input.RuleType, input.Condition)
+			// New proposals have no persisted creation time yet. Treat all
+			// history available at apply time as in sample, conservatively.
+			v, verr := s.verifyRule(c.GetString("user_id"), traderID, input.RuleType, input.Condition, time.Now().UTC().UnixMilli())
 			if verr != nil {
 				rejected = append(rejected, gin.H{"index": i, "reason": "verification failed"})
 				continue

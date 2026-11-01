@@ -557,6 +557,8 @@ func (at *AutoTrader) RunGridCycle() error {
 	}
 
 	// Execute decisions
+	// review 2026-10-28 #2: only this execution batch shares the lazy account snapshot.
+	batch := &gridEntryBatch{}
 	executionFailures := map[string]string{}
 	for _, d := range decision.Decisions {
 		// Check if trader is still running before each decision
@@ -567,7 +569,7 @@ func (at *AutoTrader) RunGridCycle() error {
 			logger.Infof("[Grid] Trader stopped, skipping remaining %d decisions", len(decision.Decisions))
 			break
 		}
-		if err := at.executeGridDecision(&d); err != nil {
+		if err := at.executeGridDecisionWithBatch(&d, batch); err != nil {
 			logger.Warnf("[Grid] Failed to execute decision %s: %v", d.Action, err)
 			// F12 (2026-10-01 review): a failed placement must be visible in
 			// the decision record — everything used to land as Success:true.
@@ -653,11 +655,15 @@ func (at *AutoTrader) buildGridContext() (*kernel.GridContext, error) {
 
 // executeGridDecision executes a single grid decision
 func (at *AutoTrader) executeGridDecision(d *kernel.Decision) error {
+	return at.executeGridDecisionWithBatch(d, &gridEntryBatch{})
+}
+
+func (at *AutoTrader) executeGridDecisionWithBatch(d *kernel.Decision, batch *gridEntryBatch) error {
 	switch d.Action {
 	case "place_buy_limit":
-		return at.placeGridLimitOrder(d, "BUY")
+		return at.placeGridLimitOrderWithBatch(d, "BUY", batch)
 	case "place_sell_limit":
-		return at.placeGridLimitOrder(d, "SELL")
+		return at.placeGridLimitOrderWithBatch(d, "SELL", batch)
 	case "cancel_order":
 		return at.cancelGridOrder(d)
 	case "cancel_all_orders":

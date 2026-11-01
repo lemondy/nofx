@@ -175,7 +175,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		}
 
 		history = append(history, EquityPoint{
-			Timestamp:        snap.Timestamp.Format("2006-01-02 15:04:05"),
+			Timestamp:        snap.Timestamp.UTC().Format(time.RFC3339),
 			TotalEquity:      snap.TotalEquity,
 			AvailableBalance: snap.Balance,
 			TotalPnL:         snap.UnrealizedPnL,
@@ -406,7 +406,7 @@ func (s *Server) getEquityHistoryForTraders(traderIDs []string, hours int) map[s
 			}
 
 			history = append(history, map[string]interface{}{
-				"timestamp":     snap.Timestamp,
+				"timestamp":     snap.Timestamp.UTC().Format(time.RFC3339),
 				"total_equity":  snap.TotalEquity,
 				"total_pnl":     snap.UnrealizedPnL,
 				"total_pnl_pct": pnlPct,
@@ -441,7 +441,7 @@ func (s *Server) getEquityHistoryForTraders(traderIDs []string, hours int) map[s
 					}
 
 					history = append(history, map[string]interface{}{
-						"timestamp":     now,
+						"timestamp":     now.UTC().Format(time.RFC3339),
 						"total_equity":  totalEquity,
 						"total_pnl":     totalPnL,
 						"total_pnl_pct": pnlPct,

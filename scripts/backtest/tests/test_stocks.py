@@ -281,6 +281,51 @@ class StockExecutionTest(unittest.TestCase):
         self.assertEqual(len(s['equity_curve']), len(study.calendar))
 
 
+class StockSlippageTest(unittest.TestCase):
+    def test_default_slippage_is_zero_and_results_identical_to_explicit_zero(self):
+        self.assertEqual(Config().slippage, 0.0)
+        stocks, spy = fixture()
+        default = run_study(study_of(stocks, spy), Config(), ['MA_CROSS', 'MOM_TOP'])
+        explicit = run_study(study_of(stocks, spy), Config(slippage=0.0), ['MA_CROSS', 'MOM_TOP'])
+        dump = dict(sort_keys=True, allow_nan=False)
+        self.assertEqual(json.dumps(default, **dump), json.dumps(explicit, **dump))
+
+    def test_positive_slippage_lowers_equity_without_rejections_or_overdraft(self):
+        stocks, spy = fixture()
+        zero = run_strategy(study_of(stocks, spy), Config(max_positions=1), 'MA_CROSS')
+        slipped = run_strategy(study_of(stocks, spy), Config(max_positions=1, slippage=0.001), 'MA_CROSS')
+        self.assertTrue(zero['fills'])
+        self.assertNotEqual([f['price'] for f in zero['fills']], [f['price'] for f in slipped['fills']])
+        self.assertLess(slipped['metrics']['final_equity'], zero['metrics']['final_equity'])
+        for s in (zero, slipped):
+            statuses = [o['status'] for o in s['order_events']]
+            self.assertNotIn('Margin', statuses)
+            self.assertNotIn('Rejected', statuses)
+            self.assertTrue(all(p['cash'] >= -1e-8 for p in s['equity_curve']))
+        buy = [f for f in slipped['fills'] if f['size'] > 0][0]
+        self.assertGreater(buy['price'], [f for f in zero['fills'] if f['size'] > 0][0]['price'])
+
+    def test_slippage_validation_rejects_negative_nan_and_over_cap(self):
+        for bad in (-0.0001, float('nan'), float('inf'), 0.05, 1.0):
+            with self.assertRaises(ValueError):
+                Config(slippage=bad).validate()
+        Config(slippage=0.0).validate()
+        Config(slippage=0.049).validate()
+
+    def test_report_states_slippage_assumption_for_both_cases(self):
+        stocks, spy = fixture()
+        zero = run_study(study_of(stocks, spy), Config(), ['MA_CROSS'])
+        self.assertEqual(zero['config']['slippage'], 0.0)
+        report = render_report(zero)
+        self.assertIn('滑点: 0（假设，未实测 bStock 价差/深度）', report)
+        self.assertIn('slippage 0 bp per side', report)
+        slipped = run_study(study_of(stocks, spy), Config(slippage=0.001), ['MA_CROSS'])
+        report = render_report(slipped)
+        self.assertIn('滑点: 10 bp/侧（假设情景，非实测）', report)
+        self.assertIn('slippage 10 bp per side', report)
+        self.assertIn('not a measured bStock spread/depth estimate', report)
+
+
 class StockCacheReportCliTest(unittest.TestCase):
     def test_offline_cache_cleaning_exclusions_and_cli_reports(self):
         stocks, spy = fixture()
@@ -309,7 +354,7 @@ class StockCacheReportCliTest(unittest.TestCase):
             self.assertIn('MA2060 rule breakdown', report)
             self.assertIn('Survivorship', report)
             self.assertIn('LLM', report)
-            self.assertIn('no slippage', report)
+            self.assertIn('滑点: 0（假设，未实测 bStock 价差/深度）', report)
             self.assertEqual(result['strategies'][-1]['metrics']['closed_trades'], 0)
             self.assertEqual(result['strategies'][-1]['open_positions_at_end'], 1)
             self.assertTrue(result['strategies'][-1]['metrics']['last_12_months_partial'])
@@ -319,8 +364,10 @@ class StockCacheReportCliTest(unittest.TestCase):
     def test_parser_validation_missing_framework_and_no_nan_json(self):
         a = build_parser().parse_args(['stocks'])
         self.assertEqual((a.tf, a.maxpos, a.rebalance, a.commission, a.cash), ('1d', 10, 10, .001, 100000))
+        self.assertEqual(a.slippage, 0.0)
         with redirect_stderr(io.StringIO()):
-            for flags in (['--maxpos', '0'], ['--cash', 'nan'], ['--commission', '-1'], ['--rebalance', '0']):
+            for flags in (['--maxpos', '0'], ['--cash', 'nan'], ['--commission', '-1'], ['--rebalance', '0'],
+                          ['--slippage', '-0.001'], ['--slippage', '0.05'], ['--slippage', 'nan']):
                 self.assertEqual(main(['stocks']+flags), 2)
             with patch.dict('sys.modules', {'backtrader': None}):
                 self.assertEqual(main(['stocks']), 2)

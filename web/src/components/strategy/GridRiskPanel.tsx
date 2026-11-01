@@ -12,6 +12,8 @@ import {
 import type { GridRiskInfo } from '../../types'
 import { gridRisk, ts } from '../../i18n/strategy-translations'
 import { withAlpha } from '../../lib/colorAlpha'
+// 自适应精度价格格式化（本地 toFixed(6) 版本会把 <1e-6 的价格截成 0.000000，review A2）
+import { formatPrice as formatPriceAdaptive } from '../../utils/format'
 
 interface GridRiskPanelProps {
   traderId: string
@@ -96,16 +98,9 @@ export function GridRiskPanel({
     return 'var(--down)'
   }
 
-  const formatPrice = (price: number) => {
-    if (price === 0) return '-'
-    if (price >= 1000)
-      return price.toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-    if (price >= 1) return price.toFixed(4)
-    return price.toFixed(6)
-  }
+  // 0/缺失（如尚无强平价）显示 '-'，与旧版一致
+  const formatPrice = (price: number) =>
+    price ? formatPriceAdaptive(price) : '-'
 
   const formatUSD = (value: number) => {
     return `$${value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`

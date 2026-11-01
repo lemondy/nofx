@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,22 +9,26 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"nofx/logger"
 	"nofx/market"
+	"nofx/telegram/notify"
 )
 
 // FactorEnsembleRef is opt-in research evidence only. No gate, score,
 // candidate filter, or execution decision reads it.
 type FactorEnsembleRef struct {
-	AsOf      string                      `json:"as_of"`
-	Scope     string                      `json:"scope,omitempty"`
-	ScopeNote string                      `json:"scope_note,omitempty"`
-	Reason    string                      `json:"reason,omitempty"`
-	Horizons  map[string]FactorHorizonRef `json:"horizons,omitempty"`
+	AsOf       string                      `json:"as_of"`
+	AgeDays    int                         `json:"age_days"` // latest closed UTC day minus as_of
+	SnapshotID string                      `json:"snapshot_id"`
+	Scope      string                      `json:"scope,omitempty"`
+	ScopeNote  string                      `json:"scope_note,omitempty"`
+	Reason     string                      `json:"reason,omitempty"`
+	Horizons   map[string]FactorHorizonRef `json:"horizons,omitempty"`
 }
 
 type FactorHorizonRef struct {
@@ -51,11 +56,14 @@ type factorEnsembleScores struct {
 	Version        int                        `json:"version"`
 	Market         string                     `json:"market"`
 	AsOf           string                     `json:"as_of"`
+	RunID          json.RawMessage            `json:"run_id"`
 	Horizons       map[string]json.RawMessage `json:"horizons"`
 	Universe       json.RawMessage            `json:"universe"`
 	Factors        json.RawMessage            `json:"factors"`
 	Skipped        json.RawMessage            `json:"skipped"`
 	asOfDate       time.Time
+	snapshotID     string
+	futureWarnOnce sync.Once
 	extendedFormat bool
 	horizons       map[string]factorEnsembleHorizonScores
 	factors        map[string]json.RawMessage
@@ -77,7 +85,7 @@ type factorEnsembleFileCache struct {
 	mu       sync.Mutex
 	path     string
 	mtime    time.Time
-	scores   *factorEnsembleScores // immutable after publication
+	scores   *factorEnsembleScores // metadata immutable after publication; warning uses sync.Once
 	lastWarn time.Time
 }
 
@@ -151,6 +159,11 @@ func (c *factorEnsembleFileCache) load(path string) *factorEnsembleScores {
 		c.warnLocked(path, err)
 		return nil
 	}
+	_ = json.Unmarshal(scores.RunID, &scores.snapshotID)
+	if strings.TrimSpace(scores.snapshotID) == "" {
+		digest := sha256.Sum256(raw)
+		scores.snapshotID = fmt.Sprintf("%x", digest[:6])
+	}
 	// Optional additions are decoded independently: malformed metadata or one
 	// extended score must not discard the core scores or another horizon.
 	scores.extendedFormat = len(scores.Universe) > 0 || len(scores.Factors) > 0 || len(scores.Skipped) > 0
@@ -182,24 +195,104 @@ func (c *factorEnsembleFileCache) warnLocked(path string, err error) {
 	}
 }
 
+const (
+	// Age is counted from the latest closed UTC day, so 1 is normal until the
+	// nightly run; 2 means a run was missed. The snapshot is "expiring" from
+	// here until every horizon passes factorEnsembleMaxAge and it is dropped.
+	factorEnsembleWarnAgeDays = 2
+	factorEnsembleLogEvery    = time.Hour
+	factorEnsembleNotifyEvery = 12 * time.Hour
+)
+
+// factorEnsembleStaleNotify delivers the staleness alert; tests replace it.
+// It is a var, not a direct call, so the default Telegram path stays optional.
+var factorEnsembleStaleNotify = func(asOf string, ageDays int, expired bool) {
+	state, effect := "即将过期", "即将失去"
+	if expired {
+		state, effect = "已过期", "已失去"
+	}
+	notify.Notify("ALERT", "因子 ensemble", fmt.Sprintf(
+		"<b>⚠️ live_scores %s</b>\nas_of <code>%s</code>，已 %d 天未更新。\n影响：因子 ensemble 实验候选组%s该字段(factor_ensemble)。\n排查：data/factor_mining/nightly.log；Binance 代理 127.0.0.1:7890 是否可用。",
+		state, notify.Escape(asOf), ageDays, effect))
+}
+
+// factorEnsembleStaleState rate-limits the stale-snapshot log and alert. It is
+// independent of factorEnsembleFileCache.lastWarn so a file-parse warning and a
+// staleness warning never suppress each other. Index 0 = expiring, 1 = expired.
+var factorEnsembleStaleState struct {
+	mu         sync.Mutex
+	lastLog    [2]time.Time
+	lastNotify [2]time.Time
+}
+
+// warnFactorEnsembleStale logs (hourly) and alerts (every 12h) once per state
+// when the snapshot is about to expire or already discarded. now is the caller's
+// clock so tests can drive the budgets.
+func warnFactorEnsembleStale(asOf string, ageDays int, expired bool, now time.Time) {
+	idx := 0
+	if expired {
+		idx = 1
+	}
+	st := &factorEnsembleStaleState
+	st.mu.Lock()
+	doLog := st.lastLog[idx].IsZero() || now.Sub(st.lastLog[idx]) >= factorEnsembleLogEvery
+	if doLog {
+		st.lastLog[idx] = now
+	}
+	doNotify := st.lastNotify[idx].IsZero() || now.Sub(st.lastNotify[idx]) >= factorEnsembleNotifyEvery
+	if doNotify {
+		st.lastNotify[idx] = now
+	}
+	st.mu.Unlock()
+	if doLog {
+		if expired {
+			logger.Warnf("[factor-ensemble] factor ensemble evidence unavailable: live_scores as_of %s is %d days old, every horizon dropped; check data/factor_mining/nightly.log and the Binance proxy", asOf, ageDays)
+		} else {
+			logger.Warnf("[factor-ensemble] factor ensemble evidence expiring: live_scores as_of %s is %d days old, short horizons dropping; check data/factor_mining/nightly.log and the Binance proxy", asOf, ageDays)
+		}
+	}
+	if doNotify && factorEnsembleStaleNotify != nil {
+		factorEnsembleStaleNotify(asOf, ageDays, expired)
+	}
+}
+
 func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef {
 	if data == nil {
 		return nil
 	}
-	scores := liveFactorEnsembleCache.load(factorEnsembleScoresPath())
+	path := factorEnsembleScoresPath()
+	scores := liveFactorEnsembleCache.load(path)
 	if scores == nil {
 		return nil
 	}
-	// Recheck age even on cache hits: an unchanged file expires at UTC midnight.
+	// Recheck against the caller's clock even on cache hits and historical replays.
 	utc := now.UTC()
 	today := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
-	if scores.asOfDate.Before(today.AddDate(0, 0, -3)) {
+	latestClosed := today.AddDate(0, 0, -1)
+	if scores.asOfDate.After(latestClosed) {
+		scores.futureWarnOnce.Do(func() {
+			logger.Warnf("[factor-ensemble] Ignoring %s: as_of %s is after latest closed UTC day %s", path, scores.AsOf, latestClosed.Format(time.DateOnly))
+		})
+		return nil
+	}
+	ageDays := int(latestClosed.Sub(scores.asOfDate) / (24 * time.Hour))
+	freshHorizons := make(map[string]factorEnsembleHorizonScores)
+	for horizon, h := range scores.horizons {
+		if ageDays <= factorEnsembleMaxAge(horizon) {
+			freshHorizons[horizon] = h
+		}
+	}
+	expired := len(freshHorizons) == 0
+	if ageDays >= factorEnsembleWarnAgeDays {
+		warnFactorEnsembleStale(scores.AsOf, ageDays, expired, now)
+	}
+	if expired {
 		return nil
 	}
 	// Scope is per symbol. Prefer the core everywhere if a malformed snapshot
-	// lists the same symbol in both universes, even in different horizons.
+	// lists the same symbol in both universes, even in different fresh horizons.
 	core, extended := false, false
-	for _, h := range scores.horizons {
+	for _, h := range freshHorizons {
 		if _, ok := h.Scores[data.Symbol]; ok {
 			core = true
 		}
@@ -221,9 +314,9 @@ func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef 
 		if json.Unmarshal(scores.skipped[data.Symbol], &skipped) == nil && skipped != "" {
 			reason = skipped
 		}
-		return &FactorEnsembleRef{AsOf: scores.AsOf, Scope: "none", Reason: reason}
+		return &FactorEnsembleRef{AsOf: scores.AsOf, AgeDays: ageDays, SnapshotID: scores.snapshotID, Scope: "none", Reason: reason}
 	}
-	ref := &FactorEnsembleRef{AsOf: scores.AsOf, Horizons: make(map[string]FactorHorizonRef)}
+	ref := &FactorEnsembleRef{AsOf: scores.AsOf, AgeDays: ageDays, SnapshotID: scores.snapshotID, Horizons: make(map[string]FactorHorizonRef)}
 	if scores.extendedFormat {
 		ref.Scope = "core"
 		if !core {
@@ -231,7 +324,7 @@ func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef 
 			ref.ScopeNote = "该币不在因子验证宇宙(流动性前60)内，因子未在此档位验证，分数仅相对核心宇宙外推，参考权重应低于 core"
 		}
 	}
-	for horizon, h := range scores.horizons {
+	for horizon, h := range freshHorizons {
 		symbolScores := h.Scores
 		if !core {
 			symbolScores = h.extScores
@@ -272,6 +365,18 @@ func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef 
 		return nil
 	}
 	return ref
+}
+
+// Age is measured from the most recent closed UTC daily candle, not today.
+func factorEnsembleMaxAge(horizon string) int {
+	h, err := strconv.Atoi(horizon)
+	if err != nil || h <= 0 {
+		return -1
+	}
+	if h == 3 {
+		return 2
+	}
+	return min(h, 3)
 }
 
 func factorEnsembleObject(raw json.RawMessage) map[string]json.RawMessage {
