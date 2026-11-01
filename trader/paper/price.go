@@ -59,10 +59,10 @@ type marketPriceSource struct{ client *futures.Client }
 // getFundingSettlements is a seam so tests can observe the bnweight priority.
 var getFundingSettlements = market.GetFundingSettlementsPriority
 
-// FundingEvents reads Binance's public /fapi/v1/fundingRate (Normal priority:
-// settlement is applied inside Advance, which order placement waits on).
+// FundingEvents reads Binance's public /fapi/v1/fundingRate at Low priority
+// so paper funding yields to live trading requests.
 func (s *marketPriceSource) FundingEvents(symbol string, from, to time.Time) ([]FundingEvent, error) {
-	rows, err := getFundingSettlements(symbol, from, to, bnweight.Normal)
+	rows, err := getFundingSettlements(symbol, from, to, bnweight.Low)
 	if err != nil {
 		return nil, err
 	}

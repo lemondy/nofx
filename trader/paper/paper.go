@@ -137,12 +137,14 @@ type PaperFuturesTrader struct {
 
 	// Funding (all guarded by mu). The cache only ever grows by fetched events;
 	// the watermark that prevents double charges is in the persisted positions.
-	funding       FundingSource
-	fundCache     map[string][]FundingEvent
-	fundQueried   map[string]time.Time // last successful query per symbol
-	fundIntervalH map[string]int       // learned settlement interval (hours), default 1 = unknown
-	fundWarnAt    map[string]time.Time
-	pendingIncome []fundsledger.Income // written in the next successful commit
+	funding          FundingSource
+	fundCache        map[string][]FundingEvent
+	fundQueried      map[string]time.Time // last successful query per symbol
+	fundIntervalH    map[string]int       // learned settlement interval (hours), 0 = unknown (poll hourly)
+	fundWarnAt       map[string]time.Time
+	fundBackoff      time.Duration
+	fundBackoffUntil time.Time
+	pendingIncome    []fundsledger.Income // written in the next successful commit
 }
 
 var _ types.GridTrader = (*PaperFuturesTrader)(nil)
@@ -439,6 +441,10 @@ func (p *PaperFuturesTrader) slipped(price float64, side string) float64 {
 // Advance obtains observations without holding mu and rechecks the version
 // before using them. Errors preserve the cursor so missed candles can retry.
 func (p *PaperFuturesTrader) Advance(now time.Time) error {
+	return p.advance(now, true)
+}
+
+func (p *PaperFuturesTrader) advance(now time.Time, fetchFunding bool) error {
 	now = now.UTC()
 	for {
 		p.mu.Lock()
@@ -461,11 +467,16 @@ func (p *PaperFuturesTrader) Advance(now time.Time) error {
 				symbols[o.Symbol] = true
 			}
 		}
-		fundingNeeds := p.fundingNeedsLocked(now)
+		var fundingNeeds map[string]int64
+		if fetchFunding {
+			fundingNeeds = p.fundingNeedsLocked(now)
+		}
 		p.mu.Unlock()
 		// Funding settlements are fetched outside the mutex and cached; a
 		// failure is logged inside and never fails the advance.
-		p.fetchFunding(fundingNeeds, now)
+		if fetchFunding {
+			p.fetchFunding(fundingNeeds, now)
+		}
 		type observation struct {
 			symbol  string
 			mark    float64
@@ -752,7 +763,8 @@ const (
 // orders, summary). A failed market sync no longer fails the read: within
 // readStaleLimit of the last successful advance it logs and serves the cached
 // ledger, and further attempts are suppressed for readRetryCooldown. The
-// background order sync keeps catching up on its own tick.
+// background order sync keeps catching up on its own tick. Reads settle cached
+// funding events but never fetch funding from the venue.
 func (p *PaperFuturesTrader) advanceForRead() error {
 	now := p.cfg.Now()
 	p.mu.Lock()
@@ -762,7 +774,7 @@ func (p *PaperFuturesTrader) advanceForRead() error {
 	if !failAt.IsZero() && now.Sub(failAt) < readRetryCooldown && age <= readStaleLimit {
 		return nil
 	}
-	err := p.Advance(now)
+	err := p.advance(now, false)
 	if err == nil {
 		p.mu.Lock()
 		p.advFailAt = time.Time{}

@@ -25,6 +25,11 @@ const (
 	fundingWarnEvery = 10 * time.Minute
 	// fundingCacheMax bounds the per-symbol event cache.
 	fundingCacheMax = 500
+	// Failed batches pause all funding queries for this trader.
+	fundingBackoffMin = time.Minute
+	fundingBackoffMax = 15 * time.Minute
+	// fundingMaxPerAdvance bounds the work in one funding batch.
+	fundingMaxPerAdvance = 8
 )
 
 // fundingPageSize mirrors the venue's page limit: a full page means more may
@@ -44,15 +49,18 @@ func fundingBoundary(now time.Time, intervalH int) time.Time {
 
 // fundingDueLocked reports whether a new settlement of symbol could exist.
 func (p *PaperFuturesTrader) fundingDueLocked(symbol string, now time.Time) bool {
-	last, ok := p.fundQueried[symbol]
-	if !ok || last.IsZero() {
-		return true
-	}
 	interval := p.fundIntervalH[symbol]
 	if interval < 1 {
 		interval = 1
 	}
 	boundary := fundingBoundary(now, interval)
+	if cached := p.fundCache[symbol]; len(cached) > 0 && !cached[len(cached)-1].Time.Before(boundary) {
+		return false // the current settlement is already known
+	}
+	last := p.fundQueried[symbol]
+	if last.IsZero() {
+		return true
+	}
 	grace := boundary.Add(fundingGrace)
 	if now.Before(grace) {
 		return now.Sub(last) >= fundingPollGap && last.Before(grace)
@@ -63,7 +71,7 @@ func (p *PaperFuturesTrader) fundingDueLocked(symbol string, now time.Time) bool
 // fundingNeedsLocked lists, per symbol with open positions, the earliest
 // fundingTime (ms) still to be charged, for symbols whose query is due.
 func (p *PaperFuturesTrader) fundingNeedsLocked(now time.Time) map[string]int64 {
-	if p.funding == nil || len(p.s.Positions) == 0 {
+	if p.funding == nil || len(p.s.Positions) == 0 || now.Before(p.fundBackoffUntil) {
 		return nil
 	}
 	needs := map[string]int64{}
@@ -84,51 +92,71 @@ func (p *PaperFuturesTrader) fundingNeedsLocked(now time.Time) map[string]int64 
 	for symbol := range needs {
 		if !p.fundingDueLocked(symbol, now) {
 			delete(needs, symbol)
+		} else if p.fundIntervalH[symbol] == 0 {
+			// Include earlier settlements to learn the interval on the first
+			// query. Settlement ignores events before each position's open.
+			needs[symbol] -= (25 * time.Hour).Milliseconds()
 		}
 	}
 	return needs
 }
 
-// fetchFunding queries every due symbol WITHOUT holding mu, then merges the
-// results into the cache. A failure is logged (rate-limited) and retried on a
-// later tick; it never fails Advance.
+// fetchFunding queries up to fundingMaxPerAdvance due symbols, oldest query
+// first, WITHOUT holding mu during requests. The first failure stops the batch
+// and backs off all funding queries; it never fails Advance.
 func (p *PaperFuturesTrader) fetchFunding(needs map[string]int64, now time.Time) {
 	if len(needs) == 0 {
+		return
+	}
+	p.mu.Lock()
+	if now.Before(p.fundBackoffUntil) {
+		p.mu.Unlock()
 		return
 	}
 	symbols := make([]string, 0, len(needs))
 	for s := range needs {
 		symbols = append(symbols, s)
 	}
-	sort.Strings(symbols)
-	type result struct {
-		events []FundingEvent
-		err    error
+	sort.Slice(symbols, func(i, j int) bool {
+		a, b := p.fundQueried[symbols[i]], p.fundQueried[symbols[j]]
+		if a.IsZero() != b.IsZero() {
+			return a.IsZero()
+		}
+		if a.Equal(b) {
+			return symbols[i] < symbols[j]
+		}
+		return a.Before(b)
+	})
+	if len(symbols) > fundingMaxPerAdvance {
+		symbols = symbols[:fundingMaxPerAdvance]
 	}
-	results := map[string]result{}
+	p.mu.Unlock()
 	for _, symbol := range symbols {
 		ev, err := p.funding.FundingEvents(symbol, time.UnixMilli(needs[symbol]).UTC(), now)
-		results[symbol] = result{ev, err}
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, symbol := range symbols {
-		r := results[symbol]
-		if r.err != nil {
+		p.mu.Lock()
+		if err != nil {
+			p.fundBackoff = min(max(2*p.fundBackoff, fundingBackoffMin), fundingBackoffMax)
+			p.fundBackoffUntil = now.Add(p.fundBackoff)
 			if now.Sub(p.fundWarnAt[symbol]) >= fundingWarnEvery {
 				p.fundWarnAt[symbol] = now
-				logger.Warnf("paper funding [%s]: fetching %s settlements failed, will retry: %v", p.displayName, symbol, r.err)
+				logger.Warnf("paper funding [%s]: fetching %s settlements failed, backing off for %s: %v", p.displayName, symbol, p.fundBackoff, err)
 			}
-			continue
+			p.mu.Unlock()
+			return
 		}
-		p.mergeFundingLocked(symbol, r.events)
-		if len(r.events) >= fundingPageSize {
+		p.mergeFundingLocked(symbol, ev)
+		if len(ev) >= fundingPageSize {
 			// More pages may follow: stay due so the next tick continues.
 			p.fundQueried[symbol] = time.Time{}
 		} else {
 			p.fundQueried[symbol] = now
 		}
+		p.mu.Unlock()
 	}
+	p.mu.Lock()
+	p.fundBackoff = 0
+	p.fundBackoffUntil = time.Time{}
+	p.mu.Unlock()
 }
 
 func (p *PaperFuturesTrader) mergeFundingLocked(symbol string, events []FundingEvent) {

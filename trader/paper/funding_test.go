@@ -2,7 +2,10 @@ package paper
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +51,16 @@ func (f *fakeFunding) add(symbol string, at time.Time, rate, mark float64) {
 	f.events[symbol] = append(f.events[symbol], FundingEvent{Time: at, Rate: rate, MarkPrice: mark})
 }
 func (f *fakeFunding) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
+func (f *fakeFunding) calledSymbols() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	symbols := make([]string, 0, len(f.calls))
+	for _, call := range f.calls {
+		symbol, _, _ := strings.Cut(call, "@")
+		symbols = append(symbols, symbol)
+	}
+	return symbols
+}
 
 var day0 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
@@ -226,6 +239,78 @@ func TestFundingFetchErrorDoesNotBreakAdvance(t *testing.T) {
 	near(t, p.PositionFunding()["BTCUSDT:LONG"], -1*100*0.0001)
 }
 
+func TestFundingFailureStopsBatchAndBacksOff(t *testing.T) {
+	p, _, f, ff := setupFunding(t)
+	for _, symbol := range []string{"SOLUSDT", "ETHUSDT", "BTCUSDT"} {
+		_, err := p.OpenLong(symbol, 1, 10)
+		must(t, err)
+	}
+	ff.err = errors.New("fundingRate: 403")
+	at := day0.Add(8*time.Hour + time.Minute)
+	for i, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute} {
+		advanceTo(t, p, f, at, 100)
+		if got := ff.callCount(); got != i+1 {
+			t.Fatalf("failure %d: calls = %v, want only the first symbol attempted", i+1, ff.calls)
+		}
+		if p.fundBackoff != want || !p.fundBackoffUntil.Equal(at.Add(want)) {
+			t.Fatalf("failure %d: backoff = %s until %s, want %s until %s", i+1, p.fundBackoff, p.fundBackoffUntil, want, at.Add(want))
+		}
+		advanceTo(t, p, f, at.Add(want/2), 100)
+		if got := ff.callCount(); got != i+1 || p.fundBackoff != want {
+			t.Fatalf("inside backoff: calls = %d, backoff = %s", got, p.fundBackoff)
+		}
+		at = p.fundBackoffUntil // equality must allow the next attempt
+	}
+	for _, symbol := range ff.calledSymbols() {
+		if symbol != "BTCUSDT" {
+			t.Fatalf("queried remaining symbol after a failure: %v", ff.calls)
+		}
+	}
+	ff.err = nil
+	before := ff.callCount()
+	advanceTo(t, p, f, at, 100)
+	if got := ff.calledSymbols()[before:]; !reflect.DeepEqual(got, []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"}) {
+		t.Fatalf("successful batch = %v", got)
+	}
+	if p.fundBackoff != 0 || !p.fundBackoffUntil.IsZero() {
+		t.Fatalf("successful batch did not reset backoff: %s until %s", p.fundBackoff, p.fundBackoffUntil)
+	}
+	ff.err = errors.New("fundingRate: timeout")
+	advanceTo(t, p, f, day0.Add(9*time.Hour+20*time.Minute), 100)
+	if ff.callCount() != before+4 || p.fundBackoff != time.Minute {
+		t.Fatalf("failure after recovery: calls = %v, backoff = %s", ff.calls, p.fundBackoff)
+	}
+}
+
+func TestFundingBatchCapAndOldestQueryFirst(t *testing.T) {
+	p, _, f, ff := setupFunding(t)
+	var symbols []string
+	for i := 0; i < 20; i++ {
+		symbol := fmt.Sprintf("S%02dUSDT", i)
+		symbols = append(symbols, symbol)
+		_, err := p.OpenLong(symbol, 1, 10)
+		must(t, err)
+	}
+	// Never-queried symbols precede older successful queries. Different ages
+	// override alphabetical order, with alphabetical ties within the same age.
+	p.fundQueried[symbols[16]] = day0.Add(6 * time.Hour)
+	p.fundQueried[symbols[17]] = day0.Add(5 * time.Hour)
+	p.fundQueried[symbols[18]] = day0.Add(5 * time.Hour)
+	p.fundQueried[symbols[19]] = day0.Add(4 * time.Hour)
+	want := append(append([]string(nil), symbols[:16]...), symbols[19], symbols[17], symbols[18], symbols[16])
+	for i, count := range []int{8, 16, 20} {
+		advanceTo(t, p, f, day0.Add(8*time.Hour+time.Minute+time.Duration(i)*time.Second), 100)
+		if got := ff.calledSymbols(); !reflect.DeepEqual(got, want[:count]) {
+			t.Fatalf("advance %d: queries = %v, want %v", i+1, got, want[:count])
+		}
+	}
+	// When everyone is due again, the first batch is now the oldest.
+	advanceTo(t, p, f, day0.Add(8*time.Hour+20*time.Minute), 100)
+	if got := ff.calledSymbols()[20:]; !reflect.DeepEqual(got, symbols[:8]) {
+		t.Fatalf("next batch = %v, want oldest %v", got, symbols[:8])
+	}
+}
+
 func TestFundingNoFetchWithoutPositions(t *testing.T) {
 	p, _, f, ff := setupFunding(t)
 	ff.add("BTCUSDT", day0.Add(8*time.Hour), 0.01, 100)
@@ -287,6 +372,83 @@ func TestFundingLateEventPickedUpInsideGrace(t *testing.T) {
 	near(t, summary(t, p).TotalFunding, -1*100*0.0005)
 }
 
+func TestFundingCachedBoundaryStopsGracePolling(t *testing.T) {
+	p, _, f, ff := setupFunding(t)
+	_, err := p.OpenLong("BTCUSDT", 1, 10)
+	must(t, err)
+	ff.add("BTCUSDT", day0.Add(8*time.Hour), 0.001, 100)
+	advanceTo(t, p, f, day0.Add(8*time.Hour+10*time.Second), 100)
+	for _, elapsed := range []time.Duration{2*time.Minute + 30*time.Second, 5 * time.Minute, 9*time.Minute + 59*time.Second, 10 * time.Minute, 20 * time.Minute} {
+		advanceTo(t, p, f, day0.Add(8*time.Hour+elapsed), 100)
+	}
+	if n := ff.callCount(); n != 1 {
+		t.Fatalf("covered settlement was polled again: %v", ff.calls)
+	}
+	advanceTo(t, p, f, day0.Add(9*time.Hour+10*time.Second), 100)
+	if n := ff.callCount(); n != 2 {
+		t.Fatalf("next boundary was not queried: %v", ff.calls)
+	}
+}
+
+func TestFundingUnknownIntervalLooksBackWithoutChargingPreOpen(t *testing.T) {
+	p, st, f, ff := setupFunding(t)
+	open := day0.Add(9 * time.Hour)
+	advanceTo(t, p, f, open, 100)
+	_, err := p.OpenLong("BTCUSDT", 1, 10)
+	must(t, err)
+	before := summary(t, p).WalletBalance
+	for h := -16; h <= 16; h += 8 {
+		ff.add("BTCUSDT", day0.Add(time.Duration(h)*time.Hour), 0.001, 100)
+	}
+	advanceTo(t, p, f, day0.Add(16*time.Hour+time.Minute), 100)
+	wantCall := "BTCUSDT@" + open.Add(-25*time.Hour).Format(time.RFC3339)
+	if !reflect.DeepEqual(ff.calls, []string{wantCall}) {
+		t.Fatalf("first query = %v, want %s", ff.calls, wantCall)
+	}
+	if p.fundIntervalH["BTCUSDT"] != 8 || len(p.fundCache["BTCUSDT"]) != 5 {
+		t.Fatalf("interval = %d, cached = %v", p.fundIntervalH["BTCUSDT"], p.fundCache["BTCUSDT"])
+	}
+	near(t, summary(t, p).WalletBalance, before-100*0.001)
+	near(t, p.PositionFunding()["BTCUSDT:LONG"], -100*0.001)
+	rows := fundingIncome(t, st, "acct")
+	if len(rows) != 1 || rows[0].TimeMS != day0.Add(16*time.Hour).UnixMilli() {
+		t.Fatalf("lookback charged pre-open events: %+v", rows)
+	}
+}
+
+func TestFundingReadSettlesCacheWithoutFetching(t *testing.T) {
+	p, st, f, ff := setupFunding(t)
+	_, err := p.OpenLong("BTCUSDT", 1, 10)
+	must(t, err)
+	before := summary(t, p).WalletBalance
+	ff.add("BTCUSDT", day0.Add(8*time.Hour), 0.001, 100)
+	ff.add("BTCUSDT", day0.Add(9*time.Hour), 0.002, 100)
+	p.mu.Lock()
+	p.mergeFundingLocked("BTCUSDT", ff.events["BTCUSDT"][:1])
+	p.mu.Unlock()
+	f.step(9*time.Hour+time.Minute, 100)
+	balance, err := p.GetBalance()
+	must(t, err)
+	near(t, balance["totalWalletBalance"].(float64), before-100*0.001)
+	near(t, p.PositionFunding()["BTCUSDT:LONG"], -100*0.001)
+	if ff.callCount() != 0 || len(p.fundQueried) != 0 {
+		t.Fatalf("read fetched funding: calls = %v, queried = %v", ff.calls, p.fundQueried)
+	}
+	f.step(time.Second, 100)
+	balance, err = p.GetBalance()
+	must(t, err)
+	near(t, balance["totalWalletBalance"].(float64), before-100*0.001)
+	if ff.callCount() != 0 || len(fundingIncome(t, st, "acct")) != 1 {
+		t.Fatalf("repeated read fetched or recharged funding: %v", ff.calls)
+	}
+	// An explicit Advance still fetches and catches up the uncached event.
+	advanceTo(t, p, f, f.now().Add(time.Second), 100)
+	if ff.callCount() != 1 {
+		t.Fatalf("explicit Advance did not fetch funding: %v", ff.calls)
+	}
+	near(t, p.PositionFunding()["BTCUSDT:LONG"], -100*(0.001+0.002))
+}
+
 func TestFundingRepeatedAdvanceDoesNotRecharge(t *testing.T) {
 	p, _, f, ff := setupFunding(t)
 	_, err := p.OpenLong("BTCUSDT", 1, 10)
@@ -346,7 +508,7 @@ func TestFundingCanLiquidate(t *testing.T) {
 	}
 }
 
-func TestMarketPriceSourceImplementsFundingViaNormalPriority(t *testing.T) {
+func TestMarketPriceSourceImplementsFundingViaLowPriority(t *testing.T) {
 	var _ FundingSource = (*marketPriceSource)(nil)
 	var gotPrio bnweight.Priority = -1
 	old := getFundingSettlements
@@ -358,7 +520,7 @@ func TestMarketPriceSourceImplementsFundingViaNormalPriority(t *testing.T) {
 	src := NewMarketPriceSource().(FundingSource)
 	ev, err := src.FundingEvents("BTCUSDT", day0, day0.Add(time.Hour))
 	must(t, err)
-	if len(ev) != 1 || ev[0].Rate != 0.0001 || ev[0].MarkPrice != 50 || gotPrio != bnweight.Normal {
+	if len(ev) != 1 || ev[0].Rate != 0.0001 || ev[0].MarkPrice != 50 || gotPrio != bnweight.Low {
 		t.Fatalf("%+v prio=%v", ev, gotPrio)
 	}
 }
