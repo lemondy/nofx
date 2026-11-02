@@ -7,13 +7,13 @@ import { RiskStatusPanel } from './RiskStatusPanel'
 vi.mock('swr', () => ({ default: vi.fn() }))
 afterEach(cleanup)
 
-function mockStatus(basis?: string) {
+function mockStatus(basis?: string, dailyCap = 7) {
   const data: RiskStatus = {
     generated_at: '2026-11-02T00:00:00Z',
     equity: 10000,
     day_start_equity: 10000,
     daily_loss_pct: 0,
-    daily_loss_cap_pct: 7,
+    daily_loss_cap_pct: dailyCap,
     daily_halted: false,
     initial_balance: 10000,
     account_drawdown_pct: 20,
@@ -51,4 +51,11 @@ test('existing paths retain their drawdown label without a peak basis', () => {
   render(<RiskStatusPanel traderId="ai" language="en" />)
   expect(screen.getByText('Account drawdown')).toBeInTheDocument()
   expect(screen.queryByText(/from peak/)).not.toBeInTheDocument()
+})
+
+test('float caps render without binary rounding noise', () => {
+  mockStatus('peak', 0.07 * 100)
+  render(<RiskStatusPanel traderId="fq" language="en" />)
+  expect(screen.getByText(/0\.00% \/ 7% /)).toBeInTheDocument()
+  expect(screen.queryByText(/7\.0000/)).not.toBeInTheDocument()
 })
