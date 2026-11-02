@@ -33,6 +33,12 @@ function fmtR(r: number) {
   return `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
 }
 
+// Caps arrive as fraction×100 (0.07*100 = 7.000000000000001); show at most
+// two decimals without trailing zeros.
+function fmtCap(cap: number) {
+  return `${Number(cap.toFixed(2))}%`
+}
+
 function fmtTime(iso: string) {
   const d = new Date(iso)
   return Number.isNaN(d.getTime())
@@ -66,7 +72,7 @@ function Meter({
         <span className={`num ${TEXT[tone]}`}>
           {shown.toFixed(2)}% /{' '}
           {cap > 0
-            ? `${cap}% ${t('riskStatus.cap', language)}`
+            ? `${fmtCap(cap)} ${t('riskStatus.cap', language)}`
             : t('riskStatus.off', language)}
         </span>
       </div>
