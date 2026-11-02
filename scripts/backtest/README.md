@@ -262,3 +262,62 @@ $P check --cross-check                  # 校验全部缓存；--cross-check 对
 | `python -m scripts.backtest.live_kelly --db data/data.db --out .prob_out/live_kelly.md --json .prob_out/live_kelly.json` | 只读数据库，实盘已平仓交易的 R 值、Kelly、Beta 后验与所需样本量 |
 
 注意：做空的收益不是对数价格变化取反（跌 2s 赚 1−e^(−2s)，涨 1s 亏 e^(s)−1）。用对数价格衡量空头会把 σ²/2 的凸性拖累算成优势，评估空头一律以 Backtrader 仓位收益为准。
+
+## 离线 LLM 决策重放（llmreplay / replay-score）
+
+先用 `cmd/llmreplay` 固定历史提示词样本，再把各组的新开仓交给现有 Backtrader 入场/出场适配器。数据库通过 `file:...?mode=ro` 打开，不启动交易员、不迁移表、不下单。`--trader` 接受完整 id 或唯一名称；日期为 UTC，`since` 含、`until` 不含。
+
+```bash
+# 预演：写 sample.json，打印分层权重、补丁命中与输入 token 粗估；绝不调用 LLM
+GOCACHE=$PWD/.gocache go run ./cmd/llmreplay \
+  --db data/data.db --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
+  --sample 600 --seed 7 --arm baseline --dry-run --out data/evolution/replay/oct
+
+# 三组必须共用 trader / 时间窗 / sample / seed / out；先检查变体补丁
+GOCACHE=$PWD/.gocache go run ./cmd/llmreplay \
+  --db data/data.db --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
+  --sample 600 --seed 7 --arm variant --variant variant.json --dry-run --out data/evolution/replay/oct
+
+# 实际运行时分别执行以下三组（会产生 LLM 费用；本期验收只运行 dry-run）
+go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
+  --sample 600 --seed 7 --arm baseline --concurrency 3 --out data/evolution/replay/oct
+go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
+  --sample 600 --seed 7 --arm noise --noise-subset 200 --out data/evolution/replay/oct
+go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
+  --sample 600 --seed 7 --arm variant --variant variant.json --out data/evolution/replay/oct
+
+# 完全离线评分，缺 K 线则计数并排除整个配对点
+.venv/bin/python -m scripts.backtest replay-score \
+  --replay-dir data/evolution/replay/oct --variant no-chase-v1 \
+  --cache data/backtest_cache --horizon 72 --ledger data/evolution/ledger.jsonl
+# 只有显式追加 --fetch 才允许调用既有 fetch 下载；两组评分可指定 --arms baseline,variant
+```
+
+变体格式：
+
+```json
+{
+  "id": "no-chase-v1",
+  "hypothesis": "等待回踩确认可减少追高亏损",
+  "source": "auto-review failure_mode 统计",
+  "system_append": "仅在回踩确认后考虑开仓。",
+  "system_replace": [{"old": "某段唯一的原文", "new": "替换原文"}],
+  "rules_text": "## Review Rules\n- 等待回踩确认。"
+}
+```
+
+三个补丁字段均可省略。每个 `system_replace.old` 在原系统提示里必须恰好出现一次；重复、缺失或互相覆盖都记 `patch_miss`。`rules_text` 插在独立行 `## Current Positions` / `Current Positions: None` 前，标题缺失也记 miss；全部 miss 拒绝运行。变体以规范化 JSON 内容的 SHA-256 标识，保存为 `variant-<hash>.json`。
+
+样本按原 `decision_json` 是否含开仓分层，各抽一半；稀少层全取后由另一层补足，奇数时开仓层多一条。每点权重为层总体大小/实际抽取数。噪声取混合随机顺序的前 M 条，避免全是开仓层。`sample.json` 固定顺序、权重、提示词哈希和总体信息；续跑沿用已有清单，新历史不会改变它，参数不匹配或原提示词改变会拒绝运行。不同实验使用不同 `--out`。
+
+`results.jsonl` 逐行追加并 fsync，以 `(record_id, arm, variant_hash, model, repeat)` 续跑；基线、噪声的变体哈希为空，可以跨变体复用。模型键含 `ai_models` id 及 provider/URL/模型名称的配置哈希，避免模型配置变更后误用旧缓存。默认模型沿用交易员当前配置（含旧 provider id 的解析路径），`--model` 可覆盖为该用户的模型 id。真实调用复用 `store.AIModel` 的自动解密和 `mcp` provider registry，需要现有 `.env`/环境变量里的加密配置；干跑不读取 API key、不解密、不创建客户端。每个 worker 独享客户端，`--timeout 3m` 限制一次调用，429/5xx 按 `--backoff 1s` 指数退避，最多 `--retries 3`；`--repeat` 默认 0。调用错误允许续跑重试，解析错误和 patch_miss 已完成键不会重复调用。缓存持有进程锁，崩溃残尾只追加哈希恢复标记，不覆盖已写内容。
+
+每行保存时间、组别、开仓列表（方向、订单类型、入场/限价、SL、TP、置信度）、解析决策、原始回复及其哈希、耗时和错误。市价回复未给价格时 `entry_price=0`，实际模拟价由下一根 K 线成交决定。逐项校验拒绝或内核安全回退会记解析失败，不能当成成功的零开仓。解析包装仅新增代码：使用既有逐项解析和批内冲突处理，未知账户/持仓状态取中性值；不补造 gate/anchor，不做线上防追高、规则与账户风控过滤，保留 SL/TP、动作、限价等结构校验。
+
+评分不做历史成交匹配、不合并连续限价信号，也不按模拟持仓阻挡后续决策点；每个历史状态下的开仓都独立研究。复用 `exitsim.build_trade` 与 `backtrader_adapter.run_trade`，只保留决策 SL/TP、完整止盈和时间止损（默认 72h），限价有效期默认 45 分钟；费用/滑点/限价穿价沿用 entry 默认值，可用同名参数覆盖。没有 SL 的开仓不计入并计数；未成交限价贡献 0；没有开仓的决策点贡献 0。缓存须覆盖信号至 horizon（限价再加有效期与 10 分钟退出缓冲），缺失/短缺 K 线或未完成交易会排除整个配对点，避免覆盖不足选择性留下早止盈样本；默认不下载。现有 fetch 的覆盖长度通常足够 72h，设置更长 horizon 时仍可能报告缺失。
+
+配对差为每点 `R_variant − R_baseline`，用分层权重求均值；SE 使用 UTC 日聚类 sandwich（`G/(G−1)` 修正），95% CI 使用正态临界值。少于两个 UTC 日无法估计 SE，输出提示；变体 z 不可估计时不能 `pass`。解析失败率按各组计算，取最大值执行 >10% 门槛，避免其他成功组稀释问题；解析失败、调用失败、patch_miss 均不参与有效配对。报告还含开仓率、决策一致率（忽略推理文字与注释）、方向翻转、成交开仓加权 avgR 与可用时的 failure_mode 描述性关联。缺少 `trade_journal.failure_mode` 会明确显示不可用，不修改 schema。噪声可省略，但会提示健康检查缺失。
+
+`invalid`：噪声 `|z|≥2`、有效配对不足 100、解析失败率 >10%。其余只有 `z≥Φ⁻¹(1−0.05/(2K))` 且相对开仓率变化在 ±50% 内才 `pass`，否则 `fail`；`--open-rate-limit` 可调整比例，越界写人工复核提示。基线开仓率为 0 而变体大于 0 时变化视为无穷，不能通过。账本以文件锁保护 K 的读取和单次 O_APPEND/fsync 追加；每次评分追加一行，包括重复评分，因此重复评分不会重置多重检验预算。缺少噪声组的评分不会伪造噪声统计。
+
+局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。`pass` 只筛入线上候选/对照，不会自动上线。
