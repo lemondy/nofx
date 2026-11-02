@@ -30,6 +30,9 @@ test('defaults: crypto market, horizon 3, leverage 3, both stops 0.2', () => {
     leverage: 3,
     long_stop_pct: 0.2,
     short_stop_pct: 0.2,
+    drawdown_warn_pct: 0.15,
+    max_drawdown_pct: 0.25,
+    daily_loss_pct: 0.07,
   })
 })
 
@@ -45,6 +48,10 @@ test('renders the intro and the crypto numeric fields', () => {
     'factor-min_order_usdt',
     'factor-long_stop_pct',
     'factor-short_stop_pct',
+    'factor-drawdown_warn_pct',
+    'factor-max_drawdown_pct',
+    'factor-daily_loss_pct',
+    'factor-kill-reset',
     'factor-max_stale_days',
     'factor-flatten_after_days',
     'factor-targets_path',
@@ -311,5 +318,83 @@ test('stop inputs show English defaults and respect disabled', () => {
     expect(input).toHaveAttribute('placeholder', 'Default 0.2')
     fireEvent.change(input, { target: { value: '0' } })
   }
+  expect(onChange).not.toHaveBeenCalled()
+})
+
+test('portfolio risk percentages show defaults in both markets and preserve zero', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  for (const market of ['crypto', 'us'] as const) {
+    fireEvent.click(screen.getByTestId(`factor-market-${market}`))
+    for (const [key, defaultPct] of [
+      ['drawdown_warn_pct', 15],
+      ['max_drawdown_pct', 25],
+      ['daily_loss_pct', 7],
+    ] as const) {
+      const input = screen.getByTestId(`factor-${key}`)
+      expect(input).toHaveValue(defaultPct)
+      expect(input).toHaveAttribute('placeholder', `默认 ${defaultPct}%`)
+      fireEvent.change(input, { target: { value: '0' } })
+      expect(input).toHaveValue(0)
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ [key]: 0 })
+      )
+      fireEvent.change(input, { target: { value: '12.5' } })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ [key]: 0.125 })
+      )
+      fireEvent.change(input, { target: { value: '' } })
+      expect(input).toHaveValue(defaultPct)
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ [key]: defaultPct / 100 })
+      )
+    }
+  }
+})
+
+test('reset emits a new ISO ID and explains that saving is required', () => {
+  const onChange = vi.fn()
+  const now = new Date('2026-11-02T03:04:05.000Z')
+  const clock = vi
+    .spyOn(Date.prototype, 'toISOString')
+    .mockReturnValue(now.toISOString())
+  try {
+    render(<Harness onChange={onChange} />)
+    expect(screen.getByText(/保存后生效/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '复位回撤熔断' }))
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kill_reset_id: '2026-11-02T03:04:05.000Z' })
+    )
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+test('portfolio risk fields show English defaults and respect disabled', () => {
+  const onChange = vi.fn()
+  render(
+    <FactorQuantConfigEditor
+      config={{ market: 'us' }}
+      language="en"
+      disabled
+      onChange={onChange}
+    />
+  )
+  for (const [key, pct] of [
+    ['drawdown_warn_pct', 15],
+    ['max_drawdown_pct', 25],
+    ['daily_loss_pct', 7],
+  ] as const) {
+    const input = screen.getByTestId(`factor-${key}`)
+    expect(input).toBeDisabled()
+    expect(input).toHaveValue(pct)
+    expect(input).toHaveAttribute('placeholder', `Default ${pct}%`)
+    fireEvent.change(input, { target: { value: '0' } })
+  }
+  const reset = screen.getByRole('button', {
+    name: 'Reset drawdown kill switch',
+  })
+  expect(reset).toBeDisabled()
+  fireEvent.click(reset)
   expect(onChange).not.toHaveBeenCalled()
 })

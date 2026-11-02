@@ -26,10 +26,11 @@ type RiskStatus struct {
 	// review 2026-10-28 #12: a failed latch read must be visible as unknown.
 	DailyHaltUnknown bool `json:"daily_halt_unknown"`
 
-	// Account drawdown breaker (vs initial balance).
+	// Account drawdown breaker (vs initial balance unless a basis is given).
 	InitialBalance       float64 `json:"initial_balance"`
 	AccountDrawdownPct   float64 `json:"account_drawdown_pct"`
 	AccountDrawdownCap   float64 `json:"account_drawdown_cap_pct"` // 0 = disabled
+	AccountDrawdownBasis string  `json:"account_drawdown_basis,omitempty"`
 	AccountBreakerActive bool    `json:"account_breaker_active"`
 
 	ReduceOnly      bool   `json:"reduce_only"`

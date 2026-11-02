@@ -36,6 +36,8 @@ type factorQuantRuntime struct {
 	lastLog       string // last tick log line (suppresses 5-minute repeats)
 	skipKey       string // last skip/failure reason already written to a decision record
 	skipKeyLoad   bool
+	riskSet       bool // risk snapshot supersedes failed durable writes
+	riskState     store.FactorQuantState
 }
 
 // IsFactorQuantStrategy reports whether this trader runs the factor_quant strategy.
@@ -210,12 +212,18 @@ func (at *AutoTrader) factorQuantTickSafe(broker fqBroker) {
 	at.factorQuantTick(broker, at.fqClock())
 }
 
-// factorQuantTick runs one loop iteration: rebalance gate, then equity snapshot.
+// factorQuantTick evaluates portfolio risk before the gate, then saves equity.
 func (at *AutoTrader) factorQuantTick(broker fqBroker, now time.Time) {
 	mu := at.executionMutex()
 	mu.Lock()
 	defer mu.Unlock()
-	at.factorQuantRebalanceCheck(broker, now)
+	ready, halted := at.factorQuantRiskCheck(broker, now)
+	if !ready {
+		return
+	}
+	if !halted {
+		at.factorQuantRebalanceCheck(broker, now)
+	}
 	at.factorQuantSaveEquity(broker, now)
 }
 
@@ -252,6 +260,9 @@ func (at *AutoTrader) fqState() (*store.FactorQuantState, error) {
 	if at.fq.retrySet {
 		state.RetryAsOf = at.fq.retryAsOf
 		state.RetryAttempts = at.fq.retryAttempts
+	}
+	if at.fq.riskSet {
+		fqCopyRiskState(state, &at.fq.riskState)
 	}
 	return state, nil
 }
@@ -765,22 +776,44 @@ func (at *AutoTrader) factorQuantUSPositions() ([]map[string]interface{}, error)
 	return out, nil
 }
 
-// factorQuantRiskStatus: a minimal read model — the AI path's breakers
-// (daily loss, loss streaks, pending entries) do not exist for this strategy.
+// factorQuantRiskStatus reads the independent portfolio breaker state. SQL and
+// account reads stay outside executionMutex; fqState snapshots memory via fq.mu.
 func (at *AutoTrader) factorQuantRiskStatus() RiskStatus {
 	out := RiskStatus{GeneratedAt: time.Now().UTC(), InitialBalance: at.initialBalance,
-		LossStreakBans: []LossStreakBan{}, Pending: []PendingStatus{}, Positions: []PositionRStatus{}}
+		AccountDrawdownBasis: "peak",
+		LossStreakBans:       []LossStreakBan{}, Pending: []PendingStatus{}, Positions: []PositionRStatus{}}
+	fq := at.config.StrategyConfig.FactorQuantConfig
+	out.DailyLossCapPct = fq.EffectiveDailyLossPct() * 100
+	out.AccountDrawdownCap = fq.EffectiveMaxDrawdownPct() * 100
+	equityOK := false
 	if at.isFactorQuantUS() {
 		if info, err := at.factorQuantUSAccountInfo(); err == nil {
 			out.Equity, _ = info["total_equity"].(float64)
+			equityOK = true
 		}
 	} else if at.trader != nil {
 		if bal, err := at.trader.GetBalance(); err == nil {
 			out.Equity = gridAccountEquity(bal)
+			equityOK = true
 		}
 	}
-	if out.InitialBalance > 0 && out.Equity > 0 {
-		out.AccountDrawdownPct = (out.InitialBalance - out.Equity) / out.InitialBalance * 100
+	state, err := at.fqState()
+	if err != nil {
+		out.DailyHaltUnknown, out.ReduceOnly = true, true
+		out.ProtectionFault = "无法读取因子量化组合风控状态"
+		return out
 	}
+	if equityOK {
+		out.AccountDrawdownPct = fqEquityLoss(out.Equity, state.PeakEquity) * 100
+	}
+	if state.DayStartDate == at.fqClock().UTC().Format(factorDateFmt) {
+		out.DayStartEquity = state.DayStartEquity
+		if equityOK {
+			out.DailyLossPct = fqEquityLoss(out.Equity, state.DayStartEquity) * 100
+		}
+	}
+	out.DailyHalted = state.HaltKind == fqHaltDaily
+	out.AccountBreakerActive = state.HaltKind == fqHaltDrawdown
+	out.ReduceOnly = state.HaltKind != ""
 	return out
 }
