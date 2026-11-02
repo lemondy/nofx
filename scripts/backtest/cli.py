@@ -303,6 +303,22 @@ def build_parser():
     p.add_argument("--csv", help="汇总结果写 CSV")
     p.set_defaults(fn=cmd_exit)
 
+    p = sub.add_parser("replay-score", help="离线 LLM 重放配对评分与追加账本")
+    from .replay_score import cmd_replay_score
+    _add_common(p)
+    _add_execution(p, with_limit=True)
+    p.add_argument("--replay-dir", required=True, help="llmreplay 输出目录")
+    p.add_argument("--variant", required=True, help="变体 id 或完整哈希")
+    p.add_argument("--arms", default="baseline,variant,noise", help="baseline,variant[,noise]")
+    p.add_argument("--model", help="完整缓存模型键；多模型时必须指定")
+    p.add_argument("--repeat", type=int, default=0)
+    p.add_argument("--horizon", type=float, default=72)
+    p.add_argument("--ledger", default="data/evolution/ledger.jsonl")
+    p.add_argument("--open-rate-limit", type=float, default=.5, help="相对开仓率变化阈值，默认 ±50%%")
+    p.add_argument("--fetch", action="store_true", help="允许调用现有 fetch 补抓 K 线")
+    p.add_argument("--db", help="可选的只读日志库，用于 failure_mode 描述性关联")
+    p.set_defaults(fn=cmd_replay_score)
+
     p = sub.add_parser("ml-dataset", help="信号 → 特征 + 标签(r_base / r_plain / mfe)")
     _add_common(p, with_db=True)
     _add_execution(p)
