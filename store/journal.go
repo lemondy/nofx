@@ -39,14 +39,16 @@ type TradeJournalDB struct {
 	Confidence        int     `gorm:"column:confidence;default:0" json:"confidence"`
 
 	// Review fields (filled during retrospective)
-	ExecutedAsPlan  string `gorm:"column:executed_as_plan;default:''" json:"executed_as_plan"` // yes|partial|no|unknown
-	DeviationNote   string `gorm:"column:deviation_note;default:''" json:"deviation_note"`
-	Emotions        string `gorm:"column:emotions;default:''" json:"emotions"`                 // comma-separated: calm,fomo,fear_of_missing,revenge,overconfident
-	MistakeCategory string `gorm:"column:mistake_category;default:''" json:"mistake_category"` // strategy|execution|risk_control|market|none
-	StrategyTag     string `gorm:"column:strategy_tag;default:''" json:"strategy_tag"`         // breakout|mean_reversion|trend_following|news|scalp|other
-	Lesson          string `gorm:"column:lesson;default:''" json:"lesson"`
-	ReviewStatus    string `gorm:"column:review_status;default:'pending'" json:"review_status"` // pending|reviewed
-	ReviewedAt      int64  `gorm:"column:reviewed_at;default:0" json:"reviewed_at"`
+	ExecutedAsPlan   string `gorm:"column:executed_as_plan;default:''" json:"executed_as_plan"` // yes|partial|no|unknown
+	DeviationNote    string `gorm:"column:deviation_note;default:''" json:"deviation_note"`
+	Emotions         string `gorm:"column:emotions;default:''" json:"emotions"`                 // comma-separated: calm,fomo,fear_of_missing,revenge,overconfident
+	MistakeCategory  string `gorm:"column:mistake_category;default:''" json:"mistake_category"` // strategy|execution|risk_control|market|none
+	FailureMode      string `gorm:"column:failure_mode;default:''" json:"failure_mode"`
+	StrategyTag      string `gorm:"column:strategy_tag;default:''" json:"strategy_tag"` // breakout|mean_reversion|trend_following|news|scalp|other
+	Lesson           string `gorm:"column:lesson;default:''" json:"lesson"`
+	ReviewStatus     string `gorm:"column:review_status;default:'pending'" json:"review_status"` // pending|reviewed|ai_reviewed|ai_failed
+	AIReviewAttempts int    `gorm:"column:ai_review_attempts;default:0" json:"ai_review_attempts"`
+	ReviewedAt       int64  `gorm:"column:reviewed_at;default:0" json:"reviewed_at"`
 
 	// AIManaged: the trade was opened by the AI (user request 09-27 — the
 	// journal must distinguish AI trades from manual ones). Determined by
@@ -88,6 +90,7 @@ func (s *TradeJournalStore) initTables() error {
 
 // JournalReviewPayload user-facing review update payload (API layer)
 type JournalReviewPayload struct {
+	FailureMode     *string `json:"failure_mode"`
 	ExecutedAsPlan  *string `json:"executed_as_plan"`
 	DeviationNote   *string `json:"deviation_note"`
 	Emotions        *string `json:"emotions"`
@@ -99,6 +102,7 @@ type JournalReviewPayload struct {
 // UpdateReviewPayload updates review fields from an API payload
 func (s *TradeJournalStore) UpdateReviewPayload(traderID string, id int64, payload *JournalReviewPayload) (*TradeJournalDB, error) {
 	return s.UpdateReview(traderID, id, &journalReviewUpdate{
+		FailureMode:     payload.FailureMode,
 		ExecutedAsPlan:  payload.ExecutedAsPlan,
 		DeviationNote:   payload.DeviationNote,
 		Emotions:        payload.Emotions,
@@ -110,6 +114,7 @@ func (s *TradeJournalStore) UpdateReviewPayload(traderID string, id int64, paylo
 
 // journalReviewUpdate fields that can be updated via review
 type journalReviewUpdate struct {
+	FailureMode     *string `json:"failure_mode"`
 	ExecutedAsPlan  *string `json:"executed_as_plan"`
 	DeviationNote   *string `json:"deviation_note"`
 	Emotions        *string `json:"emotions"`
@@ -200,10 +205,6 @@ func (s *TradeJournalStore) matchOpenDecision(traderID, symbol, side string, ent
 	if entryTimeMs <= 0 {
 		return false
 	}
-	base := "open_long"
-	if side == "SHORT" {
-		base = "open_short"
-	}
 	windowStart := time.UnixMilli(entryTimeMs).UTC().Add(-ownershipWindowMinutes * time.Minute)
 	windowEnd := time.UnixMilli(entryTimeMs).UTC().Add(2 * time.Minute)
 
@@ -219,7 +220,7 @@ func (s *TradeJournalStore) matchOpenDecision(traderID, symbol, side string, ent
 			continue
 		}
 		for _, act := range actions {
-			if act.Symbol == symbol && (act.Action == base || act.Action == base+"_limit") && act.Success {
+			if isJournalOpenAction(act, symbol, side) && act.Success {
 				return true
 			}
 		}
@@ -297,10 +298,6 @@ func (s *TradeJournalStore) enrichFromDecisions(traderID string, entry *TradeJou
 	if entry.EntryTime <= 0 {
 		return
 	}
-	openAction := "open_long"
-	if entry.Side == "SHORT" {
-		openAction = "open_short"
-	}
 
 	// Decision records within a window before position entry (AI decides,
 	// then the order fills — limit fills can lag the decision by the full
@@ -324,7 +321,7 @@ func (s *TradeJournalStore) enrichFromDecisions(traderID string, entry *TradeJou
 			continue
 		}
 		for _, act := range actions {
-			if act.Symbol == entry.Symbol && (act.Action == openAction || act.Action == openAction+"_limit") {
+			if isJournalOpenAction(act, entry.Symbol, entry.Side) {
 				// Prefer a successful action record
 				if entry.PlannedStopLoss == 0 && act.StopLoss != 0 {
 					entry.PlannedStopLoss = act.StopLoss
@@ -389,6 +386,9 @@ func (s *TradeJournalStore) UpdateReview(traderID string, id int64, update *jour
 	if update.ExecutedAsPlan != nil {
 		entry.ExecutedAsPlan = *update.ExecutedAsPlan
 	}
+	if update.FailureMode != nil {
+		entry.FailureMode = NormalizeFailureMode(*update.FailureMode)
+	}
 	if update.DeviationNote != nil {
 		entry.DeviationNote = *update.DeviationNote
 	}
@@ -415,6 +415,7 @@ func (s *TradeJournalStore) UpdateReview(traderID string, id int64, update *jour
 		"deviation_note":   entry.DeviationNote,
 		"emotions":         entry.Emotions,
 		"mistake_category": entry.MistakeCategory,
+		"failure_mode":     entry.FailureMode,
 		"strategy_tag":     entry.StrategyTag,
 		"lesson":           entry.Lesson,
 		"review_status":    entry.ReviewStatus,
@@ -455,6 +456,7 @@ type JournalStats struct {
 	EmotionStats  []JournalGroupStats `json:"emotion_stats"`  // emotions
 	MistakeStats  []JournalGroupStats `json:"mistake_stats"`  // mistake_category
 	StrategyStats []JournalGroupStats `json:"strategy_stats"` // strategy_tag
+	ByFailureMode []FailureModeStats  `json:"by_failure_mode"`
 
 	// Deviation from plan: how often planned SL/TP existed vs missing
 	WithPlanCount   int     `json:"with_plan_count"`
@@ -475,6 +477,7 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 		EmotionStats:  []JournalGroupStats{},
 		MistakeStats:  []JournalGroupStats{},
 		StrategyStats: []JournalGroupStats{},
+		ByFailureMode: []FailureModeStats{},
 	}
 
 	adherence := map[string]*JournalGroupStats{}
@@ -486,9 +489,9 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 
 	for _, e := range entries {
 		stats.TotalEntries++
-		if e.ReviewStatus == "reviewed" {
+		if e.ReviewStatus == "reviewed" || e.ReviewStatus == "ai_reviewed" {
 			stats.ReviewedCount++
-		} else {
+		} else if e.ReviewStatus == "pending" {
 			stats.PendingCount++
 		}
 		// NET caliber (user audit 2026-10-01): RealizedPnL is the exchange
@@ -572,6 +575,7 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 	stats.EmotionStats = finalize(emotions)
 	stats.MistakeStats = finalize(mistakes)
 	stats.StrategyStats = finalize(strategies)
+	stats.ByFailureMode = groupFailureModes(entries)
 
 	if stats.TotalEntries > 0 {
 		stats.WinRate = float64(stats.WinTrades) / float64(stats.TotalEntries) * 100
@@ -614,7 +618,7 @@ func (s *TradeJournalStore) GetStats(traderID string) (*JournalStats, error) {
 // GetRecentReviewed returns recent reviewed entries with lessons (for AI context)
 func (s *TradeJournalStore) GetRecentReviewed(traderID string, n int) ([]*TradeJournalDB, error) {
 	var entries []*TradeJournalDB
-	if err := s.db.Where("trader_id = ? AND review_status = ?", traderID, "reviewed").
+	if err := s.db.Where("trader_id = ? AND review_status IN ?", traderID, []string{"reviewed", "ai_reviewed"}).
 		Order("exit_time DESC").Limit(n).Find(&entries).Error; err != nil {
 		return nil, err
 	}

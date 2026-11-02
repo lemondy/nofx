@@ -20,6 +20,11 @@ import (
 
 // Server HTTP API server
 type Server struct {
+	autoReviewMu              sync.Mutex
+	autoReviewLifecycleMu     sync.Mutex
+	autoReviewCancel          context.CancelFunc
+	autoReviewDone            chan struct{}
+	reviewAI                  reviewAICaller
 	traderOpsMu               sync.Mutex
 	fundsSyncMu               sync.Mutex
 	fundsSync                 map[string]*fundsSyncState
@@ -796,11 +801,14 @@ func (s *Server) Start() error {
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
+	s.startAutoReview()
+	defer s.stopAutoReview()
 	return s.httpServer.ListenAndServe()
 }
 
 // Shutdown Gracefully shutdown server
 func (s *Server) Shutdown() error {
+	s.stopAutoReview()
 	if s.httpServer == nil {
 		return nil
 	}

@@ -14,8 +14,9 @@ type ReviewPromptStore struct {
 
 // ReviewPromptConfig is one user's custom review prompt templates.
 type ReviewPromptConfig struct {
-	ID     uint   `gorm:"primaryKey" json:"id"`
-	UserID string `gorm:"column:user_id;not null;uniqueIndex" json:"user_id"`
+	ID                uint   `gorm:"primaryKey" json:"id"`
+	UserID            string `gorm:"column:user_id;not null;uniqueIndex" json:"user_id"`
+	AutoReviewEnabled bool   `gorm:"column:auto_review_enabled;not null;default:false" json:"auto_review_enabled"`
 	// Custom system prompt for the comprehensive AI review (复盘). Empty =
 	// built-in default.
 	ReviewSystemPrompt string `gorm:"column:review_system_prompt;type:text;default:''" json:"review_system_prompt"`
@@ -65,7 +66,7 @@ func (s *ReviewPromptStore) Get(userID string) (*ReviewPromptConfig, error) {
 
 // Upsert saves the user's prompt templates. Empty string values are stored
 // as-is and mean "use built-in default" at read time.
-func (s *ReviewPromptStore) Upsert(userID string, reviewPrompt, ruleExtractPrompt string) error {
+func (s *ReviewPromptStore) Upsert(userID string, reviewPrompt, ruleExtractPrompt string, autoReviewEnabled ...bool) error {
 	if userID == "" {
 		userID = "default"
 	}
@@ -79,5 +80,15 @@ func (s *ReviewPromptStore) Upsert(userID string, reviewPrompt, ruleExtractPromp
 	}
 	cfg.ReviewSystemPrompt = reviewPrompt
 	cfg.RuleExtractSystemPrompt = ruleExtractPrompt
+	if len(autoReviewEnabled) > 0 {
+		cfg.AutoReviewEnabled = autoReviewEnabled[0]
+	}
 	return s.db.Save(&cfg).Error
+}
+
+// ListAutoReviewUsers returns only users who explicitly enabled automatic review.
+func (s *ReviewPromptStore) ListAutoReviewUsers() ([]ReviewPromptConfig, error) {
+	var configs []ReviewPromptConfig
+	err := s.db.Where("auto_review_enabled = ?", true).Order("user_id ASC").Find(&configs).Error
+	return configs, err
 }

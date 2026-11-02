@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -80,7 +81,7 @@ func (s *Server) handleJournalUpdate(c *gin.Context) {
 	// Validate enum-ish fields
 	if body.ExecutedAsPlan != nil {
 		switch *body.ExecutedAsPlan {
-		case "yes", "partial", "no", "":
+		case "yes", "partial", "no", "unknown", "":
 		default:
 			SafeBadRequest(c, "executed_as_plan must be one of: yes, partial, no")
 			return
@@ -609,6 +610,15 @@ func (s *Server) handleAIReview(c *gin.Context) {
 
 // callReviewAI invokes the user's default enabled AI model
 func (s *Server) callReviewAI(userID, systemPrompt, userPrompt string) (string, error) {
+	return s.callReviewAIContext(context.Background(), userID, systemPrompt, userPrompt)
+}
+
+// callReviewAIContext preserves the manual review model resolution while allowing
+// background calls (including provider retries) to stop with the server.
+func (s *Server) callReviewAIContext(ctx context.Context, userID, systemPrompt, userPrompt string) (string, error) {
+	if s.reviewAI != nil {
+		return s.reviewAI.CallReviewAI(ctx, userID, systemPrompt, userPrompt)
+	}
 	model, err := s.store.AIModel().GetDefault(userID)
 	if err != nil || model == nil {
 		model, err = s.store.AIModel().GetAnyEnabled()
@@ -625,6 +635,9 @@ func (s *Server) callReviewAI(userID, systemPrompt, userPrompt string) (string, 
 		aiClient = mcp.NewClient()
 	}
 	aiClient.SetAPIKey(string(model.APIKey), model.CustomAPIURL, model.CustomModelName)
+	if client, ok := aiClient.(interface{ SetRequestContext(context.Context) }); ok {
+		client.SetRequestContext(ctx)
+	}
 
 	return aiClient.CallWithMessages(systemPrompt, userPrompt)
 }
@@ -705,8 +718,10 @@ func (s *Server) handleGetReviewPromptConfig(c *gin.Context) {
 		"rule_extract_system_prompt": defaultRuleExtractSystemPrompt,
 		"review_custom":              false,
 		"rule_extract_custom":        false,
+		"auto_review_enabled":        false,
 	}
 	if cfg != nil {
+		resp["auto_review_enabled"] = cfg.AutoReviewEnabled
 		if cfg.ReviewSystemPrompt != "" {
 			resp["review_system_prompt"] = cfg.ReviewSystemPrompt
 			resp["review_custom"] = true
@@ -727,12 +742,13 @@ func (s *Server) handleUpdateReviewPromptConfig(c *gin.Context) {
 	var req struct {
 		ReviewSystemPrompt      *string `json:"review_system_prompt"`
 		RuleExtractSystemPrompt *string `json:"rule_extract_system_prompt"`
+		AutoReviewEnabled       *bool   `json:"auto_review_enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		SafeBadRequest(c, "Invalid request parameters")
 		return
 	}
-	if req.ReviewSystemPrompt == nil && req.RuleExtractSystemPrompt == nil {
+	if req.ReviewSystemPrompt == nil && req.RuleExtractSystemPrompt == nil && req.AutoReviewEnabled == nil {
 		SafeBadRequest(c, "nothing to update")
 		return
 	}
@@ -741,9 +757,16 @@ func (s *Server) handleUpdateReviewPromptConfig(c *gin.Context) {
 	// template.
 	reviewPrompt := ""
 	ruleExtractPrompt := ""
-	if cfg, _ := s.store.ReviewPrompt().Get(userID); cfg != nil {
+	autoReviewEnabled := false
+	cfg, err := s.store.ReviewPrompt().Get(userID)
+	if err != nil {
+		SafeInternalError(c, "load review prompt config", err)
+		return
+	}
+	if cfg != nil {
 		reviewPrompt = cfg.ReviewSystemPrompt
 		ruleExtractPrompt = cfg.RuleExtractSystemPrompt
+		autoReviewEnabled = cfg.AutoReviewEnabled
 	}
 	if req.ReviewSystemPrompt != nil {
 		reviewPrompt = strings.TrimSpace(*req.ReviewSystemPrompt)
@@ -751,8 +774,11 @@ func (s *Server) handleUpdateReviewPromptConfig(c *gin.Context) {
 	if req.RuleExtractSystemPrompt != nil {
 		ruleExtractPrompt = strings.TrimSpace(*req.RuleExtractSystemPrompt)
 	}
+	if req.AutoReviewEnabled != nil {
+		autoReviewEnabled = *req.AutoReviewEnabled
+	}
 
-	if err := s.store.ReviewPrompt().Upsert(userID, reviewPrompt, ruleExtractPrompt); err != nil {
+	if err := s.store.ReviewPrompt().Upsert(userID, reviewPrompt, ruleExtractPrompt, autoReviewEnabled); err != nil {
 		SafeInternalError(c, "save review prompt config", err)
 		return
 	}
@@ -769,10 +795,10 @@ func (s *Server) buildRuleExtractionPrompts(userID string, entries []*store.Trad
 	var sb strings.Builder
 	sb.WriteString("## Reviewed Trade Journal\n")
 	for _, e := range entries {
-		sb.WriteString(fmt.Sprintf("- %s %s | entry %.4f exit %.4f | %dx | PnL(净) %+.2f (%+.1f%%) | plan:SL=%.4f,TP=%.4f | adherence=%s | emotions=%s | category=%s | strategy=%s | lesson=%s\n",
+		sb.WriteString(fmt.Sprintf("- %s %s | entry %.4f exit %.4f | %dx | PnL(净) %+.2f (%+.1f%%) | plan:SL=%.4f,TP=%.4f | adherence=%s | emotions=%s | category=%s | strategy=%s | failure_mode=%s | lesson=%s\n",
 			e.Symbol, e.Side, e.EntryPrice, e.ExitPrice, e.Leverage, e.RealizedPnL-e.Fee, e.PnLPct,
 			e.PlannedStopLoss, e.PlannedTakeProfit, orDash(e.ExecutedAsPlan), orDash(e.Emotions),
-			orDash(e.MistakeCategory), orDash(e.StrategyTag), orDash(e.Lesson)))
+			orDash(e.MistakeCategory), orDash(e.StrategyTag), orDash(e.FailureMode), orDash(e.Lesson)))
 	}
 
 	data, _ := json.Marshal(stats)
