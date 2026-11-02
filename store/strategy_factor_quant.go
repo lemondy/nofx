@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -25,7 +26,7 @@ const (
 
 // FactorQuantConfig is the factor_quant strategy configuration. Zero values
 // mean "use the documented default" (see the Effective* resolvers), except
-// stop percentages where an explicit 0 disables that side's stop.
+// pointer-valued percentages where an explicit 0 disables protection.
 type FactorQuantConfig struct {
 	// Market: "crypto" (paper futures account, long/short) or "us" (bStock paper
 	// ledger, long-only). Required.
@@ -50,6 +51,12 @@ type FactorQuantConfig struct {
 	// ShortStopPct: crypto only, stop on shorts at entry*(1+ShortStopPct).
 	// nil = default 0.2; explicit 0 disables. Valid [0,10].
 	ShortStopPct *float64 `json:"short_stop_pct,omitempty"`
+	// Portfolio breakers apply to both markets. nil = defaults; 0 disables.
+	MaxDrawdownPct  *float64 `json:"max_drawdown_pct,omitempty"`
+	DrawdownWarnPct *float64 `json:"drawdown_warn_pct,omitempty"`
+	DailyLossPct    *float64 `json:"daily_loss_pct,omitempty"`
+	// A new nonempty ID manually resets the drawdown latch and equity peak.
+	KillResetID string `json:"kill_reset_id,omitempty"`
 	// MaxStaleDays: targets whose as_of is older than this many days (UTC)
 	// are not traded; default horizon+2.
 	MaxStaleDays int `json:"max_stale_days,omitempty"`
@@ -74,6 +81,9 @@ const (
 	defaultFactorQuantMinOrder      = 10.0
 	defaultFactorQuantLongStop      = 0.2
 	defaultFactorQuantShortStop     = 0.2
+	defaultFactorQuantMaxDrawdown   = 0.25
+	defaultFactorQuantDrawdownWarn  = 0.15
+	defaultFactorQuantDailyLoss     = 0.07
 	defaultFactorQuantUSFeeBps      = 10.0
 	defaultFactorQuantUSSlippageBps = 3.0
 	maxFactorQuantUSCostBps         = 100.0
@@ -142,6 +152,27 @@ func (f *FactorQuantConfig) EffectiveShortStopPct() float64 {
 		return defaultFactorQuantShortStop
 	}
 	return *f.ShortStopPct
+}
+
+func (f *FactorQuantConfig) EffectiveMaxDrawdownPct() float64 {
+	if f == nil || f.MaxDrawdownPct == nil {
+		return defaultFactorQuantMaxDrawdown
+	}
+	return *f.MaxDrawdownPct
+}
+
+func (f *FactorQuantConfig) EffectiveDrawdownWarnPct() float64 {
+	if f == nil || f.DrawdownWarnPct == nil {
+		return defaultFactorQuantDrawdownWarn
+	}
+	return *f.DrawdownWarnPct
+}
+
+func (f *FactorQuantConfig) EffectiveDailyLossPct() float64 {
+	if f == nil || f.DailyLossPct == nil {
+		return defaultFactorQuantDailyLoss
+	}
+	return *f.DailyLossPct
 }
 
 // EffectiveUSFeeBps: per-fill fee of the US paper ledger, basis points.
@@ -218,6 +249,17 @@ func (f *FactorQuantConfig) Validate() error {
 	if f.ShortStopPct != nil && (fqBadFloat(*f.ShortStopPct) || *f.ShortStopPct < 0 || *f.ShortStopPct > 10) {
 		return fmt.Errorf("factor_quant short_stop_pct must be in [0,10]")
 	}
+	for name, v := range map[string]*float64{"max_drawdown_pct": f.MaxDrawdownPct, "drawdown_warn_pct": f.DrawdownWarnPct, "daily_loss_pct": f.DailyLossPct} {
+		if v != nil && (fqBadFloat(*v) || *v < 0 || *v >= 1) {
+			return fmt.Errorf("factor_quant %s must be in [0,1)", name)
+		}
+	}
+	if warn, maxDD := f.EffectiveDrawdownWarnPct(), f.EffectiveMaxDrawdownPct(); warn > 0 && maxDD > 0 && warn >= maxDD {
+		return fmt.Errorf("factor_quant drawdown_warn_pct must be < effective max_drawdown_pct")
+	}
+	if utf8.RuneCountInString(f.KillResetID) > 64 || strings.ContainsRune(f.KillResetID, 0) {
+		return fmt.Errorf("factor_quant kill_reset_id must be at most 64 characters and contain no NUL")
+	}
 	for name, v := range map[string]*float64{"us_fee_bps": f.USFeeBps, "us_slippage_bps": f.USSlippageBps} {
 		if v != nil && (fqBadFloat(*v) || *v < 0 || *v > maxFactorQuantUSCostBps) {
 			return fmt.Errorf("factor_quant %s must be in [0,%g]", name, maxFactorQuantUSCostBps)
@@ -244,15 +286,24 @@ func fqBadFloat(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
 
 // FactorQuantState is one row per trader.
 type FactorQuantState struct {
-	TraderID      string `gorm:"column:trader_id;primaryKey" json:"trader_id"`
-	LastAsOf      string `gorm:"column:last_as_of;not null;default:''" json:"last_as_of"` // YYYY-MM-DD of the targets last rebalanced to
-	LastRunID     string `gorm:"column:last_run_id;default:''" json:"last_run_id"`
-	LastRule      string `gorm:"column:last_rule;default:''" json:"last_rule"`
-	RebalanceAt   int64  `gorm:"column:rebalance_at;default:0" json:"rebalance_at"`    // Unix ms UTC
-	LastSkipKey   string `gorm:"column:last_skip_key;default:''" json:"last_skip_key"` // last skip reason already recorded (dedup across restarts)
-	RetryAsOf     string `gorm:"column:retry_as_of;not null;default:''" json:"retry_as_of"`
-	RetryAttempts int    `gorm:"column:retry_attempts;not null;default:0" json:"retry_attempts"`
-	UpdatedAt     int64  `gorm:"column:updated_at;default:0" json:"updated_at"` // Unix ms UTC
+	TraderID         string  `gorm:"column:trader_id;primaryKey" json:"trader_id"`
+	LastAsOf         string  `gorm:"column:last_as_of;not null;default:''" json:"last_as_of"` // YYYY-MM-DD of the targets last rebalanced to
+	LastRunID        string  `gorm:"column:last_run_id;default:''" json:"last_run_id"`
+	LastRule         string  `gorm:"column:last_rule;default:''" json:"last_rule"`
+	RebalanceAt      int64   `gorm:"column:rebalance_at;default:0" json:"rebalance_at"`    // Unix ms UTC
+	LastSkipKey      string  `gorm:"column:last_skip_key;default:''" json:"last_skip_key"` // last skip reason already recorded (dedup across restarts)
+	RetryAsOf        string  `gorm:"column:retry_as_of;not null;default:''" json:"retry_as_of"`
+	RetryAttempts    int     `gorm:"column:retry_attempts;not null;default:0" json:"retry_attempts"`
+	PeakEquity       float64 `gorm:"column:peak_equity;not null;default:0" json:"peak_equity"`
+	DayStartDate     string  `gorm:"column:day_start_date;not null;default:''" json:"day_start_date"`
+	DayStartEquity   float64 `gorm:"column:day_start_equity;not null;default:0" json:"day_start_equity"`
+	HaltKind         string  `gorm:"column:halt_kind;not null;default:''" json:"halt_kind"`
+	HaltDay          string  `gorm:"column:halt_day;not null;default:''" json:"halt_day"`
+	HaltReason       string  `gorm:"column:halt_reason;not null;default:''" json:"halt_reason"`
+	HaltedAt         int64   `gorm:"column:halted_at;not null;default:0" json:"halted_at"` // Unix ms UTC
+	WarnActive       bool    `gorm:"column:warn_active;not null;default:false" json:"warn_active"`
+	KillResetApplied string  `gorm:"column:kill_reset_applied;not null;default:''" json:"kill_reset_applied"`
+	UpdatedAt        int64   `gorm:"column:updated_at;default:0" json:"updated_at"` // Unix ms UTC
 }
 
 func (FactorQuantState) TableName() string { return "factor_quant_state" }
@@ -309,4 +360,40 @@ func (s *FactorQuantStore) SetRetry(traderID, asOf string, attempts int) error {
 		Columns:   []clause.Column{{Name: "trader_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"retry_as_of", "retry_attempts", "updated_at"}),
 	}).Create(row).Error
+}
+
+// Risk setters only update their own columns, preserving rebalance/retry state.
+func (s *FactorQuantStore) setRisk(row *FactorQuantState, columns ...string) error {
+	row.UpdatedAt = time.Now().UTC().UnixMilli()
+	return s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "trader_id"}},
+		DoUpdates: clause.AssignmentColumns(append(columns, "updated_at")),
+	}).Create(row).Error
+}
+
+func (s *FactorQuantStore) SetPeakEquity(traderID string, equity float64) error {
+	return s.setRisk(&FactorQuantState{TraderID: traderID, PeakEquity: equity}, "peak_equity")
+}
+
+func (s *FactorQuantStore) SetDayStart(traderID, day string, equity float64) error {
+	return s.setRisk(&FactorQuantState{TraderID: traderID, DayStartDate: day, DayStartEquity: equity}, "day_start_date", "day_start_equity")
+}
+
+func (s *FactorQuantStore) SetHalt(traderID, kind, day, reason string, haltedAt int64) error {
+	return s.setRisk(&FactorQuantState{TraderID: traderID, HaltKind: kind, HaltDay: day, HaltReason: reason, HaltedAt: haltedAt},
+		"halt_kind", "halt_day", "halt_reason", "halted_at")
+}
+
+func (s *FactorQuantStore) SetWarnActive(traderID string, active bool) error {
+	return s.setRisk(&FactorQuantState{TraderID: traderID, WarnActive: active}, "warn_active")
+}
+
+// ApplyKillReset atomically records the ID with its new peak and warning state.
+// The caller clears only a drawdown halt; a daily halt must survive a reset.
+func (s *FactorQuantStore) ApplyKillReset(traderID, resetID string, equity float64, clearDrawdown bool) error {
+	columns := []string{"peak_equity", "warn_active", "kill_reset_applied"}
+	if clearDrawdown {
+		columns = append(columns, "halt_kind", "halt_day", "halt_reason", "halted_at")
+	}
+	return s.setRisk(&FactorQuantState{TraderID: traderID, PeakEquity: equity, KillResetApplied: resetID}, columns...)
 }

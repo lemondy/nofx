@@ -85,6 +85,18 @@ const fq = {
     zh: '仅加密：触发价 = 持仓均价 ×(1+N)；默认 0.2（20%）；填 0 关闭，范围 [0,10]',
     en: 'Crypto only: stop at average entry × (1+N); default 0.2 (20%); 0 = disabled, range [0,10]',
   },
+  drawdownWarn: { zh: '回撤预警（%）', en: 'Drawdown warning (%)' },
+  maxDrawdown: { zh: '回撤熔断清仓（%）', en: 'Drawdown kill switch (%)' },
+  dailyLoss: { zh: '单日亏损熔断（%）', en: 'Daily loss halt (%)' },
+  portfolioRiskDesc: {
+    zh: '两种市场均适用；填 0 关闭，留空恢复默认值',
+    en: 'Applies to both markets; 0 disables, empty restores the default',
+  },
+  killReset: { zh: '复位回撤熔断', en: 'Reset drawdown kill switch' },
+  killResetHint: {
+    zh: '保存后生效：重设权益峰值并解除回撤熔断，不解除当日亏损熔断。',
+    en: 'Takes effect after saving: resets the equity peak and drawdown halt; the daily loss halt remains.',
+  },
   usFee: { zh: '美股手续费 (bp)', en: 'US fee (bp)' },
   usFeeDesc: {
     zh: '仅美股：每笔成交手续费，基点（10 = 0.1%），从模拟现金扣除；0 = 无手续费；留空 = 默认 10',
@@ -137,6 +149,9 @@ export const defaultFactorQuantConfig: FactorQuantConfig = {
   leverage: 3,
   long_stop_pct: 0.2,
   short_stop_pct: 0.2,
+  drawdown_warn_pct: 0.15,
+  max_drawdown_pct: 0.25,
+  daily_loss_pct: 0.07,
 }
 
 export function FactorQuantConfigEditor({
@@ -155,6 +170,35 @@ export function FactorQuantConfigEditor({
   }
 
   const market = config.market === 'us' ? 'us' : 'crypto'
+
+  // Display percentages while persisting the backend's fractional values.
+  const riskField = (
+    key: 'drawdown_warn_pct' | 'max_drawdown_pct' | 'daily_loss_pct',
+    label: string,
+    defaultPct: number
+  ) => (
+    <div className="p-3 rounded-lg bg-surface-2 border border-line">
+      <label className="block text-[13px] mb-1 text-fg-2">{label}</label>
+      <p className="text-xs mb-2 text-fg-3">
+        {ts(fq.portfolioRiskDesc, language)}
+      </p>
+      <Input
+        type="number"
+        data-testid={`factor-${key}`}
+        value={Number(((config[key] ?? defaultPct / 100) * 100).toFixed(8))}
+        placeholder={`${ts(fq.defaultHint, language)} ${defaultPct}%`}
+        onChange={(e) => {
+          const n = parseFloat(e.target.value)
+          updateField(key, Number.isFinite(n) ? n / 100 : defaultPct / 100)
+        }}
+        disabled={disabled}
+        min={0}
+        max={99.99}
+        step={0.1}
+        className="w-full px-3 bg-surface-2 border border-line text-fg num text-right"
+      />
+    </div>
+  )
 
   // Market switch applies that market's defaults (see MARKET_DEFAULTS).
   const switchMarket = (next: 'crypto' | 'us') => {
@@ -372,6 +416,9 @@ export function FactorQuantConfigEditor({
                 desc: ts(fq.shortStopDesc, language),
               }
             )}
+          {riskField('drawdown_warn_pct', ts(fq.drawdownWarn, language), 15)}
+          {riskField('max_drawdown_pct', ts(fq.maxDrawdown, language), 25)}
+          {riskField('daily_loss_pct', ts(fq.dailyLoss, language), 7)}
           {market === 'us' &&
             bpsField(
               'us_fee_bps',
@@ -408,6 +455,20 @@ export function FactorQuantConfigEditor({
       </div>
 
       {/* Advanced */}
+      <div className="p-3 rounded-lg bg-surface-2 border border-line">
+        <button
+          type="button"
+          data-testid="factor-kill-reset"
+          disabled={disabled}
+          onClick={() => updateField('kill_reset_id', new Date().toISOString())}
+          className="text-sm text-brand disabled:opacity-50"
+        >
+          {ts(fq.killReset, language)}
+        </button>
+        <p className="text-xs mt-2 text-fg-3">
+          {ts(fq.killResetHint, language)}
+        </p>
+      </div>
       <div>
         <div className="flex items-center gap-2 mb-4">
           <h3 className="font-medium text-fg">{ts(fq.advanced, language)}</h3>

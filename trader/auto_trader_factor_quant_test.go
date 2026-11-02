@@ -728,6 +728,12 @@ func fqPaperTrader(t *testing.T, st *store.Store, id string, market string, pric
 	cfg := AutoTraderConfig{ID: id, Name: "FQ " + market, Exchange: "paper", ExchangeID: id, InitialBalance: 10000,
 		PaperConfig:      &paper.Config{ExchangeID: id, InitialBalance: 10000, TakerFeeBps: 5, MakerFeeBps: 2, SlippageBps: 0, DefaultLeverage: 3},
 		PaperPriceSource: prices, StrategyConfig: fqStrategy(market)}
+	// Legacy execution tests use independent fake equity (often 1000 against
+	// this paper account's 10000). Keep portfolio breakers off in this fixture;
+	// risk tests explicitly enable the defaults with matching account equity.
+	cfg.StrategyConfig.FactorQuantConfig.MaxDrawdownPct = fqPtr(0)
+	cfg.StrategyConfig.FactorQuantConfig.DrawdownWarnPct = fqPtr(0)
+	cfg.StrategyConfig.FactorQuantConfig.DailyLossPct = fqPtr(0)
 	at, err := NewAutoTrader(cfg, st, "u")
 	if err != nil {
 		t.Fatalf("NewAutoTrader: %v", err)
@@ -1520,11 +1526,14 @@ func TestFactorQuantPaperFlattenCancelsShortStop(t *testing.T) {
 // A transient rebalance preflight error must not suppress retry protection.
 type fqPreflightFailureBroker struct {
 	*fqFuturesBroker
-	failAccount bool
+	failAccount  bool
+	accountCalls int
 }
 
 func (b *fqPreflightFailureBroker) Account() (*fqAccount, error) {
-	if b.failAccount {
+	b.accountCalls++
+	// Fail the rebalance preflight after the portfolio-risk account read.
+	if b.failAccount && b.accountCalls == 2 {
 		b.failAccount = false
 		return nil, errors.New("transient account failure")
 	}

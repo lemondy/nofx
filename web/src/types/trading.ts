@@ -305,6 +305,7 @@ export interface RiskStatus {
   initial_balance: number
   account_drawdown_pct: number
   account_drawdown_cap_pct: number
+  account_drawdown_basis?: string
   account_breaker_active: boolean
   reduce_only: boolean
   protection_fault?: string

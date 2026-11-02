@@ -63,6 +63,14 @@ func (s *EquityStore) Save(snapshot *EquitySnapshot) error {
 	return nil
 }
 
+// MaxEquity seeds a strategy's high-water mark without loading its whole curve.
+func (s *EquityStore) MaxEquity(traderID string) (float64, error) {
+	var peak float64
+	err := s.db.Model(&EquitySnapshot{}).Where("trader_id = ?", traderID).
+		Select("COALESCE(MAX(total_equity), 0)").Scan(&peak).Error
+	return peak, err
+}
+
 // GetLatest gets the latest N equity records for specified trader (sorted in ascending chronological order: old to new)
 func (s *EquityStore) GetLatest(traderID string, limit int) ([]*EquitySnapshot, error) {
 	var snapshots []*EquitySnapshot

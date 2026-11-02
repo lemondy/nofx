@@ -153,7 +153,7 @@ export function RiskStatusPanel({
           language={language}
         />
         <Meter
-          label={t('riskStatus.accountDrawdown', language)}
+          label={`${t('riskStatus.accountDrawdown', language)}${data.account_drawdown_basis === 'peak' ? t('riskStatus.peakRelative', language) : ''}`}
           value={data.account_drawdown_pct}
           cap={data.account_drawdown_cap_pct}
           language={language}
