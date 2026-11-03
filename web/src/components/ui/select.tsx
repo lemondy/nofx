@@ -3,6 +3,9 @@ import { createPortal } from 'react-dom'
 import { ChevronDown } from 'lucide-react'
 import { cn } from '../../lib/cn'
 
+// Minimum distance (px) between the open menu and the viewport edges.
+const VIEWPORT_GAP = 8
+
 export interface SelectOption {
   value: string | number
   label: string
@@ -39,7 +42,18 @@ export function NofxSelect({
   const updatePos = useCallback(() => {
     if (!triggerRef.current) return
     const rect = triggerRef.current.getBoundingClientRect()
-    setPos({ top: rect.bottom + 4, left: rect.left, width: rect.width })
+    // A trigger near the right edge would push a wider menu off-screen:
+    // right-align the menu with the trigger instead, clamped to the viewport.
+    const viewport = document.documentElement.clientWidth
+    const menuWidth = dropdownRef.current?.offsetWidth ?? rect.width
+    let left = rect.left
+    if (left + menuWidth > viewport - VIEWPORT_GAP) {
+      left = Math.max(
+        VIEWPORT_GAP,
+        Math.min(rect.right, viewport - VIEWPORT_GAP) - menuWidth
+      )
+    }
+    setPos({ top: rect.bottom + 4, left, width: rect.width })
   }, [])
 
   useLayoutEffect(() => {
@@ -92,13 +106,19 @@ export function NofxSelect({
           <div
             ref={dropdownRef}
             className="fixed z-[9999] rounded border border-line bg-surface-2 shadow-pop max-h-60 overflow-y-auto"
-            style={{ top: pos.top, left: pos.left, minWidth: pos.width }}
+            style={{
+              top: pos.top,
+              left: pos.left,
+              minWidth: pos.width,
+              maxWidth: `calc(100vw - ${VIEWPORT_GAP * 2}px)`,
+            }}
           >
             {options.map((opt) => (
               <div
                 key={opt.value}
+                title={opt.label}
                 className={cn(
-                  'px-3 py-1.5 text-sm cursor-pointer transition-colors whitespace-nowrap',
+                  'px-3 py-1.5 text-sm cursor-pointer transition-colors whitespace-nowrap truncate',
                   String(opt.value) === String(value)
                     ? 'bg-brand-soft text-brand'
                     : 'text-fg hover:bg-surface-hover'
