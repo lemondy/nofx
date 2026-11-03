@@ -51,6 +51,25 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       'scripts/factor_mining/full_universe.py · scripts/factor_mining/universe_expansion_study.py · docs/research/2026-11-03-crypto-universe-expansion.md · data/factor_mining/crypto_full/study/result.json',
   },
   {
+    id: 'wide-pool-ensemble',
+    date: '2026-11-03',
+    title: '加密宽因子池组合（40 个低相关因子 vs 现有 14 因子）',
+    domain: '加密 · 因子挖掘 · 增量评估',
+    verdict: 'none',
+    verdictText: '无增量（S1 fail）',
+    idea: '成熟多因子策略用几十个低相关因子一起打分，而现有因子量化-加密只用 14 个 accepted 因子等权。按增量评估框架做第一个用例：从 zoo 里 h=3 训练期达标的 3650 个因子中，按训练 ICIR 贪心选出 40 个两两秩相关 <0.5 的因子，权重按训练 IC 再向等权收缩一半；持仓规则、费用、资金费都不变，只把打分换掉，在 2026-05-04 之后的前向区间与现有方案做每日收益配对差。预声明在运行前提交。',
+    bullets: [
+      '主检验：Δ = −0.125%/日，周聚类 SE 0.085%，z = −1.47（z_K 1.96），前后两半都为负，判 fail，账本 fq_crypto K=1。验证段配对差同样为负（z −2.33，对基线有利）。',
+      '信号层几乎相同：前向 RankIC 基线 0.073（t 2.99），宽池 0.076（t 3.08），差 0.0025（t 0.38）；随机 40 因子安慰剂中排第 82.5 分位。为凑够 40 个低相关因子要考察 3294 个，池子高度同质。',
+      '亏损来自空头腿：前向空头腿净损益基线 −140、宽池 −327（初始 1000），多头腿 +8 / +3；宽池偏向波动率类因子（13/40），把高波动币排到末档，多吃了暴涨右尾，换手多 45%。',
+      '基线本身前向也亏：当前因子量化-加密规则 2026-05-04 之后 −13.2%（年化约 −25%），同样主要亏在空头腿。',
+    ],
+    conclusion:
+      '因子数量不是瓶颈，组合构建（空头腿）才是。不按本次结果调参重试；后续优先做空头腿改造（只做多、剔除暴涨/新币并按波动率缩仓、截尾收益挖掘目标），以及扩充含已下架币的币池后再看多因子组合，均需新的预声明并计入 K。',
+    source:
+      'scripts/factor_mining/wide_pool_study.py · docs/research/2026-11-03-wide-pool-ensemble-prereg.md · docs/research/2026-11-03-wide-pool-ensemble-study.md',
+  },
+  {
     id: 'fib-fvg-bos',
     date: '2026-11-01',
     title: '斐波那契 + FVG + BOS 入场模型',
