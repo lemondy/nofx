@@ -289,6 +289,7 @@ go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
 # 完全离线评分，缺 K 线则计数并排除整个配对点
 .venv/bin/python -m scripts.backtest replay-score \
   --replay-dir data/evolution/replay/oct --variant no-chase-v1 \
+  --track crypto_llm --baseline-version CONFIG_HASH --change-type D \
   --cache data/backtest_cache --horizon 72 --ledger data/evolution/ledger.jsonl
 # 只有显式追加 --fetch 才允许调用既有 fetch 下载；两组评分可指定 --arms baseline,variant
 ```
@@ -316,8 +317,16 @@ go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
 
 评分不做历史成交匹配、不合并连续限价信号，也不按模拟持仓阻挡后续决策点；每个历史状态下的开仓都独立研究。复用 `exitsim.build_trade` 与 `backtrader_adapter.run_trade`，只保留决策 SL/TP、完整止盈和时间止损（默认 72h），限价有效期默认 45 分钟；费用/滑点/限价穿价沿用 entry 默认值，可用同名参数覆盖。没有 SL 的开仓不计入并计数；未成交限价贡献 0；没有开仓的决策点贡献 0。缓存须覆盖信号至 horizon（限价再加有效期与 10 分钟退出缓冲），缺失/短缺 K 线或未完成交易会排除整个配对点，避免覆盖不足选择性留下早止盈样本；默认不下载。现有 fetch 的覆盖长度通常足够 72h，设置更长 horizon 时仍可能报告缺失。
 
-配对差为每点 `R_variant − R_baseline`，用分层权重求均值；SE 使用 UTC 日聚类 sandwich（`G/(G−1)` 修正），95% CI 使用正态临界值。少于两个 UTC 日无法估计 SE，输出提示；变体 z 不可估计时不能 `pass`。解析失败率按各组计算，取最大值执行 >10% 门槛，避免其他成功组稀释问题；解析失败、调用失败、patch_miss 均不参与有效配对。报告还含开仓率、决策一致率（忽略推理文字与注释）、方向翻转、成交开仓加权 avgR 与可用时的 failure_mode 描述性关联。缺少 `trade_journal.failure_mode` 会明确显示不可用，不修改 schema。噪声可省略，但会提示健康检查缺失。
+配对差为每点 `R_variant − R_baseline`，用分层权重求均值；SE 使用 UTC 日聚类 sandwich（`G/(G−1)` 修正），95% CI 使用正态临界值。按有效配对的 UTC 日排序，前 ceil(日数/2) 天为 dev，其余为 holdout，两半分别报告加权统计。少于两个 UTC 日仍保留均值，但无法估计 SE；合并 z 或任一半均值不可估计时不能 `strong` / `screen_pass`。解析失败率按各组计算，取最大值执行 >10% 门槛，避免其他成功组稀释问题；解析失败、调用失败、patch_miss 均不参与有效配对。补丁命中率 = 1 − 变体组 patch_miss 行数 / 清单记录数，使用指定模型、repeat、变体哈希的缓存行，在排除无效配对前计算。报告还含开仓率、决策一致率（忽略推理文字与注释）、方向翻转、成交开仓加权 avgR 与可用时的 failure_mode 描述性关联。缺少 `trade_journal.failure_mode` 会明确显示不可用，不修改 schema。噪声可省略，但会提示健康检查缺失。
 
-`invalid`：噪声 `|z|≥2`、有效配对不足 100、解析失败率 >10%。其余只有 `z≥Φ⁻¹(1−0.05/(2K))` 且相对开仓率变化在 ±50% 内才 `pass`，否则 `fail`；`--open-rate-limit` 可调整比例，越界写人工复核提示。基线开仓率为 0 而变体大于 0 时变化视为无穷，不能通过。账本以文件锁保护 K 的读取和单次 O_APPEND/fsync 追加；每次评分追加一行，包括重复评分，因此重复评分不会重置多重检验预算。缺少噪声组的评分不会伪造噪声统计。
+S1 按以下顺序分级，首个命中生效：
 
-局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。`pass` 只筛入线上候选/对照，不会自动上线。
+- `invalid`：噪声 `|z|≥2`、有效配对不足 100、解析失败率 >10% 或补丁命中率 <80%。
+- `fewer_trades`：相对开仓率变化超出 ±50%，`--open-rate-limit` 可调整阈值。基线开仓率为 0 而变体大于 0 时变化视为无穷。
+- `strong`：`z≥z_K=Φ⁻¹(1−0.05/(2K))`，且 dev、holdout 的 Δ 均 >0。
+- `screen_pass`：`z≥1.0`，且两半 Δ 均 >0。
+- `fail`：其余。
+
+评分通过共享 `evolution_ledger.append_event` 追加 S1 行，文件锁保护 K 的读取、判定与 O_APPEND/fsync 写入。`--track`（crypto_llm / us_llm / fq_crypto / fq_us）和 `--baseline-version` 必填；`--change-type` 只接受 A/D，默认 D；`--idea-id` 默认使用变体 id。K 只累计同一 track 的非 invalid S1 评分，含本次与重复评分；其他 track、S2/S3 和 invalid 行不占用预算。invalid 行的 K 为 null，z_K 仍按该 track 下一次有效尝试的 K 计算。账本保留变体、假设、样本哈希、模型、参数及完整汇总，增加 delta/se/z、trade_ratio（变体/基线开仓率，基线为 0 时为 null）、placebo_pct=null、dev_delta、holdout_delta、patch_hit_rate 与 z_K。省略逐点 pairs/noise_pairs 数组以控制账本大小，逐点信息可从原重放清单和缓存重新评分得到。缺少噪声组的评分不会伪造噪声统计。
+
+局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。screen_pass/strong 仅进入线上配对队列，不直接上线；fewer_trades 归入基线交易频率问题。

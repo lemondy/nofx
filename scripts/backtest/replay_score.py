@@ -2,7 +2,6 @@
 import hashlib
 import json
 import math
-import os
 import sqlite3
 from collections import Counter, defaultdict
 from contextlib import closing
@@ -10,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import NormalDist
 
-from . import backtrader_adapter, exitsim, fetch, signals
+from . import backtrader_adapter, evolution_ledger, exitsim, fetch, signals
 from .klines import floor_min, load_bars
 from .params import FALLBACK
 
@@ -42,7 +41,15 @@ def weighted_cluster(points):
                 ci95=[mean - critical * se, mean + critical * se], z=z)
 
 
-def verdict(stats, noise, parse_failure_rate, k, open_rate_change, open_rate_limit=.5):
+def split_halves(pairs):
+    days = sorted({p['day'] for p in pairs})
+    dev_days = set(days[:(len(days) + 1) // 2])
+    return dict(dev=weighted_cluster([p for p in pairs if p['day'] in dev_days]),
+                holdout=weighted_cluster([p for p in pairs if p['day'] not in dev_days]))
+
+
+def screen_verdict(stats, halves, noise, parse_failure_rate, patch_hit_rate, k,
+                   open_rate_change, open_rate_limit=.5):
     if k < 1 or not math.isfinite(open_rate_limit) or open_rate_limit < 0:
         raise ValueError('K 至少为 1，开仓率阈值必须是非负有限数')
     z_k = NormalDist().inv_cdf(1 - .05 / (2 * k))
@@ -53,6 +60,8 @@ def verdict(stats, noise, parse_failure_rate, k, open_rate_change, open_rate_lim
         reasons.append('有效配对点 < 100')
     if parse_failure_rate > .10:
         reasons.append('解析失败率 > 10%')
+    if patch_hit_rate < .80:
+        reasons.append('补丁命中率 < 80%')
     if noise is None:
         warnings.append('未提供噪声组，无法检查重放稳定性；结论需谨慎')
     if stats['se'] is None or (noise is not None and noise['se'] is None):
@@ -62,8 +71,11 @@ def verdict(stats, noise, parse_failure_rate, k, open_rate_change, open_rate_lim
         warnings.append('开仓率变化超出阈值，需要人工复核')
     if reasons:
         result = 'invalid'
-    elif stats['z'] is not None and stats['z'] >= z_k and guard:
-        result = 'pass'
+    elif not guard:
+        result = 'fewer_trades'
+    elif stats['z'] is not None and all(halves[h]['mean'] is not None and halves[h]['mean'] > 0
+                                       for h in ('dev', 'holdout')):
+        result = 'strong' if stats['z'] >= z_k else 'screen_pass' if stats['z'] >= 1 else 'fail'
     else:
         result = 'fail'
     return dict(verdict=result, z_K=z_k, K=k, invalid_reasons=reasons,
@@ -290,6 +302,7 @@ def score(directory, variant_id, cache, horizon=72, model=None, repeat=0,
     manifest, rows, proposal = load_replay(directory, variant_id, model, repeat, arms)
     if not rows['baseline'] or not rows['variant']:
         raise ValueError('缺少同模型的基线或变体组')
+    patch_hit_rate = 1 - sum(r['status'] == 'patch_miss' for r in rows['variant'].values()) / len(manifest['records'])
     simulator = simulator or simulate_record
     if do_fetch:
         sigs = [s for arm in rows.values() for row in arm.values() if row['status'] == 'ok'
@@ -346,67 +359,55 @@ def score(directory, variant_id, cache, horizon=72, model=None, repeat=0,
                 source=proposal['source'], model=proposal['model'], repeat=repeat, sample=params,
                 horizon_h=horizon, engine='backtrader', commission=commission, slippage=slippage,
                 limit_valid_min=limit_valid_min, limit_fill=backtrader_adapter.LIMIT_FILL_DEFAULT,
-                stats=main_stats, noise=noise_stats, auxiliary=aux,
+                stats=main_stats, halves=split_halves(pairs), noise=noise_stats, auxiliary=aux,
+                patch_hit_rate=patch_hit_rate,
                 parse_failure_rate=max(parse_rates.values(), default=0), parse_failure_rates=parse_rates, counts=dict(counts),
                 available_rows={a: len(v) for a, v in rows.items()}, pairs=pairs, noise_pairs=noise_pairs,
                 warnings=warnings)
 
 
-def _json_safe(value):
-    if isinstance(value, float) and not math.isfinite(value):
-        return 'inf' if value > 0 else '-inf' if value < 0 else None
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    return value
+def append_ledger(path, result, track, baseline_version, change_type='D', idea_id=None,
+                  open_rate_limit=.5):
+    """Use the shared track-local S1 budget and append-only ledger lock.
 
-
-def append_ledger(path, result, open_rate_limit=.5):
-    """Lock K calculation and O_APPEND write together; never rewrite a ledger.
-
-    K counts scored variant events (including repeated scores), not unique ids;
-    rescoring must not reset the multiple-testing budget.
+    Omit unbounded pair arrays; keep summary statistics, sample hash and scoring
+    parameters so the replay manifest/cache can reproduce the evaluation.
     """
-    import fcntl
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        with os.fdopen(os.dup(fd), 'r', encoding='utf-8') as f:
-            old = f.read()
-        previous = [json.loads(line) for line in old.splitlines() if line.strip()]
-        if old and not old.endswith('\n'):
-            raise ValueError('账本末行不完整，拒绝追加或修改已有字节')
-        k = sum(bool(r.get('variant_id') or r.get('variant_hash')) for r in previous) + 1
-        judgment = verdict(result['stats'], result['noise'], result['parse_failure_rate'], k,
-                           result['auxiliary']['open_rate_change'], open_rate_limit)
-        result = dict(result)
-        result['warnings'] = result['warnings'] + judgment.pop('warnings')
-        result.update(judgment, open_rate_limit=open_rate_limit,
-                      scored_at=datetime.now(timezone.utc).isoformat())
-        body = (json.dumps(_json_safe(result), ensure_ascii=False, allow_nan=False, separators=(',', ':')) + '\n').encode()
-        if os.write(fd, body) != len(body):
-            raise OSError('账本追加不完整')
-        os.fsync(fd)
-        return result
-    finally:
-        os.close(fd)
+    if change_type not in ('A', 'D'):
+        raise ValueError('重放评分 change_type 必须是 A/D')
+
+    def build(k, previous):
+        judgment = screen_verdict(result['stats'], result['halves'], result['noise'],
+                                  result['parse_failure_rate'], result['patch_hit_rate'], k,
+                                  result['auxiliary']['open_rate_change'], open_rate_limit)
+        row = {key: value for key, value in result.items() if key not in ('pairs', 'noise_pairs')}
+        row['warnings'] = result['warnings'] + judgment.pop('warnings')
+        rates = result['auxiliary']['open_rates']
+        row.update(judgment, stage='S1', baseline_version=baseline_version, change_type=change_type,
+                   idea_id=result['variant_id'] if idea_id is None else idea_id,
+                   delta=result['stats']['mean'], se=result['stats']['se'], z=result['stats']['z'],
+                   trade_ratio=rates['variant'] / rates['baseline'] if rates['baseline'] else None,
+                   placebo_pct=None, dev_delta=result['halves']['dev']['mean'],
+                   holdout_delta=result['halves']['holdout']['mean'], open_rate_limit=open_rate_limit,
+                   scored_at=datetime.now(timezone.utc).isoformat())
+        return row
+
+    return evolution_ledger.append_event(path, track, build)
 
 
 def print_summary(result):
     s = result['stats']
     print(f"重放结论：{result['verdict']}；有效配对 {s['n']}，UTC 日 {s['days']}，K={result['K']}，z_K={result['z_K']:.3f}")
     print(f"加权 ΔR={s['mean']}，聚类 SE={s['se']}，95% CI={s['ci95']}，z={s['z']}")
-    print(f"解析失败率 {result['parse_failure_rate']:.1%}；开仓率 {result['auxiliary']['open_rates']}；变化 {result['auxiliary']['open_rate_change']:+.1%}")
+    print(f"时间二分：dev {result['halves']['dev']}；holdout {result['halves']['holdout']}")
+    print(f"补丁命中率 {result['patch_hit_rate']:.1%}；解析失败率 {result['parse_failure_rate']:.1%}；开仓率 {result['auxiliary']['open_rates']}；变化 {result['auxiliary']['open_rate_change']:+.1%}")
     print(f"噪声组：{result['noise']}；缺失 K 线 {result['counts'].get('missing_klines', 0)}，计数 {result['counts']}")
     aux = result['auxiliary']
     print(f"决策一致率：基线/变体 {aux.get('decision_agreement')}，基线/噪声 {aux.get('noise_decision_agreement')}；方向翻转 {aux.get('direction_flips')}")
     print(f"每笔成交开仓 avgR：{aux.get('avgR_per_open')}；failure_mode：{aux.get('failure_mode')}")
     for reason in result['invalid_reasons'] + result['warnings']:
         print('提示：' + reason)
-    print('账本已追加；pass 仅进入线上候选/对照，不自动上线。')
+    print('screen_pass/strong 仅进入线上配对队列，不直接上线；fewer_trades 归入基线交易频率问题')
 
 
 def cmd_replay_score(a):
@@ -418,7 +419,8 @@ def cmd_replay_score(a):
         result = score(a.replay_dir, a.variant, a.cache, a.horizon, a.model, a.repeat,
                        tuple(a.arms.split(',')), a.fetch, commission=a.commission,
                        slippage=a.slippage, limit_valid_min=a.limit_valid_min, db_path=a.db)
-        result = append_ledger(a.ledger, result, a.open_rate_limit)
+        result = append_ledger(a.ledger, result, track=a.track, baseline_version=a.baseline_version,
+                               change_type=a.change_type, idea_id=a.idea_id, open_rate_limit=a.open_rate_limit)
     except OSError as exc:
         raise ValueError(f'重放文件读写失败：{exc}') from exc
     print_summary(result)
