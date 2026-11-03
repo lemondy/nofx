@@ -5,6 +5,7 @@ import { t } from '../i18n/translations'
 import type {
   JournalEntry,
   JournalStats,
+  FailureModeStats,
   TradingRule,
   RuleCheckLog,
   RuleProposal,
@@ -68,6 +69,19 @@ const MISTAKE_OPTIONS = [
   'risk_control',
   'market',
   'none',
+]
+const FAILURE_MODE_OPTIONS = [
+  'chased_entry',
+  'counter_trend',
+  'weak_setup',
+  'stop_too_tight',
+  'stop_too_wide',
+  'early_exit',
+  'late_exit',
+  'size_too_large',
+  'market_shock',
+  'no_mistake',
+  'other',
 ]
 const STRATEGY_OPTIONS = [
   'breakout',
@@ -262,6 +276,7 @@ function JournalTab({
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <div className="flex items-center gap-2">
           <select
+            aria-label={rv('colStatus')}
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="h-8 rounded-md border border-line bg-surface-2 px-2 text-[13px] text-fg outline-none hover:border-line-strong focus:border-brand"
@@ -269,6 +284,8 @@ function JournalTab({
             <option value="">{rv('filterAll')}</option>
             <option value="pending">{rv('filterPending')}</option>
             <option value="reviewed">{rv('filterReviewed')}</option>
+            <option value="ai_reviewed">{rv('aiReviewed')}</option>
+            <option value="ai_failed">{rv('aiFailed')}</option>
           </select>
           <input
             value={symbolFilter}
@@ -316,6 +333,7 @@ function JournalTab({
                 <th className={`${th} text-left`}>{rv('colPlan')}</th>
                 <th className={`${th} text-left`}>{rv('colAdherence')}</th>
                 <th className={`${th} text-left`}>{rv('colEmotion')}</th>
+                <th className={`${th} text-left`}>{rv('failureMode')}</th>
                 <th className={`${th} text-left`}>{rv('colStatus')}</th>
                 <th className={`${th} text-right`}></th>
               </tr>
@@ -432,7 +450,18 @@ function JournalRow({
         {entry.emotions || '--'}
       </td>
       <td className={td}>
-        {entry.review_status === 'reviewed' ? (
+        {entry.failure_mode ? rv(`failure_${entry.failure_mode}`) : '--'}
+      </td>
+      <td className={td}>
+        {entry.review_status === 'ai_reviewed' ? (
+          <Badge variant="info" size="xs">
+            {rv('aiReviewed')}
+          </Badge>
+        ) : entry.review_status === 'ai_failed' ? (
+          <Badge variant="warn" size="xs">
+            {rv('aiFailed')}
+          </Badge>
+        ) : entry.review_status === 'reviewed' ? (
           <Badge variant="up" size="xs">
             {rv('reviewed')}
           </Badge>
@@ -480,6 +509,7 @@ function ReviewEditModal({
     entry.mistake_category || ''
   )
   const [strategyTag, setStrategyTag] = useState(entry.strategy_tag || '')
+  const [failureMode, setFailureMode] = useState(entry.failure_mode || '')
   const [deviationNote, setDeviationNote] = useState(entry.deviation_note || '')
   const [lesson, setLesson] = useState(entry.lesson || '')
   const [saving, setSaving] = useState(false)
@@ -498,6 +528,7 @@ function ReviewEditModal({
         emotions: emotions.join(','),
         mistake_category: mistakeCategory,
         strategy_tag: strategyTag,
+        failure_mode: failureMode,
         deviation_note: deviationNote,
         lesson,
       })
@@ -665,6 +696,25 @@ function ReviewEditModal({
           </div>
 
           <div>
+            <label htmlFor="review-failure-mode" className={LABEL_CLS}>
+              {rv('failureMode')}
+            </label>
+            <select
+              id="review-failure-mode"
+              value={failureMode}
+              onChange={(e) => setFailureMode(e.target.value)}
+              className={INPUT_CLS}
+            >
+              <option value="">--</option>
+              {FAILURE_MODE_OPTIONS.map((mode) => (
+                <option key={mode} value={mode}>
+                  {rv(`failure_${mode}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
             <label className={LABEL_CLS}>{rv('deviationNote')}</label>
             <textarea
               value={deviationNote}
@@ -796,6 +846,15 @@ function StatsTab({
         />
       </Card>
 
+      <div className="rounded-lg border border-line bg-surface p-4">
+        <h3 className="text-sm font-semibold mb-2">{rv('failureMode')}</h3>
+        <p className="mb-3 text-xs text-fg-3">{rv('failureRHint')}</p>
+        <FailureModeTable
+          groups={stats.by_failure_mode || []}
+          language={language}
+        />
+      </div>
+
       {/* Execution layer: adherence + plan coverage */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="rounded-lg border border-line bg-surface p-4">
@@ -852,6 +911,55 @@ function StatsTab({
           />
         </div>
       </div>
+    </div>
+  )
+}
+
+function FailureModeTable({
+  groups,
+  language,
+}: {
+  groups: FailureModeStats[]
+  language: Language
+}) {
+  const rv = (key: string) => t(`reviewPage.${key}`, language)
+  if (groups.length === 0) {
+    return (
+      <div className="py-6 text-center text-xs text-fg-3">{rv('noData')}</div>
+    )
+  }
+  const th = 'h-8 bg-surface-2 px-3 text-xs font-medium text-fg-3'
+  return (
+    <div className="-mx-4 -mb-4 overflow-x-auto">
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr className="border-y border-line">
+            <th className={`${th} text-left`}>{rv('failureMode')}</th>
+            <th className={`${th} text-right`}>{rv('countCol')}</th>
+            <th className={`${th} text-right`}>{rv('totalPnlCol')}</th>
+            <th className={`${th} text-right`}>{rv('avgR')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((group) => (
+            <tr
+              key={group.key}
+              className="h-[34px] border-b border-line last:border-b-0 hover:bg-surface-hover"
+            >
+              <td className="px-3">{rv(`failure_${group.key}`)}</td>
+              <td className="num px-3 text-right">{group.count}</td>
+              <td className="px-3 text-right">
+                <PnL value={group.total_pnl} currency="" />
+              </td>
+              <td className="num px-3 text-right">
+                {group.avg_r == null
+                  ? '--'
+                  : `${group.avg_r.toFixed(2)}R (${group.r_samples})`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -1668,6 +1776,7 @@ function AITab({
   const [promptCfg, setPromptCfg] = useState<ReviewPromptConfig | null>(null)
   const [reviewPrompt, setReviewPrompt] = useState('')
   const [rulePrompt, setRulePrompt] = useState('')
+  const [autoReviewEnabled, setAutoReviewEnabled] = useState(false)
   const [showPrompts, setShowPrompts] = useState(false)
   const [savingPrompts, setSavingPrompts] = useState(false)
   const [promptMsg, setPromptMsg] = useState('')
@@ -1679,6 +1788,7 @@ function AITab({
         setPromptCfg(cfg)
         setReviewPrompt(cfg.review_system_prompt)
         setRulePrompt(cfg.rule_extract_system_prompt)
+        setAutoReviewEnabled(cfg.auto_review_enabled)
       })
       .catch(() => {})
   }, [])
@@ -1690,11 +1800,13 @@ function AITab({
       await api.savePromptConfig({
         review_system_prompt: reviewPrompt,
         rule_extract_system_prompt: rulePrompt,
+        auto_review_enabled: autoReviewEnabled,
       })
       const cfg = await api.getPromptConfig()
       setPromptCfg(cfg)
       setReviewPrompt(cfg.review_system_prompt)
       setRulePrompt(cfg.rule_extract_system_prompt)
+      setAutoReviewEnabled(cfg.auto_review_enabled)
       setPromptMsg(rv('promptSaved'))
     } catch {
       setPromptMsg(rv('promptLoadFail'))
@@ -1753,6 +1865,15 @@ function AITab({
 
         {showPrompts && (
           <div className="mt-4 space-y-3 border-t border-line pt-4">
+            <label className="flex items-center gap-2 text-xs text-fg">
+              <input
+                type="checkbox"
+                checked={autoReviewEnabled}
+                onChange={(e) => setAutoReviewEnabled(e.target.checked)}
+              />
+              {rv('autoReviewEnabled')}
+            </label>
+            <p className="text-xs text-fg-3">{rv('autoReviewHint')}</p>
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-medium text-fg">
@@ -1794,7 +1915,7 @@ function AITab({
               <Button
                 variant="primary"
                 onClick={savePrompts}
-                disabled={savingPrompts}
+                disabled={savingPrompts || !promptCfg}
               >
                 {savingPrompts ? t('loading', language) : rv('promptSave')}
               </Button>

@@ -228,7 +228,9 @@ export const reviewApi = {
     update: Partial<
       Pick<
         ReviewPromptConfig,
-        'review_system_prompt' | 'rule_extract_system_prompt'
+        | 'review_system_prompt'
+        | 'rule_extract_system_prompt'
+        | 'auto_review_enabled'
       >
     >
   ): Promise<void> {

@@ -1602,6 +1602,26 @@ export const translations = {
 
     // ===== Review page (复盘) =====
     reviewPage: {
+      failureMode: 'Failure mode',
+      aiReviewed: 'AI reviewed',
+      aiFailed: 'AI review failed',
+      avgR: 'Avg R (samples)',
+      failureRHint:
+        'R = net PnL / (|entry − planned stop| × quantity). Missing risk data is excluded. Reviews generate hypotheses, not evidence.',
+      autoReviewEnabled: 'Enable automatic AI review',
+      autoReviewHint:
+        'Off by default. Reviews up to 50 pending AI trades from the last 90 days each hour; uses your default AI model. Save to apply.',
+      failure_chased_entry: 'Chased entry',
+      failure_counter_trend: 'Counter trend',
+      failure_weak_setup: 'Weak setup',
+      failure_stop_too_tight: 'Stop too tight',
+      failure_stop_too_wide: 'Stop too wide',
+      failure_early_exit: 'Early exit',
+      failure_late_exit: 'Late exit',
+      failure_size_too_large: 'Position too large',
+      failure_market_shock: 'Market shock',
+      failure_no_mistake: 'No mistake',
+      failure_other: 'Other',
       title: 'Trade Review',
       subtitle:
         'Structured trade journal → extract rules from lessons → pre-trade rule checks. A decision support system built from your own trade history.',
@@ -3295,6 +3315,26 @@ export const translations = {
 
     // ===== 复盘页面 =====
     reviewPage: {
+      failureMode: '失败模式',
+      aiReviewed: 'AI 已复盘',
+      aiFailed: 'AI 复盘失败',
+      avgR: '平均 R（样本数）',
+      failureRHint:
+        'R = 扣费净盈亏 ÷（|入场价 − 计划止损价| × 数量），缺少风险数据不计入均值。复盘只产生假设，不作为证据。',
+      autoReviewEnabled: '启用 AI 自动复盘',
+      autoReviewHint:
+        '默认关闭。每小时复盘最近90天内最多50笔待复盘 AI 交易，使用默认 AI 模型，保存后生效。',
+      failure_chased_entry: '追涨/追空入场',
+      failure_counter_trend: '逆大级别趋势',
+      failure_weak_setup: '信号不足',
+      failure_stop_too_tight: '止损过近',
+      failure_stop_too_wide: '止损过远',
+      failure_early_exit: '过早离场',
+      failure_late_exit: '离场过晚',
+      failure_size_too_large: '仓位或杠杆过大',
+      failure_market_shock: '突发行情',
+      failure_no_mistake: '过程无明显错误',
+      failure_other: '其他',
       title: '交易复盘',
       subtitle:
         '结构化交易日志 → 提炼教训为规则 → 下单前规则检查，用你自己的交易历史构建决策支持系统。',
@@ -4948,6 +4988,26 @@ export const translations = {
 
     // ===== Review page =====
     reviewPage: {
+      failureMode: 'Pola kegagalan',
+      aiReviewed: 'Ditinjau AI',
+      aiFailed: 'Tinjauan AI gagal',
+      avgR: 'R rata-rata (sampel)',
+      failureRHint:
+        'R = PnL bersih / (|harga masuk − stop terencana| × jumlah). Data risiko kosong dikecualikan. Tinjauan menghasilkan hipotesis, bukan bukti.',
+      autoReviewEnabled: 'Aktifkan tinjauan AI otomatis',
+      autoReviewHint:
+        'Nonaktif secara bawaan. Meninjau hingga 50 transaksi AI tertunda dari 90 hari terakhir setiap jam dengan model AI bawaan. Simpan untuk menerapkan.',
+      failure_chased_entry: 'Mengejar harga masuk',
+      failure_counter_trend: 'Melawan tren besar',
+      failure_weak_setup: 'Sinyal lemah',
+      failure_stop_too_tight: 'Stop terlalu dekat',
+      failure_stop_too_wide: 'Stop terlalu jauh',
+      failure_early_exit: 'Keluar terlalu dini',
+      failure_late_exit: 'Keluar terlambat',
+      failure_size_too_large: 'Posisi atau leverage berlebih',
+      failure_market_shock: 'Guncangan pasar',
+      failure_no_mistake: 'Proses tanpa kesalahan jelas',
+      failure_other: 'Lainnya',
       title: 'Review Trading',
       subtitle:
         'Jurnal trading terstruktur → ekstrak pelajaran menjadi aturan → pemeriksaan aturan sebelum order. Sistem pendukung keputusan dari riwayat trading Anda.',

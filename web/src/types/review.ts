@@ -36,8 +36,10 @@ export interface JournalEntry {
     | 'none'
     | string
   strategy_tag: string
+  failure_mode: string
+  ai_review_attempts: number
   lesson: string
-  review_status: 'pending' | 'reviewed' | string
+  review_status: 'pending' | 'reviewed' | 'ai_reviewed' | 'ai_failed' | string
   reviewed_at: number
   // AI 开仓 vs 手动(user request 09-27): null = 尚未分类的旧行
   ai_managed: boolean | null
@@ -59,6 +61,14 @@ export interface JournalGroupStats {
   avg_pnl: number
 }
 
+export interface FailureModeStats {
+  key: string
+  count: number
+  total_pnl: number
+  avg_r: number | null
+  r_samples: number
+}
+
 export interface JournalStats {
   total_entries: number
   reviewed_count: number
@@ -75,6 +85,7 @@ export interface JournalStats {
   emotion_stats: JournalGroupStats[]
   mistake_stats: JournalGroupStats[]
   strategy_stats: JournalGroupStats[]
+  by_failure_mode: FailureModeStats[]
   with_plan_count: number
   with_plan_win_rate: number
   no_plan_count: number
@@ -191,6 +202,7 @@ export interface AIReviewResult {
 // ===== Review prompt config =====
 // Templates in effect (custom when *_custom is true, else built-in default).
 export interface ReviewPromptConfig {
+  auto_review_enabled: boolean
   review_system_prompt: string
   rule_extract_system_prompt: string
   review_custom: boolean
