@@ -213,3 +213,30 @@ func TestStrategyCompareAndSwapRejectsInterveningWrite(t *testing.T) {
 		t.Fatal("intervening update lost", err)
 	}
 }
+
+// A row whose updated_at was written by a hand-run SQL script
+// ("2006-01-02 15:04:05", no zone suffix) must still accept a save based on
+// the value the editor loaded; a textual WHERE match refused it forever.
+func TestStrategyUpdateAcceptsScriptWrittenTimestamp(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.Strategy().Create(&Strategy{ID: "s", UserID: "u", Config: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec("UPDATE strategies SET updated_at = '2026-11-01 14:03:57' WHERE id = 's'"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := st.Strategy().Get("u", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Strategy().Update(&Strategy{ID: "s", UserID: "u", Name: "edited", Config: "{}"}, loaded.UpdatedAt); err != nil {
+		t.Fatalf("save on script-written timestamp: %v", err)
+	}
+	if err := st.Strategy().Update(&Strategy{ID: "s", UserID: "u", Name: "stale", Config: "{}"}, loaded.UpdatedAt); err != ErrStrategyConflict {
+		t.Fatalf("stale update after save: %v", err)
+	}
+	got, err := st.Strategy().Get("u", "s")
+	if err != nil || got.Name != "edited" {
+		t.Fatal("save lost", err)
+	}
+}

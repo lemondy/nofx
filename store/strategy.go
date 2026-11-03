@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -1279,27 +1280,47 @@ func (s *StrategyStore) Create(strategy *Strategy) error {
 var ErrStrategyConflict = fmt.Errorf("strategy changed since it was loaded")
 
 func (s *StrategyStore) Update(strategy *Strategy, expectedUpdatedAt ...time.Time) error {
-	query := s.db.Model(&Strategy{}).Where("id = ? AND user_id = ?", strategy.ID, strategy.UserID)
-	if len(expectedUpdatedAt) > 0 {
-		query = query.Where("updated_at = ?", expectedUpdatedAt[0])
-	}
 	writtenAt := time.Now().UTC()
-	result := query.Updates(map[string]interface{}{
-		"name":           strategy.Name,
-		"description":    strategy.Description,
-		"config":         strategy.Config,
-		"is_public":      strategy.IsPublic,
-		"config_visible": strategy.ConfigVisible,
-		"updated_at":     writtenAt,
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if len(expectedUpdatedAt) > 0 {
+			// Compare as time values, not with `WHERE updated_at = ?`: a row
+			// touched by a hand-run SQL script stores updated_at as
+			// "2006-01-02 15:04:05" while the driver binds
+			// "2006-01-02 15:04:05+00:00", so a textual match never hits and
+			// every save of that strategy was refused as a conflict.
+			var current Strategy
+			err := tx.Select("updated_at").
+				Where("id = ? AND user_id = ?", strategy.ID, strategy.UserID).
+				First(&current).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrStrategyConflict
+			}
+			if err != nil {
+				return err
+			}
+			if !current.UpdatedAt.Equal(expectedUpdatedAt[0]) {
+				return ErrStrategyConflict
+			}
+		}
+		result := tx.Model(&Strategy{}).
+			Where("id = ? AND user_id = ?", strategy.ID, strategy.UserID).
+			Updates(map[string]interface{}{
+				"name":           strategy.Name,
+				"description":    strategy.Description,
+				"config":         strategy.Config,
+				"is_public":      strategy.IsPublic,
+				"config_visible": strategy.ConfigVisible,
+				"updated_at":     writtenAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrStrategyConflict
+		}
+		strategy.UpdatedAt = writtenAt
+		return nil
 	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return ErrStrategyConflict
-	}
-	strategy.UpdatedAt = writtenAt
-	return nil
 }
 
 // Delete delete a strategy
