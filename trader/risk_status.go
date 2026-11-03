@@ -36,11 +36,34 @@ type RiskStatus struct {
 	ReduceOnly      bool   `json:"reduce_only"`
 	ProtectionFault string `json:"protection_fault,omitempty"`
 
-	LossStreakEnabled bool              `json:"loss_streak_enabled"`
-	LossStreakMax     int               `json:"loss_streak_max"`
-	LossStreakBans    []LossStreakBan   `json:"loss_streak_bans"`
-	Pending           []PendingStatus   `json:"pending_entries"`
-	Positions         []PositionRStatus `json:"positions"`
+	LossStreakEnabled bool                  `json:"loss_streak_enabled"`
+	LossStreakMax     int                   `json:"loss_streak_max"`
+	LossStreakBans    []LossStreakBan       `json:"loss_streak_bans"`
+	Pending           []PendingStatus       `json:"pending_entries"`
+	Positions         []PositionRStatus     `json:"positions"`
+	FactorQuant       *FactorQuantRunStatus `json:"factor_quant,omitempty"`
+}
+
+type FactorQuantTick struct {
+	At      time.Time `json:"at"`
+	Code    string    `json:"code"`
+	Message string    `json:"message"`
+	Equity  float64   `json:"equity,omitempty"`
+}
+
+type FactorQuantRunStatus struct {
+	TickIntervalSec   int               `json:"tick_interval_sec"`
+	LastTick          *FactorQuantTick  `json:"last_tick,omitempty"`
+	RecentTicks       []FactorQuantTick `json:"recent_ticks"`
+	TargetsAsOf       string            `json:"targets_as_of,omitempty"`
+	TargetsStatus     string            `json:"targets_status,omitempty"`
+	TargetsRule       string            `json:"targets_rule,omitempty"`
+	Horizon           int               `json:"horizon"`
+	LastRebalanceAsOf string            `json:"last_rebalance_as_of,omitempty"`
+	LastRebalanceAt   *time.Time        `json:"last_rebalance_at,omitempty"`
+	NextEligibleAsOf  string            `json:"next_eligible_as_of,omitempty"`
+	RetryAsOf         string            `json:"retry_as_of,omitempty"`
+	RetryAttempts     int               `json:"retry_attempts,omitempty"`
 }
 
 type LossStreakBan struct {
