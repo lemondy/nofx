@@ -80,13 +80,14 @@ func groupFailureModes(entries []*TradeJournalDB) []FailureModeStats {
 	return out
 }
 
-// ListAutoReviewPending caps work across all traders owned by this user.
+// ListAutoReviewPending caps work across all traders owned by this user
+// (at most 200 rows per run, oldest first).
 func (s *TradeJournalStore) ListAutoReviewPending(userID string, now time.Time) ([]*TradeJournalDB, error) {
 	var rows []*TradeJournalDB
 	traders := s.db.Model(&Trader{}).Select("id").Where("user_id = ?", userID)
 	err := s.db.Where("trader_id IN (?) AND ai_managed = ? AND review_status = ? AND exit_time >= ? AND exit_time <= ?",
 		traders, true, "pending", now.Add(-90*24*time.Hour).UnixMilli(), now.Add(-10*time.Minute).UnixMilli()).
-		Order("exit_time ASC, id ASC").Limit(50).Find(&rows).Error
+		Order("exit_time ASC, id ASC").Limit(200).Find(&rows).Error
 	return rows, err
 }
 

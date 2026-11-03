@@ -17,6 +17,9 @@ type ReviewPromptConfig struct {
 	ID                uint   `gorm:"primaryKey" json:"id"`
 	UserID            string `gorm:"column:user_id;not null;uniqueIndex" json:"user_id"`
 	AutoReviewEnabled bool   `gorm:"column:auto_review_enabled;not null;default:false" json:"auto_review_enabled"`
+	// Unix-ms time of the last automatic review run for this user. Persisted
+	// so backend restarts do not retrigger a run that already happened.
+	AutoReviewLastRunAt int64 `gorm:"column:auto_review_last_run_at;not null;default:0" json:"auto_review_last_run_at"`
 	// Custom system prompt for the comprehensive AI review (复盘). Empty =
 	// built-in default.
 	ReviewSystemPrompt string `gorm:"column:review_system_prompt;type:text;default:''" json:"review_system_prompt"`
@@ -84,6 +87,16 @@ func (s *ReviewPromptStore) Upsert(userID string, reviewPrompt, ruleExtractPromp
 		cfg.AutoReviewEnabled = autoReviewEnabled[0]
 	}
 	return s.db.Save(&cfg).Error
+}
+
+// MarkAutoReviewRun persists when the automatic review last ran for a user.
+// It updates only that column so updated_at and the other fields stay intact.
+func (s *ReviewPromptStore) MarkAutoReviewRun(userID string, at time.Time) error {
+	if userID == "" {
+		userID = "default"
+	}
+	return s.db.Model(&ReviewPromptConfig{}).Where("user_id = ?", userID).
+		UpdateColumn("auto_review_last_run_at", at.UnixMilli()).Error
 }
 
 // ListAutoReviewUsers returns only users who explicitly enabled automatic review.

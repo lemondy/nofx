@@ -124,8 +124,8 @@ func TestAutoReviewBatchSelection(t *testing.T) {
 	}
 	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 	yes, no := true, false
-	rows := make([]TradeJournalDB, 0, 70)
-	for i := 0; i < 55; i++ {
+	rows := make([]TradeJournalDB, 0, 220)
+	for i := 0; i < 203; i++ {
 		trader := "T1"
 		if i%2 == 1 {
 			trader = "T2"
@@ -144,19 +144,19 @@ func TestAutoReviewBatchSelection(t *testing.T) {
 		{TraderID: "T1", AIManaged: &yes, ExitTime: now.Add(-time.Hour).UnixMilli(), ReviewStatus: "ai_failed"},
 		{TraderID: "foreign", AIManaged: &yes, ExitTime: now.Add(-time.Hour).UnixMilli()},
 	} {
-		row.PositionID, row.Symbol, row.Side = int64(100+i), "excluded", "LONG"
+		row.PositionID, row.Symbol, row.Side = int64(300+i), "excluded", "LONG"
 		rows = append(rows, row)
 	}
 	if err := st.GormDB().Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
 	got, err := journal.ListAutoReviewPending("U", now)
-	if err != nil || len(got) != 50 {
+	if err != nil || len(got) != 200 {
 		t.Fatalf("selection: %v %d", err, len(got))
 	}
 	for i, row := range got {
-		if row.ID != rows[54-i].ID {
-			t.Fatalf("oldest first across traders: index %d got %d want %d", i, row.ID, rows[54-i].ID)
+		if row.ID != rows[202-i].ID {
+			t.Fatalf("oldest first across traders: index %d got %d want %d", i, row.ID, rows[202-i].ID)
 		}
 	}
 }

@@ -28,6 +28,11 @@ type reviewAICaller interface {
 	CallReviewAI(context.Context, string, string, string) (string, error)
 }
 
+// autoReviewInterval is how long each user waits between automatic review
+// runs. The last run time is persisted in review_prompt_configs so backend
+// restarts do not retrigger a run that already happened.
+const autoReviewInterval = 72 * time.Hour
+
 func (s *Server) startAutoReview() {
 	s.autoReviewLifecycleMu.Lock()
 	defer s.autoReviewLifecycleMu.Unlock()
@@ -61,21 +66,27 @@ func (s *Server) autoReviewLoop(ctx context.Context, startupDelay, interval time
 	ticker := time.NewTicker(interval)
 	defer startup.Stop()
 	defer ticker.Stop()
-	logger.Infof("🤖 自动复盘任务已启动：首次约2分钟后运行，此后每小时运行")
+	logger.Infof("🤖 自动复盘任务已启动：每3天为每个用户运行一次（启动约2分钟后及每小时检查是否到期）")
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Infof("🤖 自动复盘任务已停止")
 			return
 		case <-startup.C:
-			s.runAutoReview(ctx, time.Now().UTC())
+			s.runDueAutoReview(ctx, time.Now().UTC())
 		case <-ticker.C:
-			s.runAutoReview(ctx, time.Now().UTC())
+			s.runDueAutoReview(ctx, time.Now().UTC())
 		}
 	}
 }
 
-func (s *Server) runAutoReview(ctx context.Context, now time.Time) {
+// reviewEnabledUsers holds the single-flight lock, lists every enabled user
+// and reviews each one. With dueOnly it skips users whose persisted last run
+// time (auto_review_last_run_at) is younger than autoReviewInterval, and
+// records the run time after each completed user so restarts never retrigger
+// a run that already happened. The lock stays held for the whole sweep so
+// runs never overlap.
+func (s *Server) reviewEnabledUsers(ctx context.Context, now time.Time, dueOnly bool) {
 	if !s.autoReviewMu.TryLock() {
 		return
 	}
@@ -92,64 +103,104 @@ func (s *Server) runAutoReview(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		rows, err := s.store.TradeJournal().ListAutoReviewPending(user.UserID, now)
-		if err != nil {
-			logger.Warnf("⚠️ 自动复盘读取待处理日志失败，用户 %s：%v", user.UserID, err)
+		if dueOnly && user.AutoReviewLastRunAt > 0 && now.Sub(time.UnixMilli(user.AutoReviewLastRunAt)) < autoReviewInterval {
 			continue
 		}
-		for start := 0; start < len(rows); start += 10 {
-			end := start + 10
-			if end > len(rows) {
-				end = len(rows)
+		completed, aborted := s.reviewUser(ctx, user, now)
+		if aborted {
+			return // Shutdown: not a completed run, so do not record one.
+		}
+		if dueOnly && completed {
+			if err := s.store.ReviewPrompt().MarkAutoReviewRun(user.UserID, now); err != nil {
+				logger.Warnf("⚠️ 自动复盘记录运行时间失败，用户 %s：%v", user.UserID, err)
 			}
-			batch := rows[start:end]
-			prompt, err := s.buildAutoReviewPrompt(batch)
-			if err != nil {
-				logger.Warnf("⚠️ 自动复盘读取开仓决策失败，用户 %s：%v", user.UserID, err)
-				continue
-			}
-			// Recheck immediately before every call: a user may disable the job
-			// while another batch or another user's model call is in flight.
-			cfg, err := s.store.ReviewPrompt().Get(user.UserID)
-			if err != nil || cfg == nil || !cfg.AutoReviewEnabled || ctx.Err() != nil {
-				break
-			}
-			callCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-			response, err := s.callReviewAIContext(callCtx, user.UserID, defaultTradeReviewSystemPrompt, prompt)
-			cancel()
-			if ctx.Err() != nil {
-				return // Shutdown is not a failed review attempt.
-			}
-			var reviews []store.AIJournalReview
-			if err == nil {
-				reviews, err = parseAutoReviews(response, batch)
-			}
-			if err != nil {
-				logger.Warnf("⚠️ 自动复盘批次失败，用户 %s，%d笔，将按失败次数重试：%v", user.UserID, len(batch), err)
-				ids := make([]int64, 0, len(batch))
-				for _, row := range batch {
-					ids = append(ids, row.ID)
-				}
-				if saveErr := s.store.TradeJournal().FailAIReviews(ids, time.Now().UTC()); saveErr != nil {
-					logger.Warnf("⚠️ 自动复盘记录失败次数出错：%v", saveErr)
-				}
-				continue
-			}
-			traders := make(map[int64]string, len(batch))
-			for _, row := range batch {
-				traders[row.ID] = row.TraderID
-			}
-			for _, review := range reviews {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := s.store.TradeJournal().UpdateAIReview(traders[review.ID], review, time.Now().UTC()); err != nil {
-					logger.Warnf("⚠️ 自动复盘写入日志 %d 失败：%v", review.ID, err)
-				}
-			}
-			logger.Infof("🤖 自动复盘批次处理完成，用户 %s，%d笔", user.UserID, len(batch))
 		}
 	}
+}
+
+// runAutoReview reviews every enabled user regardless of the last run time.
+// It is the forced entry point: tests and manual triggers call it repeatedly
+// with the same timestamp, so it must stay idempotent in that sense.
+func (s *Server) runAutoReview(ctx context.Context, now time.Time) {
+	s.reviewEnabledUsers(ctx, now, false)
+}
+
+// runDueAutoReview reviews only enabled users whose last automatic review is
+// older than autoReviewInterval. The loop calls it from the startup timer and
+// the hourly ticker; persistence of the last run time keeps frequent restarts
+// from re-running reviews.
+func (s *Server) runDueAutoReview(ctx context.Context, now time.Time) {
+	s.reviewEnabledUsers(ctx, now, true)
+}
+
+// reviewUser runs every pending batch for one user. aborted means ctx was
+// cancelled; completed is false only when the pending rows could not be read,
+// so a transient DB error is retried at the next hourly check instead of
+// waiting a full interval. Zero pending rows or failed batches still count as
+// a completed attempt.
+func (s *Server) reviewUser(ctx context.Context, user store.ReviewPromptConfig, now time.Time) (completed, aborted bool) {
+	rows, err := s.store.TradeJournal().ListAutoReviewPending(user.UserID, now)
+	if err != nil {
+		logger.Warnf("⚠️ 自动复盘读取待处理日志失败，用户 %s：%v", user.UserID, err)
+		return false, false
+	}
+	logger.Infof("🤖 自动复盘开始，用户 %s，待复盘 %d 笔", user.UserID, len(rows))
+	for start := 0; start < len(rows); start += 10 {
+		end := start + 10
+		if end > len(rows) {
+			end = len(rows)
+		}
+		batch := rows[start:end]
+		prompt, err := s.buildAutoReviewPrompt(batch)
+		if err != nil {
+			logger.Warnf("⚠️ 自动复盘读取开仓决策失败，用户 %s：%v", user.UserID, err)
+			continue
+		}
+		// Recheck immediately before every call: a user may disable the job
+		// while another batch or another user's model call is in flight.
+		if ctx.Err() != nil {
+			return false, true
+		}
+		cfg, err := s.store.ReviewPrompt().Get(user.UserID)
+		if err != nil || cfg == nil || !cfg.AutoReviewEnabled {
+			break
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		response, err := s.callReviewAIContext(callCtx, user.UserID, defaultTradeReviewSystemPrompt, prompt)
+		cancel()
+		if ctx.Err() != nil {
+			return false, true // Shutdown is not a failed review attempt.
+		}
+		var reviews []store.AIJournalReview
+		if err == nil {
+			reviews, err = parseAutoReviews(response, batch)
+		}
+		if err != nil {
+			logger.Warnf("⚠️ 自动复盘批次失败，用户 %s，%d笔，将按失败次数重试：%v", user.UserID, len(batch), err)
+			ids := make([]int64, 0, len(batch))
+			for _, row := range batch {
+				ids = append(ids, row.ID)
+			}
+			if saveErr := s.store.TradeJournal().FailAIReviews(ids, time.Now().UTC()); saveErr != nil {
+				logger.Warnf("⚠️ 自动复盘记录失败次数出错：%v", saveErr)
+			}
+			continue
+		}
+		traders := make(map[int64]string, len(batch))
+		for _, row := range batch {
+			traders[row.ID] = row.TraderID
+		}
+		for _, review := range reviews {
+			if ctx.Err() != nil {
+				return false, true
+			}
+			if err := s.store.TradeJournal().UpdateAIReview(traders[review.ID], review, time.Now().UTC()); err != nil {
+				logger.Warnf("⚠️ 自动复盘写入日志 %d 失败：%v", review.ID, err)
+			}
+		}
+		logger.Infof("🤖 自动复盘批次处理完成，用户 %s，%d笔", user.UserID, len(batch))
+	}
+	return true, false
 }
 
 type autoReviewTradeInput struct {
