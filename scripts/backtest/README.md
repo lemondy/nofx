@@ -360,3 +360,23 @@ S1 按以下顺序分级，首个命中生效：
 可选 `as_of` 必须为 RFC3339 时间；加载时通过只读数据库逐条核对，晚于对应记录决策时间、记录不存在或时间无效均拒绝，并指出 record_id。此校验覆盖整个字段文件，包括未进入当前交易员、时间窗或抽样的行。**字段生成器负责 point-in-time 正确性：只使用决策时刻已可获得的数据，正确处理发布延迟、修订和窗口截止；省略或通过 `as_of` 检查不能替代这一责任。**
 
 加载后的变体快照在 `input_inject.sha256` 保存字段文件原始字节的 SHA-256，并将其纳入变体哈希及缓存键；每次加载都会重新计算，文件内容（包括空白）改变会使用新的缓存键。
+
+## B 类过滤器增量筛选与影子闸门（incremental_filter）
+
+独立模块运行，不经过 `cli.py`；数据库只读。导出真实平仓交易的扣费 R，按 UTC **入场时间**筛选（`since` 含、`until` 不含），可重复传入 `--trader`：
+
+```bash
+python -m scripts.backtest.incremental_filter export-trades \
+  --db data/data.db --trader TRADER_ID --since 2026-10-01 --until 2026-11-01 \
+  --out .incr_out/trades.jsonl
+python -m scripts.backtest.incremental_filter evaluate \
+  --trades .incr_out/trades.jsonl --mask mask.jsonl --idea-id no-chase-v1 \
+  --hypothesis '开仓时的追高过滤可提高每笔 R' --track crypto_llm --baseline-version CONFIG_HASH \
+  --seed 20261103 --placebo-n 2000 --ledger data/evolution/ledger.jsonl
+python -m scripts.backtest.incremental_filter shadow \
+  --db data/data.db --since 2026-10-01 --horizon 48 --min-n 30
+```
+
+掩码每行 `{"trade_id": 123, "drop": true}`，每笔交易均应有一行；缺失不超过 5% 时计错并按保留处理，超过 5% 中止绩效计算、记 `invalid` 并返回非零状态。重复 ID、非布尔 `drop`、无效 R/时间均报错。`evaluate --no-ledger` 只打印预览，K 取当前账本；正常评估在账本锁内计算 K 和判定，并记录两个输入文件的 SHA256。时间排序后前半为 dev、后半为 holdout；被剔除集的 CI 按 UTC 入场周聚类，不足三周不报告 CI。`screen_pass/strong` 仅进入线上配对队列，不直接上线。
+
+`shadow` 可重复指定 `--trader`，默认全选；每个代码与贡献该代码的交易员在同一时间窗内的真实执行 avgR 比较。未指定 `since` 时从所选影子的最早创建时间开始，截止运行时间；空结果、`no_data`、`unfilled` 和无效止损排除并计数，多代码记录分别计入各代码。该分析仅作描述，不写账本、不作判定；影子结果按计划止损止盈先到先算，非大模型逐周期管理的真实离场。
