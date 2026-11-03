@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -24,8 +26,13 @@ import uuid
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if __package__ in (None, ""):
+    sys.path.insert(0, str(REPO_ROOT))
+from scripts.backtest import evolution_ledger
+
 MIGRATION_HINT = "请先用包含 paper 支持的新版后端启动一次完成迁移"
 START_NOTE = "首次启动后用 report.py --set-started 回填"
+RETRO_WARNING = "补登记发生在已看到部分结果之后，结论需打折"
 
 
 def main_repo_root() -> Path:
@@ -110,6 +117,71 @@ def set_feature(config: str, feature_path: str, value) -> str:
 
 
 @dataclass(frozen=True)
+class PreregOptions:
+    track: str
+    baseline_version: str
+    idea_id: str
+    change_type: str
+    mode: str = "incremental"
+    margin_r: float = 0.03
+    min_days: float = 30
+    min_trades: int = 50
+    harm_check_days: float = 14
+    extend_days: float = 14
+    extend_se: float = 0.02
+
+    def validate(self):
+        if self.mode != "incremental":
+            raise ValueError("mode 必须是 incremental")
+        if self.track not in evolution_ledger.TRACKS:
+            raise ValueError(f"track 必须是 {'/'.join(evolution_ledger.TRACKS)}")
+        if self.change_type not in evolution_ledger.CHANGE_TYPES:
+            raise ValueError("change-type 必须是 A–E")
+        for field in ("baseline_version", "idea_id"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field} 不可为空")
+        for field in ("margin_r", "min_days", "harm_check_days", "extend_days", "extend_se"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{field} 必须是非负有限数")
+        if self.min_days < 7:
+            raise ValueError("min-days 必须至少为 7 天")
+        if type(self.min_trades) is not int or self.min_trades < 1:
+            raise ValueError("min-trades 必须是正整数")
+
+
+def prereg_hash(prereg: dict) -> str:
+    body = {key: value for key, value in prereg.items() if key != "prereg_hash"}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def make_prereg(options: PreregOptions, timestamp: str, *, retroactive=False) -> dict:
+    options.validate()
+    prereg = {**vars(options), "registered_at": timestamp}
+    if retroactive:
+        prereg.update(retroactive=True, note=RETRO_WARNING)
+    prereg["prereg_hash"] = prereg_hash(prereg)
+    return prereg
+
+
+def verify_prereg(prereg) -> bool:
+    try:
+        if not isinstance(prereg, dict) or not isinstance(prereg.get("prereg_hash"), str):
+            return False
+        if not hmac.compare_digest(prereg["prereg_hash"], prereg_hash(prereg)):
+            return False
+        PreregOptions(**{key: prereg[key] for key in PreregOptions.__dataclass_fields__}).validate()
+        if not isinstance(prereg.get("registered_at"), str):
+            return False
+        registered = datetime.fromisoformat(prereg["registered_at"].replace("Z", "+00:00"))
+        return registered.tzinfo is not None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+@dataclass(frozen=True)
 class PairOptions:
     source_trader: str
     feature_path: str
@@ -123,6 +195,7 @@ class PairOptions:
     leverage: int = 5
     min_days: float = 7
     min_trades: int = 20
+    prereg: PreregOptions | None = None
 
     def validate(self):
         for field in ("source_trader", "feature_path", "pair_id", "title"):
@@ -142,6 +215,8 @@ class PairOptions:
         if type(self.min_trades) is not int or self.min_trades < 1:
             raise ValueError("min-trades 必须是正整数")
         encode(self.feature_value)
+        if self.prereg is not None:
+            self.prereg.validate()
 
     def paper_config(self) -> dict:
         return {"initial_balance": self.initial_balance, "taker_fee_bps": self.taker_bps,
@@ -206,6 +281,9 @@ def build_plan(options: PairOptions, source: dict, strategy: dict, exchange: dic
             "control_trader_id": identifiers["control"]["trader_id"],
             "live_trader_id": source["id"], "started_at": None, "note": START_NOTE,
             "min_days": options.min_days, "min_trades": options.min_trades}
+    if options.prereg is not None:
+        pair["prereg"] = make_prereg(options.prereg, timestamp)
+        pair.update(min_days=options.prereg.min_days, min_trades=options.prereg.min_trades)
     return {"objects": rows, "ids": identifiers, "pair": pair,
             "pairs_document": {**document, "pairs": [*document["pairs"], pair]}}
 
@@ -398,6 +476,77 @@ def start_pair(promotion_dir: Path, pair_id: str, *, now: datetime | None = None
         return pair
 
 
+def register_pair(promotion_dir: Path, pair_id: str, options: PreregOptions, *, now=None) -> dict:
+    """Seal one explicitly retroactive registration; never replace an existing prereg."""
+    options.validate()
+    with pairs_lock(promotion_dir):
+        path = promotion_dir / "pairs.json"
+        document, _ = load_document(path)
+        pair = next((p for p in document["pairs"] if p["id"] == pair_id), None)
+        if pair is None:
+            raise ValueError(f"pair-id 不存在：{pair_id}")
+        if "prereg" in pair:
+            raise ValueError(f"{pair_id} 已有 prereg，拒绝修改预登记")
+        timestamp = now if now is not None else datetime.now(timezone.utc)
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("registered_at 必须包含时区")
+        pair["prereg"] = make_prereg(options, timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                     retroactive=True)
+        atomic_write(path, document_bytes(document))
+        return pair
+
+
+def promote_pair(promotion_dir: Path, db_path: Path, pair_id: str, *, holdback_days=28, now=None) -> dict:
+    """Recompute in memory using a read-only DB snapshot; publish only pairs.json."""
+    from scripts.promotion import report
+
+    if not math.isfinite(holdback_days) or holdback_days <= 0:
+        raise ValueError("holdback-days 必须是大于 0 的有限数")
+    timestamp = now if now is not None else datetime.now(timezone.utc)
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("promoted_at 必须包含时区")
+    timestamp = timestamp.astimezone(timezone.utc)
+    with pairs_lock(promotion_dir):
+        path = promotion_dir / "pairs.json"
+        document, _ = load_document(path)
+        pair = next((p for p in document["pairs"] if p["id"] == pair_id), None)
+        if pair is None:
+            raise ValueError(f"pair-id 不存在：{pair_id}")
+        if pair.get("promoted_at"):
+            raise ValueError(f"{pair_id} 已记录 promote，拒绝重置保留对照期")
+        latest = report.build_report([pair], db_path, timestamp)["pairs"][0]
+        if latest["verdict"] != "promote":
+            raise ValueError(f"{pair_id} 最新判定为 {latest['verdict']}，只有 promote 可以登记保留对照")
+        pair.update(promoted_at=report.iso(timestamp),
+                    holdback_until=report.iso(timestamp + timedelta(days=holdback_days)))
+        atomic_write(path, document_bytes(document))
+        return pair
+
+
+def add_prereg_arguments(parser, *, required_mode=False):
+    parser.add_argument("--mode", choices=("incremental",), required=required_mode)
+    parser.add_argument("--track", choices=evolution_ledger.TRACKS)
+    parser.add_argument("--baseline-version")
+    parser.add_argument("--idea-id")
+    parser.add_argument("--change-type", choices=evolution_ledger.CHANGE_TYPES)
+    parser.add_argument("--margin-r", type=float, default=0.03)
+    parser.add_argument("--min-days", type=float, default=None, help="增量默认 30 天；旧模式默认 7 天")
+    parser.add_argument("--min-trades", type=int, default=None, help="增量默认 50 笔；旧模式默认 20 笔")
+    parser.add_argument("--harm-check-days", type=float, default=14)
+    parser.add_argument("--extend-days", type=float, default=14)
+    parser.add_argument("--extend-se", type=float, default=0.02)
+
+
+def prereg_options(args) -> PreregOptions | None:
+    if args.mode is None:
+        if any(getattr(args, key) is not None for key in ("track", "baseline_version", "idea_id", "change_type")):
+            raise ValueError("预登记字段需要 --mode incremental")
+        return None
+    options = PreregOptions(**{key: getattr(args, key) for key in PreregOptions.__dataclass_fields__})
+    options.validate()
+    return options
+
+
 def print_plan(plan: dict, db_path: Path, promotion_dir: Path, *, apply: bool, backup: Path | None):
     print(f"{'APPLIED' if apply else 'DRY-RUN（数据库以 mode=ro 打开，未写库/文件）'} | db={db_path}")
     if backup is not None:
@@ -431,6 +580,33 @@ def print_plan(plan: dict, db_path: Path, promotion_dir: Path, *, apply: bool, b
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     promotion_dir = Path(os.environ.get("PROMOTION_DIR", REPO_ROOT / "data/promotion"))
+    if argv and argv[0] in ("prereg", "promote"):
+        command = argv[0]
+        parser = argparse.ArgumentParser(description="补登记预注册（仅一次）" if command == "prereg" else
+                                         "重算最新判定并登记保留对照期（只写 pairs.json）")
+        parser.add_argument("pair_id")
+        if command == "prereg":
+            add_prereg_arguments(parser, required_mode=True)
+        else:
+            parser.add_argument("--holdback-days", type=float, default=28)
+            parser.add_argument("--db", type=Path, help="默认 NOFX_DB 或主仓库 data/data.db")
+        args = parser.parse_args(argv[1:])
+        try:
+            if command == "prereg":
+                args.min_days = 30 if args.min_days is None else args.min_days
+                args.min_trades = 50 if args.min_trades is None else args.min_trades
+                pair = register_pair(promotion_dir, args.pair_id, prereg_options(args))
+                print(f"警告：{RETRO_WARNING}", file=sys.stderr)
+                print(f"[{pair['id']}] 已补登记 prereg_hash={pair['prereg']['prereg_hash']}")
+            else:
+                db_path = args.db or Path(os.environ.get("NOFX_DB") or main_repo_root() / "data/data.db")
+                pair = promote_pair(promotion_dir, db_path, args.pair_id, holdback_days=args.holdback_days)
+                print(f"[{pair['id']}] promoted_at={pair['promoted_at']}；holdback_until={pair['holdback_until']}")
+                print("提醒：正式交易员配置须手动修改并经用户批准；请保留原对照模拟盘运行。")
+        except (OSError, ValueError, sqlite3.Error) as error:
+            print(f"{'补登记' if command == 'prereg' else '登记保留对照'}失败：{error}", file=sys.stderr)
+            return 1
+        return 0
     if argv and argv[0] == "start":
         parser = argparse.ArgumentParser(description="首次手动启动当天回填 started_at（只写 pairs.json）")
         parser.add_argument("pair_id")
@@ -443,7 +619,7 @@ def main(argv=None) -> int:
         print(f"[{pair['id']}] started_at={pair['started_at']}；未启动交易员，未访问数据库")
         return 0
 
-    parser = argparse.ArgumentParser(description=__doc__, epilog="子命令：start <pair-id> 回填首次启动 UTC 时间")
+    parser = argparse.ArgumentParser(description=__doc__, epilog="子命令：start / prereg / promote <pair-id>；各子命令支持 --help")
     parser.add_argument("--db", type=Path, default=None, help="SQLite 路径；默认 NOFX_DB 或主仓库 data/data.db")
     for name in ("source-trader", "feature-path", "pair-id", "title"):
         parser.add_argument(f"--{name}", required=True)
@@ -453,14 +629,16 @@ def main(argv=None) -> int:
     parser.add_argument("--maker-bps", type=float, default=2)
     parser.add_argument("--slippage-bps", type=float, default=3)
     parser.add_argument("--leverage", type=int, default=5)
-    parser.add_argument("--min-days", type=float, default=7)
-    parser.add_argument("--min-trades", type=int, default=20)
+    add_prereg_arguments(parser)
     parser.add_argument("--apply", action="store_true", help="先备份，再写入；省略时只读 dry-run")
     parser.add_argument("--backup-dir", type=Path, help="默认 PROMOTION_DIR/backups；备份失败则中止")
     args = parser.parse_args(argv)
     try:
         db_path = args.db if args.db is not None else Path(os.environ.get("NOFX_DB") or main_repo_root() / "data/data.db")
-        options = PairOptions(**{key: getattr(args, key) for key in PairOptions.__dataclass_fields__})
+        args.min_days = (30 if args.mode else 7) if args.min_days is None else args.min_days
+        args.min_trades = (50 if args.mode else 20) if args.min_trades is None else args.min_trades
+        options = PairOptions(**{key: getattr(args, key) for key in PairOptions.__dataclass_fields__ if key != "prereg"},
+                              prereg=prereg_options(args))
         plan, backup = create_pair(db_path, promotion_dir, options, apply=args.apply, backup_dir=args.backup_dir)
     except (OSError, ValueError, sqlite3.Error) as error:
         print(f"创建模拟盘对失败：{error}", file=sys.stderr)
