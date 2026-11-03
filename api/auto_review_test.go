@@ -51,12 +51,16 @@ func TestParseAutoReviews(t *testing.T) {
 	}
 }
 
-func seedAutoReviewRows(t *testing.T, srv *Server, traderID string, n int, now time.Time) []store.TradeJournalDB {
+func seedAutoReviewRows(t *testing.T, srv *Server, traderID string, n int, now time.Time, positionBase ...int64) []store.TradeJournalDB {
 	t.Helper()
 	yes := true
+	base := int64(0)
+	if len(positionBase) > 0 {
+		base = positionBase[0]
+	}
 	rows := make([]store.TradeJournalDB, n)
 	for i := range rows {
-		rows[i] = store.TradeJournalDB{TraderID: traderID, PositionID: int64(i + 1), Symbol: "BTCUSDT", Side: "LONG", AIManaged: &yes,
+		rows[i] = store.TradeJournalDB{TraderID: traderID, PositionID: base + int64(i+1), Symbol: "BTCUSDT", Side: "LONG", AIManaged: &yes,
 			EntryPrice: 100, ExitPrice: 101, Quantity: 1, PlannedStopLoss: 90, RealizedPnL: 1,
 			EntryTime: now.Add(-2 * time.Hour).UnixMilli(), ExitTime: now.Add(-time.Duration(i+11) * time.Minute).UnixMilli()}
 	}
@@ -87,7 +91,7 @@ func autoReviewResponse(inputs []autoReviewTradeInput) string {
 func TestAutoReviewOptInAndBatchCap(t *testing.T) {
 	srv, _, _, user, trader := idorFixture(t)
 	now := time.Now().UTC()
-	rows := seedAutoReviewRows(t, srv, trader, 53, now)
+	rows := seedAutoReviewRows(t, srv, trader, 203, now)
 	seedAutoReviewRows(t, srv, "trader-B", 1, now)
 	calls := 0
 	srv.reviewAI = reviewAIFunc(func(_ context.Context, gotUser, system, prompt string) (string, error) {
@@ -96,7 +100,7 @@ func TestAutoReviewOptInAndBatchCap(t *testing.T) {
 			t.Fatalf("wrong user or prompt: %s", gotUser)
 		}
 		inputs := inputAutoReviewTrades(t, prompt)
-		if len(inputs) != 10 || inputs[0].ID != rows[52-(calls-1)*10].ID {
+		if len(inputs) != 10 || inputs[0].ID != rows[202-(calls-1)*10].ID {
 			t.Fatalf("batch cap or order wrong: %+v", inputs)
 		}
 		return autoReviewResponse(inputs), nil
@@ -113,16 +117,67 @@ func TestAutoReviewOptInAndBatchCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.runAutoReview(context.Background(), now)
-	if calls != 5 {
-		t.Fatalf("got %d calls, want five batches", calls)
+	if calls != 20 {
+		t.Fatalf("got %d calls, want twenty batches", calls)
 	}
 	pending, _ := srv.store.TradeJournal().ListAutoReviewPending(user, now)
 	if len(pending) != 3 {
 		t.Fatalf("expected 3 remaining, got %d", len(pending))
 	}
-	foreign, _ := srv.store.TradeJournal().Get("trader-B", rows[52].ID+1)
+	foreign, _ := srv.store.TradeJournal().Get("trader-B", rows[202].ID+1)
 	if foreign == nil || foreign.ReviewStatus != "pending" {
 		t.Fatalf("disabled user's rows changed: %+v", foreign)
+	}
+}
+
+func TestRunDueAutoReviewRespectsThreeDayInterval(t *testing.T) {
+	srv, _, _, user, trader := idorFixture(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	rows := seedAutoReviewRows(t, srv, trader, 1, now)
+	if err := srv.store.ReviewPrompt().Upsert(user, "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	srv.reviewAI = reviewAIFunc(func(_ context.Context, _, _, prompt string) (string, error) {
+		calls.Add(1)
+		inputs := inputAutoReviewTrades(t, prompt)
+		return autoReviewResponse(inputs), nil
+	})
+	// First due run: reviews the pending row and persists the run time.
+	srv.runDueAutoReview(context.Background(), now)
+	got, _ := srv.store.TradeJournal().Get(trader, rows[0].ID)
+	cfg, _ := srv.store.ReviewPrompt().Get(user)
+	if calls.Load() != 1 || got.ReviewStatus != "ai_reviewed" || cfg == nil || cfg.AutoReviewLastRunAt != now.UnixMilli() {
+		t.Fatalf("first due run: calls=%d status=%s cfg=%+v", calls.Load(), got.ReviewStatus, cfg)
+	}
+	// 71h later new pending rows exist, but the user is not due yet.
+	seedAutoReviewRows(t, srv, trader, 2, now.Add(71*time.Hour), 100)
+	srv.runDueAutoReview(context.Background(), now.Add(71*time.Hour))
+	cfg, _ = srv.store.ReviewPrompt().Get(user)
+	if calls.Load() != 1 || cfg.AutoReviewLastRunAt != now.UnixMilli() {
+		t.Fatalf("ran before the 3-day interval elapsed: calls=%d last_run_at=%d", calls.Load(), cfg.AutoReviewLastRunAt)
+	}
+	// At exactly 72h the user is due again.
+	srv.runDueAutoReview(context.Background(), now.Add(72*time.Hour))
+	cfg, _ = srv.store.ReviewPrompt().Get(user)
+	if calls.Load() != 2 || cfg.AutoReviewLastRunAt != now.Add(72*time.Hour).UnixMilli() {
+		t.Fatalf("second due run: calls=%d last_run_at=%d", calls.Load(), cfg.AutoReviewLastRunAt)
+	}
+	// Much later the user is due again but has zero pending rows; the run
+	// time must still be marked so it does not stay due forever.
+	later := now.Add(6 * 72 * time.Hour)
+	srv.runDueAutoReview(context.Background(), later)
+	cfg, _ = srv.store.ReviewPrompt().Get(user)
+	if calls.Load() != 2 || cfg.AutoReviewLastRunAt != later.UnixMilli() {
+		t.Fatalf("zero-pending run must still be marked: calls=%d last_run_at=%d", calls.Load(), cfg.AutoReviewLastRunAt)
+	}
+	// Saving the toggle must not reset the persisted run time.
+	if err := srv.store.ReviewPrompt().Upsert(user, "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = srv.store.ReviewPrompt().Get(user)
+	if cfg.AutoReviewLastRunAt != later.UnixMilli() {
+		t.Fatalf("upsert reset the last run time: %+v", cfg)
 	}
 }
 

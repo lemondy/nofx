@@ -1610,7 +1610,7 @@ export const translations = {
         'R = net PnL / (|entry − planned stop| × quantity). Missing risk data is excluded. Reviews generate hypotheses, not evidence.',
       autoReviewEnabled: 'Enable automatic AI review',
       autoReviewHint:
-        'Off by default. Reviews up to 50 pending AI trades from the last 90 days each hour; uses your default AI model. Save to apply.',
+        'Off by default. Every 3 days, reviews pending AI trades from the last 90 days (up to 200 per run) with your default AI model. Save to apply.',
       failure_chased_entry: 'Chased entry',
       failure_counter_trend: 'Counter trend',
       failure_weak_setup: 'Weak setup',
@@ -3323,7 +3323,7 @@ export const translations = {
         'R = 扣费净盈亏 ÷（|入场价 − 计划止损价| × 数量），缺少风险数据不计入均值。复盘只产生假设，不作为证据。',
       autoReviewEnabled: '启用 AI 自动复盘',
       autoReviewHint:
-        '默认关闭。每小时复盘最近90天内最多50笔待复盘 AI 交易，使用默认 AI 模型，保存后生效。',
+        '默认关闭。每3天复盘一次最近90天内的待复盘 AI 交易（每次最多200笔），使用默认 AI 模型，保存后生效。',
       failure_chased_entry: '追涨/追空入场',
       failure_counter_trend: '逆大级别趋势',
       failure_weak_setup: '信号不足',
@@ -4996,7 +4996,7 @@ export const translations = {
         'R = PnL bersih / (|harga masuk − stop terencana| × jumlah). Data risiko kosong dikecualikan. Tinjauan menghasilkan hipotesis, bukan bukti.',
       autoReviewEnabled: 'Aktifkan tinjauan AI otomatis',
       autoReviewHint:
-        'Nonaktif secara bawaan. Meninjau hingga 50 transaksi AI tertunda dari 90 hari terakhir setiap jam dengan model AI bawaan. Simpan untuk menerapkan.',
+        'Nonaktif secara bawaan. Setiap 3 hari meninjau transaksi AI tertunda dari 90 hari terakhir (maks. 200 per proses) dengan model AI bawaan. Simpan untuk menerapkan.',
       failure_chased_entry: 'Mengejar harga masuk',
       failure_counter_trend: 'Melawan tren besar',
       failure_weak_setup: 'Sinyal lemah',
