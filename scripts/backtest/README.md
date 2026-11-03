@@ -330,3 +330,33 @@ S1 按以下顺序分级，首个命中生效：
 评分通过共享 `evolution_ledger.append_event` 追加 S1 行，文件锁保护 K 的读取、判定与 O_APPEND/fsync 写入。`--track`（crypto_llm / us_llm / fq_crypto / fq_us）和 `--baseline-version` 必填；`--change-type` 只接受 A/D，默认 D；`--idea-id` 默认使用变体 id。K 只累计同一 track 的非 invalid S1 评分，含本次与重复评分；其他 track、S2/S3 和 invalid 行不占用预算。invalid 行的 K 为 null，z_K 仍按该 track 下一次有效尝试的 K 计算。账本保留变体、假设、样本哈希、模型、参数及完整汇总，增加 delta/se/z、trade_ratio（变体/基线开仓率，基线为 0 时为 null）、placebo_pct=null、dev_delta、holdout_delta、patch_hit_rate 与 z_K。省略逐点 pairs/noise_pairs 数组以控制账本大小，逐点信息可从原重放清单和缓存重新评分得到。缺少噪声组的评分不会伪造噪声统计。
 
 局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。screen_pass/strong 仅进入线上配对队列，不直接上线；fewer_trades 归入基线交易频率问题。
+
+### A 类输入字段补丁：`input_inject`
+
+在 `variant.json` 中增加可选字段：
+
+```json
+{
+  "id": "factor-reference-v1",
+  "input_inject": {
+    "file": "fields.jsonl",
+    "label": "Factor reference",
+    "require_all": true
+  }
+}
+```
+
+`file` 相对 `variant.json` 所在目录解析，也可使用绝对路径。JSONL 每行包含一个记录、币种和参考文字；`text` 最多 300 个 Unicode 字符，重复的 `(record_id, symbol)` 或超长文字在加载时拒绝。示例：
+
+```jsonl
+{"record_id":123,"symbol":"BTCUSDT","text":"factor_rank=0.85","as_of":"2026-10-01T00:00:00Z"}
+{"record_id":123,"symbol":"ETHUSDT","text":"factor_rank=0.60"}
+```
+
+每条记录的字段按 symbol 升序组成 `## <label>` 和 `- <symbol>: <text>` 列表，末尾空一行，插在原输入提示词独立行 `## Candidate Coins (` 开头的候选标题之前。已只读检查 2026 年 8–11 月历史样本及最新提示词，均使用此前缀。候选标题不存在时，回退到 `rules_text` 使用的独立行 `## Current Positions` / `Current Positions: None`；两者都不存在则记 `patch_miss`。
+
+补丁顺序固定为 `system_replace` → `system_append` → `rules_text` → `input_inject`，所有输入锚点均从原始提示词查找，插入的文字不会制造新锚点。两种输入补丁都回退到同一持仓标题时，最终顺序是规则、参考字段、持仓标题。`require_all=true` 且该记录没有任何字段行时，错误为 `patch_miss: input_inject 无该记录字段`；false（默认）时不注入，正常计命中。该选项检查记录覆盖，不要求覆盖每个候选币种。`--dry-run` 除总补丁命中数外，还独立报告 `input_inject` 命中/缺失数，允许缺字段的无操作计命中；其他补丁失败不改变此独立计数。
+
+可选 `as_of` 必须为 RFC3339 时间；加载时通过只读数据库逐条核对，晚于对应记录决策时间、记录不存在或时间无效均拒绝，并指出 record_id。此校验覆盖整个字段文件，包括未进入当前交易员、时间窗或抽样的行。**字段生成器负责 point-in-time 正确性：只使用决策时刻已可获得的数据，正确处理发布延迟、修订和窗口截止；省略或通过 `as_of` 检查不能替代这一责任。**
+
+加载后的变体快照在 `input_inject.sha256` 保存字段文件原始字节的 SHA-256，并将其纳入变体哈希及缓存键；每次加载都会重新计算，文件内容（包括空白）改变会使用新的缓存键。
