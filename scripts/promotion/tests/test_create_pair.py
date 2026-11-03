@@ -138,6 +138,31 @@ class CreatePairTests(unittest.TestCase):
         self.assertNotIn("secret-api", text)
         self.assertNotIn("secret-key", text)
 
+    def test_incremental_cli_defaults_and_creation_hash(self):
+        prereg_flags = ["--mode", "incremental", "--track", "crypto_llm", "--baseline-version", "config-v1",
+                        "--idea-id", "ensemble", "--change-type", "A"]
+        command = ["--source-trader", SOURCE, "--feature-path", OPTIONS.feature_path, "--feature-value", "true",
+                   "--pair-id", OPTIONS.pair_id, "--title", OPTIONS.title, *prereg_flags]
+        with patch.dict(os.environ, {"PROMOTION_DIR": str(self.promotion), "NOFX_DB": str(self.db)}):
+            with patch.object(pair_cli, "print_plan") as output:
+                self.assertEqual(pair_cli.main(command), 0)
+            planned = output.call_args.args[0]["pair"]
+            self.assertEqual((planned["min_days"], planned["min_trades"]), (30, 50))
+            self.assertEqual(planned["prereg"]["margin_r"], 0.03)
+            self.assertEqual(planned["prereg"]["harm_check_days"], 14)
+            self.assertEqual(planned["prereg"]["extend_days"], 14)
+            self.assertEqual(planned["prereg"]["extend_se"], 0.02)
+            self.assertTrue(pair_cli.verify_prereg(planned["prereg"]))
+            self.assertNotIn("retroactive", planned["prereg"])
+            self.assertFalse(self.promotion.exists())
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(pair_cli.main([*command, "--apply"]), 0)
+        saved = json.loads((self.promotion / "pairs.json").read_text())["pairs"][0]
+        self.assertTrue(pair_cli.verify_prereg(saved["prereg"]))
+        for exchange in self.rows("exchanges"):
+            if exchange["exchange_type"] == "paper":
+                self.assertEqual(saved["prereg"]["registered_at"], exchange["created_at"])
+
     def test_readonly_mode_cannot_write_and_missing_db_is_never_created(self):
         with closing(pair_cli.open_database(self.db)) as connection:
             self.assertEqual(connection.execute("PRAGMA query_only").fetchone()[0], 1)

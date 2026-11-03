@@ -304,11 +304,16 @@ def build_parser():
     p.set_defaults(fn=cmd_exit)
 
     p = sub.add_parser("replay-score", help="离线 LLM 重放配对评分与追加账本")
+    from .evolution_ledger import TRACKS
     from .replay_score import cmd_replay_score
     _add_common(p)
     _add_execution(p, with_limit=True)
     p.add_argument("--replay-dir", required=True, help="llmreplay 输出目录")
     p.add_argument("--variant", required=True, help="变体 id 或完整哈希")
+    p.add_argument("--track", required=True, choices=TRACKS, help="交易线")
+    p.add_argument("--baseline-version", required=True, help="基线配置版本")
+    p.add_argument("--change-type", choices=("A", "D"), default="D", help="A 输入字段 / D 提示词规则")
+    p.add_argument("--idea-id", help="思路标识，默认使用变体 id")
     p.add_argument("--arms", default="baseline,variant,noise", help="baseline,variant[,noise]")
     p.add_argument("--model", help="完整缓存模型键；多模型时必须指定")
     p.add_argument("--repeat", type=int, default=0)

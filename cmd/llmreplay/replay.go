@@ -53,12 +53,13 @@ type replacement struct {
 	New string `json:"new"`
 }
 type variant struct {
-	ID         string        `json:"id"`
-	Hypothesis string        `json:"hypothesis"`
-	Source     string        `json:"source"`
-	Append     string        `json:"system_append"`
-	Replace    []replacement `json:"system_replace"`
-	Rules      string        `json:"rules_text"`
+	ID          string          `json:"id"`
+	Hypothesis  string          `json:"hypothesis"`
+	Source      string          `json:"source"`
+	Append      string          `json:"system_append"`
+	Replace     []replacement   `json:"system_replace"`
+	Rules       string          `json:"rules_text"`
+	InputInject *inputInjection `json:"input_inject,omitempty"`
 }
 
 func digest(b []byte) string   { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -143,12 +144,29 @@ func applyPatch(r record, v variant) (string, string, error) {
 		system += "\n\n" + v.Append
 	}
 	input := r.Input
+	rulesAt, rulesSize := -1, 0
 	if v.Rules != "" {
 		hit := positionsHeader.FindStringIndex(input)
 		if hit == nil {
 			return "", "", fmt.Errorf("patch_miss: 缺少持仓标题")
 		}
-		input = input[:hit[0]] + strings.TrimRight(v.Rules, "\r\n") + "\n\n" + input[hit[0]:]
+		rules := strings.TrimRight(v.Rules, "\r\n") + "\n\n"
+		rulesAt, rulesSize = hit[0], len(rules)
+		input = input[:rulesAt] + rules + input[rulesAt:]
+	}
+	if v.InputInject != nil {
+		// Apply rules first, then fields, but locate both anchors in the
+		// original prompt so inserted text cannot manufacture an anchor.
+		block, at, err := v.InputInject.prepare(r)
+		if err != nil {
+			return "", "", err
+		}
+		if block != "" {
+			if rulesAt >= 0 && rulesAt <= at {
+				at += rulesSize
+			}
+			input = input[:at] + block + input[at:]
+		}
 	}
 	return system, input, nil
 }
@@ -291,12 +309,20 @@ func runReplay(ctx context.Context, records []record, o runOptions, factory clie
 	}
 	var jobs []replayJob
 	hits, misses, tokens := 0, 0, 0
+	injectHits, injectMisses := 0, 0
 	for i, r := range records {
 		if o.Arm == "noise" && i >= o.NoiseSubset {
 			break
 		}
 		job := replayJob{rec: r, system: r.System, input: r.Input, key: cacheKey{r.ID, o.Arm, hash, o.Model, o.Repeat}}
 		if o.Arm == "variant" {
+			if o.Variant.InputInject != nil {
+				if _, _, err := o.Variant.InputInject.prepare(r); err != nil {
+					injectMisses++
+				} else {
+					injectHits++
+				}
+			}
 			job.system, job.input, job.patchErr = applyPatch(r, o.Variant)
 		}
 		if job.patchErr != nil {
@@ -308,6 +334,9 @@ func runReplay(ctx context.Context, records []record, o runOptions, factory clie
 		jobs = append(jobs, job)
 	}
 	fmt.Fprintf(w, "样本 %d；补丁命中 %d，patch_miss %d；预计输入 tokens ≈ %d（字符/3 粗估，不含回复）\n", len(jobs), hits, misses, tokens)
+	if o.Arm == "variant" && o.Variant.InputInject != nil {
+		fmt.Fprintf(w, "input_inject 命中 %d，缺失 %d（允许缺字段的无操作计命中）\n", injectHits, injectMisses)
+	}
 	if hits == 0 {
 		return fmt.Errorf("全部样本 patch_miss 或没有待运行样本，拒绝运行")
 	}

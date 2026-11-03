@@ -289,6 +289,7 @@ go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
 # 完全离线评分，缺 K 线则计数并排除整个配对点
 .venv/bin/python -m scripts.backtest replay-score \
   --replay-dir data/evolution/replay/oct --variant no-chase-v1 \
+  --track crypto_llm --baseline-version CONFIG_HASH --change-type D \
   --cache data/backtest_cache --horizon 72 --ledger data/evolution/ledger.jsonl
 # 只有显式追加 --fetch 才允许调用既有 fetch 下载；两组评分可指定 --arms baseline,variant
 ```
@@ -316,8 +317,66 @@ go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
 
 评分不做历史成交匹配、不合并连续限价信号，也不按模拟持仓阻挡后续决策点；每个历史状态下的开仓都独立研究。复用 `exitsim.build_trade` 与 `backtrader_adapter.run_trade`，只保留决策 SL/TP、完整止盈和时间止损（默认 72h），限价有效期默认 45 分钟；费用/滑点/限价穿价沿用 entry 默认值，可用同名参数覆盖。没有 SL 的开仓不计入并计数；未成交限价贡献 0；没有开仓的决策点贡献 0。缓存须覆盖信号至 horizon（限价再加有效期与 10 分钟退出缓冲），缺失/短缺 K 线或未完成交易会排除整个配对点，避免覆盖不足选择性留下早止盈样本；默认不下载。现有 fetch 的覆盖长度通常足够 72h，设置更长 horizon 时仍可能报告缺失。
 
-配对差为每点 `R_variant − R_baseline`，用分层权重求均值；SE 使用 UTC 日聚类 sandwich（`G/(G−1)` 修正），95% CI 使用正态临界值。少于两个 UTC 日无法估计 SE，输出提示；变体 z 不可估计时不能 `pass`。解析失败率按各组计算，取最大值执行 >10% 门槛，避免其他成功组稀释问题；解析失败、调用失败、patch_miss 均不参与有效配对。报告还含开仓率、决策一致率（忽略推理文字与注释）、方向翻转、成交开仓加权 avgR 与可用时的 failure_mode 描述性关联。缺少 `trade_journal.failure_mode` 会明确显示不可用，不修改 schema。噪声可省略，但会提示健康检查缺失。
+配对差为每点 `R_variant − R_baseline`，用分层权重求均值；SE 使用 UTC 日聚类 sandwich（`G/(G−1)` 修正），95% CI 使用正态临界值。按有效配对的 UTC 日排序，前 ceil(日数/2) 天为 dev，其余为 holdout，两半分别报告加权统计。少于两个 UTC 日仍保留均值，但无法估计 SE；合并 z 或任一半均值不可估计时不能 `strong` / `screen_pass`。解析失败率按各组计算，取最大值执行 >10% 门槛，避免其他成功组稀释问题；解析失败、调用失败、patch_miss 均不参与有效配对。补丁命中率 = 1 − 变体组 patch_miss 行数 / 清单记录数，使用指定模型、repeat、变体哈希的缓存行，在排除无效配对前计算。报告还含开仓率、决策一致率（忽略推理文字与注释）、方向翻转、成交开仓加权 avgR 与可用时的 failure_mode 描述性关联。缺少 `trade_journal.failure_mode` 会明确显示不可用，不修改 schema。噪声可省略，但会提示健康检查缺失。
 
-`invalid`：噪声 `|z|≥2`、有效配对不足 100、解析失败率 >10%。其余只有 `z≥Φ⁻¹(1−0.05/(2K))` 且相对开仓率变化在 ±50% 内才 `pass`，否则 `fail`；`--open-rate-limit` 可调整比例，越界写人工复核提示。基线开仓率为 0 而变体大于 0 时变化视为无穷，不能通过。账本以文件锁保护 K 的读取和单次 O_APPEND/fsync 追加；每次评分追加一行，包括重复评分，因此重复评分不会重置多重检验预算。缺少噪声组的评分不会伪造噪声统计。
+S1 按以下顺序分级，首个命中生效：
 
-局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。`pass` 只筛入线上候选/对照，不会自动上线。
+- `invalid`：噪声 `|z|≥2`、有效配对不足 100、解析失败率 >10% 或补丁命中率 <80%。
+- `fewer_trades`：相对开仓率变化超出 ±50%，`--open-rate-limit` 可调整阈值。基线开仓率为 0 而变体大于 0 时变化视为无穷。
+- `strong`：`z≥z_K=Φ⁻¹(1−0.05/(2K))`，且 dev、holdout 的 Δ 均 >0。
+- `screen_pass`：`z≥1.0`，且两半 Δ 均 >0。
+- `fail`：其余。
+
+评分通过共享 `evolution_ledger.append_event` 追加 S1 行，文件锁保护 K 的读取、判定与 O_APPEND/fsync 写入。`--track`（crypto_llm / us_llm / fq_crypto / fq_us）和 `--baseline-version` 必填；`--change-type` 只接受 A/D，默认 D；`--idea-id` 默认使用变体 id。K 只累计同一 track 的非 invalid S1 评分，含本次与重复评分；其他 track、S2/S3 和 invalid 行不占用预算。invalid 行的 K 为 null，z_K 仍按该 track 下一次有效尝试的 K 计算。账本保留变体、假设、样本哈希、模型、参数及完整汇总，增加 delta/se/z、trade_ratio（变体/基线开仓率，基线为 0 时为 null）、placebo_pct=null、dev_delta、holdout_delta、patch_hit_rate 与 z_K。省略逐点 pairs/noise_pairs 数组以控制账本大小，逐点信息可从原重放清单和缓存重新评分得到。缺少噪声组的评分不会伪造噪声统计。
+
+局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。screen_pass/strong 仅进入线上配对队列，不直接上线；fewer_trades 归入基线交易频率问题。
+
+### A 类输入字段补丁：`input_inject`
+
+在 `variant.json` 中增加可选字段：
+
+```json
+{
+  "id": "factor-reference-v1",
+  "input_inject": {
+    "file": "fields.jsonl",
+    "label": "Factor reference",
+    "require_all": true
+  }
+}
+```
+
+`file` 相对 `variant.json` 所在目录解析，也可使用绝对路径。JSONL 每行包含一个记录、币种和参考文字；`text` 最多 300 个 Unicode 字符，重复的 `(record_id, symbol)` 或超长文字在加载时拒绝。示例：
+
+```jsonl
+{"record_id":123,"symbol":"BTCUSDT","text":"factor_rank=0.85","as_of":"2026-10-01T00:00:00Z"}
+{"record_id":123,"symbol":"ETHUSDT","text":"factor_rank=0.60"}
+```
+
+每条记录的字段按 symbol 升序组成 `## <label>` 和 `- <symbol>: <text>` 列表，末尾空一行，插在原输入提示词独立行 `## Candidate Coins (` 开头的候选标题之前。已只读检查 2026 年 8–11 月历史样本及最新提示词，均使用此前缀。候选标题不存在时，回退到 `rules_text` 使用的独立行 `## Current Positions` / `Current Positions: None`；两者都不存在则记 `patch_miss`。
+
+补丁顺序固定为 `system_replace` → `system_append` → `rules_text` → `input_inject`，所有输入锚点均从原始提示词查找，插入的文字不会制造新锚点。两种输入补丁都回退到同一持仓标题时，最终顺序是规则、参考字段、持仓标题。`require_all=true` 且该记录没有任何字段行时，错误为 `patch_miss: input_inject 无该记录字段`；false（默认）时不注入，正常计命中。该选项检查记录覆盖，不要求覆盖每个候选币种。`--dry-run` 除总补丁命中数外，还独立报告 `input_inject` 命中/缺失数，允许缺字段的无操作计命中；其他补丁失败不改变此独立计数。
+
+可选 `as_of` 必须为 RFC3339 时间；加载时通过只读数据库逐条核对，晚于对应记录决策时间、记录不存在或时间无效均拒绝，并指出 record_id。此校验覆盖整个字段文件，包括未进入当前交易员、时间窗或抽样的行。**字段生成器负责 point-in-time 正确性：只使用决策时刻已可获得的数据，正确处理发布延迟、修订和窗口截止；省略或通过 `as_of` 检查不能替代这一责任。**
+
+加载后的变体快照在 `input_inject.sha256` 保存字段文件原始字节的 SHA-256，并将其纳入变体哈希及缓存键；每次加载都会重新计算，文件内容（包括空白）改变会使用新的缓存键。
+
+## B 类过滤器增量筛选与影子闸门（incremental_filter）
+
+独立模块运行，不经过 `cli.py`；数据库只读。导出真实平仓交易的扣费 R，按 UTC **入场时间**筛选（`since` 含、`until` 不含），可重复传入 `--trader`：
+
+```bash
+python -m scripts.backtest.incremental_filter export-trades \
+  --db data/data.db --trader TRADER_ID --since 2026-10-01 --until 2026-11-01 \
+  --out .incr_out/trades.jsonl
+python -m scripts.backtest.incremental_filter evaluate \
+  --trades .incr_out/trades.jsonl --mask mask.jsonl --idea-id no-chase-v1 \
+  --hypothesis '开仓时的追高过滤可提高每笔 R' --track crypto_llm --baseline-version CONFIG_HASH \
+  --seed 20261103 --placebo-n 2000 --ledger data/evolution/ledger.jsonl
+python -m scripts.backtest.incremental_filter shadow \
+  --db data/data.db --since 2026-10-01 --horizon 48 --min-n 30
+```
+
+掩码每行 `{"trade_id": 123, "drop": true}`，每笔交易均应有一行；缺失不超过 5% 时计错并按保留处理，超过 5% 中止绩效计算、记 `invalid` 并返回非零状态。重复 ID、非布尔 `drop`、无效 R/时间均报错。`evaluate --no-ledger` 只打印预览，K 取当前账本；正常评估在账本锁内计算 K 和判定，并记录两个输入文件的 SHA256。时间排序后前半为 dev、后半为 holdout；被剔除集的 CI 按 UTC 入场周聚类，不足三周不报告 CI。`screen_pass/strong` 仅进入线上配对队列，不直接上线。
+
+`shadow` 可重复指定 `--trader`，默认全选；每个代码与贡献该代码的交易员在同一时间窗内的真实执行 avgR 比较。未指定 `since` 时从所选影子的最早创建时间开始，截止运行时间；空结果、`no_data`、`unfilled` 和无效止损排除并计数，多代码记录分别计入各代码。该分析仅作描述，不写账本、不作判定；影子结果按计划止损止盈先到先算，非大模型逐周期管理的真实离场。
