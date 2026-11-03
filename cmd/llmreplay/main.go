@@ -104,6 +104,9 @@ func cli(args []string, w io.Writer, injected clientFactory) error {
 		return err
 	}
 	defer db.Close()
+	if err = loadInputInject(&o.Variant, o.VariantFile, db); err != nil {
+		return err
+	}
 	// Do not use store.New: it migrates tables and can change journal mode.
 	gd, err := gorm.Open(sqlite.New(sqlite.Config{DriverName: "sqlite", Conn: db}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
