@@ -321,3 +321,23 @@ go run ./cmd/llmreplay --trader mac-nofx --since 2026-10-01 --until 2026-11-01 \
 `invalid`：噪声 `|z|≥2`、有效配对不足 100、解析失败率 >10%。其余只有 `z≥Φ⁻¹(1−0.05/(2K))` 且相对开仓率变化在 ±50% 内才 `pass`，否则 `fail`；`--open-rate-limit` 可调整比例，越界写人工复核提示。基线开仓率为 0 而变体大于 0 时变化视为无穷，不能通过。账本以文件锁保护 K 的读取和单次 O_APPEND/fsync 追加；每次评分追加一行，包括重复评分，因此重复评分不会重置多重检验预算。缺少噪声组的评分不会伪造噪声统计。
 
 局限：历史提示词含真实持仓状态，并非反事实账户；今天的模型不等于当时版本；固定 SL/TP/时间止损不重放实盘逐周期持仓管理；单一市场阶段有偏差。`pass` 只筛入线上候选/对照，不会自动上线。
+
+## B 类过滤器增量筛选与影子闸门（incremental_filter）
+
+独立模块运行，不经过 `cli.py`；数据库只读。导出真实平仓交易的扣费 R，按 UTC **入场时间**筛选（`since` 含、`until` 不含），可重复传入 `--trader`：
+
+```bash
+python -m scripts.backtest.incremental_filter export-trades \
+  --db data/data.db --trader TRADER_ID --since 2026-10-01 --until 2026-11-01 \
+  --out .incr_out/trades.jsonl
+python -m scripts.backtest.incremental_filter evaluate \
+  --trades .incr_out/trades.jsonl --mask mask.jsonl --idea-id no-chase-v1 \
+  --hypothesis '开仓时的追高过滤可提高每笔 R' --track crypto_llm --baseline-version CONFIG_HASH \
+  --seed 20261103 --placebo-n 2000 --ledger data/evolution/ledger.jsonl
+python -m scripts.backtest.incremental_filter shadow \
+  --db data/data.db --since 2026-10-01 --horizon 48 --min-n 30
+```
+
+掩码每行 `{"trade_id": 123, "drop": true}`，每笔交易均应有一行；缺失不超过 5% 时计错并按保留处理，超过 5% 中止绩效计算、记 `invalid` 并返回非零状态。重复 ID、非布尔 `drop`、无效 R/时间均报错。`evaluate --no-ledger` 只打印预览，K 取当前账本；正常评估在账本锁内计算 K 和判定，并记录两个输入文件的 SHA256。时间排序后前半为 dev、后半为 holdout；被剔除集的 CI 按 UTC 入场周聚类，不足三周不报告 CI。`screen_pass/strong` 仅进入线上配对队列，不直接上线。
+
+`shadow` 可重复指定 `--trader`，默认全选；每个代码与贡献该代码的交易员在同一时间窗内的真实执行 avgR 比较。未指定 `since` 时从所选影子的最早创建时间开始，截止运行时间；空结果、`no_data`、`unfilled` 和无效止损排除并计数，多代码记录分别计入各代码。该分析仅作描述，不写账本、不作判定；影子结果按计划止损止盈先到先算，非大模型逐周期管理的真实离场。
