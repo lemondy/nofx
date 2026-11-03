@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from contextlib import closing
+from contextlib import closing, ExitStack
 from datetime import datetime, timedelta, timezone
 import json
 import math
@@ -22,7 +22,8 @@ try:  # The nightly runtime dir only gets quant_audit.py via deploy.sh; never le
     from scripts.backtest.quant_audit import audit_returns
 except ImportError:
     audit_returns = None
-from scripts.promotion.create_pair import main_repo_root
+from scripts.backtest import evolution_ledger
+from scripts.promotion.create_pair import main_repo_root, verify_prereg
 
 
 UTC = timezone.utc
@@ -385,6 +386,47 @@ def decide_verdict(elapsed_days: float, min_days: float, min_trades: int,
     return verdict, insufficient + performance
 
 
+def decide_incremental(elapsed: float, prereg: dict, candidate: dict, control: dict,
+                       weekly: dict) -> tuple[str, list[str]]:
+    delta, se = finite(weekly["mean_diff"]), finite(weekly["cluster_se"])
+    lower = finite(delta - 1.645 * se) if delta is not None and se is not None else None
+    ratio = candidate["n"] / control["n"] if control["n"] else None
+    if elapsed < prereg["harm_check_days"]:
+        return "insufficient", [f"尚未达到伤害检查期 {prereg['harm_check_days']:g} 天"]
+    if delta is not None and se is not None and delta < -2 * se:
+        return "harm_stop", ["avgR 差 < −2·SE，建议提前终止配对"]
+    if elapsed < prereg["min_days"] or min(candidate["r_n"], control["r_n"]) < prereg["min_trades"]:
+        return "insufficient", [f"需运行至少 {prereg['min_days']:g} 天且两侧各有 {prereg['min_trades']} 笔有效 R"]
+    if (delta is not None and delta > 0 and lower is not None and lower > -prereg["margin_r"]
+            and ratio is not None and 0.67 <= ratio <= 1.5):
+        return "promote", ["avgR 增量、单侧 95% 下界及平仓数比均通过预登记门槛"]
+    if delta is not None and delta > 0 and ratio is not None and ratio < 0.67:
+        return "fewer_trades", ["avgR 为正增量但平仓数比 < 0.67，转入交易频率问题"]
+    if se is not None and se > prereg["extend_se"] and elapsed < prereg["min_days"] + prereg["extend_days"]:
+        return "extend", [f"SE 仍偏大，最多延长至 {prereg['min_days'] + prereg['extend_days']:g} 天"]
+    return "reject", ["未通过预登记增量门槛（包括正式判定期内无法计算 SE）"]
+
+
+def incremental_fields(pair: dict, as_of: datetime, elapsed: float, candidate: dict,
+                       control: dict, weekly: dict) -> dict:
+    delta, se = finite(weekly["mean_diff"]), finite(weekly["cluster_se"])
+    verdict, reasons = decide_incremental(elapsed, pair["prereg"], candidate, control, weekly)
+    if pair.get("promoted_at"):
+        if as_of >= as_utc(pair["holdback_until"]):
+            verdict, reasons = "holdback_done", ["保留对照期已结束"]
+        elif delta is not None and se is not None and delta < -2 * se:
+            verdict, reasons = "rollback_suggested", ["晋升后 avgR 差 < −2·SE，建议人工审批回滚"]
+        else:
+            verdict, reasons = "holdback_ok", ["保留对照期内未触发回滚条件；缺少 SE 时不能排除伤害"]
+    return {"delta": delta, "se": se,
+            "lower_bound": finite(delta - 1.645 * se) if delta is not None and se is not None else None,
+            "trade_ratio": candidate["n"] / control["n"] if control["n"] else None,
+            "retroactive": bool(pair["prereg"].get("retroactive", False)),
+            "evaluation_started_at": pair.get("promoted_at") or pair["started_at"],
+            "evaluation_closed_counts": {"candidate": candidate["n"], "control": control["n"]},
+            "incremental_weekly_avg_r": weekly, "verdict": verdict, "reasons": reasons}
+
+
 def normalize_pair(pair: dict) -> dict:
     pair = dict(pair)
     for key in ("id", "candidate_trader_id", "control_trader_id", "started_at"):
@@ -402,6 +444,12 @@ def normalize_pair(pair: dict) -> dict:
     if trades is None or not trades.is_integer() or trades < 1:
         raise ValueError(f"{pair['id']}：min_trades 必须是正整数")
     pair.update(min_days=days, min_trades=int(trades))
+    if "prereg" in pair and pair.get("promoted_at"):
+        promoted = as_utc(pair["promoted_at"])
+        until = as_utc(pair["holdback_until"])
+        if promoted < as_utc(pair["started_at"]) or until <= promoted:
+            raise ValueError(f"{pair['id']}：保留对照时间必须晚于启动时间且顺序有效")
+        pair.update(promoted_at=iso(promoted), holdback_until=iso(until))
     return pair
 
 
@@ -443,7 +491,10 @@ def read_trader(connection: sqlite3.Connection, trader_id: str,
 def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dict:
     """Read every configured pair in one consistent, bounded read transaction."""
     as_of = as_utc(as_of)
-    pairs = [normalize_pair(pair) for pair in pairs]
+    def tampered(pair):
+        return "prereg" in pair and not verify_prereg(pair["prereg"])
+
+    pairs = [dict(pair) if tampered(pair) else normalize_pair(pair) for pair in pairs]
     if len({pair["id"] for pair in pairs}) != len(pairs):
         raise ValueError("pair id 不可重复")
     report = {"schema_version": 1, "generated_at": iso(as_of), "pairs": [],
@@ -463,17 +514,23 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
               }}
     if not pairs:
         return report  # Empty configuration must work even without a database.
-    btc_returns, btc_error = load_btc_returns(as_of)
-    with closing(open_readonly(db_path)) as connection:
-        connection.execute("BEGIN")
+    trusted = any(not tampered(pair) for pair in pairs)
+    btc_returns, btc_error = load_btc_returns(as_of) if trusted else ({}, None)
+    with ExitStack() as stack:
+        connection = stack.enter_context(closing(open_readonly(db_path))) if trusted else None
+        if connection is not None:
+            connection.execute("BEGIN")
         cache = {}
         for pair in pairs:
+            if tampered(pair):
+                report["pairs"].append({"id": pair["id"], "verdict": "prereg_tampered"})
+                continue
             start = as_utc(pair["started_at"])
 
-            def trader(trader_id):
-                key = (trader_id, start)
+            def trader(trader_id, window_start=start):
+                key = (trader_id, window_start)
                 if key not in cache:
-                    cache[key] = read_trader(connection, trader_id, start, as_of)
+                    cache[key] = read_trader(connection, trader_id, window_start, as_of)
                 return cache[key]
 
             candidate, cand_r = trader(pair["candidate_trader_id"])
@@ -486,6 +543,16 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
             item = {**pair, "elapsed_days": elapsed, "candidate": candidate, "control": control,
                     "paired_daily": paired, "weekly_avg_r": weekly, "verdict": verdict,
                     "reasons": reasons, "caveats": CAVEAT, "warnings": warnings}
+            if "prereg" in pair:
+                inc_c, inc_b = candidate, control
+                if pair.get("promoted_at"):
+                    # Strictly after promotion, including already-open trades that exit later.
+                    after = as_utc(pair["promoted_at"]) + timedelta(microseconds=1)
+                    inc_c, cand_r = trader(pair["candidate_trader_id"], after)
+                    inc_b, ctrl_r = trader(pair["control_trader_id"], after)
+                inc_weekly = weekly_r_comparison(cand_r, ctrl_r, 1)
+                item.update(legacy_verdict=verdict, legacy_reasons=reasons)
+                item.update(incremental_fields(pair, as_of, elapsed, inc_c, inc_b, inc_weekly))
             if pair.get("live_trader_id"):
                 item["live"], _ = trader(pair["live_trader_id"])
             for role in ("candidate", "control", "live"):
@@ -504,6 +571,37 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
             item["audit"] = pair_audit(candidate, control, as_of, btc_returns, btc_error)
             report["pairs"].append(item)
     return json_safe(report)
+
+
+class _AlreadyRecorded(Exception):
+    pass
+
+
+def record_ledger(report: dict, path: Path) -> None:
+    """Check deduplication inside append_event's existing exclusive ledger lock."""
+    for item in report["pairs"]:
+        verdict = item["verdict"]
+        if "prereg" not in item or verdict not in {"harm_stop", "promote", "fewer_trades", "reject", "rollback_suggested"}:
+            continue
+        prereg = item["prereg"]
+        stage = "S3" if verdict == "rollback_suggested" else "S2"
+
+        def build(k, previous):
+            if any(row.get("pair_id") == item["id"] and row.get("stage") == stage and row.get("verdict") == verdict
+                   for row in previous):
+                raise _AlreadyRecorded
+            delta, se = item["delta"], item["se"]
+            z = delta / se if delta is not None and se is not None and se > 0 else None
+            return {"stage": stage, "verdict": verdict, "pair_id": item["id"],
+                    "idea_id": prereg["idea_id"], "change_type": prereg["change_type"],
+                    "baseline_version": prereg["baseline_version"], "prereg_hash": prereg["prereg_hash"],
+                    "delta": delta, "se": se, "z": z, "trade_ratio": item["trade_ratio"],
+                    "placebo_pct": None, "retroactive": item["retroactive"]}
+
+        try:
+            evolution_ledger.append_event(path, prereg["track"], build)
+        except _AlreadyRecorded:
+            pass
 
 
 def load_pairs(promotion_dir: Path) -> list[dict]:
@@ -542,8 +640,22 @@ def summary(report: dict) -> str:
 
     lines = [f"模拟盘晋升报告 {report['generated_at']} | pairs={len(report['pairs'])}"]
     for item in report["pairs"]:
+        if item["verdict"] == "prereg_tampered":
+            lines.append(f"[{item['id']}] prereg_tampered")
+            continue
         verdict = "insufficient（样本不足）" if item['verdict'] == 'insufficient' else item['verdict']
         lines.append(f"[{item['id']}] {verdict} | 已运行 {item['elapsed_days']:.2f} 天")
+        if "prereg" in item:
+            p = item["prereg"]
+            lines.append(f"  增量: Δ={number(item['delta'])} R, SE={number(item['se'])}, "
+                         f"单侧95%下界={number(item['lower_bound'])}, 平仓数比={number(item['trade_ratio'])}, "
+                         f"统计起点={item['evaluation_started_at']}, legacy_verdict={item['legacy_verdict']}")
+            lines.append(f"  预登记: track={p['track']}, baseline={p['baseline_version']}, idea={p['idea_id']}, "
+                         f"类型={p['change_type']}, margin_r={p['margin_r']:g}, "
+                         f"min_days={p['min_days']:g}, min_trades={p['min_trades']}, "
+                         f"harm_check_days={p['harm_check_days']:g}, extend_days={p['extend_days']:g}, "
+                         f"extend_se={p['extend_se']:g}, registered_at={p['registered_at']}, "
+                         f"prereg_hash={p['prereg_hash']}, retroactive={item['retroactive']}")
         for role, label in (("candidate", "候选"), ("control", "对照"), ("live", "正式参照")):
             if role in item:
                 stats = item[role]
@@ -583,12 +695,17 @@ def summary(report: dict) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args(argv)
+    parser.add_argument("--ledger", nargs="?", const="", default=None, metavar="PATH",
+                        help="追加最终 S2/S3 判定并去重；无 PATH 时用主仓库 data/evolution/ledger.jsonl；默认不记账")
+    args = parser.parse_args(argv)
     promotion_dir = Path(os.environ.get("PROMOTION_DIR", REPO_ROOT / "data/promotion"))
     db_path = Path(os.environ.get("NOFX_DB", REPO_ROOT / "data/data.db"))
     try:
         report = build_report(load_pairs(promotion_dir), db_path, datetime.now(UTC))
         write_report(promotion_dir / "report.json", report)
+        if args.ledger is not None:
+            ledger_path = Path(args.ledger) if args.ledger else main_repo_root() / evolution_ledger.DEFAULT_PATH
+            record_ledger(report, ledger_path)
     except (OSError, ValueError, sqlite3.Error) as error:
         print(f"晋升报告失败：{error}", file=sys.stderr)
         return 1
