@@ -55,15 +55,21 @@ func fqClearHalt(state *store.FactorQuantState) {
 func (at *AutoTrader) factorQuantRiskCheck(broker fqBroker, now time.Time) (ready, halted bool) {
 	acct, err := broker.Account()
 	if err != nil {
+		at.fqNote("risk_skip", fmt.Sprintf("组合风控读取账户失败，本轮跳过：%v", err))
 		at.fqLogOnce(fmt.Sprintf("组合风控读取账户失败，本轮跳过：%v", err))
 		return false, false
 	}
 	if acct == nil || math.IsNaN(acct.Equity) || math.IsInf(acct.Equity, 0) {
+		at.fqNote("risk_skip", "组合风控账户权益无效，本轮跳过")
 		at.fqLogOnce("组合风控账户权益无效，本轮跳过")
 		return false, false
 	}
+	at.fq.mu.Lock()
+	at.fq.currentTick.Equity = acct.Equity
+	at.fq.mu.Unlock()
 	state, err := at.fqState()
 	if err != nil {
+		at.fqNote("risk_skip", fmt.Sprintf("组合风控读取状态失败，本轮跳过：%v", err))
 		at.fqLogOnce(fmt.Sprintf("组合风控读取状态失败，本轮跳过：%v", err))
 		return false, false
 	}
@@ -94,6 +100,7 @@ func (at *AutoTrader) factorQuantRiskCheck(broker fqBroker, now time.Time) (read
 		}
 	}
 	if unreliable != "" {
+		at.fqNote("risk_skip", "组合风控："+unreliable+"，本轮不评估熔断")
 		at.fqLogOnce("组合风控：" + unreliable + "，本轮不评估熔断")
 		if state.HaltKind != "" {
 			at.factorQuantHaltFlatten(broker, acct, state, now)
@@ -179,6 +186,7 @@ func (at *AutoTrader) fqRiskRecord(acct *fqAccount, reason string, now time.Time
 // factorQuantHaltFlatten reuses stale-flatten execution, including full-close
 // stop cancellation. No last_as_of means these holdings are not strategy-owned.
 func (at *AutoTrader) factorQuantHaltFlatten(broker fqBroker, acct *fqAccount, state *store.FactorQuantState, now time.Time) {
+	at.fqNote("halted", fmt.Sprintf("风控停机 [%s]：%s", state.HaltKind, state.HaltReason))
 	fq := at.config.StrategyConfig.FactorQuantConfig
 	synthetic := &quantTargets{Version: quantTargetsVersion, Market: fq.Market, Status: quantStatusOK,
 		AsOf: state.LastAsOf, Horizon: fq.EffectiveHorizon(), Rule: quantRule{Name: state.LastRule}, Weights: map[string]float64{}}

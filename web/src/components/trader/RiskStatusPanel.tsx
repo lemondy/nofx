@@ -1,7 +1,7 @@
 import useSWR from 'swr'
 import { api } from '../../lib/api'
 import { t, type Language } from '../../i18n/translations'
-import type { RiskStatus } from '../../types'
+import type { FactorQuantRunStatus, RiskStatus } from '../../types'
 
 // RiskStatusPanel surfaces the program-enforced risk state the backend
 // already computes (2026-10-07 review F1): daily-loss halt, account drawdown
@@ -49,6 +49,134 @@ function fmtTime(iso: string) {
         hour: '2-digit',
         minute: '2-digit',
       })
+}
+
+function factorQuantCodeLabel(code: string, language: Language) {
+  const key = `riskStatus.factorQuantCodes.${code}`
+  const label = t(key, language)
+  return label === key ? code : label
+}
+
+function FactorQuantRunSection({
+  status,
+  language,
+}: {
+  status: FactorQuantRunStatus
+  language: Language
+}) {
+  const tick = status.last_tick
+  const ageMs = tick ? Date.now() - new Date(tick.at).getTime() : 0
+  const live =
+    Number.isFinite(ageMs) && ageMs <= status.tick_interval_sec * 2000
+  const tone: Tone = !tick ? 'muted' : live ? 'up' : 'down'
+  const badge = !tick ? 'waiting' : live ? 'running' : 'stopped'
+  const fields = [
+    {
+      label: 'lastCheck',
+      value: tick
+        ? `${fmtTime(tick.at)} · ${t('riskStatus.factorQuant.minutesAgo', language, { minutes: Math.max(0, Math.floor(ageMs / 60000)) })}`
+        : '--',
+    },
+    {
+      label: 'result',
+      value: tick
+        ? `${factorQuantCodeLabel(tick.code, language)} · ${tick.message}`
+        : '--',
+    },
+    {
+      label: 'targets',
+      value:
+        [status.targets_as_of, status.targets_status, status.targets_rule]
+          .filter(Boolean)
+          .join(' · ') || '--',
+    },
+    {
+      label: 'lastRebalance',
+      value:
+        [
+          status.last_rebalance_as_of,
+          status.last_rebalance_at && fmtTime(status.last_rebalance_at),
+        ]
+          .filter(Boolean)
+          .join(' · ') || '--',
+    },
+    {
+      label: 'nextRebalance',
+      value: status.next_eligible_as_of
+        ? t('riskStatus.factorQuant.eligibleTarget', language, {
+            date: status.next_eligible_as_of,
+          })
+        : t('riskStatus.factorQuant.firstRebalance', language),
+    },
+    {
+      label: 'horizon',
+      value: t('riskStatus.factorQuant.days', language, {
+        days: status.horizon,
+      }),
+    },
+    ...((status.retry_attempts ?? 0) > 0
+      ? [
+          {
+            label: 'retry',
+            value: `${status.retry_as_of || '--'} · ${status.retry_attempts}`,
+          },
+        ]
+      : []),
+  ]
+
+  return (
+    <section className="space-y-3 border-t border-line pt-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-fg">
+          {t('riskStatus.factorQuant.title', language)}
+        </h3>
+        <span className={`text-xs font-semibold ${TEXT[tone]}`}>
+          {t(`riskStatus.factorQuant.${badge}`, language)}
+        </span>
+      </div>
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-xs md:grid-cols-2">
+        {fields.map(({ label, value }) => (
+          <div key={label} className="min-w-0">
+            <dt className="mb-1 text-fg-3">
+              {t(`riskStatus.factorQuant.${label}`, language)}
+            </dt>
+            <dd className="break-words text-fg">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {status.recent_ticks.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs text-fg-3">
+            {t('riskStatus.factorQuant.recentTicks', language)}
+          </div>
+          <ul className="space-y-1 text-xs">
+            {status.recent_ticks.map((recent, index) => (
+              <li
+                key={`${recent.at}-${index}`}
+                className="flex items-center gap-3"
+              >
+                <span className="num shrink-0 text-fg-3">
+                  {fmtTime(recent.at)}
+                </span>
+                <span className="shrink-0 text-fg">
+                  {factorQuantCodeLabel(recent.code, language)}
+                </span>
+                <span className="num shrink-0 text-fg">
+                  {recent.equity?.toFixed(2) ?? '--'}
+                </span>
+                <span
+                  className="min-w-0 truncate text-fg-3"
+                  title={recent.message}
+                >
+                  {recent.message}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function Meter({
@@ -264,6 +392,9 @@ export function RiskStatusPanel({
           )}
         </div>
       </div>
+      {data.factor_quant && (
+        <FactorQuantRunSection status={data.factor_quant} language={language} />
+      )}
     </div>
   )
 }

@@ -295,6 +295,28 @@ export interface GridRiskInfo {
 }
 
 // Program-enforced risk state (GET /api/risk-status) — read-only.
+export interface FactorQuantTick {
+  at: string
+  code: string
+  message: string
+  equity?: number
+}
+
+export interface FactorQuantRunStatus {
+  tick_interval_sec: number
+  last_tick?: FactorQuantTick
+  recent_ticks: FactorQuantTick[]
+  targets_as_of?: string
+  targets_status?: string
+  targets_rule?: string
+  horizon: number
+  last_rebalance_as_of?: string
+  last_rebalance_at?: string
+  next_eligible_as_of?: string
+  retry_as_of?: string
+  retry_attempts?: number
+}
+
 export interface RiskStatus {
   generated_at: string
   equity: number
@@ -309,6 +331,7 @@ export interface RiskStatus {
   account_breaker_active: boolean
   reduce_only: boolean
   protection_fault?: string
+  factor_quant?: FactorQuantRunStatus
   loss_streak_enabled: boolean
   loss_streak_max: number
   loss_streak_bans: { symbol: string; until: string }[]
