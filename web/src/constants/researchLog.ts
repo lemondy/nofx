@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'us-broad-classic-factors',
+    date: '2026-11-05',
+    title: '美股宽池（标普 500）经典因子检验：能否给 fq_us 提供因子',
+    domain: '美股 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 0/30 通过',
+    idea: 'fq_us 从未调仓（no_validated_factors）。诊断发现：us 因子库 1.1 万多个通过训练的因子 99.9% 属于成交量族（变异自我强化），验证期 IC 中位数为负；每日可用标的只有 76–86 只。假设：在宽池上，预先登记的 10 个经典价量因子（短期反转、周反转、12-1/6-1 动量、低波动、特质波动、52 周高点、彩票效应、低贝塔、非流动性）× 5/10/20 日，按 Bonferroni t ≥ 3.14 + 验证 t ≥ 1.65 + 前向 IC > 0 能通过，并能迁移到 90 只 bStock 个股。数据：标普 500 当前成分 498 只，15 年 Yahoo 复权日线（有幸存者偏差）。',
+    bullets: [
+      'S1 判 fail（fq_us K=1，已记账）：宽池通过 0/30，可迁移通过 0/30。',
+      '低波动、特质低波动、低贝塔、彩票效应四个防御类因子在 2012–26 三段 IC 全为负：高波动成长股系统性跑赢。',
+      '12-1 动量训练段（2012–21）≈ 0，2022 年后转正，bStock 前向 IC +0.04～0.06；只卡在 G1。非流动性过 G1 但验证衰减。反转因子在 bStock 上为负。',
+    ],
+    conclusion:
+      '“宽池 + 经典因子”不能解决美股无因子：问题不只是样本小，而是美股因子溢价本身不稳定。12-1 动量是唯一在近期与 bStock 上方向稳定为正的信号（us-stock 候选排序已在用），若要作为 fq_us 单一信号需另立预注册、K+1，不能事后放行。',
+    source:
+      'docs/research/2026-11-05-us-broad-classic-factors-prereg.md · docs/research/2026-11-05-us-broad-classic-factors-study.md · scripts/factor_mining/us_broad_classic_study.py · data/factor_mining/us_broad/study/classic_v1/report.md',
+  },
+  {
     id: 'llm-long-veto',
     date: '2026-11-04',
     title: 'LLM 加密交易员：因子弱币做多否决（B 类过滤）',
