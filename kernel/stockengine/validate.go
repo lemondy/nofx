@@ -5,6 +5,7 @@ import (
 	"math"
 	"nofx/market/usstock"
 	"strings"
+	"time"
 )
 
 // MinEntryConfidence is the confidence gate (0–100): open_long / add_long below
@@ -31,7 +32,7 @@ var RepairableCodes = map[string]bool{
 func Validate(ctx *Context, decisions []Decision) []Verdict {
 	verdicts := make([]Verdict, 0, len(decisions))
 	seen := make(map[string]bool)
-	opens, cycleNotional := 0, 0.0
+	opens, cycleNotional, cycleShort := 0, 0.0, 0.0
 	held := 0
 	if ctx != nil {
 		for _, p := range ctx.Positions {
@@ -44,7 +45,7 @@ func Validate(ctx *Context, decisions []Decision) []Verdict {
 		v := Verdict{Decision: d}
 		code, note := validateOne(ctx, d, seen, held+opens)
 		var extra []string
-		if d.Action == ActionOpenLong || d.Action == ActionAddLong {
+		if IsEntryAction(d.Action) {
 			if strings.TrimSpace(d.Thesis) == "" || strings.TrimSpace(d.Invalidation) == "" {
 				switch {
 				case code == "":
@@ -54,14 +55,20 @@ func Validate(ctx *Context, decisions []Decision) []Verdict {
 					note = strings.TrimSpace(note + " Also: thesis and invalidation are both required for open_long / add_long.")
 				}
 			}
+			if IsShortAction(d.Action) {
+				note = strings.ReplaceAll(strings.ReplaceAll(note, "open_long", "open_short"), "add_long", "add_short")
+			}
 		}
-		if code == "" && (d.Action == ActionOpenLong || d.Action == ActionAddLong) {
-			size, err := sizeOrder(ctx, d, cycleNotional)
+		if code == "" && IsEntryAction(d.Action) {
+			size, err := sizeOrder(ctx, d, cycleNotional, cycleShort)
 			if err != nil {
 				code = err.Error()
 			} else {
 				cycleNotional += size.Notional
-				if d.Action == ActionOpenLong {
+				if IsShortAction(d.Action) {
+					cycleShort += size.Notional
+				}
+				if d.Action == ActionOpenLong || d.Action == ActionOpenShort {
 					opens++
 				}
 			}
@@ -96,7 +103,7 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 	if ctx != nil && ctx.EntrySymbols != nil {
 		entryAllowed = ctx.EntrySymbols[d.Symbol]
 	}
-	if (d.Action == ActionOpenLong || d.Action == ActionAddLong) && !entryAllowed {
+	if IsEntryAction(d.Action) && !entryAllowed {
 		return "EXIT_ONLY_SYMBOL", "Held symbol is managed for hold/reduce/close/adjust_stop only; new exposure is not authorized."
 	}
 	if seen[d.Symbol] {
@@ -106,18 +113,31 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 	if !validAction(d.Action) {
 		return "UNKNOWN_ACTION", ""
 	}
-	if d.Action == ActionOpenLong && p != nil {
+	short := IsShortAction(d.Action)
+	if short && !ctx.Config.ShortEnabled() {
+		return "SHORT_DISABLED", "Shorts require short_mode=paper and paper_trading=true."
+	}
+	if p != nil && d.Action != ActionHold && d.Action != ActionWait && d.Action != ActionAdjustStop && short != IsShortSide(p.Side) {
+		return "OPPOSITE_HELD", "Cannot trade the opposite side of a held symbol."
+	}
+	if (d.Action == ActionOpenLong || d.Action == ActionOpenShort) && p != nil {
+		if short {
+			return "ALREADY_HELD", "Use add_short for an existing position."
+		}
 		return "ALREADY_HELD", "Use add_long for an existing position."
 	}
 	if p == nil {
 		switch d.Action {
-		case ActionAddLong, ActionReduceLong, ActionCloseLong, ActionAdjustStop, ActionHold:
+		case ActionAddLong, ActionReduceLong, ActionCloseLong, ActionAddShort, ActionReduceShort, ActionCloseShort, ActionAdjustStop, ActionHold:
 			return "NOT_HELD", ""
 		}
 	}
 	s := snapshotFor(ctx, d.Symbol)
 	switch d.Action {
-	case ActionOpenLong, ActionAddLong:
+	case ActionOpenLong, ActionAddLong, ActionOpenShort, ActionAddShort:
+		if short && (s == nil || !s.Shortable) {
+			return "NOT_SHORTABLE", "No TRADING EQUITY TRADIFI_PERPETUAL mapping."
+		}
 		if ctx.Session == usstock.SessionClosed {
 			return "SESSION_CLOSED", ""
 		}
@@ -149,45 +169,75 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 		if limit >= 0 && (!finite(s.Quote.DivergencePct) || math.Abs(s.Quote.DivergencePct) > limit) {
 			return "BSTOCK_DIVERGENCE", ""
 		}
+		if short {
+			if s.PerpQuote == nil || !positive(s.PerpQuote.Price) || s.PerpQuote.Time.IsZero() || ctx.Now.Before(s.PerpQuote.Time) || ctx.Now.Sub(s.PerpQuote.Time) > 30*time.Second {
+				return "PERP_PRICE_STALE", "Perpetual quote must be at most 30 seconds old."
+			}
+			copy := *s
+			copy.Price = s.PerpQuote.Price
+			s = &copy
+		}
 		if d.EntryType != "" && d.EntryType != EntryMarket && d.EntryType != EntryLimit {
 			return "ENTRY_INVALID", "entry_type must be market or limit."
 		}
 		entry := entryPrice(s, d)
-		if d.EntryType == EntryLimit && (!positive(entry) || entry > s.Price*1.01) {
+		if d.EntryType == EntryLimit && (!positive(entry) || (!short && entry > s.Price*1.01) || (short && entry < s.Price*0.99)) {
+			if short {
+				return "LIMIT_INVALID", fmt.Sprintf("limit_price must be >0 and ≥ market price×0.99 = %.4f.", s.Price*0.99)
+			}
 			return "LIMIT_INVALID", fmt.Sprintf("limit_price must be >0 and ≤ market price×1.01 = %.4f (yours %.4f).", s.Price*1.01, entry)
 		}
-		if !positive(d.StopLoss) || d.StopLoss >= entry {
+		if !positive(d.StopLoss) || (!short && d.StopLoss >= entry) || (short && d.StopLoss <= entry) {
+			if short {
+				return "STOP_INVALID", fmt.Sprintf("stop_loss must exceed entry %.4f.", entry)
+			}
 			return "STOP_INVALID", fmt.Sprintf("stop_loss must be >0 and below the entry price %.4f (yours %.4f).", entry, d.StopLoss)
 		}
 		if !positive(s.ATR1d) {
 			return "DATA_INSUFFICIENT", ""
 		}
-		multiple := (entry - d.StopLoss) / s.ATR1d
+		multiple := math.Abs(entry-d.StopLoss) / s.ATR1d
 		if multiple < preset.StopATRMin || multiple > preset.StopATRMax {
+			if short {
+				return "STOP_OUT_OF_BAND", fmt.Sprintf("stop must be within [%.2f, %.2f]×ATR(1d) above entry %.4f; yours is %.2f×ATR.", preset.StopATRMin, preset.StopATRMax, entry, multiple)
+			}
 			return "STOP_OUT_OF_BAND", fmt.Sprintf("stop must be within [%.2f, %.2f]×ATR(1d) = [%.4f, %.4f] below entry %.4f; yours %.4f is %.2f×ATR.",
 				preset.StopATRMin, preset.StopATRMax, entry-preset.StopATRMax*s.ATR1d, entry-preset.StopATRMin*s.ATR1d, entry, d.StopLoss, multiple)
 		}
-		if !finite(d.TakeProfit) || (d.TakeProfit != 0 && d.TakeProfit <= entry) {
+		if !finite(d.TakeProfit) || (d.TakeProfit != 0 && ((!short && d.TakeProfit <= entry) || (short && (d.TakeProfit <= 0 || d.TakeProfit >= entry)))) {
+			if short {
+				return "TP_INVALID", fmt.Sprintf("take_profit must be 0 (none) or >0 and below entry %.4f.", entry)
+			}
 			return "TP_INVALID", fmt.Sprintf("take_profit must be 0 (none) or above the entry price %.4f (yours %.4f).", entry, d.TakeProfit)
 		}
-		if d.Action == ActionOpenLong && positionCount >= effectiveMaxPositions(ctx.Config) {
+		if (d.Action == ActionOpenLong || d.Action == ActionOpenShort) && positionCount >= effectiveMaxPositions(ctx.Config) {
 			return "MAX_POSITIONS", ""
 		}
-		if d.Action == ActionAddLong && (s.Price <= p.InitialStop || s.Price <= p.AvgPrice) {
+		if (d.Action == ActionAddLong && (s.Price <= p.InitialStop || s.Price <= p.AvgPrice)) ||
+			(d.Action == ActionAddShort && (s.Price >= p.AvgPrice || s.Price >= p.InitialStop)) {
 			return "ADD_WHILE_LOSING", ""
 		}
-	case ActionReduceLong:
+	case ActionReduceLong, ActionReduceShort:
 		if !finite(d.ReduceFraction) || d.ReduceFraction <= 0 || d.ReduceFraction >= 1 {
 			return "REDUCE_INVALID", ""
 		}
 	case ActionAdjustStop:
+		short = IsShortSide(p.Side)
+		if short && s != nil {
+			copy := *s
+			copy.Price = p.Price
+			if s.PerpQuote != nil {
+				copy.Price = s.PerpQuote.Price
+			}
+			s = &copy
+		}
 		if s == nil || !positive(s.Price) {
 			return "DATA_INSUFFICIENT", ""
 		}
-		if !positive(d.StopLoss) || d.StopLoss >= s.Price {
+		if !positive(d.StopLoss) || (!short && d.StopLoss >= s.Price) || (short && d.StopLoss <= s.Price) {
 			return "STOP_INVALID", ""
 		}
-		if d.StopLoss < p.StopPrice {
+		if p.StopPrice > 0 && ((!short && d.StopLoss < p.StopPrice) || (short && d.StopLoss > p.StopPrice)) {
 			return "STOP_LOOSEN", ""
 		}
 	}

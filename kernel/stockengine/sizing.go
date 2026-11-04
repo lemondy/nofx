@@ -5,6 +5,21 @@ import (
 	"math"
 )
 
+func IsShortAction(action string) bool {
+	return action == ActionOpenShort || action == ActionAddShort || action == ActionReduceShort || action == ActionCloseShort
+}
+func IsEntryAction(action string) bool {
+	return action == ActionOpenLong || action == ActionAddLong || action == ActionOpenShort || action == ActionAddShort
+}
+func IsShortSide(side string) bool { return side == "SHORT" }
+
+func decisionPrice(s *SymbolSnapshot, d Decision) float64 {
+	if IsShortAction(d.Action) && s.PerpQuote != nil {
+		return s.PerpQuote.Price
+	}
+	return s.Price
+}
+
 func finite(v float64) bool   { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 func positive(v float64) bool { return finite(v) && v > 0 }
 func snapshotFor(ctx *Context, symbol string) *SymbolSnapshot {
@@ -27,14 +42,14 @@ func entryPrice(s *SymbolSnapshot, d Decision) float64 {
 	if d.EntryType == EntryLimit {
 		return d.LimitPrice
 	}
-	return s.Price
+	return decisionPrice(s, d)
 }
 
 // SizeOrder sizes one order with no lot-size rounding. For several orders callers
 // must reserve earlier sizes; Validate does so explicitly with cycleNotional.
-func SizeOrder(ctx *Context, d Decision) (Sizing, error) { return sizeOrder(ctx, d, 0) }
+func SizeOrder(ctx *Context, d Decision) (Sizing, error) { return sizeOrder(ctx, d, 0, 0) }
 
-func sizeOrder(ctx *Context, d Decision, cycleNotional float64) (Sizing, error) {
+func sizeOrder(ctx *Context, d Decision, cycleNotional, cycleShort float64) (Sizing, error) {
 	if ctx == nil {
 		return Sizing{}, errors.New("DATA_INSUFFICIENT")
 	}
@@ -46,22 +61,28 @@ func sizeOrder(ctx *Context, d Decision, cycleNotional float64) (Sizing, error) 
 		return Sizing{}, errors.New("ENTRY_INVALID")
 	}
 	entry := entryPrice(s, d)
-	if !positive(entry) || (d.EntryType == EntryLimit && entry > s.Price*1.01) {
+	short := IsShortAction(d.Action)
+	price := decisionPrice(s, d)
+	if !positive(entry) || (d.EntryType == EntryLimit && ((!short && entry > price*1.01) || (short && entry < price*0.99))) {
 		return Sizing{}, errors.New("LIMIT_INVALID")
 	}
-	if !positive(d.StopLoss) || d.StopLoss >= entry {
+	if !positive(d.StopLoss) || (!short && d.StopLoss >= entry) || (short && d.StopLoss <= entry) {
 		return Sizing{}, errors.New("STOP_INVALID")
 	}
-	risk := entry - d.StopLoss
+	risk := math.Abs(entry - d.StopLoss)
 	currentValue := 0.0
 	if p := positionFor(ctx, d.Symbol); p != nil {
-		currentValue = p.Quantity * s.Price
+		currentValue = p.Quantity * price
 	}
 	// The regime scale shrinks the risk budget and both exposure caps; the cash
 	// bound is a fact, not a budget, and stays as is.
 	regime := 1.0
 	if ctx.Regime.Enabled {
 		regime = ctx.Regime.Scale
+	}
+	available := ctx.Account.Available
+	if ctx.Config.ShortEnabled() {
+		available = ctx.Account.Equity - ctx.Account.Exposure
 	}
 	// Reserve ALL accepted buys (opens and adds), both exposure and cash, in order.
 	bounds := []struct {
@@ -71,7 +92,13 @@ func sizeOrder(ctx *Context, d Decision, cycleNotional float64) (Sizing, error) 
 		{"risk", ctx.Account.Equity * effectiveRiskPerTradePct(ctx.Config) * regime / 100 / risk},
 		{"position_cap", (ctx.Account.Equity*effectiveMaxPositionPct(ctx.Config)*regime/100 - currentValue) / entry},
 		{"exposure_cap", (ctx.Account.Equity*effectiveMaxTotalExposurePct(ctx.Config)*regime/100 - ctx.Account.Exposure - cycleNotional) / entry},
-		{"available", (ctx.Account.Available - cycleNotional) * 0.995 / entry},
+		{"available", (available - cycleNotional) * 0.995 / entry},
+	}
+	if short {
+		bounds = append(bounds, struct {
+			name string
+			qty  float64
+		}{"short_exposure_cap", (ctx.Account.Equity*ctx.Config.EffectiveMaxShortExposurePct() - ctx.Account.ShortExposure - cycleShort) / entry})
 	}
 	qty, limited := bounds[0].qty, bounds[0].name
 	for _, b := range bounds {

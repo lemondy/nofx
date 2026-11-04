@@ -1,0 +1,16 @@
+2026-10-09 10:00:00 EDT ET | session=regular | 允许新增敞口=true
+账户: equity=10000.00 USDT available=10000.00 exposure=500.00 (5.00%)
+持仓:
+AAPLBUSDT qty=5.000000 avg=90.00 price=100.00 unrealized=11.11% R=2.00R held_days=2.0 (calendar) initial_stop=85.00 live_stop=94.00 TP=0.00
+大盘背景 SPY/QQQ（仅供参考，不是候选标的，不要对其输出决策）:
+配置标的:
+AAPLBUSDT (AAPLBUSDT) price=100.00 trend[d/w/entry]=// EMA20/50/200=0.00/0.00/0.00 ATR1d=2.00 (0.00%) 52w[low/high]=0.00/0.00 from_high=0.00% vol20/50=0.00 ret20d=0.00% swing[low/high]=0.00/0.00
+价格周期(Kell, 日线): phase=wedge_pop long_setup=true score=72.0 ext10=+0.0ATR dist20=+0.0ATR rs63_vs_SPY=+12.0% vol=0.00x
+sources: 1d: Yahoo 正股 AAPLBUSDT; 
+quote: bStock=100.00 ref=0.00 divergence=0.00% fresh=true ref_time=0001-01-01T00:00:00Z session=
+MSFTBUSDT (MSFTBUSDT) price=100.00 trend[d/w/entry]=// EMA20/50/200=0.00/0.00/0.00 ATR1d=2.00 (0.00%) 52w[low/high]=0.00/0.00 from_high=0.00% vol20/50=0.00 ret20d=0.00% swing[low/high]=0.00/0.00
+sources: 1d: Yahoo 正股 MSFTBUSDT; 
+quote: bStock=100.00 ref=0.00 divergence=0.00% fresh=true ref_time=0001-01-01T00:00:00Z session=
+QQQBUSDT (QQQBUSDT) price=100.00 trend[d/w/entry]=// EMA20/50/200=0.00/0.00/0.00 ATR1d=2.00 (0.00%) 52w[low/high]=0.00/0.00 from_high=0.00% vol20/50=0.00 ret20d=0.00% swing[low/high]=0.00/0.00
+sources: 1d: Yahoo 正股 QQQBUSDT; 
+quote: bStock=100.00 ref=0.00 divergence=0.00% fresh=true ref_time=0001-01-01T00:00:00Z session=

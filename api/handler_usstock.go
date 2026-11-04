@@ -93,7 +93,7 @@ func (s *Server) handleUSStockPaper(c *gin.Context) {
 		equity = acct.Cash
 	}
 	for _, p := range open {
-		equity += p.Quantity * p.AvgPrice
+		equity += p.MarketValue(p.AvgPrice)
 	}
 	c.JSON(http.StatusOK, gin.H{"account": acct, "equity": equity, "open_positions": open, "closed_positions": closed})
 }

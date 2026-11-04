@@ -86,6 +86,7 @@ const (
 // CycleAssessment is the daily-bar read of one symbol.
 type CycleAssessment struct {
 	Phase         CyclePhase `json:"phase"`
+	ShortSetup    bool       `json:"short_setup"`
 	LongSetup     bool       `json:"long_setup"`
 	Score         float64    `json:"score"`
 	Ext10ATR      float64    `json:"ext10_atr"`
@@ -293,6 +294,10 @@ func cycleReclaim(bars []usstock.Bar, fast, slow []float64, j int) bool {
 }
 
 func cycleFinish(a CycleAssessment, bars []usstock.Bar, event int, currentATR float64) CycleAssessment {
+	i := len(bars) - 1
+	slow := ema(closes(bars), cycleSlowEMA)
+	a.ShortSetup = (a.Phase == PhaseDowntrend || a.Phase == PhaseWedgeDrop) &&
+		bars[i].Close < slow[i] && slow[i] < slow[i-1] && a.RS63Pct < 0
 	a.VolRatio = cycleVolumeRatio(bars, event)
 	if !a.LongSetup {
 		return a

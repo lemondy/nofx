@@ -3,6 +3,8 @@ package trader
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"nofx/store"
@@ -35,7 +37,7 @@ func (at *AutoTrader) stockAccountInfo() (map[string]interface{}, error) {
 	}
 	unrealized := 0.0
 	for _, h := range st.Holdings {
-		unrealized += (h.Mark - h.Avg) * h.Owned
+		unrealized += h.unrealized()
 	}
 	totalPnL := st.Equity - at.initialBalance
 	pnlPct, usedPct := 0.0, 0.0
@@ -79,13 +81,13 @@ func (at *AutoTrader) stockPositionsAPI() ([]map[string]interface{}, error) {
 	}
 	out := []map[string]interface{}{}
 	for _, h := range st.sortedHoldings() {
-		pnl := (h.Mark - h.Avg) * h.Owned
+		pnl := h.unrealized()
 		pct := 0.0
 		if h.Avg > 0 {
-			pct = (h.Mark/h.Avg - 1) * 100
+			pct = pnl / (h.Avg * h.Owned) * 100
 		}
 		out = append(out, map[string]interface{}{
-			"symbol": h.Symbol, "side": "long", "entry_price": h.Avg, "mark_price": h.Mark, "quantity": h.Owned,
+			"symbol": h.Symbol, "side": stockAPISide(h.Side), "entry_price": h.Avg, "mark_price": h.Mark, "quantity": h.Owned,
 			"leverage": 1, "unrealized_pnl": pnl, "unrealized_pnl_pct": pct, "liquidation_price": 0.0,
 			"margin_used": h.Owned * h.Mark, "paper": at.stockPaper(),
 			"protection": map[string]interface{}{"sl_price": h.Stop, "tp_price": h.TakeProfit},
@@ -107,10 +109,10 @@ func (at *AutoTrader) stockRiskStatus() RiskStatus {
 	}
 	for _, h := range st.sortedHoldings() {
 		r := 0.0
-		if h.InitialStop > 0 && h.Avg > h.InitialStop {
-			r = (h.Mark - h.Avg) / (h.Avg - h.InitialStop)
+		if h.InitialStop > 0 && math.Abs(h.Avg-h.InitialStop) > 0 {
+			r = h.unrealized() / h.Owned / math.Abs(h.Avg-h.InitialStop)
 		}
-		out.Positions = append(out.Positions, PositionRStatus{Symbol: h.Symbol, Side: "long", EntryPrice: h.Avg, MarkPrice: h.Mark,
+		out.Positions = append(out.Positions, PositionRStatus{Symbol: h.Symbol, Side: stockAPISide(h.Side), EntryPrice: h.Avg, MarkPrice: h.Mark,
 			InitialStop: h.InitialStop, CurrentStop: h.Stop, CurrentR: r, AIManaged: true, HasInitialStop: h.InitialStop > 0})
 	}
 	return out
@@ -147,6 +149,9 @@ func (at *AutoTrader) ForceCloseStockPosition(symbol string) (map[string]interfa
 	var out *stockOutcome
 	if at.stockPaper() {
 		price := at.stock.price(symbol)
+		if h.Side == store.StockPaperShort {
+			price = at.stock.perpPrice(symbol)
+		}
 		if price <= 0 {
 			price = h.Mark
 		}
@@ -198,4 +203,11 @@ type StockPaperSnapshot struct {
 	Equity  float64                     `json:"equity"`
 	Open    []*store.StockPaperPosition `json:"open_positions"`
 	Closed  []*store.StockPaperPosition `json:"closed_positions"`
+}
+
+func stockAPISide(side string) string {
+	if side == store.StockPaperShort {
+		return strings.ToLower(side)
+	}
+	return "long"
 }

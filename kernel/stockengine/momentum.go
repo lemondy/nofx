@@ -17,6 +17,7 @@ const (
 type MomentumAssessment struct {
 	Valid       bool    `json:"valid"`        // ≥ 253 daily bars
 	Mom12_1Pct  float64 `json:"mom12_1_pct"`  // (close[t−21]/close[t−252] − 1)×100
+	BelowSMA200 bool    `json:"below_sma200"` // strict comparison; equality is neither above nor below
 	AboveSMA200 bool    `json:"above_sma200"` // close[t] > simple mean of the last 200 closes
 }
 
@@ -47,5 +48,6 @@ func ClassifyMomentum(bars []usstock.Bar) MomentumAssessment {
 		Valid:       true,
 		Mom12_1Pct:  (recent/anchor - 1) * 100,
 		AboveSMA200: last > sum/momentumSMAWin,
+		BelowSMA200: last < sum/momentumSMAWin,
 	}
 }

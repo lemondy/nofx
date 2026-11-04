@@ -18,7 +18,7 @@ func TestParseDecisions(t *testing.T) {
 	}{
 		{"fenced", "Summary\n```json\n[{\"symbol\":\"aaplbusdt\",\"action\":\"OPEN_LONG\",\"entry_type\":\"LIMIT\"}]\n```\nTrailing prose", "AAPLBUSDT", ActionOpenLong, EntryLimit, 1, false},
 		{"raw trailing", `Thoughts [{"symbol":" MSFTbusdt ","action":" wait "}] done`, "MSFTBUSDT", ActionWait, "", 1, false},
-		{"unknown dropped", `[{"symbol":"A","action":"open_short"},{"symbol":"aaplbusdt","action":"hold"}]`, "AAPLBUSDT", ActionHold, "", 1, false},
+		{"unknown dropped", `[{"symbol":"A","action":"open_straddle"},{"symbol":"aaplbusdt","action":"hold"}]`, "AAPLBUSDT", ActionHold, "", 1, false},
 		{"last array", `[{"symbol":"OLD","action":"wait"}] prose [{"symbol":"aaplbusdt","action":"open_long","reasoning":"brackets [inside] and escaped quote \""}] trailing`, "AAPLBUSDT", ActionOpenLong, "", 1, false},
 		{"last valid array", `[{"symbol":"aaplbusdt","action":"wait"}] junk [not valid JSON]`, "AAPLBUSDT", ActionWait, "", 1, false},
 		{"empty", `Summary [] trailing`, "", "", "", 0, false},

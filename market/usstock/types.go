@@ -34,10 +34,11 @@ const (
 
 // SymbolInfo is one tradable bStock pair and its spot trading filters.
 type SymbolInfo struct {
-	Symbol      string  `json:"symbol"`     // "AAPLBUSDT"
-	BaseAsset   string  `json:"base_asset"` // "AAPLB"
-	Underlying  string  `json:"underlying"` // "AAPL" (Yahoo ticker)
-	Status      string  `json:"status"`     // exchange status, "TRADING"
+	PerpSymbol  string  `json:"perp_symbol,omitempty"` // TRADING EQUITY TRADIFI_PERPETUAL only
+	Symbol      string  `json:"symbol"`                // "AAPLBUSDT"
+	BaseAsset   string  `json:"base_asset"`            // "AAPLB"
+	Underlying  string  `json:"underlying"`            // "AAPL" (Yahoo ticker)
+	Status      string  `json:"status"`                // exchange status, "TRADING"
 	TickSize    float64 `json:"tick_size"`
 	StepSize    float64 `json:"step_size"`
 	MinQty      float64 `json:"min_qty"`

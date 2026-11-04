@@ -24,6 +24,7 @@ type exchangeInfo struct {
 		QuoteAsset     string `json:"quoteAsset"`
 		Status         string `json:"status"`
 		UnderlyingType string `json:"underlyingType"`
+		ContractType   string `json:"contractType"`
 		Filters        []struct {
 			Type        string `json:"filterType"`
 			TickSize    string `json:"tickSize"`
@@ -82,9 +83,13 @@ func loadSymbols(ctx context.Context) ([]SymbolInfo, error) {
 		return nil, fmt.Errorf("futures registry: %w", err)
 	}
 	equities := make(map[string]bool)
+	perps := make(map[string]string)
 	for _, s := range futures.Symbols {
 		if s.UnderlyingType == "EQUITY" {
 			equities[s.BaseAsset] = true
+			if s.Status == "TRADING" && s.ContractType == "TRADIFI_PERPETUAL" && s.QuoteAsset == "USDT" {
+				perps[s.BaseAsset] = s.Symbol
+			}
 		}
 	}
 	symbols := make([]SymbolInfo, 0)
@@ -94,7 +99,7 @@ func loadSymbols(ctx context.Context) ([]SymbolInfo, error) {
 			continue
 		}
 		// Yahoo denotes share classes with a hyphen (e.g. BRK.B -> BRK-B).
-		info := SymbolInfo{Symbol: s.Symbol, BaseAsset: s.BaseAsset, Underlying: strings.ReplaceAll(ticker, ".", "-"), Status: s.Status}
+		info := SymbolInfo{PerpSymbol: perps[ticker], Symbol: s.Symbol, BaseAsset: s.BaseAsset, Underlying: strings.ReplaceAll(ticker, ".", "-"), Status: s.Status}
 		hasNotional := false
 		for _, f := range s.Filters {
 			var fields []*float64

@@ -1,6 +1,6 @@
 // Package stockengine is the decision layer of the us_stock strategy: it turns
 // market/usstock series into per-symbol signal snapshots, builds the LLM
-// prompts, parses and validates long-only decisions, and sizes orders. It is
+// prompts, parses and validates stock decisions, and sizes orders. It is
 // pure (no network, no exchange): the run cycle in package trader fetches the
 // data, calls the model through mcp.AIClient and executes the result.
 // Design: docs/architecture/US_STOCK_BSTOCK_DESIGN_2026-10-09.md §4, §6.
@@ -24,18 +24,22 @@ import (
 	"nofx/store"
 )
 
-// Actions a decision may carry. Long-only: there is no short.
+// Actions a decision may carry. Shorts are paper-only.
 const (
-	ActionOpenLong   = "open_long"   // new position
-	ActionAddLong    = "add_long"    // scale into an existing position
-	ActionReduceLong = "reduce_long" // sell ReduceFraction of the position
-	ActionCloseLong  = "close_long"  // sell everything
-	ActionAdjustStop = "adjust_stop" // move the protective stop (and/or take-profit)
-	ActionHold       = "hold"        // keep a position as is
-	ActionWait       = "wait"        // no position, no entry
+	ActionOpenLong    = "open_long"   // new position
+	ActionAddLong     = "add_long"    // scale into an existing position
+	ActionReduceLong  = "reduce_long" // sell ReduceFraction of the position
+	ActionCloseLong   = "close_long"  // sell everything
+	ActionOpenShort   = "open_short"
+	ActionAddShort    = "add_short"
+	ActionReduceShort = "reduce_short"
+	ActionCloseShort  = "close_short"
+	ActionAdjustStop  = "adjust_stop" // move the protective stop (and/or take-profit)
+	ActionHold        = "hold"        // keep a position as is
+	ActionWait        = "wait"        // no position, no entry
 )
 
-// Entry order types for open_long / add_long.
+// Entry order types for opens and adds.
 const (
 	EntryMarket = "market"
 	EntryLimit  = "limit"
@@ -54,7 +58,7 @@ type Preset struct {
 }
 
 // SymbolSnapshot is the program-computed view of one symbol the model reads.
-// All prices are bStock prices except where named Ref*.
+// Price is bStock spot; PerpQuote supplies the executable short price.
 type SymbolSnapshot struct {
 	Symbol     string            `json:"symbol"`     // AAPLBUSDT
 	Underlying string            `json:"underlying"` // AAPL
@@ -78,7 +82,9 @@ type SymbolSnapshot struct {
 	// Entry timeframe (1h for swing, 1d for position).
 	TrendEntry string `json:"trend_entry"` // up | down | range
 
-	Quote *usstock.Quote `json:"quote,omitempty"`
+	Quote     *usstock.Quote     `json:"quote,omitempty"`
+	Shortable bool               `json:"shortable"`
+	PerpQuote *usstock.PerpQuote `json:"perp_quote,omitempty"`
 
 	// Cycle is the Kell price-cycle assessment on daily bars (nil when no
 	// daily series was available).
@@ -114,6 +120,7 @@ type UniverseRow struct {
 
 // Position is a held bStock position as the engine sees it.
 type Position struct {
+	Side        string    `json:"side"` // empty legacy positions are LONG
 	Symbol      string    `json:"symbol"`
 	Quantity    float64   `json:"quantity"`
 	AvgPrice    float64   `json:"avg_price"`
@@ -128,11 +135,12 @@ type Position struct {
 	Invalidation string `json:"invalidation,omitempty"`
 }
 
-// Account is the spot account summary in USDT.
+// Account is the strategy account summary in USDT.
 type Account struct {
-	Equity    float64 `json:"equity"`    // USDT + Σ bStock value
-	Available float64 `json:"available"` // free USDT
-	Exposure  float64 `json:"exposure"`  // Σ bStock value
+	Equity        float64 `json:"equity"`    // cash + long value − short liability
+	Available     float64 `json:"available"` // free USDT or 1x paper margin
+	ShortExposure float64 `json:"short_exposure"`
+	Exposure      float64 `json:"exposure"` // gross long + short notional
 }
 
 // Context is everything one decision cycle needs.

@@ -18,6 +18,9 @@ func BuildSystemPrompt(cfg *store.StockConfig, preset Preset, lang string) strin
 	if preset.Name == "" {
 		preset = ResolvePreset(cfg)
 	}
+	if cfg.ShortEnabled() {
+		return buildShortSystemPrompt(cfg, preset, lang)
+	}
 	position := preset.Name == store.StockPresetPosition
 	horizon, trail := "days to weeks; review after 30 trading days", "daily EMA20 or 2×ATR(1d)"
 	zhHorizon, zhTrail := "数天至数周；30 个交易日后复核", "日线 EMA20 或 2×ATR(1d)"
@@ -117,16 +120,28 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 	}
 	for _, p := range ctx.Positions {
 		price := p.Price
-		if s := snapshotFor(ctx, p.Symbol); s != nil && positive(s.Price) {
-			price = s.Price
+		if s := snapshotFor(ctx, p.Symbol); s != nil {
+			if IsShortSide(p.Side) {
+				if s.PerpQuote != nil && positive(s.PerpQuote.Price) {
+					price = s.PerpQuote.Price
+				}
+			} else if positive(s.Price) {
+				price = s.Price
+			}
 		}
 		pnl := 0.0
 		if p.AvgPrice > 0 {
 			pnl = (price/p.AvgPrice - 1) * 100
 		}
+		if IsShortSide(p.Side) {
+			pnl = -pnl
+		}
 		r := "n/a"
 		if p.InitialStop > 0 && p.AvgPrice > p.InitialStop {
 			r = fmt.Sprintf("%.2fR", (price-p.AvgPrice)/(p.AvgPrice-p.InitialStop))
+		}
+		if IsShortSide(p.Side) && p.InitialStop > p.AvgPrice {
+			r = fmt.Sprintf("%.2fR", (p.AvgPrice-price)/(p.InitialStop-p.AvgPrice))
 		}
 		days := "n/a"
 		if !p.OpenedAt.IsZero() {
@@ -135,6 +150,13 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 				d = 0
 			}
 			days = fmt.Sprintf("%.1f", d)
+		}
+		if ctx.Config.ShortEnabled() {
+			side := p.Side
+			if side == "" {
+				side = "LONG"
+			}
+			fmt.Fprintf(&b, "side=%s ", side)
 		}
 		fmt.Fprintf(&b, "%s qty=%.6f avg=%.2f price=%.2f unrealized=%.2f%% R=%s held_days=%s (calendar) initial_stop=%.2f live_stop=%.2f TP=%.2f\n", p.Symbol, p.Quantity, p.AvgPrice, price, pnl, r, days, p.InitialStop, p.StopPrice, p.TakeProfit)
 		if p.Thesis != "" || p.Invalidation != "" {
@@ -147,7 +169,7 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 	}
 	fmt.Fprintf(&b, "%s:\n", label("Market context SPY/QQQ (reference only — not candidates, output no decisions for them)", "大盘背景 SPY/QQQ（仅供参考，不是候选标的，不要对其输出决策）"))
 	for _, s := range ctx.Market {
-		writeSnapshot(&b, s, zh, required, benchmarkCandleTFs)
+		writeSnapshot(&b, s, zh, required, benchmarkCandleTFs, ctx.Config.ShortEnabled())
 	}
 	fmt.Fprintf(&b, "%s:\n", label("Configured symbols", "配置标的"))
 	if ctx.Config != nil {
@@ -157,7 +179,7 @@ func BuildUserPrompt(ctx *Context, lang string) string {
 				fmt.Fprintf(&b, "%s: DATA_INSUFFICIENT / MissingTF 1d and required timeframes\n", symbol)
 				continue
 			}
-			writeSnapshot(&b, s, zh, required, candleOrder)
+			writeSnapshot(&b, s, zh, required, candleOrder, ctx.Config.ShortEnabled())
 		}
 	}
 	writeUniverse(&b, ctx, zh)
@@ -208,13 +230,20 @@ func writeRegimeLine(b *strings.Builder, r RegimeScale, zh bool) {
 		r.Scale, regimeBasketSize, regimeVolWindow, r.BasketVolPct, r.TargetVolPct, r.Floor, breadth, hint)
 }
 
-func writeSnapshot(b *strings.Builder, s *SymbolSnapshot, zh bool, required map[string]bool, candleTFs []string) {
+func writeSnapshot(b *strings.Builder, s *SymbolSnapshot, zh bool, required map[string]bool, candleTFs []string, shorts bool) {
 	if s == nil {
 		return
 	}
 	fmt.Fprintf(b, "%s (%s) price=%.2f trend[d/w/entry]=%s/%s/%s EMA20/50/200=%.2f/%.2f/%.2f ATR1d=%.2f (%.2f%%) 52w[low/high]=%.2f/%.2f from_high=%.2f%% vol20/50=%.2f ret20d=%.2f%% swing[low/high]=%.2f/%.2f\n", s.Symbol, s.Underlying, s.Price, s.TrendDaily, s.TrendWeekly, s.TrendEntry, s.EMA20, s.EMA50, s.EMA200, s.ATR1d, s.ATR1dPct, s.Low52w, s.High52w, s.PctFrom52wHigh, s.VolumeRatio20_50, s.Return20dPct, s.SwingLow, s.SwingHigh)
+	if shorts {
+		fmt.Fprintf(b, "  shortable=%t", s.Shortable)
+		if s.PerpQuote != nil {
+			fmt.Fprintf(b, " perp=%s perp_price=%.4f", s.PerpQuote.Symbol, s.PerpQuote.Price)
+		}
+		fmt.Fprintln(b)
+	}
 	if c := s.Cycle; c != nil {
-		writeCycleLine(b, c, zh)
+		writeCycleLine(b, c, zh, shorts)
 	}
 	if m := s.Momentum; m != nil && m.Valid {
 		fmt.Fprintf(b, "mom12_1=%+.1f%% above_sma200=%t\n", m.Mom12_1Pct, m.AboveSMA200)
@@ -348,7 +377,7 @@ func writeUniverse(b *strings.Builder, ctx *Context, zh bool) {
 			continue
 		}
 		keep := candidates[r.Symbol] || held[r.Symbol] ||
-			(!excluded[r.Symbol] && ((r.Momentum.Valid && r.Momentum.AboveSMA200) || r.Cycle.LongSetup))
+			(!excluded[r.Symbol] && ((r.Momentum.Valid && r.Momentum.AboveSMA200) || r.Cycle.LongSetup || (ctx.Config.ShortEnabled() && (r.Cycle.ShortSetup || (r.Momentum.Valid && r.Momentum.BelowSMA200)))))
 		if !keep {
 			omitted++
 			continue
@@ -359,7 +388,14 @@ func writeUniverse(b *strings.Builder, ctx *Context, zh bool) {
 		return
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Symbol < rows[j].Symbol })
-	if zh {
+	if ctx.Config.ShortEnabled() {
+		if zh {
+			fmt.Fprintf(b, "全市场概览（%d 只：多头、做空候选及持仓；省略 %d 只；仅本轮候选可开仓/加仓）:\n", len(rows), omitted)
+		} else {
+			fmt.Fprintf(b, "Universe (%d long/short candidates and holdings; %d omitted; open/add only authorized candidates):\n", len(rows), omitted)
+		}
+		fmt.Fprintln(b, "symbol|class|sector|candidate|price|r1d%|r10d%|r30d%|vol30%|rsi14|from30dHigh%|adv20$|earn_days|mom12_1%|>sma200|phase|shortable|short_setup")
+	} else if zh {
 		fmt.Fprintf(b, "全市场概览（bStock 中站上 200 日线或有 Kell 多头信号的 %d 只，另含本周期候选与持仓；已省略 %d 只跌破 200 日线且无多头信号或已排除的；仅供参考——只能对上面的候选标的开仓/加仓）:\n", len(rows), omitted)
 		fmt.Fprintln(b, "列：symbol|class|sector|candidate(Y=本周期候选, x=已排除)|price|r1d%|r10d%|r30d%|vol30%(年化)|rsi14(日线)|from30dHigh%|adv20$(20日均成交额)|earn_days(距财报天数,空=未知)|mom12_1%|>sma200(Y/N)|phase(Kell)")
 	} else {
@@ -386,18 +422,25 @@ func writeUniverse(b *strings.Builder, ctx *Context, zh bool) {
 				above = "Y"
 			}
 		}
-		fmt.Fprintf(b, "%s|%s|%s|%s|%s|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|$%s|%s|%s|%s|%s\n", r.Symbol, u.Class, strings.ReplaceAll(u.Sector, "|", "/"), mark,
-			fmtPx(u.Price), u.Ret1dPct, u.Ret10dPct, u.Ret30dPct, u.Vol30Pct, u.RSI14, u.DistFrom30dHighPct, fmtVol(u.AvgDollarVol20), earn, mom, above, r.Cycle.Phase)
+		shortFields := ""
+		if ctx.Config.ShortEnabled() {
+			shortFields = fmt.Sprintf("|%t|%t", r.Shortable, r.Cycle.ShortSetup)
+		}
+		fmt.Fprintf(b, "%s|%s|%s|%s|%s|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|$%s|%s|%s|%s|%s%s\n", r.Symbol, u.Class, strings.ReplaceAll(u.Sector, "|", "/"), mark,
+			fmtPx(u.Price), u.Ret1dPct, u.Ret10dPct, u.Ret30dPct, u.Vol30Pct, u.RSI14, u.DistFrom30dHighPct, fmtVol(u.AvgDollarVol20), earn, mom, above, r.Cycle.Phase, shortFields)
 	}
 }
 
 // writeCycleLine prints the Kell price-cycle assessment of one snapshot.
-func writeCycleLine(b *strings.Builder, c *CycleAssessment, zh bool) {
+func writeCycleLine(b *strings.Builder, c *CycleAssessment, zh bool, shorts bool) {
 	head := "cycle(Kell, daily)"
 	if zh {
 		head = "价格周期(Kell, 日线)"
 	}
 	fmt.Fprintf(b, "%s: phase=%s long_setup=%t score=%.1f ext10=%+.1fATR dist20=%+.1fATR rs63_vs_SPY=%+.1f%% vol=%.2fx", head, c.Phase, c.LongSetup, c.Score, c.Ext10ATR, c.Dist20ATR, c.RS63Pct, c.VolRatio)
+	if shorts {
+		fmt.Fprintf(b, " short_setup=%t", c.ShortSetup)
+	}
 	if len(c.Notes) > 0 {
 		fmt.Fprintf(b, " %s", strings.Join(c.Notes, "; "))
 	}

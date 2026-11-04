@@ -202,6 +202,10 @@ type StockConfig struct {
 	// PaperTrading: run data, decisions and risk checks but place no orders.
 	// nil = true (first launch is paper by default — user decision 2026-10-09).
 	PaperTrading *bool `json:"paper_trading,omitempty"`
+	// Shorts use equity perpetuals in paper mode only; exposure is a fraction of equity.
+	ShortMode           string  `json:"short_mode,omitempty"`
+	ScanShortTopN       int     `json:"scan_short_top_n,omitempty"`
+	MaxShortExposurePct float64 `json:"max_short_exposure_pct,omitempty"`
 	// RegimeScaler: market-state position scaler. "" / "off" = disabled
 	// (default); "basket_vol" scales the risk budget, per-symbol cap and total
 	// exposure cap of NEW entries by s = clip(target_vol / σ_basket, floor, 1),

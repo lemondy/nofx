@@ -45,6 +45,7 @@ type DatedClose struct {
 }
 
 type ScanResult struct {
+	Shortable   bool               `json:"shortable"`
 	Symbol      string             `json:"symbol"`
 	Underlying  string             `json:"underlying"`
 	Source      string             `json:"source"`
@@ -114,6 +115,34 @@ func (r *ScanReport) TopMomentum(n int, exclude map[string]bool) []ScanResult {
 	return picks
 }
 
+// TopShort prioritizes bearish setups, then valid momentum below SMA200.
+// Each group is ordered by ascending 12-1 momentum, with symbol as a tie break.
+func (r *ScanReport) TopShort(n int, exclude map[string]bool) []ScanResult {
+	if r == nil || n <= 0 {
+		return nil
+	}
+	var picks []ScanResult
+	for _, result := range r.Results {
+		if !exclude[result.Symbol] && (result.Cycle.ShortSetup || (result.Momentum.Valid && result.Momentum.BelowSMA200)) {
+			picks = append(picks, result)
+		}
+	}
+	sort.SliceStable(picks, func(i, j int) bool {
+		a, b := picks[i], picks[j]
+		if a.Cycle.ShortSetup != b.Cycle.ShortSetup {
+			return a.Cycle.ShortSetup
+		}
+		if a.Momentum.Mom12_1Pct != b.Momentum.Mom12_1Pct {
+			return a.Momentum.Mom12_1Pct < b.Momentum.Mom12_1Pct
+		}
+		return a.Symbol < b.Symbol
+	})
+	if len(picks) > n {
+		picks = picks[:n]
+	}
+	return picks
+}
+
 // Lookup returns the result for symbol.
 func (r *ScanReport) Lookup(symbol string) (ScanResult, bool) {
 	if r != nil {
@@ -167,7 +196,7 @@ func Scan(ctx context.Context, universe []usstock.SymbolInfo, spyBars []usstock.
 			row = UniverseRow{Symbol: info.Symbol, Underlying: info.Underlying, DaysToEarnings: -1}
 		}
 		report.Results = append(report.Results, ScanResult{
-			Symbol: info.Symbol, Underlying: info.Underlying, Source: source, DataThrough: cutoff,
+			Shortable: info.PerpSymbol != "", Symbol: info.Symbol, Underlying: info.Underlying, Source: source, DataThrough: cutoff,
 			Cycle: ClassifyCycle(bars, spyBars), Momentum: ClassifyMomentum(bars),
 			Universe: row, RecentCloses: recentCloses(bars),
 		})
