@@ -30,6 +30,21 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'pit60-btchedge',
+    date: '2026-11-04',
+    title: '因子量化-加密：时点 top 60 全量币池 + BTC 对冲空头腿',
+    domain: '加密 · 因子量化程序化交易员 · 增量评估',
+    verdict: 'running',
+    verdictText: '已预声明，待运行 S1',
+    idea: '用户选择了“时点 top 60 + 空头腿改造”作为下一步。冻结 11-03 nightly 的 zoo/ensemble 快照（h=3 共 11 个因子），比较四组：B 为现状；UH 为主变体，用全量时点 top 60（含已下架币），把 3866 个 h=3 表达式在新币池上按 K=16502（t_req 4.669）重新验收并组合，空头腿改为按多头篮子 beta 做空 BTC；U 和 H 分别只换币池、只换空头腿，仅作拆解。主检验是前向 2026-05-07 至 2026-10-31 的 UH − B 每日收益配对差（按周聚类，K=2，z_K 2.24）；S0 要求 B 组复现 quant_targets 回测。',
+    bullets: [
+      '已知污染：前向区间的基线腿级结果已在 11-01、11-03 两次研究中看过，对冲思路正源于此，所以 S1 偏向对冲；S1 只决定能否进入线上配对。',
+      'S2 预登记：新建 fq_crypto 模拟盘与 ae795edd 配对，至少 42 个配对日，第 14 天起若 Δ < −2·SE 则止损；Δ > 0 且单侧下界 > −0.05%/日才算通过。实现线上部分需用户批准。',
+    ],
+    source:
+      'docs/research/2026-11-04-pit60-btchedge-prereg.md · docs/research/2026-11-03-crypto-universe-expansion.md',
+  },
+  {
     id: 'crypto-universe-expansion',
     date: '2026-11-03',
     title: '加密因子挖掘股票池扩展：含已下架币的全量 USDT-M 永续',
