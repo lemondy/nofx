@@ -12,6 +12,7 @@ import (
 	"nofx/kernel/stockengine"
 	"nofx/logger"
 	"nofx/market/usstock"
+	"nofx/store"
 	"nofx/trader/types"
 
 	notify "nofx/telegram/notify"
@@ -199,6 +200,9 @@ func (at *AutoTrader) stockProtectOrEmergency(ctx context.Context, h *stockHoldi
 // explicit quantity. full closes the position record. Protection is cancelled
 // first (the stop locks the inventory) and re-placed for any remainder.
 func (at *AutoTrader) stockSellLive(ctx context.Context, h *stockHolding, qty float64, full bool, reason string, now time.Time) (*stockOutcome, error) {
+	if h != nil && h.Side == store.StockPaperShort {
+		return nil, fmt.Errorf("SHORT_DISABLED: live short selling is not implemented")
+	}
 	sym := h.Symbol
 	info := stockSymbolInfo(ctx, sym)
 	stop, tp := at.persistedStop(sym, h)
@@ -319,6 +323,9 @@ func (at *AutoTrader) stockBuyFilled(ctx context.Context, sym string, executed, 
 // stockOpenLive places the entry order for a sized open/add.
 func (at *AutoTrader) stockOpenLive(ctx context.Context, d stockengine.Decision, qty, entry float64, h *stockHolding, info usstock.SymbolInfo,
 	now time.Time, logf func(string, ...interface{})) (*stockOutcome, error) {
+	if stockengine.IsShortAction(d.Action) {
+		return nil, fmt.Errorf("SHORT_DISABLED: live short selling is not implemented")
+	}
 	stop := floorStep(d.StopLoss, info.TickSize)
 
 	var res *types.SpotOrderResult
@@ -371,28 +378,83 @@ func (at *AutoTrader) stockOpenLive(ctx context.Context, d stockengine.Decision,
 // ------------------------------------------------------------ paper helpers
 
 func (at *AutoTrader) stockOpenPaper(d stockengine.Decision, qty, price float64, h *stockHolding, info usstock.SymbolInfo, now time.Time) (*stockOutcome, error) {
-	if d.EntryType == stockengine.EntryLimit && price > d.LimitPrice {
-		return nil, fmt.Errorf("limit not filled: price %.4f above limit %.4f", price, d.LimitPrice)
+	short := stockengine.IsShortAction(d.Action)
+	side := store.StockPaperLong
+	if short {
+		side = store.StockPaperShort
 	}
-	stop := floorStep(d.StopLoss, info.TickSize)
+	if d.EntryType == stockengine.EntryLimit && ((!short && price > d.LimitPrice) || (short && price < d.LimitPrice)) {
+		return nil, fmt.Errorf("limit not filled: price %.4f limit %.4f", price, d.LimitPrice)
+	}
+	stop := stockRoundStop(d.StopLoss, info.TickSize, short)
 	tp := d.TakeProfit
 	if h != nil {
-		if h.Stop > stop {
+		if (short && h.Stop > 0 && h.Stop < stop) || (!short && h.Stop > stop) {
 			stop = h.Stop
 		}
 		if tp <= 0 {
 			tp = h.TakeProfit
 		}
 	}
-	if _, err := at.store.StockPaper().OpenOrAdd(at.id, d.Symbol, qty, price, stop, tp, now); err != nil {
+	if short {
+		if err := at.stockSettleSymbol(context.Background(), d.Symbol, price, now); err != nil {
+			return nil, err
+		}
+	}
+	feeBps := 10.0
+	if short {
+		feeBps = 4
+	}
+	if d.EntryType == stockengine.EntryLimit {
+		feeBps = 0
+	}
+	if _, _, err := at.store.StockPaper().OpenOrAddSideWithFee(at.id, d.Symbol, side, qty, price, stop, tp, feeBps, now); err != nil {
 		return nil, err
 	}
 	return &stockOutcome{Qty: qty, Price: price}, nil
 }
 
-// stockSellPaper books a paper sell of qty (0 = everything) at price.
+func (at *AutoTrader) stockSettleSymbol(ctx context.Context, sym string, price float64, now time.Time) error {
+	rows, err := at.store.StockPaper().ListOpen(at.id)
+	if err != nil {
+		return err
+	}
+	for _, p := range rows {
+		if p.Symbol == sym {
+			return at.stockApplyFunding(ctx, p, price, now)
+		}
+	}
+	return nil
+}
+
+// stockSellPaper also covers shorts; TP is a resting limit, other exits are market fills.
 func (at *AutoTrader) stockSellPaper(sym string, qty, price float64, reason string, now time.Time) (*stockOutcome, error) {
-	pnl, closed, err := at.store.StockPaper().Reduce(at.id, sym, qty, price, now, reason)
+	rows, err := at.store.StockPaper().ListOpen(at.id)
+	if err != nil {
+		return nil, err
+	}
+	side := store.StockPaperLong
+	for _, p := range rows {
+		if p.Symbol != sym {
+			continue
+		}
+		side = p.EffectiveSide()
+		if err := at.stockApplyFunding(context.Background(), p, price, now); err != nil {
+			// Protective exits fill regardless; the unread funding is forfeited.
+			if reason != "stop_loss" && reason != "take_profit" {
+				return nil, err
+			}
+			logger.Warnf("⚠️ [%s] paper %s %s without funding settlement: %v", at.name, reason, sym, err)
+		}
+	}
+	feeBps := 10.0
+	if side == store.StockPaperShort {
+		feeBps = 4
+	}
+	if reason == "take_profit" {
+		feeBps = 0
+	}
+	pnl, closed, _, err := at.store.StockPaper().ReduceSideWithFee(at.id, sym, side, qty, price, feeBps, now, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +576,7 @@ func (at *AutoTrader) stockAlertEntryRejected(paper bool, d stockengine.Decision
 
 // stockEntryContext is the last network read before an entry is submitted.
 // It bypasses both quote caches, then validates with the execution clock and
-// sizes from that same final bStock price. Existing position exits do not use it.
+// sizes from the final spot or perpetual price. Existing exits do not use it.
 func (at *AutoTrader) stockEntryContext(ctx context.Context, sizing *stockengine.Context, d stockengine.Decision,
 	snap *stockengine.SymbolSnapshot) (*stockengine.SymbolSnapshot, *stockengine.Context, error) {
 	if sizing == nil || snap == nil {
@@ -536,10 +598,29 @@ func (at *AutoTrader) stockEntryContext(ctx context.Context, sizing *stockengine
 	if q.BStockTime.IsZero() || age < 0 || age > 30*time.Second || q.BStockPrice <= 0 || math.IsNaN(q.BStockPrice) || math.IsInf(q.BStockPrice, 0) {
 		return nil, nil, fmt.Errorf("BSTOCK_PRICE_STALE: execution quote age %s", age)
 	}
+	var perp *usstock.PerpQuote
+	if stockengine.IsShortAction(d.Action) {
+		info, ok := stockLookupSymbol(ctx, d.Symbol)
+		if !ok || info.PerpSymbol == "" {
+			return nil, nil, fmt.Errorf("NOT_SHORTABLE: %s", d.Symbol)
+		}
+		perp, err = stockGetPerpQuote(ctx, info.PerpSymbol)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ENTRY_QUOTE_UNAVAILABLE: %w", err)
+		}
+		now = at.stockClock()
+		if perp == nil || perp.Symbol != info.PerpSymbol || perp.Time.IsZero() || now.Before(perp.Time) || now.Sub(perp.Time) > 30*time.Second || perp.Price <= 0 || math.IsNaN(perp.Price) || math.IsInf(perp.Price, 0) {
+			return nil, nil, fmt.Errorf("PERP_PRICE_STALE: execution quote must be at most 30 seconds old")
+		}
+	}
 	current := *sizing
 	current.Now, current.Session = now, usstock.SessionAt(now)
 	fresh := *snap
 	fresh.Price, fresh.Quote = q.BStockPrice, &q
+	if perp != nil {
+		fresh.PerpQuote, fresh.Shortable = perp, true
+		at.stock.setPerpPrice(d.Symbol, perp.Price)
+	}
 	current.Snapshots = append([]*stockengine.SymbolSnapshot(nil), sizing.Snapshots...)
 	replaced := false
 	for i, s := range current.Snapshots {

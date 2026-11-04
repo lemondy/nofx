@@ -12,7 +12,7 @@ import (
 
 func validAction(action string) bool {
 	switch action {
-	case ActionOpenLong, ActionAddLong, ActionReduceLong, ActionCloseLong, ActionAdjustStop, ActionHold, ActionWait:
+	case ActionOpenLong, ActionAddLong, ActionReduceLong, ActionCloseLong, ActionOpenShort, ActionAddShort, ActionReduceShort, ActionCloseShort, ActionAdjustStop, ActionHold, ActionWait:
 		return true
 	}
 	return false
@@ -108,7 +108,7 @@ func repairable(verdicts []Verdict) []int {
 	var idx []int
 	for i, v := range verdicts {
 		d := v.Decision
-		if v.Accepted || len(v.Codes) == 0 || (d.Action != ActionOpenLong && d.Action != ActionAddLong) {
+		if v.Accepted || len(v.Codes) == 0 || !IsEntryAction(d.Action) {
 			continue
 		}
 		all := true

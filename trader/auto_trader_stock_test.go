@@ -492,11 +492,11 @@ func TestStockPaperCycleOpenThenClose(t *testing.T) {
 		t.Fatal("paper position not closed")
 	}
 	closed, _ := fx.at.store.StockPaper().ListClosed("t1", 5)
-	if len(closed) != 1 || closed[0].Status != store.StockPaperClosed || !near(closed[0].ExitPrice, 126) || !near(closed[0].RealizedPnL, 6*16.666) {
+	if len(closed) != 1 || closed[0].Status != store.StockPaperClosed || !near(closed[0].ExitPrice, 126) || !near(closed[0].RealizedPnL, (6-0.120-0.126)*16.666) {
 		t.Fatalf("closed paper position %+v", closed)
 	}
 	acct, _ := fx.at.store.StockPaper().GetAccount("t1")
-	if !near(acct.Cash, 10000+6*16.666) {
+	if !near(acct.Cash, 10000+(6-0.120-0.126)*16.666) {
 		t.Fatalf("paper cash %v", acct.Cash)
 	}
 	if rec := fx.lastRecord(t); !rec.Decisions[0].Success || rec.Decisions[0].Action != "close_long" || len(fx.spot.sells) != 0 {
@@ -510,7 +510,7 @@ func TestStockPaperTickStopAndTakeProfit(t *testing.T) {
 	fx.price = 114
 	fx.at.stockProtectionTick(context.Background())
 	closed, _ := fx.at.store.StockPaper().ListClosed("t1", 5)
-	if len(closed) != 1 || closed[0].CloseReason != "stop_loss" || !near(closed[0].ExitPrice, 115) {
+	if len(closed) != 1 || closed[0].CloseReason != "stop_loss" || !near(closed[0].ExitPrice, 114) {
 		t.Fatalf("paper stop not simulated: %+v", closed)
 	}
 }

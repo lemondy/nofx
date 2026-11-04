@@ -24,6 +24,8 @@ const DefaultStockPaperCash = 10000.0
 const (
 	StockPaperOpen   = "OPEN"
 	StockPaperClosed = "CLOSED"
+	StockPaperLong   = "LONG"
+	StockPaperShort  = "SHORT"
 
 	// stockPaperQtyEpsilon: quantities at or below this count as flat.
 	stockPaperQtyEpsilon = 1e-9
@@ -40,21 +42,24 @@ type StockPaperAccount struct {
 
 func (StockPaperAccount) TableName() string { return "stock_paper_accounts" }
 
-// StockPaperPosition is one simulated long holding of a bStock pair. One OPEN
+// StockPaperPosition is one simulated holding of a bStock pair. One OPEN
 // row per (trader, symbol); a CLOSED row is history.
 type StockPaperPosition struct {
-	ID          int64   `gorm:"primaryKey;autoIncrement" json:"id"`
-	TraderID    string  `gorm:"column:trader_id;not null;index:idx_stock_paper_trader_status" json:"trader_id"`
-	Symbol      string  `gorm:"column:symbol;not null" json:"symbol"`
-	Quantity    float64 `gorm:"column:quantity;not null" json:"quantity"` // currently held
-	EntryQty    float64 `gorm:"column:entry_quantity;default:0" json:"entry_quantity"`
-	AvgPrice    float64 `gorm:"column:avg_price;not null" json:"avg_price"`
-	InitialStop float64 `gorm:"column:initial_stop;default:0" json:"initial_stop"` // write-once opening-risk stop
-	Stop        float64 `gorm:"column:stop;default:0" json:"stop"`                 // live protective stop
-	TakeProfit  float64 `gorm:"column:take_profit;default:0" json:"take_profit"`
-	OpenedAt    int64   `gorm:"column:opened_at" json:"opened_at"`
-	UpdatedAt   int64   `gorm:"column:updated_at" json:"updated_at"`
-	Status      string  `gorm:"column:status;default:OPEN;index:idx_stock_paper_trader_status" json:"status"`
+	ID              int64   `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraderID        string  `gorm:"column:trader_id;not null;index:idx_stock_paper_trader_status" json:"trader_id"`
+	Symbol          string  `gorm:"column:symbol;not null" json:"symbol"`
+	Side            string  `gorm:"column:side;not null;default:LONG" json:"side"`
+	Funding         float64 `gorm:"column:funding;not null;default:0" json:"funding"`
+	LastFundingTime int64   `gorm:"column:last_funding_time;not null;default:0" json:"last_funding_time"`
+	Quantity        float64 `gorm:"column:quantity;not null" json:"quantity"` // currently held
+	EntryQty        float64 `gorm:"column:entry_quantity;default:0" json:"entry_quantity"`
+	AvgPrice        float64 `gorm:"column:avg_price;not null" json:"avg_price"`
+	InitialStop     float64 `gorm:"column:initial_stop;default:0" json:"initial_stop"` // write-once opening-risk stop
+	Stop            float64 `gorm:"column:stop;default:0" json:"stop"`                 // live protective stop
+	TakeProfit      float64 `gorm:"column:take_profit;default:0" json:"take_profit"`
+	OpenedAt        int64   `gorm:"column:opened_at" json:"opened_at"`
+	UpdatedAt       int64   `gorm:"column:updated_at" json:"updated_at"`
+	Status          string  `gorm:"column:status;default:OPEN;index:idx_stock_paper_trader_status" json:"status"`
 	// Exit legs accumulate: ExitPrice is the quantity-weighted average of
 	// every sell leg (ExitedQty / ExitValue are its working sums).
 	ExitedQty   float64 `gorm:"column:exited_qty;default:0" json:"exited_qty"`
@@ -63,13 +68,60 @@ type StockPaperPosition struct {
 	RealizedPnL float64 `gorm:"column:realized_pnl;default:0" json:"realized_pnl"`
 	ClosedAt    int64   `gorm:"column:closed_at;default:0" json:"closed_at"`
 	CloseReason string  `gorm:"column:close_reason;default:''" json:"close_reason"`
-	// Fee is the cumulative trading fee (USDT) paid on this position's buys and
-	// sells. Only the factor_quant US executor charges fees (us_stock paper
-	// fills are fee-free), so it stays 0 for us_stock rows.
+	// Fee is the cumulative trading fee in USDT.
 	Fee float64 `gorm:"column:fee;default:0" json:"fee"`
 }
 
 func (StockPaperPosition) TableName() string { return "stock_paper_positions" }
+
+// EffectiveSide treats pre-migration rows as longs.
+func (p *StockPaperPosition) EffectiveSide() string {
+	if p.Side == StockPaperShort {
+		return StockPaperShort
+	}
+	return StockPaperLong
+}
+
+func (p *StockPaperPosition) MarketValue(price float64) float64 {
+	value := p.Quantity * price
+	if p.EffectiveSide() == StockPaperShort {
+		return -value
+	}
+	return value
+}
+
+func paperFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// ApplyShortFunding atomically advances the settlement watermark, position
+// funding and cash. Replaying an event after a restart is a no-op.
+func (s *StockPaperStore) ApplyShortFunding(id int64, settlement time.Time, rate, mark float64) error {
+	if !paperFinite(rate) || !paperFinite(mark) || mark <= 0 {
+		return fmt.Errorf("invalid funding settlement")
+	}
+	return retryOnceOnBusy(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			var p StockPaperPosition
+			if err := tx.First(&p, id).Error; err != nil {
+				return err
+			}
+			ms := settlement.UnixMilli()
+			if p.Status != StockPaperOpen || p.EffectiveSide() != StockPaperShort || ms <= p.LastFundingTime || ms <= p.OpenedAt {
+				return nil
+			}
+			amount := rate * p.Quantity * mark
+			res := tx.Model(&StockPaperPosition{}).Where("id = ? AND last_funding_time = ?", id, p.LastFundingTime).Updates(map[string]interface{}{
+				"funding": gorm.Expr("funding + ?", amount), "realized_pnl": gorm.Expr("realized_pnl + ?", amount), "last_funding_time": ms,
+			})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return nil
+			}
+			return tx.Model(&StockPaperAccount{}).Where("trader_id = ?", p.TraderID).Update("cash", gorm.Expr("cash + ?", amount)).Error
+		})
+	})
+}
 
 // StockPendingEntry is a resting limit-entry order of a live us_stock trader,
 // persisted so a restart can still finish the fill (protection + position row).
@@ -146,6 +198,23 @@ func (s *StockPaperStore) OpenOrAdd(traderID, symbol string, qty, price, stop, t
 // the position row. It returns the fee charged. feeBps 0 behaves exactly like
 // OpenOrAdd.
 func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, stop, takeProfit, feeBps float64, now time.Time) (*StockPaperPosition, float64, error) {
+	return s.openOrAddSide(traderID, symbol, StockPaperLong, qty, price, stop, takeProfit, feeBps, now, false)
+}
+
+// OpenOrAddSideWithFee books cash and net realized fees for us_stock. Legacy
+// wrappers retain factor_quant's gross-PnL convention.
+func (s *StockPaperStore) OpenOrAddSideWithFee(traderID, symbol, side string, qty, price, stop, takeProfit, feeBps float64, now time.Time) (*StockPaperPosition, float64, error) {
+	return s.openOrAddSide(traderID, symbol, side, qty, price, stop, takeProfit, feeBps, now, true)
+}
+
+func (s *StockPaperStore) openOrAddSide(traderID, symbol, side string, qty, price, stop, takeProfit, feeBps float64, now time.Time, net bool) (*StockPaperPosition, float64, error) {
+	if side != StockPaperLong && side != StockPaperShort {
+		return nil, 0, fmt.Errorf("invalid paper side %q", side)
+	}
+	if !paperFinite(qty) || !paperFinite(price) || !paperFinite(feeBps) {
+		return nil, 0, fmt.Errorf("non-finite paper fill")
+	}
+
 	if qty <= 0 || price <= 0 {
 		return nil, 0, fmt.Errorf("paper buy needs positive qty and price (qty=%v price=%v)", qty, price)
 	}
@@ -156,6 +225,10 @@ func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, 
 	var out StockPaperPosition
 	cost := qty * price
 	fee := cost * feeBps / 10000
+	cashDelta := -cost - fee
+	if side == StockPaperShort {
+		cashDelta = cost - fee
+	}
 	// A transient SQLITE_BUSY is retried once. Replay-safe: a busy error means
 	// the transaction rolled back (with _txlock=immediate it fires at BEGIN),
 	// and out is reset so the retry's First() is not keyed by a stale id.
@@ -163,7 +236,7 @@ func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, 
 		out = StockPaperPosition{}
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			res := tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
-				"cash": gorm.Expr("cash - ?", cost+fee), "updated_at": nowMs})
+				"cash": gorm.Expr("cash + ?", cashDelta), "updated_at": nowMs})
 			if res.Error != nil {
 				return res.Error
 			}
@@ -172,12 +245,18 @@ func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, 
 			}
 			err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&out).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				out = StockPaperPosition{TraderID: traderID, Symbol: symbol, Quantity: qty, EntryQty: qty, AvgPrice: price,
+				out = StockPaperPosition{TraderID: traderID, Symbol: symbol, Side: side, LastFundingTime: nowMs, Quantity: qty, EntryQty: qty, AvgPrice: price,
 					InitialStop: stop, Stop: stop, TakeProfit: takeProfit, OpenedAt: nowMs, UpdatedAt: nowMs, Status: StockPaperOpen, Fee: fee}
+				if net {
+					out.RealizedPnL = -fee
+				}
 				return tx.Create(&out).Error
 			}
 			if err != nil {
 				return err
+			}
+			if out.EffectiveSide() != side {
+				return fmt.Errorf("OPPOSITE_HELD: %s", symbol)
 			}
 			newQty := out.Quantity + qty
 			out.AvgPrice = (out.AvgPrice*out.Quantity + price*qty) / newQty
@@ -191,6 +270,9 @@ func (s *StockPaperStore) OpenOrAddWithFee(traderID, symbol string, qty, price, 
 			out.TakeProfit = takeProfit
 			out.UpdatedAt = nowMs
 			out.Fee += fee
+			if net {
+				out.RealizedPnL -= fee
+			}
 			return tx.Save(&out).Error
 		})
 	})
@@ -213,6 +295,20 @@ func (s *StockPaperStore) Reduce(traderID, symbol string, qty, price float64, no
 // the crypto paper ledger, fees are tracked separately). It returns the fee
 // charged. feeBps 0 behaves exactly like Reduce.
 func (s *StockPaperStore) ReduceWithFee(traderID, symbol string, qty, price, feeBps float64, now time.Time, reason string) (float64, bool, float64, error) {
+	return s.reduceSide(traderID, symbol, StockPaperLong, qty, price, feeBps, now, reason, false)
+}
+
+// ReduceSideWithFee books a long sale or short cover, net of the exit fee.
+// Funding and opening fees already accumulated in RealizedPnL remain there.
+func (s *StockPaperStore) ReduceSideWithFee(traderID, symbol, side string, qty, price, feeBps float64, now time.Time, reason string) (float64, bool, float64, error) {
+	return s.reduceSide(traderID, symbol, side, qty, price, feeBps, now, reason, true)
+}
+
+func (s *StockPaperStore) reduceSide(traderID, symbol, side string, qty, price, feeBps float64, now time.Time, reason string, net bool) (float64, bool, float64, error) {
+	if !paperFinite(qty) || !paperFinite(price) || !paperFinite(feeBps) {
+		return 0, false, 0, fmt.Errorf("non-finite paper fill")
+	}
+
 	if price <= 0 {
 		return 0, false, 0, fmt.Errorf("paper sell needs a positive price")
 	}
@@ -231,12 +327,25 @@ func (s *StockPaperStore) ReduceWithFee(traderID, symbol string, qty, price, fee
 			if err := tx.Where("trader_id = ? AND symbol = ? AND status = ?", traderID, symbol, StockPaperOpen).First(&pos).Error; err != nil {
 				return err
 			}
+			if pos.EffectiveSide() != side {
+				return fmt.Errorf("OPPOSITE_HELD: %s", symbol)
+			}
 			qty := qty
 			if qty <= 0 || qty >= pos.Quantity-stockPaperQtyEpsilon {
 				qty = pos.Quantity
 			}
 			pnl = (price - pos.AvgPrice) * qty
+			if side == StockPaperShort {
+				pnl = -pnl
+			}
 			fee = qty * price * feeBps / 10000
+			if net {
+				pnl -= fee
+			}
+			cashDelta := qty*price - fee
+			if side == StockPaperShort {
+				cashDelta = -qty*price - fee
+			}
 			pos.Fee += fee
 			pos.Quantity -= qty
 			pos.ExitedQty += qty
@@ -252,7 +361,7 @@ func (s *StockPaperStore) ReduceWithFee(traderID, symbol string, qty, price, fee
 				return err
 			}
 			return tx.Model(&StockPaperAccount{}).Where("trader_id = ?", traderID).Updates(map[string]interface{}{
-				"cash": gorm.Expr("cash + ?", qty*price-fee), "updated_at": nowMs}).Error
+				"cash": gorm.Expr("cash + ?", cashDelta), "updated_at": nowMs}).Error
 		})
 	})
 	return pnl, closed, fee, err

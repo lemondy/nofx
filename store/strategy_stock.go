@@ -267,6 +267,39 @@ func (s *StockConfig) RegimeTrimEnabled() bool {
 	return *s.RegimeTrim
 }
 
+const (
+	StockShortOff                   = "off"
+	StockShortPaper                 = "paper"
+	DefaultStockScanShortTopN       = 3
+	DefaultStockMaxShortExposurePct = 0.5
+)
+
+func (s *StockConfig) EffectiveShortMode() string {
+	if s != nil && s.ShortMode == StockShortPaper {
+		return StockShortPaper
+	}
+	return StockShortOff
+}
+
+func (s *StockConfig) ShortEnabled() bool {
+	return s.EffectiveShortMode() == StockShortPaper && s.IsPaper()
+}
+
+func (s *StockConfig) EffectiveScanShortTopN() int {
+	if s == nil || s.ScanShortTopN <= 0 {
+		return DefaultStockScanShortTopN
+	}
+	return min(s.ScanShortTopN, maxStockScanTopN)
+}
+
+// EffectiveMaxShortExposurePct is a fraction of equity, unlike the percent-based long caps.
+func (s *StockConfig) EffectiveMaxShortExposurePct() float64 {
+	if s == nil || s.MaxShortExposurePct <= 0 {
+		return DefaultStockMaxShortExposurePct
+	}
+	return s.MaxShortExposurePct
+}
+
 // IsPaper reports whether the strategy runs in paper mode (no orders placed).
 // nil = true: the first launch is paper by default.
 func (s *StockConfig) IsPaper() bool {
@@ -284,6 +317,23 @@ func (s *StockConfig) Validate() error {
 	}
 	if _, err := json.Marshal(s); err != nil {
 		return fmt.Errorf("stock_config contains non-finite values: %w", err)
+	}
+	switch s.ShortMode {
+	case "", StockShortOff:
+	case StockShortPaper:
+		if !s.IsPaper() {
+			return fmt.Errorf("short_mode=paper requires paper_trading=true")
+		}
+	case "live":
+		return fmt.Errorf("short_mode=live: live short selling is not implemented (实盘做空未实现)")
+	default:
+		return fmt.Errorf("invalid short_mode %q: must be off or paper", s.ShortMode)
+	}
+	if s.ScanShortTopN < 0 || s.ScanShortTopN > maxStockScanTopN {
+		return fmt.Errorf("scan_short_top_n must be between 0 and %d", maxStockScanTopN)
+	}
+	if s.MaxShortExposurePct < 0 || s.MaxShortExposurePct > 1 {
+		return fmt.Errorf("max_short_exposure_pct must be 0 (default) or in (0, 1]")
 	}
 	switch s.SymbolSource {
 	case "", StockSymbolSourceManual:

@@ -3,6 +3,7 @@ package trader
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 // stockHolding is a PROGRAM-OWNED position (the quantity recorded in the
 // program's own ai_managed trader_positions rows, or the paper ledger row).
 type stockHolding struct {
+	Side               string
 	Symbol             string
 	Owned              float64 // program-owned quantity (never above the exchange balance)
 	Balance            float64 // exchange base-asset balance (live); = Owned in paper
@@ -35,15 +37,41 @@ type stockHolding struct {
 	QuarantineReason   string
 }
 
+func (h *stockHolding) marketValue() float64 {
+	value := h.Owned * h.Mark
+	if h.Side == store.StockPaperShort {
+		return -value
+	}
+	return value
+}
+func (h *stockHolding) unrealized() float64 {
+	pnl := (h.Mark - h.Avg) * h.Owned
+	if h.Side == store.StockPaperShort {
+		return -pnl
+	}
+	return pnl
+}
+func (s *stockState) shortExposure() float64 {
+	value := 0.0
+	for _, h := range s.Holdings {
+		if h.Side == store.StockPaperShort {
+			value += h.Owned * h.Mark
+		}
+	}
+	return value
+}
+
 // stockState is the account view the cycle decides on.
 type stockState struct {
-	Holdings  map[string]*stockHolding // program-owned positions
-	Balances  map[string]float64       // exchange balances by pair (live; includes manual holdings)
-	Marks     map[string]float64
-	Available float64 // free USDT (paper: cash)
-	Equity    float64
-	Exposure  float64 // value of ALL holdings, manual ones included (risk is account-wide)
-	Notes     []string
+	Cash            float64                  // paper ledger cash, including short-sale proceeds
+	MarginAvailable bool                     // use 1x gross exposure when shorts are enabled or held
+	Holdings        map[string]*stockHolding // program-owned positions
+	Balances        map[string]float64       // exchange balances by pair (live; includes manual holdings)
+	Marks           map[string]float64
+	Available       float64 // free USDT (paper: cash)
+	Equity          float64
+	Exposure        float64 // value of ALL holdings, manual ones included (risk is account-wide)
+	Notes           []string
 }
 
 func (s *stockState) sortedHoldings() []*stockHolding {
@@ -311,7 +339,7 @@ func (at *AutoTrader) stockGatherLiveWithQuarantine(ctx context.Context, now tim
 		if qty <= 0 && quarantined[sym] == "" {
 			continue
 		}
-		h := &stockHolding{Symbol: sym, Owned: qty, Balance: balance, Avg: avg, Mark: st.Marks[sym],
+		h := &stockHolding{Side: store.StockPaperLong, Symbol: sym, Owned: qty, Balance: balance, Avg: avg, Mark: st.Marks[sym],
 			InitialStop: initial, OpenedAt: opened, Rows: rows,
 			ProtectionVerified: reconcile && (checks[sym].Known || intents[sym]) && !checks[sym].Filled}
 		if reconcile && quarantined[sym] == "" && replaceProtection {
@@ -420,22 +448,34 @@ func (at *AutoTrader) stockGatherPaper(prices map[string]float64) (*stockState, 
 	if err != nil {
 		return nil, err
 	}
-	st := &stockState{Holdings: map[string]*stockHolding{}, Balances: map[string]float64{}, Marks: map[string]float64{}, Available: acct.Cash}
+	st := &stockState{Holdings: map[string]*stockHolding{}, Balances: map[string]float64{}, Marks: map[string]float64{}, Available: acct.Cash, Cash: acct.Cash, MarginAvailable: at.stock.cfg.ShortEnabled()}
 	for _, p := range open {
 		mark := prices[p.Symbol]
+		if p.EffectiveSide() == store.StockPaperShort {
+			st.MarginAvailable = true
+			mark = at.stock.perpPrice(p.Symbol)
+		}
 		if mark <= 0 {
-			mark = at.stock.price(p.Symbol)
+			if p.EffectiveSide() != store.StockPaperShort {
+				mark = at.stock.price(p.Symbol)
+			}
 		}
 		if mark <= 0 {
 			mark = p.AvgPrice
 		}
-		st.Holdings[p.Symbol] = &stockHolding{Symbol: p.Symbol, Owned: p.Quantity, Balance: p.Quantity, Avg: p.AvgPrice, Mark: mark,
+		st.Holdings[p.Symbol] = &stockHolding{Side: p.EffectiveSide(), Symbol: p.Symbol, Owned: p.Quantity, Balance: p.Quantity, Avg: p.AvgPrice, Mark: mark,
 			Stop: p.Stop, TakeProfit: p.TakeProfit, InitialStop: p.InitialStop, OpenedAt: time.UnixMilli(p.OpenedAt)}
 		st.Balances[p.Symbol] = p.Quantity
 		st.Marks[p.Symbol] = mark
 		st.Exposure += p.Quantity * mark
 	}
-	st.Equity = st.Available + st.Exposure
+	st.Equity = acct.Cash
+	for _, h := range st.Holdings {
+		st.Equity += h.marketValue()
+	}
+	if st.MarginAvailable {
+		st.Available = math.Max(0, st.Equity-st.Exposure)
+	}
 	return st, nil
 }
 
@@ -444,24 +484,31 @@ func (at *AutoTrader) stockGatherPaper(prices map[string]float64) (*stockState, 
 func (s *stockState) repricePaper(prices map[string]float64) {
 	exposure := 0.0
 	for sym, h := range s.Holdings {
-		if p := prices[sym]; p > 0 {
+		if p := prices[sym]; p > 0 && h.Side != store.StockPaperShort {
 			h.Mark = p
 			s.Marks[sym] = p
 		}
+		s.Marks[sym] = h.Mark
 		exposure += h.Owned * h.Mark
 	}
 	s.Exposure = exposure
-	s.Equity = s.Available + exposure
+	s.Equity = s.Cash
+	for _, h := range s.Holdings {
+		s.Equity += h.marketValue()
+	}
+	if s.MarginAvailable {
+		s.Available = math.Max(0, s.Equity-exposure)
+	}
 }
 
 func (s *stockState) enginePositions(prices map[string]float64) []stockengine.Position {
 	var out []stockengine.Position
 	for _, h := range s.sortedHoldings() {
 		price := h.Mark
-		if p := prices[h.Symbol]; p > 0 {
+		if p := prices[h.Symbol]; p > 0 && h.Side != store.StockPaperShort {
 			price = p
 		}
-		out = append(out, stockengine.Position{Symbol: h.Symbol, Quantity: h.Owned, AvgPrice: h.Avg, Price: price,
+		out = append(out, stockengine.Position{Side: h.Side, Symbol: h.Symbol, Quantity: h.Owned, AvgPrice: h.Avg, Price: price,
 			StopPrice: h.Stop, TakeProfit: h.TakeProfit, InitialStop: h.InitialStop, OpenedAt: h.OpenedAt})
 	}
 	return out

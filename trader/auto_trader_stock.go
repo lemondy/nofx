@@ -20,8 +20,8 @@ import (
 )
 
 // us_stock (design 2026-10-09 §5/§6): a strategy type with its own run cycle.
-// Long-only trading of Binance spot bStock pairs, scheduled at fixed US/Eastern
-// decision times plus a 60s protection tick. Paper mode (the default) runs the
+// Live trading uses Binance spot bStock longs; paper mode also supports equity
+// perpetual shorts. Fixed US/Eastern decisions and a 60s protection tick run the
 // full data/decision/risk path against a simulated ledger and places no orders.
 //
 // Ownership rule (user also trades manually on this Binance account): the
@@ -40,6 +40,7 @@ var (
 	stockLookupSymbol = usstock.LookupSymbol
 	stockGetSeries    = usstock.GetSeries
 	stockGetQuote     = usstock.GetQuote
+	stockGetPerpQuote = usstock.GetPerpQuote
 	stockListUniverse = usstock.ListSymbols
 	// stockGetUnderlyingSeries: Yahoo-only series for prompt context (4h).
 	stockGetUnderlyingSeries = usstock.GetUnderlyingSeries
@@ -113,8 +114,9 @@ type stockPending struct {
 type stockRuntime struct {
 	cfg *store.StockConfig // symbols filtered to the listed bStock pairs
 
-	mu         sync.Mutex // guards lastPrices
-	lastPrices map[string]float64
+	mu             sync.Mutex // guards lastPrices
+	lastPrices     map[string]float64
+	lastPerpPrices map[string]float64
 
 	weekKey         string
 	weekStartEquity float64
@@ -151,6 +153,24 @@ func (r *stockRuntime) setPrice(symbol string, p float64) {
 	}
 	r.lastPrices[symbol] = p
 	r.mu.Unlock()
+}
+
+func (r *stockRuntime) perpPrice(symbol string) float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastPerpPrices[symbol]
+}
+
+func (r *stockRuntime) setPerpPrice(symbol string, price float64) {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastPerpPrices == nil {
+		r.lastPerpPrices = map[string]float64{}
+	}
+	r.lastPerpPrices[symbol] = price
 }
 
 // IsStockStrategy reports whether this trader runs the us_stock strategy.

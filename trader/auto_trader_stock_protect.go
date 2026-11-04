@@ -3,7 +3,9 @@ package trader
 import (
 	"context"
 	"fmt"
+	"math"
 	"nofx/market/usstock"
+	"nofx/store"
 	"strings"
 	"sync"
 	"time"
@@ -85,18 +87,43 @@ func (at *AutoTrader) stockTickPaper(ctx context.Context, now time.Time, logf fu
 		return
 	}
 	for _, p := range open {
-		q, err := stockGetQuote(ctx, p.Symbol)
-		if err != nil || q == nil || q.BStockPrice <= 0 {
-			logf("paper tick price %s unavailable: %v", p.Symbol, err)
-			continue
+		short := p.EffectiveSide() == store.StockPaperShort
+		price := 0.0
+		if short {
+			info, ok := stockLookupSymbol(ctx, p.Symbol)
+			if !ok || info.PerpSymbol == "" {
+				logf("paper tick: NOT_SHORTABLE %s", p.Symbol)
+				continue
+			}
+			q, err := stockGetPerpQuote(ctx, info.PerpSymbol)
+			if err != nil || q == nil || q.Price <= 0 {
+				logf("paper tick perp price %s unavailable: %v", p.Symbol, err)
+				continue
+			}
+			price = q.Price
+			at.stock.setPerpPrice(p.Symbol, price)
+			// A funding read failure must not skip the stop/TP check below.
+			if err := at.stockApplyFunding(ctx, p, price, now); err != nil {
+				logf("paper funding %s: %v", p.Symbol, err)
+			}
+		} else {
+			q, err := stockGetQuote(ctx, p.Symbol)
+			if err != nil || q == nil || q.BStockPrice <= 0 {
+				logf("paper tick price %s unavailable: %v", p.Symbol, err)
+				continue
+			}
+			price = q.BStockPrice
+			at.stock.setPrice(p.Symbol, price)
 		}
-		price := q.BStockPrice
-		at.stock.setPrice(p.Symbol, price)
 		fill, reason := 0.0, ""
 		switch {
-		case p.Stop > 0 && price <= p.Stop:
-			fill, reason = p.Stop, "stop_loss"
-		case p.TakeProfit > 0 && price >= p.TakeProfit:
+		case short && p.Stop > 0 && price >= p.Stop:
+			fill, reason = math.Max(p.Stop, price), "stop_loss"
+		case !short && p.Stop > 0 && price <= p.Stop:
+			fill, reason = math.Min(p.Stop, price), "stop_loss"
+		case short && p.TakeProfit > 0 && price <= p.TakeProfit:
+			fill, reason = p.TakeProfit, "take_profit"
+		case !short && p.TakeProfit > 0 && price >= p.TakeProfit:
 			fill, reason = p.TakeProfit, "take_profit"
 		}
 		if reason == "" {

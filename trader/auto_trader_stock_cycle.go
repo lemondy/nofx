@@ -276,6 +276,15 @@ func (at *AutoTrader) stockCycleSelection(ctx context.Context, sc *store.StockCo
 				picks = append(picks, fmt.Sprintf("%s(%s %.1f)", r.Symbol, r.Cycle.Phase, r.Cycle.Score))
 			}
 		}
+		if sc.ShortEnabled() {
+			for _, r := range usable.TopShort(sc.EffectiveScanShortTopN(), exclude) {
+				if _, ok := stockLookupSymbol(ctx, r.Symbol); !ok {
+					continue
+				}
+				entries[r.Symbol] = true
+				add(r.Symbol)
+			}
+		}
 	}
 	if report == nil {
 		logf("scan unavailable: %d held/manual symbols this cycle", nBase)
@@ -370,6 +379,19 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 			quote = nil
 		}
 		snap := stockengine.BuildSnapshot(sym, info.Underlying, series, quote, at.stockClock())
+		if sc.ShortEnabled() {
+			snap.Shortable = info.PerpSymbol != ""
+			if snap.Shortable {
+				snap.PerpQuote, err = stockGetPerpQuote(ctx, info.PerpSymbol)
+				if err != nil {
+					logf("perp quote %s: %v", sym, err)
+					snap.PerpQuote = nil
+				}
+				if snap.PerpQuote != nil {
+					at.stock.setPerpPrice(sym, snap.PerpQuote.Price)
+				}
+			}
+		}
 		byName[sym] = snap
 		daily[sym] = series[usstock.TF1d]
 		if snap.Price > 0 {
@@ -485,7 +507,7 @@ func (at *AutoTrader) saveStockEquity(now time.Time, st *stockState) {
 	}
 	unrealized := 0.0
 	for _, h := range st.Holdings {
-		unrealized += (h.Mark - h.Avg) * h.Owned
+		unrealized += h.unrealized()
 	}
 	pct := 0.0
 	if st.Equity > 0 {
@@ -499,7 +521,7 @@ func (at *AutoTrader) saveStockEquity(now time.Time, st *stockState) {
 }
 
 func isEntryAction(a string) bool {
-	return a == stockengine.ActionOpenLong || a == stockengine.ActionAddLong
+	return stockengine.IsEntryAction(a)
 }
 
 // runStockCycle runs one decision cycle: account + data → engine → execution →
@@ -613,6 +635,13 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 		at.stock.setPrice(sym, p)
 	}
 	if paper {
+		for sym, h := range state.Holdings {
+			if h.Side == store.StockPaperShort {
+				if p := at.stock.perpPrice(sym); p > 0 {
+					h.Mark = p
+				}
+			}
+		}
 		state.repricePaper(prices)
 	}
 	halted, dd := at.stockWeekRisk(now, state.Equity)
@@ -668,7 +697,7 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 		}
 	}
 	ectx := &stockengine.Context{Now: now, Session: session, Config: cc, Preset: preset,
-		Account:   stockengine.Account{Equity: state.Equity, Available: state.Available, Exposure: state.Exposure},
+		Account:   stockengine.Account{Equity: state.Equity, Available: state.Available, Exposure: state.Exposure, ShortExposure: state.shortExposure()},
 		Positions: positions, EntrySymbols: entrySyms, Snapshots: snaps, Market: market, Paper: paper,
 		Universe: freshScanResults(report, now), Regime: regime}
 	result, derr := stockengine.Decide(ectx, at.mcpClient, at.stockLang())
@@ -709,7 +738,7 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 		}
 		sizing := *ectx
 		sizing.Positions = fresh.enginePositions(prices)
-		acct := stockengine.Account{Equity: fresh.Equity, Available: fresh.Available, Exposure: fresh.Exposure}
+		acct := stockengine.Account{Equity: fresh.Equity, Available: fresh.Available, Exposure: fresh.Exposure, ShortExposure: fresh.shortExposure()}
 		var rejected []string
 		for _, v := range result.Verdicts {
 			d := v.Decision
@@ -724,6 +753,8 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 			switch {
 			case h != nil && h.Quarantined && d.Action != stockengine.ActionHold && d.Action != stockengine.ActionWait:
 				code = "PROTECTION_UNVERIFIED"
+			case !paper && stockengine.IsShortAction(d.Action):
+				code = "SHORT_DISABLED"
 			case !v.Accepted:
 				code = joinCodes(v.Codes)
 			case stockDecisionStateChanged(d.Action, state.Holdings[d.Symbol], h):
@@ -752,18 +783,21 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 				if d.Action == stockengine.ActionHold {
 					at.refineStockThesis(d, theses, now, logf)
 				}
-			case stockengine.ActionOpenLong, stockengine.ActionAddLong:
+			case stockengine.ActionOpenLong, stockengine.ActionAddLong, stockengine.ActionOpenShort, stockengine.ActionAddShort:
 				sizing.Account = acct
 				var reserved float64
 				out, reserved, xerr = at.execStockEntry(ctx, &sizing, d, snap, h, paper, now, logf)
 				if xerr == nil {
 					acct.Available -= reserved
 					acct.Exposure += reserved
+					if stockengine.IsShortAction(d.Action) {
+						acct.ShortExposure += reserved
+					}
 					at.setStockRegimeScale(regime, paper, d.Symbol, logf)
 				}
-			case stockengine.ActionReduceLong, stockengine.ActionCloseLong:
+			case stockengine.ActionReduceLong, stockengine.ActionCloseLong, stockengine.ActionReduceShort, stockengine.ActionCloseShort:
 				out, xerr = at.execStockExit(ctx, d, snap, h, paper, now)
-				if xerr == nil && d.Action == stockengine.ActionCloseLong {
+				if xerr == nil && (d.Action == stockengine.ActionCloseLong || d.Action == stockengine.ActionCloseShort) {
 					at.deleteStockRegimeScale(regime, paper, d.Symbol, logf)
 				}
 			case stockengine.ActionAdjustStop:
@@ -811,9 +845,9 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 // without a registry/network lookup. Missing positions always count as changed.
 func stockDecisionStateChanged(action string, prompt, fresh *stockHolding) bool {
 	switch action {
-	case stockengine.ActionOpenLong:
+	case stockengine.ActionOpenLong, stockengine.ActionOpenShort:
 		return (prompt == nil || prompt.Owned <= 0) && fresh != nil && fresh.Owned > 0
-	case stockengine.ActionAddLong, stockengine.ActionReduceLong, stockengine.ActionCloseLong, stockengine.ActionAdjustStop:
+	case stockengine.ActionAddLong, stockengine.ActionReduceLong, stockengine.ActionCloseLong, stockengine.ActionAddShort, stockengine.ActionReduceShort, stockengine.ActionCloseShort, stockengine.ActionAdjustStop:
 		if prompt == nil || fresh == nil || prompt.Owned <= 0 || fresh.Owned <= 0 {
 			return true
 		}
@@ -821,7 +855,7 @@ func stockDecisionStateChanged(action string, prompt, fresh *stockHolding) bool 
 		if math.IsNaN(before) || math.IsNaN(after) || math.IsInf(before, 0) || math.IsInf(after, 0) {
 			return true
 		}
-		return math.Abs(after-before) > math.Max(1e-9, math.Max(before, after)*1e-6)
+		return prompt.Side != fresh.Side || math.Abs(after-before) > math.Max(1e-9, math.Max(before, after)*1e-6)
 	default: // hold/wait never act on an old quantity
 		return false
 	}
@@ -857,13 +891,13 @@ func containsString(list []string, s string) bool {
 // Store errors are logged and never fail the cycle.
 func (at *AutoTrader) persistStockThesis(d stockengine.Decision, theses map[string]store.StockThesis, now time.Time, logf func(string, ...interface{})) {
 	switch d.Action {
-	case stockengine.ActionOpenLong, stockengine.ActionAddLong:
+	case stockengine.ActionOpenLong, stockengine.ActionAddLong, stockengine.ActionOpenShort, stockengine.ActionAddShort:
 		if err := at.store.StockThesis().Upsert(at.id, d.Symbol, d.Thesis, d.Invalidation, now); err != nil {
 			logf("thesis save %s failed: %v", d.Symbol, err)
 		}
 	case stockengine.ActionAdjustStop:
 		at.refineStockThesis(d, theses, now, logf)
-	case stockengine.ActionCloseLong:
+	case stockengine.ActionCloseLong, stockengine.ActionCloseShort:
 		if err := at.store.StockThesis().Delete(at.id, d.Symbol); err != nil {
 			logf("thesis delete %s failed: %v", d.Symbol, err)
 		}
@@ -924,9 +958,9 @@ func (at *AutoTrader) saveStockRecord(rec *store.DecisionRecord) {
 
 func (at *AutoTrader) notifyStockOutcome(paper bool, d stockengine.Decision, out *stockOutcome) {
 	switch d.Action {
-	case stockengine.ActionOpenLong, stockengine.ActionAddLong:
+	case stockengine.ActionOpenLong, stockengine.ActionAddLong, stockengine.ActionOpenShort, stockengine.ActionAddShort:
 		title := "开仓"
-		if d.Action == stockengine.ActionAddLong {
+		if d.Action == stockengine.ActionAddLong || d.Action == stockengine.ActionAddShort {
 			title = "加仓"
 		}
 		extra := fmt.Sprintf("止损 %.4g 止盈 %.4g", d.StopLoss, d.TakeProfit)
@@ -934,9 +968,9 @@ func (at *AutoTrader) notifyStockOutcome(paper bool, d stockengine.Decision, out
 			title, extra = "限价入场挂单", extra+"，挂单中"
 		}
 		at.stockNotifyTrade(paper, title, d.Symbol, out, extra)
-	case stockengine.ActionReduceLong:
+	case stockengine.ActionReduceLong, stockengine.ActionReduceShort:
 		at.stockNotifyTrade(paper, "减仓", d.Symbol, out, "")
-	case stockengine.ActionCloseLong:
+	case stockengine.ActionCloseLong, stockengine.ActionCloseShort:
 		at.stockNotifyTrade(paper, "平仓", d.Symbol, out, "")
 	}
 }
@@ -944,9 +978,12 @@ func (at *AutoTrader) notifyStockOutcome(paper bool, d stockengine.Decision, out
 // execStockEntry sizes and places an accepted open/add.
 func (at *AutoTrader) execStockEntry(ctx context.Context, sizing *stockengine.Context, d stockengine.Decision, snap *stockengine.SymbolSnapshot,
 	h *stockHolding, paper bool, now time.Time, logf func(string, ...interface{})) (*stockOutcome, float64, error) {
+	if !paper && stockengine.IsShortAction(d.Action) {
+		return nil, 0, fmt.Errorf("SHORT_DISABLED: live short selling is not implemented")
+	}
 	info := stockSymbolInfo(ctx, d.Symbol)
 	// Round the executable prices before revalidating the stop band and risk.
-	d.StopLoss = floorStep(d.StopLoss, info.TickSize)
+	d.StopLoss = stockRoundStop(d.StopLoss, info.TickSize, stockengine.IsShortAction(d.Action))
 	if d.EntryType == stockengine.EntryLimit {
 		d.LimitPrice = floorStep(d.LimitPrice, info.TickSize)
 	}
@@ -963,6 +1000,9 @@ func (at *AutoTrader) execStockEntry(ctx context.Context, sizing *stockengine.Co
 	}
 	now = current.Now
 	snap = fresh
+	if stockengine.IsShortAction(d.Action) {
+		snap.Price = snap.PerpQuote.Price
+	}
 	size, err := stockengine.SizeOrder(current, d)
 	if err != nil {
 		return nil, 0, fmt.Errorf("sizing: %w", err)
@@ -1025,15 +1065,21 @@ func (at *AutoTrader) execStockExit(ctx context.Context, d stockengine.Decision,
 // reduce ("" = ai_reduce); the regime trim passes "regime_trim".
 func (at *AutoTrader) execStockExitReason(ctx context.Context, d stockengine.Decision, snap *stockengine.SymbolSnapshot, h *stockHolding,
 	paper bool, now time.Time, reduceReason string) (*stockOutcome, error) {
+	if !paper && (stockengine.IsShortAction(d.Action) || (h != nil && h.Side == store.StockPaperShort)) {
+		return nil, fmt.Errorf("SHORT_DISABLED: live short selling is not implemented")
+	}
 	if h == nil || h.Owned <= 0 {
 		return nil, fmt.Errorf("NOT_HELD: no program-owned position")
 	}
 	info := stockSymbolInfo(ctx, d.Symbol)
 	price := h.Mark
-	if snap != nil && snap.Price > 0 {
+	if snap != nil && snap.Price > 0 && h.Side != store.StockPaperShort {
 		price = snap.Price
 	}
-	full := d.Action == stockengine.ActionCloseLong
+	if h.Side == store.StockPaperShort && snap != nil && snap.PerpQuote != nil {
+		price = snap.PerpQuote.Price
+	}
+	full := d.Action == stockengine.ActionCloseLong || d.Action == stockengine.ActionCloseShort
 	qty := h.Owned
 	reason := "ai_close"
 	if !full {
@@ -1063,18 +1109,24 @@ func (at *AutoTrader) execStockExitReason(ctx context.Context, d stockengine.Dec
 // execStockAdjust moves the stop (and optionally the take-profit) of an owned position.
 func (at *AutoTrader) execStockAdjust(ctx context.Context, d stockengine.Decision, snap *stockengine.SymbolSnapshot, h *stockHolding,
 	paper bool, now time.Time) (*stockOutcome, error) {
+	if !paper && h != nil && h.Side == store.StockPaperShort {
+		return nil, fmt.Errorf("SHORT_DISABLED: live short selling is not implemented")
+	}
 	if h == nil || h.Owned <= 0 {
 		return nil, fmt.Errorf("NOT_HELD: no program-owned position")
 	}
 	info := stockSymbolInfo(ctx, d.Symbol)
-	stop := floorStep(d.StopLoss, info.TickSize)
+	stop := stockRoundStop(d.StopLoss, info.TickSize, h.Side == store.StockPaperShort)
 	tp := d.TakeProfit
 	if tp <= 0 {
 		tp = h.TakeProfit
 	}
 	price := h.Mark
-	if snap != nil && snap.Price > 0 {
+	if snap != nil && snap.Price > 0 && h.Side != store.StockPaperShort {
 		price = snap.Price
+	}
+	if h.Side == store.StockPaperShort && snap != nil && snap.PerpQuote != nil {
+		price = snap.PerpQuote.Price
 	}
 	if paper {
 		if err := at.store.StockPaper().SetProtection(at.id, d.Symbol, stop, tp, now); err != nil {
@@ -1086,4 +1138,11 @@ func (at *AutoTrader) execStockAdjust(ctx context.Context, d stockengine.Decisio
 		return nil, err
 	}
 	return &stockOutcome{Qty: h.Owned, Price: stop, Note: "stop moved"}, nil
+}
+
+func stockRoundStop(price, step float64, short bool) float64 {
+	if short && step > 0 {
+		return math.Ceil(price/step-1e-9) * step
+	}
+	return floorStep(price, step)
 }

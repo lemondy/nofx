@@ -31,11 +31,21 @@ python -m scripts.promotion.create_pair start ensemble-v2
 | `--harm-check-days` | 14 天 |
 | `--extend-days` | 14 天 |
 | `--extend-se` | 0.02 R |
+| `--metric` | `avg_r`（可选 `daily_return`，见下） |
+| `--margin-daily` | 0.0002（每日收益差的非劣效边际，仅 `daily_return` 使用） |
+| `--trade-ratio-max` | 1.5；`none`/`null` 表示不设上限 |
+| `--min-short-trades` | 不限；设置后要求候选组 SHORT 平仓 ≥ 该笔数 |
+| `--min-trades-scope` | `both`（可选 `candidate`，`min-trades` 只约束候选组） |
+| `--extend-se-daily` | 0.0001（`daily_return` 的 extend SE 门槛） |
 
 `prereg` 包含上述参数、模式、交易线、基线版本、思路及改动类型、UTC `registered_at`，
 以及 `prereg_hash`。哈希为其余全部 prereg 字段的 SHA-256：JSON 按键排序、使用紧凑
 分隔符 `(',', ':')`、保留 UTF-8 中文、禁止 NaN/Infinity。没有修改登记的命令。
 未指定增量模式时，不产生 prereg，原有 7 天 / 20 笔配置默认值及报告行为保持不变。
+
+2026-11-04 之前登记的 prereg 没有 metric 等新字段：校验对缺失字段取默认值
+（`avg_r`、0.0002、1.5、不限、`both`、0.0001），判定行为与当时完全一致；哈希仍只
+覆盖实际存在的字段。
 
 历史配对可以且只能补登记一次，参数与新建时相同。例如：
 
@@ -52,6 +62,36 @@ python -m scripts.promotion.create_pair prereg early-trim-0p8r \
 「补登记发生在已看到部分结果之后，结论需打折」。说明和标记也纳入哈希。
 已有 prereg（包括损坏的登记）一律拒绝覆盖。补登记保留原有外层配置，旧口径判定仍可参照。
 以上命令为操作示例，本次实现不自动补登记现有配对。
+
+## us_stock 配对（做空模拟）
+
+源交易员是 us_stock（`strategy_type=us_stock`）时，`create_pair` 走专用路径：
+
+- **不新建 paper 交易所**：us_stock 模拟盘依赖 binance 行情，两组克隆保留源交易员的
+  `exchange_id`；源交易所不是真实 binance 交易所时直接拒绝。
+- **两组强制 `stock_config.paper_trading=true`**（对照组也是）；候选组再打
+  `--feature-path/--feature-value` 补丁（只作用于候选）。源策略本身已开启
+  `paper_trading` 时拒绝建对。
+- **`--paper-cash`**（默认 1000）同时设定两个克隆的 `initial_balance`，并记入 pair 元数据。
+- 交易从 `stock_paper_positions` 读取（`closed_at` 为退出时间，
+  R = realized_pnl / (|avg_price − initial_stop| × entry_quantity)，side/funding 列缺失时
+  按全 LONG、资金费 0 处理）；权益快照仍读 `trader_equity_snapshots`。
+
+做空模拟的建对命令（≈45 个美股交易日，预登记写死后再不改）：
+
+```sh
+python -m scripts.promotion.create_pair \
+  --source-trader SOURCE_US_STOCK_ID \
+  --feature-path stock_config.short_mode --feature-value '"paper"' \
+  --pair-id us-short-paper-v1 --title 美股做空模拟 \
+  --mode incremental --track us_llm --baseline-version CONFIG_HASH \
+  --idea-id us-short-paper-v1 --change-type E \
+  --metric daily_return --margin-daily 0.0002 --trade-ratio-max none \
+  --min-trades 30 --min-trades-scope candidate --min-short-trades 15 \
+  --min-days 63 --harm-check-days 20 --extend-se-daily 0.0001 \
+  --paper-cash 1000
+python -m scripts.promotion.create_pair start us-short-paper-v1
+```
 
 ## 报告与判定
 
@@ -85,6 +125,30 @@ python -m scripts.promotion.report --ledger /path/to/ledger.jsonl
 `legacy_reasons`。增量计算复用 `weekly_r_comparison`，但将统计计算门槛设为每侧 1 笔，
 独立应用登记中的正式样本门槛，使 `harm_stop` 可以早于 min_days/min_trades 触发。
 仍需联合至少 3 个退出周才能给出 SE。该计算保存在 `incremental_weekly_avg_r`。
+
+### metric=daily_return
+
+`metric=daily_return` 时（`incremental_metric` 字段标明，比较保存在
+`incremental_daily_return`）：
+
+- 主统计量改为每日权益收益率差：每臂取 UTC 日末最后快照之比（缺日向前填充，与旧口径
+  相同），配对两组都有的已完成 UTC 日；Δ = mean(候选 − 对照)。
+- SE 用 `cluster_se` 按 UTC 周一所在周聚类（交易日为簇内样本）；不足两个聚类周时
+  不给 SE/CI。
+- 判定表与 avg_r 相同，但非劣效边际用 `margin_daily`，extend 的 SE 门槛用
+  `extend_se_daily`（独立登记字段，默认 0.0001/日；不按 margin_daily/margin_r 折算，
+  避免复用一个对该指标无意义的参数）；正式样本按平仓笔数（`n`）计，
+  `min_trades_scope=candidate` 只约束候选组，`min_short_trades` 只约束候选组
+  SHORT 平仓。`trade_ratio_max=null` 时 promote 不设平仓数比上限（0.67 下限不变）。
+- 报告额外给出仅参考的辅助字段 `us_stock_extra`：候选组空头 avgR 与笔数、
+  候选组多头 avgR − 对照组多头 avgR、两组 MaxDD、候选组空头资金费合计
+  （平仓 SHORT 行的 funding 求和）。这些字段不参与任何判定。
+
+### avg_r 与新字段
+
+`metric=avg_r`（默认）的判定与之前完全一致；若 prereg 里显式登记了
+`trade_ratio_max`、`min_trades_scope` 或 `min_short_trades`，同样按其生效：
+缺失或为默认值时，行为与旧版硬编码的 1.5 上限、两侧门槛、不限空头完全相同。
 
 ## 晋升与保留对照
 

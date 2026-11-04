@@ -107,6 +107,10 @@ func (at *AutoTrader) applyStockRegimeTrim(ctx context.Context, sc *store.StockC
 	}
 	trimmed := false
 	for _, h := range state.sortedHoldings() {
+		// This phase trims long exposure only; short hedges are left intact.
+		if h.Side == store.StockPaperShort {
+			continue
+		}
 		if h.Owned <= 0 || h.Quarantined || at.stock.pendings[h.Symbol] != nil {
 			continue
 		}
