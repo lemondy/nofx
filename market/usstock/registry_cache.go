@@ -9,7 +9,9 @@ import (
 	"nofx/logger"
 )
 
-const symbolsDiskVersion = 1
+// symbolsDiskVersion 2 adds SymbolInfo.PerpSymbol; a v1 file would leave
+// every symbol unshortable until its 24h expiry.
+const symbolsDiskVersion = 2
 
 // SymbolsCachePath can be configured before starting registry requests. Empty
 // disables disk caching. Both source URLs must match before a file can be used.
