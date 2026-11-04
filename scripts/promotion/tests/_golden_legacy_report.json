@@ -1,0 +1,314 @@
+{
+ "caveats": "ready 要求至少 30 个配对日、两侧各 50 笔平仓，且 USDT/日配对差 CI95 下界通过非劣效；非劣效不等于已证明更优；上线前仍需人工确认并保持小仓位/可回滚",
+ "generated_at": "2026-11-10T12:00:00Z",
+ "methodology": {
+  "ci": "近似正态 95% CI = 均值差 +/- 1.96*聚类 SE",
+  "daily_comparison": "完整 UTC 日收益取交集，不含当天；日为聚类，SE=sqrt(G/(G-1)*sum(influence^2))；G<10 不给 SE/CI",
+  "equity": "UTC 日末最后快照，观测区间内缺日向前填充；MaxDD 基于日末权益；期间收益率以首个实际快照为基准",
+  "noninferiority": "相同配对日的日末权益增量差（USDT/日）CI95 下界 > -0.01；配对日 >= 30，两侧平仓各 >= max(min_trades, 50)；权益增量含浮盈亏，外部资金流会影响结果，比较账户需保持资金口径一致",
+  "open_positions": "当前 status=OPEN 的持仓数，包含 started_at 前入场的持仓",
+  "pnl": "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）",
+  "r": "净盈亏 / (abs(entry_price - initial_stop_loss) * quantity)；|R|>15 保留并提示",
+  "rates": "胜率、收益率、MaxDD 均为小数比例，非百分数",
+  "scope": "仅统计，不校验模拟盘标识或两侧配置一致性，不自动修改任何交易员配置",
+  "weekly_r": "两侧有效 R 笔数均达 min_trades 后，按退出时间的 UTC 周一聚类；交易加权 avgR 差；联合周<3 不给 SE/CI"
+ },
+ "pairs": [
+  {
+   "audit": {
+    "benchmark": null,
+    "candidate_vs_benchmark": {
+     "reason": "测试：无基准",
+     "verdict": "UNAVAILABLE"
+    },
+    "candidate_vs_control": {
+     "reason": "quant_audit 模块不可用（运行目录未同步 scripts/backtest/quant_audit.py）",
+     "verdict": "UNAVAILABLE"
+    },
+    "control_vs_benchmark": {
+     "reason": "测试：无基准",
+     "verdict": "UNAVAILABLE"
+    },
+    "min_window_periods": 20,
+    "note": "信号层收益审计：仅供参考，不改变 verdict；样本不足时只给出样本数"
+   },
+   "candidate": {
+    "avg_r": null,
+    "daily_equity": [],
+    "fees_usdt": 0.0,
+    "first_equity_usdt": null,
+    "first_snapshot_at": null,
+    "forward_filled_days": 0,
+    "gross_pnl_usdt": 0.0,
+    "last_equity_usdt": null,
+    "last_snapshot_at": null,
+    "max_drawdown": null,
+    "n": 0,
+    "net_pnl_usdt": 0.0,
+    "open_positions": 0,
+    "period_return": null,
+    "pnl_basis": "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）",
+    "pnl_invalid": 0,
+    "r_excluded": 0,
+    "r_excluded_reasons": {},
+    "r_extreme_count": 0,
+    "r_extremes": [],
+    "r_n": 0,
+    "snapshot_count": 0,
+    "snapshot_invalid": 0,
+    "trader_id": "candidate",
+    "win_rate": null
+   },
+   "candidate_trader_id": "candidate",
+   "caveats": "ready 要求至少 30 个配对日、两侧各 50 笔平仓，且 USDT/日配对差 CI95 下界通过非劣效；非劣效不等于已证明更优；上线前仍需人工确认并保持小仓位/可回滚",
+   "control": {
+    "avg_r": null,
+    "daily_equity": [],
+    "fees_usdt": 0.0,
+    "first_equity_usdt": null,
+    "first_snapshot_at": null,
+    "forward_filled_days": 0,
+    "gross_pnl_usdt": 0.0,
+    "last_equity_usdt": null,
+    "last_snapshot_at": null,
+    "max_drawdown": null,
+    "n": 0,
+    "net_pnl_usdt": 0.0,
+    "open_positions": 0,
+    "period_return": null,
+    "pnl_basis": "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）",
+    "pnl_invalid": 0,
+    "r_excluded": 0,
+    "r_excluded_reasons": {},
+    "r_extreme_count": 0,
+    "r_extremes": [],
+    "r_n": 0,
+    "snapshot_count": 0,
+    "snapshot_invalid": 0,
+    "trader_id": "control",
+    "win_rate": null
+   },
+   "control_trader_id": "control",
+   "delta": null,
+   "elapsed_days": 40.5,
+   "evaluation_closed_counts": {
+    "candidate": 0,
+    "control": 0
+   },
+   "evaluation_started_at": "2026-10-01T00:00:00Z",
+   "feature": "enable_factor_ensemble",
+   "id": "legacy-prereg",
+   "incremental_weekly_avg_r": {
+    "candidate_r_n": 0,
+    "ci95": null,
+    "cluster_se": null,
+    "control_r_n": 0,
+    "mean_diff": null,
+    "n_weeks": 0,
+    "note": "两侧有效 R 成交均需至少 1 笔，当前不足",
+    "weeks": []
+   },
+   "legacy_reasons": [
+    "候选已平仓 0 笔，少于要求的 50 笔",
+    "对照已平仓 0 笔，少于要求的 50 笔",
+    "完整 USDT 配对日不足 30 日",
+    "USDT/日配对差 CI95 下界不可计算或不大于 -0.01，未通过非劣效",
+    "候选净盈亏不可计算或不大于 0 USDT",
+    "候选或对照缺少有效权益快照，期间收益率无法比较",
+    "完整日配对收益差均值不可计算或小于 0"
+   ],
+   "legacy_verdict": "insufficient",
+   "live_trader_id": "",
+   "lower_bound": null,
+   "min_days": 7.0,
+   "min_trades": 20,
+   "paired_daily": {
+    "aligned_candidate_return": null,
+    "aligned_control_return": null,
+    "aligned_cumulative_return_diff": null,
+    "ci95": null,
+    "ci_note": "完整配对日不足 10 日，仅报告均值，不报告标准误或 CI",
+    "cluster_se": null,
+    "cumulative_return_diff": null,
+    "daily_diffs": [],
+    "mean_diff": null,
+    "n_days": 0,
+    "pnl_usdt": {
+     "ci95": null,
+     "cluster_se": null,
+     "mean_diff": null,
+     "n_days": 0,
+     "noninferiority_margin": 0.01,
+     "unit": "USDT/day"
+    }
+   },
+   "prereg": {
+    "baseline_version": "config-v1",
+    "change_type": "A",
+    "extend_days": 14,
+    "extend_se": 0.02,
+    "harm_check_days": 14,
+    "idea_id": "ensemble",
+    "margin_r": 0.03,
+    "min_days": 30,
+    "min_trades": 50,
+    "mode": "incremental",
+    "prereg_hash": "568d7f8de3a06f0a07878b161e4428e7219f4563a02530ef44d05bbfaacbbe36",
+    "registered_at": "2026-09-30T00:00:00Z",
+    "track": "crypto_llm"
+   },
+   "reasons": [
+    "需运行至少 30 天且两侧各有 50 笔有效 R"
+   ],
+   "retroactive": false,
+   "se": null,
+   "started_at": "2026-10-01T00:00:00Z",
+   "title": "因子 ensemble",
+   "trade_ratio": null,
+   "verdict": "insufficient",
+   "warnings": [
+    "candidate：期间无有效权益快照",
+    "control：期间无有效权益快照"
+   ],
+   "weekly_avg_r": {
+    "candidate_r_n": 0,
+    "ci95": null,
+    "cluster_se": null,
+    "control_r_n": 0,
+    "mean_diff": null,
+    "n_weeks": 0,
+    "note": "两侧有效 R 成交均需至少 20 笔，当前不足",
+    "weeks": []
+   }
+  },
+  {
+   "audit": {
+    "benchmark": null,
+    "candidate_vs_benchmark": {
+     "reason": "测试：无基准",
+     "verdict": "UNAVAILABLE"
+    },
+    "candidate_vs_control": {
+     "reason": "quant_audit 模块不可用（运行目录未同步 scripts/backtest/quant_audit.py）",
+     "verdict": "UNAVAILABLE"
+    },
+    "control_vs_benchmark": {
+     "reason": "测试：无基准",
+     "verdict": "UNAVAILABLE"
+    },
+    "min_window_periods": 20,
+    "note": "信号层收益审计：仅供参考，不改变 verdict；样本不足时只给出样本数"
+   },
+   "candidate": {
+    "avg_r": null,
+    "daily_equity": [],
+    "fees_usdt": 0.0,
+    "first_equity_usdt": null,
+    "first_snapshot_at": null,
+    "forward_filled_days": 0,
+    "gross_pnl_usdt": 0.0,
+    "last_equity_usdt": null,
+    "last_snapshot_at": null,
+    "max_drawdown": null,
+    "n": 0,
+    "net_pnl_usdt": 0.0,
+    "open_positions": 0,
+    "period_return": null,
+    "pnl_basis": "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）",
+    "pnl_invalid": 0,
+    "r_excluded": 0,
+    "r_excluded_reasons": {},
+    "r_extreme_count": 0,
+    "r_extremes": [],
+    "r_n": 0,
+    "snapshot_count": 0,
+    "snapshot_invalid": 0,
+    "trader_id": "candidate",
+    "win_rate": null
+   },
+   "candidate_trader_id": "candidate",
+   "caveats": "ready 要求至少 30 个配对日、两侧各 50 笔平仓，且 USDT/日配对差 CI95 下界通过非劣效；非劣效不等于已证明更优；上线前仍需人工确认并保持小仓位/可回滚",
+   "control": {
+    "avg_r": null,
+    "daily_equity": [],
+    "fees_usdt": 0.0,
+    "first_equity_usdt": null,
+    "first_snapshot_at": null,
+    "forward_filled_days": 0,
+    "gross_pnl_usdt": 0.0,
+    "last_equity_usdt": null,
+    "last_snapshot_at": null,
+    "max_drawdown": null,
+    "n": 0,
+    "net_pnl_usdt": 0.0,
+    "open_positions": 0,
+    "period_return": null,
+    "pnl_basis": "net_pnl_usdt = realized_pnl - fee（realized_pnl 为未扣手续费盈亏）",
+    "pnl_invalid": 0,
+    "r_excluded": 0,
+    "r_excluded_reasons": {},
+    "r_extreme_count": 0,
+    "r_extremes": [],
+    "r_n": 0,
+    "snapshot_count": 0,
+    "snapshot_invalid": 0,
+    "trader_id": "control",
+    "win_rate": null
+   },
+   "control_trader_id": "control",
+   "elapsed_days": 40.5,
+   "feature": "enable_factor_ensemble",
+   "id": "legacy-plain",
+   "live_trader_id": "",
+   "min_days": 7.0,
+   "min_trades": 20,
+   "paired_daily": {
+    "aligned_candidate_return": null,
+    "aligned_control_return": null,
+    "aligned_cumulative_return_diff": null,
+    "ci95": null,
+    "ci_note": "完整配对日不足 10 日，仅报告均值，不报告标准误或 CI",
+    "cluster_se": null,
+    "cumulative_return_diff": null,
+    "daily_diffs": [],
+    "mean_diff": null,
+    "n_days": 0,
+    "pnl_usdt": {
+     "ci95": null,
+     "cluster_se": null,
+     "mean_diff": null,
+     "n_days": 0,
+     "noninferiority_margin": 0.01,
+     "unit": "USDT/day"
+    }
+   },
+   "reasons": [
+    "候选已平仓 0 笔，少于要求的 50 笔",
+    "对照已平仓 0 笔，少于要求的 50 笔",
+    "完整 USDT 配对日不足 30 日",
+    "USDT/日配对差 CI95 下界不可计算或不大于 -0.01，未通过非劣效",
+    "候选净盈亏不可计算或不大于 0 USDT",
+    "候选或对照缺少有效权益快照，期间收益率无法比较",
+    "完整日配对收益差均值不可计算或小于 0"
+   ],
+   "started_at": "2026-10-01T00:00:00Z",
+   "title": "因子 ensemble",
+   "verdict": "insufficient",
+   "warnings": [
+    "candidate：期间无有效权益快照",
+    "control：期间无有效权益快照"
+   ],
+   "weekly_avg_r": {
+    "candidate_r_n": 0,
+    "ci95": null,
+    "cluster_se": null,
+    "control_r_n": 0,
+    "mean_diff": null,
+    "n_weeks": 0,
+    "note": "两侧有效 R 成交均需至少 20 笔，当前不足",
+    "weeks": []
+   }
+  }
+ ],
+ "schema_version": 1
+}

@@ -92,8 +92,12 @@ def json_safe(value):
     return value
 
 
-def trade_statistics(trades: list[dict]) -> tuple[dict, list[tuple[datetime, float]]]:
-    """Closed rows, already restricted by exit_time; R uses quantity, not entry_quantity."""
+def trade_statistics(trades: list[dict], *, gross_r: bool = False) -> tuple[dict, list[tuple[datetime, float]]]:
+    """Closed rows, already restricted by exit_time; R uses quantity, not entry_quantity.
+
+    gross_r (stock_paper_positions) divides the raw realized_pnl by the risk;
+    the default nets the fee first, as trader_positions always did.
+    """
     nets, fees, gross, r_samples, extremes = [], [], [], [], []
     excluded = defaultdict(int)
     for row in trades:
@@ -116,7 +120,8 @@ def trade_statistics(trades: list[dict]) -> tuple[dict, list[tuple[datetime, flo
             excluded["missing_or_invalid_quantity"] += 1
             continue
         risk = finite(distance * quantity)
-        r = finite(net / risk) if net is not None and risk is not None and risk > 0 else None
+        basis = pnl if gross_r else net
+        r = finite(basis / risk) if basis is not None and risk is not None and risk > 0 else None
         if r is None:
             excluded["nonfinite_pnl_or_risk"] += 1
             continue
@@ -395,10 +400,18 @@ def decide_incremental(elapsed: float, prereg: dict, candidate: dict, control: d
         return "insufficient", [f"尚未达到伤害检查期 {prereg['harm_check_days']:g} 天"]
     if delta is not None and se is not None and delta < -2 * se:
         return "harm_stop", ["avgR 差 < −2·SE，建议提前终止配对"]
-    if elapsed < prereg["min_days"] or min(candidate["r_n"], control["r_n"]) < prereg["min_trades"]:
+    # Preregs from before 2026-11-04 lack these keys; the defaults reproduce the
+    # hardcoded behavior those pairs were judged with.
+    needed = candidate["r_n"] if prereg.get("min_trades_scope", "both") == "candidate" \
+        else min(candidate["r_n"], control["r_n"])
+    if elapsed < prereg["min_days"] or needed < prereg["min_trades"]:
         return "insufficient", [f"需运行至少 {prereg['min_days']:g} 天且两侧各有 {prereg['min_trades']} 笔有效 R"]
+    min_short = prereg.get("min_short_trades")
+    if min_short is not None and (candidate.get("short_n") or 0) < min_short:
+        return "insufficient", [f"候选 SHORT 平仓 {candidate.get('short_n') or 0} 笔，少于要求的 {min_short} 笔"]
+    upper = prereg.get("trade_ratio_max", 1.5)
     if (delta is not None and delta > 0 and lower is not None and lower > -prereg["margin_r"]
-            and ratio is not None and 0.67 <= ratio <= 1.5):
+            and ratio is not None and ratio >= 0.67 and (upper is None or ratio <= upper)):
         return "promote", ["avgR 增量、单侧 95% 下界及平仓数比均通过预登记门槛"]
     if delta is not None and delta > 0 and ratio is not None and ratio < 0.67:
         return "fewer_trades", ["avgR 为正增量但平仓数比 < 0.67，转入交易频率问题"]
@@ -407,24 +420,117 @@ def decide_incremental(elapsed: float, prereg: dict, candidate: dict, control: d
     return "reject", ["未通过预登记增量门槛（包括正式判定期内无法计算 SE）"]
 
 
+def daily_return_comparison(candidate: dict, control: dict, as_of: datetime) -> dict:
+    """Paired difference of daily equity returns; weeks (UTC Monday) are clusters.
+
+    A trader's daily return is last-snapshot-of-day d over last snapshot of
+    day d−1 (equity_statistics), completed UTC days only; the paired days are
+    the days present for both arms.
+    """
+    def returns(stats):
+        return {row["date"]: row["return"] for row in stats["daily_equity"]
+                if row["return"] is not None and as_utc(row["date"]) < midnight(as_of)}
+
+    cand, ctrl = returns(candidate), returns(control)
+    sequence = [{"date": day, "candidate_return": cand[day], "control_return": ctrl[day],
+                 "diff": finite(cand[day] - ctrl[day])} for day in sorted(cand.keys() & ctrl.keys())]
+    sequence = [row for row in sequence if row["diff"] is not None]
+    n = len(sequence)
+    estimate = mean(row["diff"] for row in sequence)
+    buckets = defaultdict(list)
+    for row in sequence:
+        day = as_utc(row["date"])
+        buckets[day - timedelta(days=day.weekday())].append(row["diff"])
+    influences = [finite_sum((value - estimate) / n for value in rows) for rows in buckets.values()] \
+        if estimate is not None else []
+    se = cluster_se(influences) if n and all(value is not None for value in influences) else None
+    return {"n_days": n, "n_weeks": len(buckets), "mean_diff": estimate, "cluster_se": se,
+            "ci95": ci95(estimate, se), "daily_diffs": sequence,
+            "note": None if se is not None else "配对日不足两个聚类周或均值不可计算，不报告标准误或 CI"}
+
+
+def decide_daily_return(elapsed: float, prereg: dict, candidate: dict, control: dict,
+                        daily: dict) -> tuple[str, list[str]]:
+    """Same ordered table as decide_incremental, on the daily-return metric.
+
+    margin_daily replaces margin_r, trade_ratio_max (null = no upper bound)
+    replaces the hardcoded 1.5, extend_se_daily replaces extend_se, and the
+    sample floors count closed trades (candidate only when
+    min_trades_scope=candidate) plus the candidate's SHORT closes.
+    """
+    delta, se = finite(daily["mean_diff"]), finite(daily["cluster_se"])
+    lower = finite(delta - 1.645 * se) if delta is not None and se is not None else None
+    ratio = candidate["n"] / control["n"] if control["n"] else None
+    if elapsed < prereg["harm_check_days"]:
+        return "insufficient", [f"尚未达到伤害检查期 {prereg['harm_check_days']:g} 天"]
+    if delta is not None and se is not None and delta < -2 * se:
+        return "harm_stop", ["每日收益差 < −2·SE，建议提前终止配对"]
+    reasons = []
+    if elapsed < prereg["min_days"]:
+        reasons.append(f"已运行 {elapsed:.2f} 天，少于要求的 {prereg['min_days']:g} 天")
+    min_trades = prereg["min_trades"]
+    if candidate["n"] < min_trades:
+        reasons.append(f"候选已平仓 {candidate['n']} 笔，少于要求的 {min_trades} 笔")
+    if prereg.get("min_trades_scope", "both") != "candidate" and control["n"] < min_trades:
+        reasons.append(f"对照已平仓 {control['n']} 笔，少于要求的 {min_trades} 笔")
+    min_short = prereg.get("min_short_trades")
+    short_n = candidate.get("short_n") or 0
+    if min_short is not None and short_n < min_short:
+        reasons.append(f"候选 SHORT 平仓 {short_n} 笔，少于要求的 {min_short} 笔")
+    if reasons:
+        return "insufficient", reasons
+    upper = prereg.get("trade_ratio_max", 1.5)
+    if (delta is not None and delta > 0 and lower is not None and lower > -prereg.get("margin_daily", 0.0002)
+            and ratio is not None and ratio >= 0.67 and (upper is None or ratio <= upper)):
+        return "promote", ["每日收益差增量、单侧 95% 下界及平仓数比均通过预登记门槛"]
+    if delta is not None and delta > 0 and ratio is not None and ratio < 0.67:
+        return "fewer_trades", ["每日收益差为正增量但平仓数比 < 0.67，转入交易频率问题"]
+    if (se is not None and se > prereg.get("extend_se_daily", 0.0001)
+            and elapsed < prereg["min_days"] + prereg["extend_days"]):
+        return "extend", [f"周聚类 SE 仍偏大，最多延长至 {prereg['min_days'] + prereg['extend_days']:g} 天"]
+    return "reject", ["未通过预登记增量门槛（包括正式判定期内无法计算 SE）"]
+
+
+def us_stock_extra_fields(candidate: dict, control: dict) -> dict:
+    """Informational short-mode context; never part of any verdict."""
+    long_c, long_b = finite(candidate.get("long_avg_r")), finite(control.get("long_avg_r"))
+    return {"note": "做空配对辅助指标，仅报告，不参与判定",
+            "candidate_short_avg_r": finite(candidate.get("short_avg_r")),
+            "candidate_short_n": candidate.get("short_n"),
+            "candidate_long_avg_r": long_c,
+            "control_long_avg_r": long_b,
+            "long_avg_r_diff": finite(long_c - long_b) if long_c is not None and long_b is not None else None,
+            "max_drawdown": {"candidate": candidate.get("max_drawdown"), "control": control.get("max_drawdown")},
+            "candidate_short_funding_usdt": candidate.get("short_funding_usdt")}
+
+
 def incremental_fields(pair: dict, as_of: datetime, elapsed: float, candidate: dict,
-                       control: dict, weekly: dict) -> dict:
-    delta, se = finite(weekly["mean_diff"]), finite(weekly["cluster_se"])
-    verdict, reasons = decide_incremental(elapsed, pair["prereg"], candidate, control, weekly)
+                       control: dict, weekly: dict, daily: dict | None = None) -> dict:
+    metrics = daily if daily is not None else weekly
+    delta, se = finite(metrics["mean_diff"]), finite(metrics["cluster_se"])
+    if daily is not None:
+        verdict, reasons = decide_daily_return(elapsed, pair["prereg"], candidate, control, daily)
+    else:
+        verdict, reasons = decide_incremental(elapsed, pair["prereg"], candidate, control, weekly)
     if pair.get("promoted_at"):
         if as_of >= as_utc(pair["holdback_until"]):
             verdict, reasons = "holdback_done", ["保留对照期已结束"]
         elif delta is not None and se is not None and delta < -2 * se:
-            verdict, reasons = "rollback_suggested", ["晋升后 avgR 差 < −2·SE，建议人工审批回滚"]
+            verdict, reasons = "rollback_suggested", ["晋升后 avgR 差 < −2·SE，建议人工审批回滚" if daily is None
+                                                      else "晋升后每日收益差 < −2·SE，建议人工审批回滚"]
         else:
             verdict, reasons = "holdback_ok", ["保留对照期内未触发回滚条件；缺少 SE 时不能排除伤害"]
-    return {"delta": delta, "se": se,
-            "lower_bound": finite(delta - 1.645 * se) if delta is not None and se is not None else None,
-            "trade_ratio": candidate["n"] / control["n"] if control["n"] else None,
-            "retroactive": bool(pair["prereg"].get("retroactive", False)),
-            "evaluation_started_at": pair.get("promoted_at") or pair["started_at"],
-            "evaluation_closed_counts": {"candidate": candidate["n"], "control": control["n"]},
-            "incremental_weekly_avg_r": weekly, "verdict": verdict, "reasons": reasons}
+    result = {"delta": delta, "se": se,
+              "lower_bound": finite(delta - 1.645 * se) if delta is not None and se is not None else None,
+              "trade_ratio": candidate["n"] / control["n"] if control["n"] else None,
+              "retroactive": bool(pair["prereg"].get("retroactive", False)),
+              "evaluation_started_at": pair.get("promoted_at") or pair["started_at"],
+              "evaluation_closed_counts": {"candidate": candidate["n"], "control": control["n"]},
+              "incremental_weekly_avg_r": weekly, "verdict": verdict, "reasons": reasons}
+    if daily is not None:
+        result["incremental_metric"] = "daily_return"
+        result["incremental_daily_return"] = daily
+    return result
 
 
 def normalize_pair(pair: dict) -> dict:
@@ -461,16 +567,75 @@ def open_readonly(db_path: Path | str) -> sqlite3.Connection:
     return connection
 
 
+def read_strategy_config(connection: sqlite3.Connection, trader_id: str) -> dict | None:
+    """Parse the trader's strategy config; anything unreadable means not us_stock."""
+    try:
+        row = connection.execute(
+            "SELECT s.config FROM traders t JOIN strategies s ON s.id = t.strategy_id WHERE t.id = ?",
+            (trader_id,)).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None or row[0] is None:
+        return None
+    try:
+        config = json.loads(row[0])
+    except (ValueError, TypeError):
+        return None
+    return config if isinstance(config, dict) else None
+
+
+def stock_paper_rows(connection: sqlite3.Connection, trader_id: str,
+                     start_ms: int, end_ms: int) -> list[dict]:
+    """Closed us_stock paper rows, mapped onto the trader_positions column names.
+
+    R uses avg_price/initial_stop/entry_quantity, exit time is closed_at. The
+    side/funding columns were added later: a database without them means every
+    row is a LONG with zero funding.
+    """
+    statement = ("SELECT id, symbol, closed_at AS exit_time, realized_pnl, fee, "
+                 "initial_stop AS initial_stop_loss, avg_price AS entry_price, "
+                 "entry_quantity AS quantity{extra} FROM stock_paper_positions "
+                 "WHERE trader_id = ? AND status = 'CLOSED' AND closed_at >= ? AND closed_at <= ? "
+                 "ORDER BY closed_at, id")
+    rows, last_error = None, None
+    for extra in (", side, funding", ", side", ""):
+        try:
+            rows = [dict(row) for row in
+                    connection.execute(statement.format(extra=extra), (trader_id, start_ms, end_ms))]
+            break
+        except sqlite3.OperationalError as error:
+            last_error = error
+    if rows is None:
+        raise last_error
+    for row in rows:
+        side = row.get("side")
+        row["side"] = side if side in ("LONG", "SHORT") else "LONG"
+        funding = finite(row.get("funding"))
+        row["funding"] = funding if funding is not None else 0.0
+    return rows
+
+
 def read_trader(connection: sqlite3.Connection, trader_id: str,
                 started_at: datetime, as_of: datetime) -> tuple[dict, list]:
     # Millisecond bounds are inclusive, without rounding rows into the window.
     start_ms = math.ceil(started_at.timestamp() * 1000)
     end_ms = math.floor(as_of.timestamp() * 1000)
-    rows = [dict(row) for row in connection.execute(
-        "SELECT id, symbol, exit_time, realized_pnl, fee, initial_stop_loss, entry_price, quantity "
-        "FROM trader_positions WHERE trader_id = ? AND status = 'CLOSED' "
-        "AND exit_time >= ? AND exit_time <= ? ORDER BY exit_time, id",
-        (trader_id, start_ms, end_ms))]
+    us_stock = (read_strategy_config(connection, trader_id) or {}).get("strategy_type") == "us_stock"
+    if us_stock:
+        # Paper us_stock trades never appear in trader_positions.
+        rows = stock_paper_rows(connection, trader_id, start_ms, end_ms)
+        open_positions = connection.execute(
+            "SELECT COUNT(*) FROM stock_paper_positions WHERE trader_id = ? AND status = 'OPEN' AND opened_at <= ?",
+            (trader_id, end_ms)).fetchone()[0]
+    else:
+        rows = [dict(row) for row in connection.execute(
+            "SELECT id, symbol, exit_time, realized_pnl, fee, initial_stop_loss, entry_price, quantity "
+            "FROM trader_positions WHERE trader_id = ? AND status = 'CLOSED' "
+            "AND exit_time >= ? AND exit_time <= ? ORDER BY exit_time, id",
+            (trader_id, start_ms, end_ms))]
+        open_positions = connection.execute(
+            "SELECT COUNT(*) FROM trader_positions WHERE trader_id = ? AND status = 'OPEN' AND entry_time <= ?",
+            (trader_id, end_ms)).fetchone()[0]
     # Use the trader/time index, padding whole dates for GORM's space/T and
     # offset encodings. Exact UTC bounds are applied after parsing, above.
     lower = (started_at - timedelta(days=1)).date().isoformat()
@@ -479,10 +644,17 @@ def read_trader(connection: sqlite3.Connection, trader_id: str,
         "SELECT id, timestamp, total_equity FROM trader_equity_snapshots "
         "WHERE trader_id = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp, id",
         (trader_id, lower, upper))]
-    open_positions = connection.execute(
-        "SELECT COUNT(*) FROM trader_positions WHERE trader_id = ? AND status = 'OPEN' AND entry_time <= ?",
-        (trader_id, end_ms)).fetchone()[0]
-    stats, r_samples = trade_statistics(rows)
+    stats, r_samples = trade_statistics(rows, gross_r=us_stock)
+    if us_stock:
+        # Long/short splits and accrued funding are informational context for
+        # the short-mode pair; a missing side means every row is a LONG.
+        longs = [row for row in rows if row["side"] != "SHORT"]
+        shorts = [row for row in rows if row["side"] == "SHORT"]
+        short_stats, _ = trade_statistics(shorts, gross_r=True)
+        long_stats, _ = trade_statistics(longs, gross_r=True)
+        stats.update(long_n=long_stats["n"], short_n=short_stats["n"],
+                     long_avg_r=long_stats["avg_r"], short_avg_r=short_stats["avg_r"],
+                     short_funding_usdt=finite_sum(row["funding"] for row in shorts))
     stats.update(equity_statistics(snapshots, started_at, as_of))
     stats.update(trader_id=trader_id, open_positions=open_positions)
     return stats, r_samples
@@ -552,7 +724,12 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
                     inc_b, ctrl_r = trader(pair["control_trader_id"], after)
                 inc_weekly = weekly_r_comparison(cand_r, ctrl_r, 1)
                 item.update(legacy_verdict=verdict, legacy_reasons=reasons)
-                item.update(incremental_fields(pair, as_of, elapsed, inc_c, inc_b, inc_weekly))
+                if pair["prereg"].get("metric", "avg_r") == "daily_return":
+                    inc_daily = daily_return_comparison(inc_c, inc_b, as_of)
+                    item.update(incremental_fields(pair, as_of, elapsed, inc_c, inc_b, inc_weekly, inc_daily),
+                                us_stock_extra=us_stock_extra_fields(candidate, control))
+                else:
+                    item.update(incremental_fields(pair, as_of, elapsed, inc_c, inc_b, inc_weekly))
             if pair.get("live_trader_id"):
                 item["live"], _ = trader(pair["live_trader_id"])
             for role in ("candidate", "control", "live"):
@@ -647,15 +824,24 @@ def summary(report: dict) -> str:
         lines.append(f"[{item['id']}] {verdict} | 已运行 {item['elapsed_days']:.2f} 天")
         if "prereg" in item:
             p = item["prereg"]
-            lines.append(f"  增量: Δ={number(item['delta'])} R, SE={number(item['se'])}, "
+            unit = "/日" if item.get("incremental_metric") == "daily_return" else " R"
+            lines.append(f"  增量: Δ={number(item['delta'])}{unit}, SE={number(item['se'])}, "
                          f"单侧95%下界={number(item['lower_bound'])}, 平仓数比={number(item['trade_ratio'])}, "
                          f"统计起点={item['evaluation_started_at']}, legacy_verdict={item['legacy_verdict']}")
+            metric_text = ""
+            if "metric" in p:
+                ratio_text = "不设上限" if p["trade_ratio_max"] is None else f"{p['trade_ratio_max']:g}"
+                short_text = "不限" if p["min_short_trades"] is None else str(p["min_short_trades"])
+                metric_text = (f", metric={p['metric']}, margin_daily={p['margin_daily']:g}, "
+                               f"trade_ratio_max={ratio_text}, min_trades_scope={p['min_trades_scope']}, "
+                               f"min_short_trades={short_text}, extend_se_daily={p['extend_se_daily']:g}")
             lines.append(f"  预登记: track={p['track']}, baseline={p['baseline_version']}, idea={p['idea_id']}, "
                          f"类型={p['change_type']}, margin_r={p['margin_r']:g}, "
                          f"min_days={p['min_days']:g}, min_trades={p['min_trades']}, "
                          f"harm_check_days={p['harm_check_days']:g}, extend_days={p['extend_days']:g}, "
                          f"extend_se={p['extend_se']:g}, registered_at={p['registered_at']}, "
-                         f"prereg_hash={p['prereg_hash']}, retroactive={item['retroactive']}")
+                         f"prereg_hash={p['prereg_hash']}, retroactive={item['retroactive']}"
+                         + metric_text)
         for role, label in (("candidate", "候选"), ("control", "对照"), ("live", "正式参照")):
             if role in item:
                 stats = item[role]
@@ -674,6 +860,17 @@ def summary(report: dict) -> str:
         weekly = item["weekly_avg_r"]
         lines.append(f"  avgR差={number(weekly['mean_diff'])}, 聚类周={weekly['n_weeks']}, "
                      f"SE={number(weekly['cluster_se'])}, CI95={weekly['ci95']}")
+        if item.get("incremental_metric") == "daily_return":
+            daily = item["incremental_daily_return"]
+            lines.append(f"  日收益配对: 配对日={daily['n_days']}, 聚类周={daily['n_weeks']}, "
+                         f"周聚类SE={number(daily['cluster_se'], True)}, CI95={daily['ci95']}")
+        extra = item.get("us_stock_extra")
+        if extra:
+            drawdowns = extra["max_drawdown"]
+            lines.append(f"  做空辅助(仅报告): 候选空头 avgR={number(extra['candidate_short_avg_r'])}, "
+                         f"空头笔数={extra['candidate_short_n']}, 多头avgR差={number(extra['long_avg_r_diff'])}, "
+                         f"空头资金费={number(extra['candidate_short_funding_usdt'])} USDT, "
+                         f"MaxDD 候选={number(drawdowns['candidate'], True)}, 对照={number(drawdowns['control'], True)}")
         for reason in item["reasons"] + item["warnings"]:
             lines.append(f"  - {reason}")
         if "audit" in item:
