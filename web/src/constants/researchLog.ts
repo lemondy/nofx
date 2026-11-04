@@ -30,6 +30,43 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'llm-long-veto',
+    date: '2026-11-04',
+    title: 'LLM 加密交易员：因子弱币做多否决（B 类过滤）',
+    domain: '加密 · LLM 交易路径 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fewer_trades · 否决集反而更好',
+    idea: 'fq_crypto 的 S1 显示：在全量时点 top 60 上重新验收的 20 个因子（F1）前向 RankIC 0.19，但信息集中在“谁会跌”，单币空头无法兑现。改为 B 类过滤器：LLM 交易员准备做多时，若该币 F1 分数在开仓前一日处于全币池（不设 N 上限，覆盖约 91% 的 AI 做多）最低 20%，则否决这次做多；做空、出场、仓位不变。样本是 4 个不含因子字段的加密 LLM 交易员（实盘 deepseek + 3 个 glm 模拟盘）在 2026-10-31 之前的 AI 归因做多平仓，约 138 笔（排除疑似手动单）；用 incremental_filter 做多头内随机剔除安慰剂（2000 次），crypto_llm 线 K=1，z_K 1.96。',
+    bullets: [
+      'S1 判 fewer_trades（crypto_llm K=1，已记账）：138 笔 AI 归因做多中 71 笔被否决（p = 51%，命中 p > 0.5 规则）。S0 通过：F1 RankIC 逐日复现，覆盖率 91%。',
+      '方向与假设相反：被否决集 avgR −0.046，保留集 −0.234；Δ = −0.097R，z = −1.47，安慰剂分位 7%，后半段 −0.16。总 R 变好（+3.2）只是因为基线本身亏损。',
+      '描述：阈值 0.10/0.30 也都为负（z −1.97/−1.07）；F2 现有 ensemble 为负（z −0.88/−0.93）；对称做空否决无信息（z 0.21）。实盘 117 笔单独看方向相同。被否决的主要是 BTW、MUBARAK、AKE、CAP、PHA 等高波动小币。',
+    ],
+    conclusion:
+      '不进入 S2，按预声明不调参重试。LLM 做多的币有一半落在因子判为弱的一侧，但 LLM 带止损的短线做多在这些币上并不更差：因子预测的是 3 日截面相对收益，与 LLM 的交易对象不同。至此，截面因子在加密市场的三种用法（独立多空、对冲多头、LLM 否决器）都没有通过，只剩 A 类参考字段的线上配对在跑。',
+    source:
+      'docs/research/2026-11-04-llm-long-factor-veto-prereg.md · data/factor_mining/crypto_full/prereg_20261104b/f1_selected.json · docs/research/2026-11-04-llm-long-factor-veto-study.md · scripts/factor_mining/llm_long_veto_study.py · data/factor_mining/crypto_full/study/llm_long_veto/report.md',
+  },
+  {
+    id: 'pit60-btchedge',
+    date: '2026-11-04',
+    title: '因子量化-加密：时点 top 60 全量币池 + BTC 对冲空头腿',
+    domain: '加密 · 因子量化程序化交易员 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 不进入线上',
+    idea: '用户选择了“时点 top 60 + 空头腿改造”作为下一步。冻结 11-03 nightly 的 zoo/ensemble 快照（h=3 共 11 个因子），比较四组：B 为现状；UH 为主变体，用全量时点 top 60（含已下架币），把 3866 个 h=3 表达式在新币池上按 K=16502（t_req 4.669）重新验收并组合，空头腿改为按多头篮子 beta 做空 BTC；U 和 H 分别只换币池、只换空头腿，仅作拆解。主检验是前向 2026-05-07 至 2026-10-31 的 UH − B 每日收益配对差（按周聚类，K=2，z_K 2.24）；S0 要求 B 组复现 quant_targets 回测。',
+    bullets: [
+      'S1 判 fail：前向 2026-05-07～10-31 共 178 天，UH − B 每日 Δ = +0.064%（SE 0.145%），z = 0.44（z_K 2.24），前半段为负。已记账，fq_crypto K=2。S0 复现与 quant_targets 回测完全一致。',
+      '四组前向收益：现状 B −14.5%，UH +BTC 对冲 −1.4%，U 全量池 + 单币空头 −35.2%，H 现有因子 + BTC 对冲 +1.2%。改善几乎全部来自“不做单币空头”；换币池本身无增量（UH − H 的 z 为 −0.93）。',
+      '在新币池上重新验收：94 个因子通过 t ≥ 4.67，前 20 个与快照组合重合为 0，几乎全是负方向的波动率/振幅因子（做多低波、做空高波）。前向 RankIC 达 0.19（t 9.0），而基线为 0.08。',
+      '但排序信息集中在“谁会跌”，无法兑现：U 组单币空头在 val 段赚 +59%，前向亏 −32%。3 日涨幅 >30% 的空头持仓贡献了 63% 的空头亏损，还要倒贴负资金费（每 1000 初始资金付出 76）。多头腿在所有组前向都为负（−1.3% 到 −3.2%）。',
+    ],
+    conclusion:
+      '不进入 S2，按预声明不调参重试。加密截面因子的信息主要是识别弱币：单币空头因右尾拉盘和负资金费无法兑现，多头一侧跑不赢 BTC。这不是币池宽度或因子数量的问题。唯一未试的方向是把因子作为 B 类过滤器，在 LLM 交易路径上否决做多弱币，需另写预声明并让 K 加 1。',
+    source:
+      'docs/research/2026-11-04-pit60-btchedge-prereg.md · docs/research/2026-11-04-pit60-btchedge-study.md · scripts/factor_mining/pit60_hedge_study.py · data/factor_mining/crypto_full/study/pit60_btchedge/report.md',
+  },
+  {
     id: 'crypto-universe-expansion',
     date: '2026-11-03',
     title: '加密因子挖掘股票池扩展：含已下架币的全量 USDT-M 永续',
