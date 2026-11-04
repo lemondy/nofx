@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'llm-long-veto',
+    date: '2026-11-04',
+    title: 'LLM 加密交易员：因子弱币做多否决（B 类过滤）',
+    domain: '加密 · LLM 交易路径 · 增量评估',
+    verdict: 'running',
+    verdictText: '已预声明 · 待 S1',
+    idea: 'fq_crypto 的 S1 显示：在全量时点 top 60 上重新验收的 20 个因子（F1）前向 RankIC 0.19，但信息集中在“谁会跌”，单币空头无法兑现。改为 B 类过滤器：LLM 交易员准备做多时，若该币 F1 分数在开仓前一日处于全币池（不设 N 上限，覆盖约 91% 的 AI 做多）最低 20%，则否决这次做多；做空、出场、仓位不变。样本是 4 个不含因子字段的加密 LLM 交易员（实盘 deepseek + 3 个 glm 模拟盘）在 2026-10-31 之前的 AI 归因做多平仓，约 138 笔（排除疑似手动单）；用 incremental_filter 做多头内随机剔除安慰剂（2000 次），crypto_llm 线 K=1，z_K 1.96。',
+    bullets: [
+      '已知污染：LLM 交易区间落在 F1 已看过的前向区间内；写预声明前只看过笔数与覆盖率，没有看过任何“R 按因子分数分组”的结果。',
+      'S0 闸门：F1 打分必须逐日复现 fq_crypto S1 报告里的前向 RankIC；有分数交易占比 ≥ 80%。p > 0.5 或“只靠少做”判 fewer_trades。',
+      '通过后先上 S2a 影子标记（只记录不拦截，累计 ≥ 100 笔 11-05 之后的新做多再按同规则确认），再考虑 S2b 模拟盘配对；fail 则结束，不调阈值、N 或因子集重试。',
+    ],
+    conclusion:
+      '预声明已提交，评估脚本尚未实现。任何结果都不自动改动 kernel 闸门、交易员或实盘。',
+    source:
+      'docs/research/2026-11-04-llm-long-factor-veto-prereg.md · data/factor_mining/crypto_full/prereg_20261104b/f1_selected.json',
+  },
+  {
     id: 'pit60-btchedge',
     date: '2026-11-04',
     title: '因子量化-加密：时点 top 60 全量币池 + BTC 对冲空头腿',
