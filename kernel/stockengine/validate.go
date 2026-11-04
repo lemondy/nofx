@@ -5,7 +5,6 @@ import (
 	"math"
 	"nofx/market/usstock"
 	"strings"
-	"time"
 )
 
 // MinEntryConfidence is the confidence gate (0–100): open_long / add_long below
@@ -170,8 +169,11 @@ func validateOne(ctx *Context, d Decision, seen map[string]bool, positionCount i
 			return "BSTOCK_DIVERGENCE", ""
 		}
 		if short {
-			if s.PerpQuote == nil || !positive(s.PerpQuote.Price) || s.PerpQuote.Time.IsZero() || ctx.Now.Before(s.PerpQuote.Time) || ctx.Now.Sub(s.PerpQuote.Time) > 30*time.Second {
-				return "PERP_PRICE_STALE", "Perpetual quote must be at most 30 seconds old."
+			// Age is not checked here: decisions arrive minutes after the
+			// snapshot, and the entry re-quote enforces the 30s bound (as the
+			// bStock quote age is enforced only at execution for longs).
+			if s.PerpQuote == nil || !positive(s.PerpQuote.Price) {
+				return "PERP_PRICE_MISSING", "No usable perpetual quote."
 			}
 			copy := *s
 			copy.Price = s.PerpQuote.Price
