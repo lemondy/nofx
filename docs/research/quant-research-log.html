@@ -73,16 +73,16 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-04</div>
 
-<article data-v="run" data-id="llm-long-veto">
-<h2>LLM 加密交易员：因子弱币做多否决（B 类过滤） <span class="tag t-run">已预声明 · 待 S1</span><span class="dom">加密 · LLM 交易路径 · 增量评估</span></h2>
+<article data-v="no" data-id="llm-long-veto">
+<h2>LLM 加密交易员：因子弱币做多否决（B 类过滤） <span class="tag t-no">S1 fewer_trades · 否决集反而更好</span><span class="dom">加密 · LLM 交易路径 · 增量评估</span></h2>
 <p class="k">思路：fq_crypto 的 S1 显示：在全量时点 top 60 上重新验收的 20 个因子（F1）前向 RankIC 0.19，但信息集中在“谁会跌”，单币空头无法兑现。改为 B 类过滤器：LLM 交易员准备做多时，若该币 F1 分数在开仓前一日处于全币池（不设 N 上限，覆盖约 91% 的 AI 做多）最低 20%，则否决这次做多；做空、出场、仓位不变。样本是 4 个不含因子字段的加密 LLM 交易员（实盘 deepseek + 3 个 glm 模拟盘）在 2026-10-31 之前的 AI 归因做多平仓，约 138 笔（排除疑似手动单）；用 incremental_filter 做多头内随机剔除安慰剂（2000 次），crypto_llm 线 K=1，z_K 1.96。</p>
 <ul>
-<li>已知污染：LLM 交易区间落在 F1 已看过的前向区间内；写预声明前只看过笔数与覆盖率，没有看过任何“R 按因子分数分组”的结果。</li>
-<li>S0 闸门：F1 打分必须逐日复现 fq_crypto S1 报告里的前向 RankIC；有分数交易占比 ≥ 80%。p &gt; 0.5 或“只靠少做”判 fewer_trades。</li>
-<li>通过后先上 S2a 影子标记（只记录不拦截，累计 ≥ 100 笔 11-05 之后的新做多再按同规则确认），再考虑 S2b 模拟盘配对；fail 则结束，不调阈值、N 或因子集重试。</li>
+<li>S1 判 fewer_trades（crypto_llm K=1，已记账）：138 笔 AI 归因做多中 71 笔被否决（p = 51%，命中 p &gt; 0.5 规则）。S0 通过：F1 RankIC 逐日复现，覆盖率 91%。</li>
+<li>方向与假设相反：被否决集 avgR −0.046，保留集 −0.234；Δ = −0.097R，z = −1.47，安慰剂分位 7%，后半段 −0.16。总 R 变好（+3.2）只是因为基线本身亏损。</li>
+<li>描述：阈值 0.10/0.30 也都为负（z −1.97/−1.07）；F2 现有 ensemble 为负（z −0.88/−0.93）；对称做空否决无信息（z 0.21）。实盘 117 笔单独看方向相同。被否决的主要是 BTW、MUBARAK、AKE、CAP、PHA 等高波动小币。</li>
 </ul>
-<p><b>结论：</b>预声明已提交，评估脚本尚未实现。任何结果都不自动改动 kernel 闸门、交易员或实盘。</p>
-<p class="src">来源：<code>docs/research/2026-11-04-llm-long-factor-veto-prereg.md</code> · <code>data/factor_mining/crypto_full/prereg_20261104b/f1_selected.json</code></p>
+<p><b>结论：</b>不进入 S2，按预声明不调参重试。LLM 做多的币有一半落在因子判为弱的一侧，但 LLM 带止损的短线做多在这些币上并不更差：因子预测的是 3 日截面相对收益，与 LLM 的交易对象不同。至此，截面因子在加密市场的三种用法（独立多空、对冲多头、LLM 否决器）都没有通过，只剩 A 类参考字段的线上配对在跑。</p>
+<p class="src">来源：<code>docs/research/2026-11-04-llm-long-factor-veto-prereg.md</code> · <code>data/factor_mining/crypto_full/prereg_20261104b/f1_selected.json</code> · <code>docs/research/2026-11-04-llm-long-factor-veto-study.md</code> · <code>scripts/factor_mining/llm_long_veto_study.py</code> · <code>data/factor_mining/crypto_full/study/llm_long_veto/report.md</code></p>
 </article>
 
 <article data-v="no" data-id="pit60-btchedge">
