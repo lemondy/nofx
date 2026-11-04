@@ -66,6 +66,17 @@ def decode(text: str):
     return json.loads(text, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
 
 
+def ratio_bound(text: str) -> float | None:
+    """--trade-ratio-max accepts a finite number, or none/null for no upper bound."""
+    lowered = text.strip().lower()
+    if lowered in ("none", "null"):
+        return None
+    value = float(lowered)
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError("trade-ratio-max 必须是非负有限数或 none")
+    return value
+
+
 def set_feature(config: str, feature_path: str, value) -> str:
     """Replace only the target JSON span; retain every other source byte.
 
@@ -129,6 +140,12 @@ class PreregOptions:
     harm_check_days: float = 14
     extend_days: float = 14
     extend_se: float = 0.02
+    metric: str = "avg_r"
+    margin_daily: float = 0.0002
+    trade_ratio_max: float | None = 1.5
+    min_short_trades: int | None = None
+    min_trades_scope: str = "both"
+    extend_se_daily: float = 0.0001
 
     def validate(self):
         if self.mode != "incremental":
@@ -141,7 +158,8 @@ class PreregOptions:
             value = getattr(self, field)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field} 不可为空")
-        for field in ("margin_r", "min_days", "harm_check_days", "extend_days", "extend_se"):
+        for field in ("margin_r", "min_days", "harm_check_days", "extend_days", "extend_se",
+                      "margin_daily", "extend_se_daily"):
             value = getattr(self, field)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"{field} 必须是非负有限数")
@@ -149,6 +167,17 @@ class PreregOptions:
             raise ValueError("min-days 必须至少为 7 天")
         if type(self.min_trades) is not int or self.min_trades < 1:
             raise ValueError("min-trades 必须是正整数")
+        if self.metric not in ("avg_r", "daily_return"):
+            raise ValueError("metric 必须是 avg_r 或 daily_return")
+        if self.min_trades_scope not in ("both", "candidate"):
+            raise ValueError("min-trades-scope 必须是 both 或 candidate")
+        if self.trade_ratio_max is not None and (isinstance(self.trade_ratio_max, bool)
+                                                 or not isinstance(self.trade_ratio_max, (int, float))
+                                                 or not math.isfinite(self.trade_ratio_max)
+                                                 or self.trade_ratio_max < 0):
+            raise ValueError("trade-ratio-max 必须是非负有限数或 none")
+        if self.min_short_trades is not None and (type(self.min_short_trades) is not int or self.min_short_trades < 1):
+            raise ValueError("min-short-trades 必须是正整数或省略")
 
 
 def prereg_hash(prereg: dict) -> str:
@@ -172,7 +201,10 @@ def verify_prereg(prereg) -> bool:
             return False
         if not hmac.compare_digest(prereg["prereg_hash"], prereg_hash(prereg)):
             return False
-        PreregOptions(**{key: prereg[key] for key in PreregOptions.__dataclass_fields__}).validate()
+        # Preregs registered before the metric fields (2026-11-04) lack them;
+        # omitting a key means the dataclass default, as when it was created.
+        known = {key: value for key, value in prereg.items() if key in PreregOptions.__dataclass_fields__}
+        PreregOptions(**known).validate()
         if not isinstance(prereg.get("registered_at"), str):
             return False
         registered = datetime.fromisoformat(prereg["registered_at"].replace("Z", "+00:00"))
@@ -195,6 +227,7 @@ class PairOptions:
     leverage: int = 5
     min_days: float = 7
     min_trades: int = 20
+    paper_cash: float = 1000
     prereg: PreregOptions | None = None
 
     def validate(self):
@@ -204,6 +237,8 @@ class PairOptions:
                 raise ValueError(f"{field} 不可为空")
         if not math.isfinite(self.initial_balance) or self.initial_balance <= 0:
             raise ValueError("initial-balance 必须是大于 0 的有限数")
+        if not math.isfinite(self.paper_cash) or self.paper_cash <= 0:
+            raise ValueError("paper-cash 必须是大于 0 的有限数")
         for field in ("taker_bps", "maker_bps", "slippage_bps"):
             value = getattr(self, field)
             if not math.isfinite(value) or not 0 <= value <= 100:
@@ -249,31 +284,57 @@ def build_plan(options: PairOptions, source: dict, strategy: dict, exchange: dic
         raise ValueError("源策略不匹配")
     if exchange["exchange_type"] == "paper" or exchange["type"] == "paper":
         raise ValueError("source trader 的交易所不能是 paper")
+    source_config = decode(strategy["config"])
+    us_stock = isinstance(source_config, dict) and source_config.get("strategy_type") == "us_stock"
+    if us_stock:
+        # The us_stock paper engine reads Binance market data: a paper exchange
+        # row breaks it, so both clones keep the source's real binance exchange.
+        if "binance" not in (exchange["exchange_type"], exchange["type"]):
+            raise ValueError("us_stock 源必须挂在真实 binance 交易所上（us_stock 模拟盘读取 binance 行情，"
+                             "paper 交易所不可用）；请先在界面给源交易员换绑 binance 交易所")
+        stock_config = source_config.get("stock_config")
+        if isinstance(stock_config, dict) and stock_config.get("paper_trading") is True:
+            raise ValueError("源 us_stock 策略已开启 stock_config.paper_trading，拒绝以模拟盘为源建对")
+        if options.feature_path == "stock_config.paper_trading":
+            raise ValueError("us_stock 配对的 feature-path 不能是 stock_config.paper_trading（两组都会强制为 true）")
     candidate_config = set_feature(strategy["config"], options.feature_path, options.feature_value)
+    if us_stock:
+        # Forced last so paper_trading=true wins even if the feature touched stock_config.
+        candidate_config = set_feature(candidate_config, "stock_config.paper_trading", True)
+        control_config = set_feature(strategy["config"], "stock_config.paper_trading", True)
+        identifiers = {role: {**ids, "exchange_id": source["exchange_id"]} for role, ids in identifiers.items()}
+    else:
+        control_config = strategy["config"]
     rows = {"exchanges": [], "strategies": [], "traders": []}
-    all_ids = [ids[key] for ids in identifiers.values()
-               for key in ("exchange_id", "strategy_id", "trader_id")]
-    if len(all_ids) != 6 or len(set(all_ids)) != 6:
-        raise ValueError("候选/对照的六个新 id 必须互异")
+    if us_stock:
+        all_ids = [ids[key] for ids in identifiers.values() for key in ("strategy_id", "trader_id")]
+        if len(all_ids) != 4 or len(set(all_ids)) != 4:
+            raise ValueError("候选/对照的四个新 id 必须互异")
+    else:
+        all_ids = [ids[key] for ids in identifiers.values()
+                   for key in ("exchange_id", "strategy_id", "trader_id")]
+        if len(all_ids) != 6 or len(set(all_ids)) != 6:
+            raise ValueError("候选/对照的六个新 id 必须互异")
     for role, suffix, label in (("candidate", "cand", "候选"), ("control", "ctrl", "对照")):
         ids = identifiers[role]
         name = f"{options.title}-{label}"
-        rows["exchanges"].append({
-            "id": ids["exchange_id"], "user_id": source["user_id"],
-            "exchange_type": "paper", "name": "Paper Futures (模拟盘)", "type": "paper",
-            "account_name": f"{options.pair_id}-{suffix}", "enabled": 1,
-            "paper_config": encode(options.paper_config()), "created_at": timestamp, "updated_at": timestamp,
-        })
+        if not us_stock:
+            rows["exchanges"].append({
+                "id": ids["exchange_id"], "user_id": source["user_id"],
+                "exchange_type": "paper", "name": "Paper Futures (模拟盘)", "type": "paper",
+                "account_name": f"{options.pair_id}-{suffix}", "enabled": 1,
+                "paper_config": encode(options.paper_config()), "created_at": timestamp, "updated_at": timestamp,
+            })
         rows["strategies"].append({
             **strategy, "id": ids["strategy_id"], "name": name,
             "is_active": 0, "is_default": 0, "is_public": 0,
-            "config": candidate_config if role == "candidate" else strategy["config"],
+            "config": candidate_config if role == "candidate" else control_config,
         })
         rows["traders"].append({
             **source, "id": ids["trader_id"], "name": name,
             "exchange_id": ids["exchange_id"], "strategy_id": ids["strategy_id"],
-            "initial_balance": options.initial_balance, "is_running": 0,
-            "show_in_competition": 0, "run_version": 0,
+            "initial_balance": options.paper_cash if us_stock else options.initial_balance,
+            "is_running": 0, "show_in_competition": 0, "run_version": 0,
         })
     pair = {"id": options.pair_id, "title": options.title, "feature": options.feature_path,
             "feature_value": options.feature_value,
@@ -281,11 +342,16 @@ def build_plan(options: PairOptions, source: dict, strategy: dict, exchange: dic
             "control_trader_id": identifiers["control"]["trader_id"],
             "live_trader_id": source["id"], "started_at": None, "note": START_NOTE,
             "min_days": options.min_days, "min_trades": options.min_trades}
+    if us_stock:
+        pair["paper_cash"] = options.paper_cash
     if options.prereg is not None:
         pair["prereg"] = make_prereg(options.prereg, timestamp)
         pair.update(min_days=options.prereg.min_days, min_trades=options.prereg.min_trades)
-    return {"objects": rows, "ids": identifiers, "pair": pair,
+    plan = {"objects": rows, "ids": identifiers, "pair": pair,
             "pairs_document": {**document, "pairs": [*document["pairs"], pair]}}
+    if us_stock:
+        plan["us_stock"] = {"source_exchange_id": source["exchange_id"], "paper_cash": options.paper_cash}
+    return plan
 
 
 def open_database(path: Path, *, writable=False) -> sqlite3.Connection:
@@ -535,14 +601,36 @@ def add_prereg_arguments(parser, *, required_mode=False):
     parser.add_argument("--harm-check-days", type=float, default=14)
     parser.add_argument("--extend-days", type=float, default=14)
     parser.add_argument("--extend-se", type=float, default=0.02)
+    parser.add_argument("--metric", choices=("avg_r", "daily_return"), default=None,
+                        help="主指标：avg_r（默认，按周聚类 avgR 差）或 daily_return（每日权益收益率差）")
+    parser.add_argument("--margin-daily", type=float, default=None,
+                        help="daily_return 非劣效边际，默认 0.0002（每日 0.02%%）")
+    parser.add_argument("--trade-ratio-max", type=ratio_bound, default="1.5",
+                        help="平仓数比上限，默认 1.5；none 表示不设上限")
+    parser.add_argument("--min-short-trades", type=int, default=None,
+                        help="候选组需要的 SHORT 平仓笔数下限；默认不限")
+    parser.add_argument("--min-trades-scope", choices=("both", "candidate"), default=None,
+                        help="min-trades 适用于两侧（默认）或仅候选组")
+    parser.add_argument("--extend-se-daily", type=float, default=None,
+                        help="daily_return 的 extend SE 门槛，默认 0.0001")
 
 
 def prereg_options(args) -> PreregOptions | None:
     if args.mode is None:
-        if any(getattr(args, key) is not None for key in ("track", "baseline_version", "idea_id", "change_type")):
+        # trade_ratio_max defaults to 1.5, so only a value other than the
+        # default proves the flag was passed without --mode incremental.
+        if any(getattr(args, key) is not None for key in
+               ("track", "baseline_version", "idea_id", "change_type", "metric", "margin_daily",
+                "min_short_trades", "min_trades_scope", "extend_se_daily")) \
+                or args.trade_ratio_max != 1.5:
             raise ValueError("预登记字段需要 --mode incremental")
         return None
-    options = PreregOptions(**{key: getattr(args, key) for key in PreregOptions.__dataclass_fields__})
+    values = {key: getattr(args, key) for key in PreregOptions.__dataclass_fields__}
+    values["metric"] = values["metric"] or "avg_r"
+    values["margin_daily"] = 0.0002 if values["margin_daily"] is None else values["margin_daily"]
+    values["min_trades_scope"] = values["min_trades_scope"] or "both"
+    values["extend_se_daily"] = 0.0001 if values["extend_se_daily"] is None else values["extend_se_daily"]
+    options = PreregOptions(**values)
     options.validate()
     return options
 
@@ -566,6 +654,11 @@ def print_plan(plan: dict, db_path: Path, promotion_dir: Path, *, apply: bool, b
         print("-- pairs.json 合并结果：")
         print(document_bytes(plan["pairs_document"]).decode("utf-8"), end="")
     print(f"[{plan['pair']['id']}] 最终清单" if apply else f"[{plan['pair']['id']}] 预览清单（apply 将生成新 id）")
+    if plan.get("us_stock"):
+        us = plan["us_stock"]
+        print(f"us_stock 配对：不新建 paper 交易所，两组复用源 binance 交易所 {us['source_exchange_id']}；"
+              f"两组 config 强制 stock_config.paper_trading=true；initial_balance=paper-cash={us['paper_cash']:g} USDT；"
+              f"候选组补丁 {plan['pair']['feature']}={encode(plan['pair']['feature_value'])} 仅作用于候选")
     for role, label in (("candidate", "候选"), ("control", "对照")):
         ids = plan["ids"][role]
         print(f"{label}: exchange={ids['exchange_id']} strategy={ids['strategy_id']} trader={ids['trader_id']}")
@@ -625,6 +718,8 @@ def main(argv=None) -> int:
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--feature-value", required=True, type=decode, help="JSON 值，例如 true、0.5、\"text\"")
     parser.add_argument("--initial-balance", type=float, default=1000)
+    parser.add_argument("--paper-cash", type=float, default=1000,
+                        help="us_stock 配对：两个克隆的 initial_balance（模拟现金）；默认 1000")
     parser.add_argument("--taker-bps", type=float, default=5)
     parser.add_argument("--maker-bps", type=float, default=2)
     parser.add_argument("--slippage-bps", type=float, default=3)
