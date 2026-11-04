@@ -30,6 +30,27 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'crypto-universe-expansion',
+    date: '2026-11-03',
+    title: '加密因子挖掘股票池扩展：含已下架币的全量 USDT-M 永续',
+    domain: '加密 · 因子挖掘数据',
+    verdict: 'partial',
+    verdictText: '建议时点 top60 含已下架币 · 不扩到 150',
+    idea: '用户问为什么加密因子挖掘池只有 60 个币，而美股有几千只。现有挖掘池是固定的 104 币名单（实际 100 个），只包含今天还在交易的币：训练窗口 2022-05～2025-05 每天只有 35–83 个币有数据，LUNA、FTT 等 166 个已下架币完全缺席。这次从 data.binance.vision 拉取了全部 685 个 USDT-M 币本位永续（519 个在交易、135 个 SETTLING、31 个已从 exchangeInfo 删除）的 1d K 线、资金费和 premium 月度归档，写入新目录 data/factor_mining/crypto_full。然后做时点普查，计算有效宽度、成本和拉盘尾部，并用冻结评估器把 zoo 的 40 个 accepted 因子和冻结组合在 top 60/100/150 上重算（只用 train/val，holdout 仍封存）。',
+    bullets: [
+      '数据校验：6.4 万个归档文件全部 sha256 一致；OHLC 异常 0 条，重复日期 0 条。2026-10-28 是 Binance 归档的全市场缺口，已用 fapi 为 518 个在交易的币补齐。59,309 根下架后的零成交量平盘 K 线已剔除。100 个存量币与现有 fapi 数据逐日一致（只有 TRUMP 1 天差 0.018%）。',
+      '普查：训练窗口内全市场平均 223 个币在交易，其中 133 个日成交额 ≥$20M；现有名单平均只有 52 个。时点 top 60 与现有名单平均只重合 30 个，约 15% 的成员后来被下架；top 150 中这一比例约 21%。',
+      '有效宽度：去掉截面均值后，特征值参与比在 top 60/100/150 下分别为 17.8 / 22.3 / 25.3（训练段）。名数扩大 2.5 倍，独立下注数只增长 1.4–1.75 倍，IR 理论上限提高约 20%–30%。',
+      '成本与风险：盘口快照下 $10k 单边成本，1–60 名 3 bp，61–100 名 10 bp，101–150 名 12 bp，151–250 名 14 bp（配置是 8 bp）。7 日涨幅 >50% 的概率各档都在 1.2%–1.4%，与排名无关；下架率则随排名上升，151–250 名是前 60 名的 2.6 倍。',
+      '重算：换成全量时点池后，因子中位 train t 从约 5.6 升到约 8。加回已下架币后，三个周期的 val 多空都比仅现存币 top 100 好 14–51 个百分点。但从 60 扩到 100、150 时，三个周期的多空都下降。h=3 组合（fq_crypto 所用）的 val 多空在 base60 / 全量 60 / 100 / 150 上分别为 +12% / −1% / −18% / −26%；空头腿亏损中来自 3 日涨幅 >30% 持仓的份额从 27% 升到 50%–57%。',
+      '重新挖掘的影响：现有 40 个 accepted 因子在全量 top 60/100/150 下分别保留 30/19/14 个。K 应与原账本合并计算：K≈24,402 时 t_req 从 4.61 升到 4.75。fq_crypto 的基线变更需要按增量框架做配对评估。',
+    ],
+    conclusion:
+      '建议重新挖掘时改用含已下架币的时点 top 60（N 不变）。这一步能消除幸存者偏差，并让 IC 的 t 提高约 2.5，但它本身不能让 fq_crypto 的 h=3 组合赚钱，瓶颈仍是空头腿的拉盘尾部。所以应与空头腿改造一起预注册、作为配对变更评估。N=100 等空头腿改造后再考虑；不建议 N=150（成本 12–36 bp，下架风险更高，多空为负）。切换线上挖掘池需用户另行决定，本研究没有改动 config、zoo、ensemble 或交易员。',
+    source:
+      'scripts/factor_mining/full_universe.py · scripts/factor_mining/universe_expansion_study.py · docs/research/2026-11-03-crypto-universe-expansion.md · data/factor_mining/crypto_full/study/result.json',
+  },
+  {
     id: 'wide-pool-ensemble',
     date: '2026-11-03',
     title: '加密宽因子池组合（40 个低相关因子 vs 现有 14 因子）',
