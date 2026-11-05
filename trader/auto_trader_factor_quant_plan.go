@@ -26,6 +26,7 @@ const (
 	fqCodeTooSoon        = "too_soon"
 	fqCodeUnmanaged      = "unmanaged_positions"
 	fqCodeRetryExhausted = "retry_exhausted"
+	fqCodeShortDisabled  = "short_disabled"
 )
 
 // fqDecision is the outcome of the rebalance gate.
@@ -67,6 +68,13 @@ func fqShouldRebalance(t *quantTargets, cfg *store.FactorQuantConfig, lastAsOf s
 	}
 	if t.asOfDate.IsZero() {
 		return fqDecision{Code: fqCodeInvalid, Reason: "status=ok 但缺少 as_of"}
+	}
+	if cfg.IsUS() && cfg.EffectiveUSShortMode() != "paper" {
+		for _, w := range t.Weights {
+			if w < 0 {
+				return fqDecision{Code: fqCodeShortDisabled, Reason: "美股模拟做空开关未开启，目标含负权重，整次跳过调仓（保持现有持仓）"}
+			}
+		}
 	}
 	horizon := cfg.EffectiveHorizon()
 	if horizon > 0 && t.Horizon != horizon {

@@ -63,6 +63,11 @@ for FM_MARKET in crypto us; do
     ) >> "$FM_LOG" 2>&1
 done
 (
+    echo "=== us momentum targets $(date '+%Y-%m-%d %H:%M:%S') ==="
+    "$AR_PYTHON" -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --write || \
+        echo "us momentum targets exited non-zero"
+) >> "$FM_LOG" 2>&1
+(
     echo "=== promotion report $(date '+%Y-%m-%d %H:%M:%S') ==="
     NOFX_DB="${NOFX_DB:-/Users/zhangyun/workspace/nofx/data/data.db}" \
     FACTOR_MINING_DIR="$FM_ROOT" \

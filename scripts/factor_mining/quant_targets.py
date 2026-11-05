@@ -1,8 +1,9 @@
 """Fixed v1 target rules and an offline, descriptive frozen-ensemble study.
 
-Live targets consume only the core live_scores snapshot. Research uses the same
-builder, with causal ensemble scores rounded exactly as in that snapshot.
-No data fetching, factor selection, or writes to inputs occur in the study.
+Crypto targets consume the core live_scores snapshot. US targets reuse the S1
+momentum selection on local daily rows and the frozen equity universe. Research
+uses causal ensemble scores rounded exactly as in the crypto snapshot.
+No data fetching, factor selection, or writes to inputs occur here.
 """
 from __future__ import annotations
 
@@ -20,13 +21,21 @@ from . import panel, store
 from .data_fetch import ROOT
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+US_UNIVERSE = Path(__file__).with_name('us_momentum_universe.json')
+DEFAULT_PERP_MAP = REPO_ROOT / 'data/cache/usstock_symbols.json'
+US_HORIZON = 28
+# Daily data may bridge weekends/holidays for four calendar days. The 28-day
+# rebalance horizon does not extend freshness; Go also applies max_stale_days.
+US_MAX_STALE_DAYS = 4
+
+
 def _rule(market):
     if market not in ('crypto', 'us'):
         raise ValueError('market must be crypto or us')
-    rule = dict(name='ls_invvol_protected_v1' if market == 'crypto' else 'long_invvol_v1',
-                quantile=0.2, long_gross=0.5 if market == 'crypto' else 1.0,
-                short_gross=0.5 if market == 'crypto' else 0.0,
-                max_name_weight=0.1, vol_window=30, long_only=market == 'us')
+    rule = dict(name='ls_invvol_protected_v1' if market == 'crypto' else 'mom_ls_invvol_v1',
+                quantile=0.2, long_gross=0.5, short_gross=0.5,
+                max_name_weight=0.1, vol_window=30, long_only=False)
     if market == 'crypto':
         rule.update(short_exclude_ret7_quantile=0.9, min_listing_days=90)
     return rule
@@ -66,13 +75,114 @@ def _capped_invvol(vol, gross, cap):
     return weights
 
 
-def build_targets(market, live_scores_doc, panels, *, horizon=None, now=None) -> dict:
-    """Build schema v1 without I/O or mutation of the supplied snapshot/panels.
+def _load_perp_map(path):
+    path = Path(path) if path is not None else DEFAULT_PERP_MAP
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    try:
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(doc, dict) or doc.get('version') != 2 or not isinstance(doc.get('symbols'), list):
+            return None
+        return {row['underlying']: row.get('perp_symbol') for row in doc['symbols']
+                if isinstance(row['underlying'], str)}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _load_us_features(root):
+    # Import lazily: S1 itself imports _capped_invvol from this module.
+    from scripts.backtest.fq_us_momentum_study import build_features, valid_rows
+
+    universe = json.loads(US_UNIVERSE.read_text(encoding='utf-8'))['symbols']
+    frames = {}
+    for symbol in universe + ['SPY']:
+        path = Path(root) / 'us/daily' / f'{symbol}.json'
+        try:
+            rows = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            rows = []
+        # Same row parsing, validity check and SPY calendar as S1.load_snapshot.
+        frame = pd.DataFrame([r[:6] for r in rows],
+                             columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        frame.index = pd.DatetimeIndex(pd.to_datetime(frame.pop('date')))
+        if not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+            raise ValueError(f'{symbol}: dates must be unique and ascending')
+        frame = frame.astype(float)
+        frames[symbol] = frame.where(valid_rows(frame), np.nan)
+    calendar = frames['SPY'].dropna().index
+    return build_features(frames, universe, calendar) if len(calendar) else None
+
+
+def _build_us_targets(features, perps, *, now=None):
+    from scripts.backtest.fq_us_momentum_study import decision_at
+
+    generated = _utc(now)
+    date = features['close'].index[-1] if features is not None else None
+    result = dict(version=1, market='us', status='insufficient_universe',
+                  reason='missing_spy_calendar', generated_at=generated.isoformat(),
+                  as_of=str(date.date()) if date is not None else None,
+                  run_id=None, horizon=US_HORIZON, rule=_rule('us'), factor_ids=[],
+                  universe_size=0, weights={}, excluded={}, pct={})
+    if perps is None:
+        result.update(reason='perp_map_unavailable')
+        return result
+    if date is None:
+        return result
+    if (generated.normalize() - _utc(date).normalize()).days > US_MAX_STALE_DAYS:
+        result.update(status='stale_scores', reason='as_of_older_than_4_days')
+        return result
+    decision = decision_at(features, date)
+    result['universe_size'] = decision['eligible_count']
+    signals = features['signal'].loc[date, decision['eligible']]
+    ranks = signals.rank(pct=True).dropna()
+    result['pct'] = {s + 'BUSDT': round(float(p), 6) for s, p in ranks.items()}
+    if decision['eligible_count'] < 15:
+        result.update(reason='fewer_than_15_eligible_symbols')
+        return result
+    longs, shorts = list(decision['long']), list(decision['short'])
+    for symbol in shorts:
+        perp = perps.get(symbol)
+        if not isinstance(perp, str) or not perp.strip():
+            result['excluded'][symbol + 'BUSDT'] = 'no_perp'
+    shorts = [s for s in shorts if s + 'BUSDT' not in result['excluded']]
+    if not shorts:
+        result.update(reason='empty_short_leg_after_exclusions')
+        return result
+    # The perp map lists every tradable bStock pair. A long candidate missing
+    # from it cannot be bought (e.g. STX on 2026-11-05), so it is excluded and
+    # the long sleeve re-weighted to its full gross, mirroring the no_perp rule.
+    for symbol in longs:
+        if symbol not in perps:
+            result['excluded'][symbol + 'BUSDT'] = 'not_listed'
+    longs = [s for s in longs if s + 'BUSDT' not in result['excluded']]
+    if not longs:
+        result.update(reason='empty_long_leg_after_exclusions')
+        return result
+    vol = pd.Series(decision['volatility'], dtype=float)
+    rule = result['rule']
+    weights = pd.concat([
+        _capped_invvol(vol.loc[longs], rule['long_gross'], rule['max_name_weight']),
+        -_capped_invvol(vol.loc[shorts], rule['short_gross'], rule['max_name_weight'])])
+    result['weights'] = {s + 'BUSDT': round(float(w), 6) for s, w in weights.items() if round(float(w), 6)}
+    result.update(status='ok', reason=None)
+    return result
+
+
+def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, now=None,
+                  root=ROOT, perp_map=None) -> dict:
+    """Build schema v1 from local US rows or supplied crypto snapshot/panels.
 
     ``horizon`` is an optional consistency assertion, not a rule override.
     Ties use the original panel column order. Listing age counts finite positive
     observed closes through as_of, rather than elapsed time since first quote.
+
+    US ignores live_scores_doc and miner panels: its S1 features come directly
+    from <root>/us/daily and the repository's frozen universe.
     """
+    if market == 'us':
+        if horizon is not None and horizon != US_HORIZON:
+            raise ValueError(f'horizon must match the fixed live selection ({US_HORIZON})')
+        return _build_us_targets(_load_us_features(root), _load_perp_map(perp_map), now=now)
     rule = _rule(market)
     generated = _utc(now)
     doc = live_scores_doc or {}
@@ -146,16 +256,18 @@ def build_targets(market, live_scores_doc, panels, *, horizon=None, now=None) ->
     return result
 
 
-def _load_targets(market, root, *, panels=None, now=None):
+def _load_targets(market, root, *, panels=None, now=None, perp_map=None):
+    if market == 'us':
+        return build_targets(market, root=root, perp_map=perp_map, now=now)
     doc = store.read_json(Path(root) / market / 'live_scores.json')
     if panels is None and _scores_entry(market, doc)[1]:
         panels = panel.load_panels(market, root)
     return build_targets(market, doc, panels, now=now)
 
 
-def write_targets(market, root, *, panels=None, now=None) -> Path:
-    """Read a core snapshot and atomically replace only quant_targets.json."""
-    result = _load_targets(market, root, panels=panels, now=now)
+def write_targets(market, root, *, panels=None, now=None, perp_map=None) -> Path:
+    """Read local inputs and atomically replace only quant_targets.json."""
+    result = _load_targets(market, root, panels=panels, now=now, perp_map=perp_map)
     path = Path(root) / market / 'quant_targets.json'
     # store uses a same-directory mkstemp, fsync, os.replace and finally cleanup.
     store.write_json(path, result)
@@ -322,6 +434,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--market', choices=('crypto', 'us'), default='crypto')
     parser.add_argument('--root', type=Path, default=ROOT)
+    parser.add_argument('--perp-map', type=Path, default=DEFAULT_PERP_MAP,
+                        help='US version 2 perp map; relative paths resolve from the repo root')
     parser.add_argument('--write', action='store_true')
     parser.add_argument('--print', action='store_true', dest='print_summary')
     parser.add_argument('--backtest', action='store_true')
@@ -337,13 +451,14 @@ def main(argv=None):
         args.out.write_text(_report(result), encoding='utf-8')
         print(f'Backtest reports: {args.out}, {args.json_path}')
     elif args.write:
-        path = write_targets(args.market, args.root)
+        path = write_targets(args.market, args.root, perp_map=args.perp_map)
         if args.print_summary:
             print(json.dumps(_summary(store.read_json(path)), ensure_ascii=False, indent=2))
         else:
             print(path)
     else:
-        print(json.dumps(_summary(_load_targets(args.market, args.root)), ensure_ascii=False, indent=2))
+        print(json.dumps(_summary(_load_targets(args.market, args.root, perp_map=args.perp_map)),
+                         ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

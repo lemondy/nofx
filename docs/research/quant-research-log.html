@@ -85,6 +85,42 @@ th{color:var(--mut);font-weight:600}
 <p class="src">来源：<code>docs/research/2026-11-05-us-range-reversal-prereg.md</code> · <code>docs/research/2026-11-05-us-range-reversal-study.md</code> · <code>scripts/factor_mining/us_range_reversal_study.py</code></p>
 </article>
 
+<article data-v="part" data-id="fq-us-momentum-ls">
+<h2>fq_us 动量多空单一信号（mom_ls_invvol_v1） <span class="tag t-part">S1 screen_pass · 非样本外，空头腿为负</span><span class="dom">美股 · 因子量化 · 增量评估</span></h2>
+<p class="k">思路：fq_us 无因子（第 1 步标普 500 经典因子 0/30，第 2 步挖掘器多样化父代 fail），只有 12-1 动量在近期与 bStock 上方向一直为正；用户要求 fq_us 能多能空。预注册规则 mom_ls_invvol_v1：90 只 bStock 个股，12-1 动量每 20 个交易日调仓，前 20% 现货做多、后 20% 永续做空，各 0.5 总敞口，1/σ 加权、单只上限 0.1，成本多 13bp/空 7bp。S1 用 Backtrader 在 2021-11→2026-10 共 62 个周期上检验，判定 z ≥ 1 且两半均值 &gt; 0。声明：数据已看过、名单有幸存者偏差，S1 只筛可行性，最终判定靠 S2 在线模拟。</p>
+<ul>
+<li>S1 判 screen_pass（fq_us K=3，已记账）：每周期均值 +3.02%，z = 2.44，两半 +0.62%/+5.43%。两腿每期重置为各 0.5 的复核 z = 2.11，结论不变。</li>
+<li>收益全部来自多头腿：多头腿 +840%（相对 5 万），空头腿 −64%（两半均为负，仅 2022 年盈利）；只做多 +920%，等权持有 +157%，SPY +77%。</li>
+<li>多头 +840% 远超等权，主要反映 bStock 名单的事后选择偏差；另有 9 只股票没有永续映射，实际不能做空。</li>
+</ul>
+<p><b>结论：</b>通过的是可行性筛查，不是样本外证据。S2 需用户批准后接入（quant_targets 新规则 + fq_us 永续空头腿）才启动。空头腿回测为负贡献：要么照预注册跑多空 S2，要么另立只做多预注册（K=4），不能事后改规则。</p>
+<p class="src">来源：<code>docs/research/2026-11-05-fq-us-momentum-prereg.md</code> · <code>docs/research/2026-11-05-fq-us-momentum-study.md</code> · <code>scripts/backtest/fq_us_momentum_study.py</code> · <code>data/factor_mining/us_momentum/study/s1_v1/report.md</code></p>
+</article>
+
+<article data-v="no" data-id="us-miner-diverse-parents">
+<h2>美股因子挖掘器：多样化变异父代（解决因子库塌缩） <span class="tag t-no">S1 fail · 两组均 0 个通过验证</span><span class="dom">美股 · 因子量化 · 增量评估</span></h2>
+<p class="k">思路：诊断发现 us 因子库 h=10 前 300 个候选按 0.8 秩相关聚类只有 1 簇，偏向大盘高流动性（与 −log 成交额秩相关 −0.33；该代理训练段 IC −0.063、验证段 ≈0）。成因是变异父代 = 训练 t 前 20，全在同一簇。改动（开关 FM_DIVERSE_PARENTS，默认关）：父代池与 LLM top-10 在训练 t 前 300 中按训练段秩相关 &lt; 0.8、每个 family_fine 至多 4 个贪心挑选。A/B：从同一冻结快照出发，B 现状 vs D 改动各跑 4 晚（1500 变异、无 LLM、同种子），主指标为新增 accepted 且保留段前向 confirmed 的因子数。“K 按簇计”未做：卡住的是验证段而非 t_req，且会放松多重检验。</p>
+<ul>
+<li>S1 判 fail（fq_us K=2，已记账）：B、D 两组新增 accepted 都是 0，前向 confirmed 都是 0。</li>
+<li>前 300 名里按规则只能选出 1～4 个父代（不是 20 个），D 组父代池基本只剩随机种子：塌缩比诊断时更彻底。</li>
+<li>D 组训练通过的新因子 104 个（B 组 513），新增簇数相当，验证 IC 中位数仍为负（−0.010 对 −0.013）。B 组新增因子已分布在 4～8 个簇，同样无一通过验证。</li>
+</ul>
+<p><b>结论：</b>第 2 步无增量，线上夜间任务不打开该开关，代码保留为默认关闭。结合第 1 步（标普 500 经典因子 0/30），问题不在搜索方式或池子宽度：2022–25 训练段学到的美股截面方向在 2025–26 验证段不成立。剩下的选项是为 12-1 动量另立预注册（K+1），或暂停 fq_us。</p>
+<p class="src">来源：<code>docs/research/2026-11-05-us-miner-diverse-parents-prereg.md</code> · <code>docs/research/2026-11-05-us-miner-diverse-parents-study.md</code> · <code>scripts/factor_mining/diversity.py</code> · <code>scripts/factor_mining/miner_ab_study.py</code> · <code>data/factor_mining/us_miner_ab/report_v1/report.md</code></p>
+</article>
+
+<article data-v="no" data-id="us-broad-classic-factors">
+<h2>美股宽池（标普 500）经典因子检验：能否给 fq_us 提供因子 <span class="tag t-no">S1 fail · 0/30 通过</span><span class="dom">美股 · 因子量化 · 增量评估</span></h2>
+<p class="k">思路：fq_us 从未调仓（no_validated_factors）。诊断发现：us 因子库 1.1 万多个通过训练的因子 99.9% 属于成交量族（变异自我强化），验证期 IC 中位数为负；每日可用标的只有 76–86 只。假设：在宽池上，预先登记的 10 个经典价量因子 × 5/10/20 日，按 Bonferroni t ≥ 3.14 + 验证 t ≥ 1.65 + 前向 IC &gt; 0 能通过，并能迁移到 90 只 bStock 个股。数据：标普 500 当前成分 498 只，15 年 Yahoo 复权日线（有幸存者偏差）。</p>
+<ul>
+<li>S1 判 fail（fq_us K=1，已记账）：宽池通过 0/30，可迁移通过 0/30。</li>
+<li>低波动、特质低波动、低贝塔、彩票效应四个防御类因子在 2012–26 三段 IC 全为负：高波动成长股系统性跑赢。</li>
+<li>12-1 动量训练段（2012–21）≈ 0，2022 年后转正，bStock 前向 IC +0.04～0.06；只卡在 G1。非流动性过 G1 但验证衰减。反转因子在 bStock 上为负。</li>
+</ul>
+<p><b>结论：</b>“宽池 + 经典因子”不能解决美股无因子：问题不只是样本小，而是美股因子溢价本身不稳定。12-1 动量是唯一在近期与 bStock 上方向稳定为正的信号（us-stock 候选排序已在用），若要作为 fq_us 单一信号需另立预注册、K+1，不能事后放行。</p>
+<p class="src">来源：<code>docs/research/2026-11-05-us-broad-classic-factors-prereg.md</code> · <code>docs/research/2026-11-05-us-broad-classic-factors-study.md</code> · <code>scripts/factor_mining/us_broad_classic_study.py</code> · <code>data/factor_mining/us_broad/study/classic_v1/report.md</code></p>
+</article>
+
 <div class="day">2026-11-04</div>
 
 <article data-v="no" data-id="llm-long-veto">
