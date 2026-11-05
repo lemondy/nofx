@@ -148,6 +148,16 @@ def _build_us_targets(features, perps, *, now=None):
     if not shorts:
         result.update(reason='empty_short_leg_after_exclusions')
         return result
+    # The perp map lists every tradable bStock pair. A long candidate missing
+    # from it cannot be bought (e.g. STX on 2026-11-05), so it is excluded and
+    # the long sleeve re-weighted to its full gross, mirroring the no_perp rule.
+    for symbol in longs:
+        if symbol not in perps:
+            result['excluded'][symbol + 'BUSDT'] = 'not_listed'
+    longs = [s for s in longs if s + 'BUSDT' not in result['excluded']]
+    if not longs:
+        result.update(reason='empty_long_leg_after_exclusions')
+        return result
     vol = pd.Series(decision['volatility'], dtype=float)
     rule = result['rule']
     weights = pd.concat([
