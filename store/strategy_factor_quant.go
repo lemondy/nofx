@@ -29,7 +29,7 @@ const (
 // pointer-valued percentages where an explicit 0 disables protection.
 type FactorQuantConfig struct {
 	// Market: "crypto" (paper futures account, long/short) or "us" (bStock paper
-	// ledger, long-only). Required.
+	// ledger, with optional paper perpetual shorts). Required.
 	Market string `json:"market"`
 	// Horizon in days; must equal the targets file's horizon. crypto default 3;
 	// us default 0 = accept the horizon given by the file.
@@ -70,6 +70,11 @@ type FactorQuantConfig struct {
 	// explicit 0 disables. Valid 0..100.
 	USFeeBps      *float64 `json:"us_fee_bps,omitempty"`
 	USSlippageBps *float64 `json:"us_slippage_bps,omitempty"`
+	// USShortMode: US only; "" / "off" disables shorts, "paper" enables
+	// perpetual shorts in the paper ledger. Live shorts are never allowed.
+	USShortMode string `json:"us_short_mode,omitempty"`
+	// USShortFeeBps: US only; nil = 4 bp, explicit 0 disables. Valid 0..100.
+	USShortFeeBps *float64 `json:"us_short_fee_bps,omitempty"`
 	// TargetsPath overrides $FACTOR_MINING_DIR/{market}/quant_targets.json.
 	TargetsPath string `json:"targets_path,omitempty"`
 }
@@ -85,6 +90,7 @@ const (
 	defaultFactorQuantDrawdownWarn  = 0.15
 	defaultFactorQuantDailyLoss     = 0.07
 	defaultFactorQuantUSFeeBps      = 10.0
+	defaultFactorQuantUSShortFeeBps = 4.0
 	defaultFactorQuantUSSlippageBps = 3.0
 	maxFactorQuantUSCostBps         = 100.0
 )
@@ -183,6 +189,20 @@ func (f *FactorQuantConfig) EffectiveUSFeeBps() float64 {
 	return *f.USFeeBps
 }
 
+func (f *FactorQuantConfig) EffectiveUSShortMode() string {
+	if f == nil || f.USShortMode == "" {
+		return "off"
+	}
+	return f.USShortMode
+}
+
+func (f *FactorQuantConfig) EffectiveUSShortFeeBps() float64 {
+	if f == nil || f.USShortFeeBps == nil {
+		return defaultFactorQuantUSShortFeeBps
+	}
+	return *f.USShortFeeBps
+}
+
 // EffectiveUSSlippageBps: per-fill adverse slippage of the US paper ledger, basis points.
 func (f *FactorQuantConfig) EffectiveUSSlippageBps() float64 {
 	if f == nil || f.USSlippageBps == nil {
@@ -260,7 +280,17 @@ func (f *FactorQuantConfig) Validate() error {
 	if utf8.RuneCountInString(f.KillResetID) > 64 || strings.ContainsRune(f.KillResetID, 0) {
 		return fmt.Errorf("factor_quant kill_reset_id must be at most 64 characters and contain no NUL")
 	}
-	for name, v := range map[string]*float64{"us_fee_bps": f.USFeeBps, "us_slippage_bps": f.USSlippageBps} {
+	if !f.IsUS() && (f.USShortMode != "" || f.USShortFeeBps != nil) {
+		return fmt.Errorf("factor_quant us_short_mode and us_short_fee_bps are only valid for market=us")
+	}
+	switch f.EffectiveUSShortMode() {
+	case "off", "paper":
+	case "live":
+		return fmt.Errorf("factor_quant us_short_mode=live is not supported: only paper shorts are allowed（仅模拟盘做空）")
+	default:
+		return fmt.Errorf("factor_quant us_short_mode must be off or paper, got %q", f.USShortMode)
+	}
+	for name, v := range map[string]*float64{"us_fee_bps": f.USFeeBps, "us_slippage_bps": f.USSlippageBps, "us_short_fee_bps": f.USShortFeeBps} {
 		if v != nil && (fqBadFloat(*v) || *v < 0 || *v > maxFactorQuantUSCostBps) {
 			return fmt.Errorf("factor_quant %s must be in [0,%g]", name, maxFactorQuantUSCostBps)
 		}

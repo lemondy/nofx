@@ -65,10 +65,22 @@ func (s *Server) handleUSStockPaper(c *gin.Context) {
 		SafeNotFound(c, "Trader")
 		return
 	}
-	if at, err := s.traderManager.GetTrader(traderID); err == nil && at != nil && at.IsStockStrategy() {
-		if view, verr := at.StockPaperView(); verr == nil {
-			c.JSON(http.StatusOK, view)
-			return
+	marks := map[string]float64{}
+	if at, err := s.traderManager.GetTrader(traderID); err == nil && at != nil {
+		if at.IsStockStrategy() {
+			if view, verr := at.StockPaperView(); verr == nil {
+				c.JSON(http.StatusOK, view)
+				return
+			}
+		} else if at.IsFactorQuantUSStrategy() {
+			// The factor US reader marks shorts on perps and settles funding.
+			// Read cash below afterwards so the ledger view includes settlement.
+			if positions, perr := at.GetPositions(); perr == nil {
+				for _, p := range positions {
+					sym, _ := p["symbol"].(string)
+					marks[sym], _ = p["mark_price"].(float64)
+				}
+			}
 		}
 	}
 	// Trader not loaded in memory: serve the ledger straight from the store,
@@ -92,10 +104,28 @@ func (s *Server) handleUSStockPaper(c *gin.Context) {
 	if acct != nil {
 		equity = acct.Cash
 	}
-	for _, p := range open {
-		equity += p.MarketValue(p.AvgPrice)
+	type markedPosition struct {
+		*store.StockPaperPosition
+		Side          string  `json:"side"`
+		MarkPrice     float64 `json:"mark_price"`
+		MarketValue   float64 `json:"market_value"`
+		UnrealizedPnL float64 `json:"unrealized_pnl"`
 	}
-	c.JSON(http.StatusOK, gin.H{"account": acct, "equity": equity, "open_positions": open, "closed_positions": closed})
+	marked := make([]markedPosition, 0, len(open))
+	for _, p := range open {
+		mark := marks[p.Symbol]
+		if mark <= 0 {
+			mark = p.AvgPrice
+		}
+		value := p.MarketValue(mark)
+		pnl := (mark - p.AvgPrice) * p.Quantity
+		if p.EffectiveSide() == store.StockPaperShort {
+			pnl = -pnl
+		}
+		equity += value
+		marked = append(marked, markedPosition{p, p.EffectiveSide(), mark, value, pnl})
+	}
+	c.JSON(http.StatusOK, gin.H{"account": acct, "equity": equity, "open_positions": marked, "closed_positions": closed})
 }
 
 // strategyIsUSStock reports whether the strategy row holds a us_stock config.
