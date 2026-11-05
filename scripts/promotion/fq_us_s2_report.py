@@ -14,6 +14,27 @@ pre-registered S2 rules in docs/research/2026-11-05-fq-us-momentum-prereg.md:
   252 days; at n_days >= 252 a final `inconclusive` is reported as
   `fail_extended_inconclusive`.
 
+Pair mode (--control/--candidate, pre-registered in
+docs/research/2026-11-05-fq-us-volscale-pair-prereg.md 判定):
+
+- common window: the weekday UTC dates present in BOTH arms after --start;
+  daily sampling per arm reuses the single-trader logic above, and every
+  per-arm statistic is computed on the common dates only;
+- per arm: annualized Sharpe = mean / sd(ddof=1) × √252, max drawdown,
+  cumulative return, and the same kill-switch rule (drawdown latch tripped at
+  or after --start, or a computed daily max drawdown >= 25%);
+- common rebalances: successful rebalance records of both arms since start,
+  intersected by as_of. The as_of key is parsed from the `as_of=YYYY-MM-DD`
+  line Go renders into cot_trace (trader/auto_trader_factor_quant.go);
+  records without a parseable as_of fall back to their UTC date;
+- verdict order (pre-registered): control kill fired and candidate clean →
+  `pass` (early); candidate kill fired → `fail` (early); n_days < 126 or
+  common rebalances < 6 → `pending`; stage 1 (126 <= n < 252): `pass` when
+  Sharpe_candidate >= Sharpe_control and MaxDD_candidate < MaxDD_control,
+  `fail` when Sharpe_candidate < Sharpe_control and MaxDD_candidate >=
+  MaxDD_control, else `inconclusive`; at n >= 252: `pass` only when both
+  conditions hold, else `fail`.
+
 Tables and queries (documented as required by T3):
 
 - rebalance count — decision_records (written by Go saveFactorQuantRecord ->
@@ -41,6 +62,7 @@ Tables and queries (documented as required by T3):
 import argparse
 import json
 import math
+import re
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -59,6 +81,15 @@ MAX_DRAWDOWN = 0.25
 IDEA_ID = 'fq-us-momentum-ls-v1'
 BASELINE_VERSION = 'fq_us:no_validated_factors'
 REBALANCE_PREFIX = '因子量化调仓（'
+SHARPE_ANNUAL_DAYS = 252
+PAIR_IDEA_ID = 'fq-us-volscale-pair-v1'
+PAIR_BASELINE_VERSION = 'mom_ls_invvol_v1'
+AS_OF_PATTERN = re.compile(r'as_of=(\d{4}-\d{2}-\d{2})')
+REBALANCE_KEY_METHOD = (
+    '共同调仓按 as_of 求交集：取 decision_records 里 success=1 且 cot_trace 以'
+    '「因子量化调仓（」开头的记录，主键用 cot_trace 第二行 Go 写入的 '
+    'as_of=YYYY-MM-DD（trader/auto_trader_factor_quant.go 渲染）；'
+    '该行缺失或不可解析时退回记录 timestamp 的 UTC 日期')
 
 try:  # frozen evaluator; identical fallback below keeps the script standalone
     from scripts.factor_mining.evaluate import nw_t
@@ -437,15 +468,351 @@ def append_ledger(report, path) -> dict:
     return append_event(Path(path), 'fq_us', build)
 
 
+# --- 配对模式（idea_id fq-us-volscale-pair-v1）-----------------------------
+# 预注册：docs/research/2026-11-05-fq-us-volscale-pair-prereg.md「判定」。
+
+
+def sharpe_ratio(returns):
+    """年化夏普 = 日均收益 ÷ 样本标准差(ddof=1) × √252（预注册口径）。
+
+    常数序列没有有限夏普：均值为 0 时返回 None，否则沿用 nw_t_fallback 对
+    零方差的处理，按均值符号给 ±1e12，使比较保持确定性。
+    """
+    n = len(returns)
+    if n < 2:
+        return None
+    mean = sum(returns) / n
+    variance = sum((r - mean) ** 2 for r in returns) / (n - 1)
+    if variance <= 0.0:
+        return math.copysign(1e12, mean) if mean else None
+    return mean / math.sqrt(variance) * math.sqrt(SHARPE_ANNUAL_DAYS)
+
+
+def rebalance_asofs(conn, trader_id, start):
+    """One arm's rebalance keys since start (same records as count_rebalances).
+
+    Key: the `as_of=YYYY-MM-DD` line Go renders into cot_trace
+    (trader/auto_trader_factor_quant.go, second line of the rebalance
+    summary); records without a parseable as_of fall back to their UTC date.
+    """
+    start_date = start.strftime('%Y-%m-%d')
+    keys = set()
+    for ts_text, cot_trace in conn.execute(
+            "SELECT timestamp, cot_trace FROM decision_records "
+            "WHERE trader_id = ? AND success = 1 "
+            "AND cot_trace LIKE ? "
+            "AND substr(timestamp, 1, 10) >= ?",
+            (trader_id, REBALANCE_PREFIX + '%', start_date)):
+        if parse_instant(ts_text) < start:
+            continue
+        match = AS_OF_PATTERN.search(cot_trace or '')
+        keys.add(match.group(1) if match else ts_text[:10])
+    return keys
+
+
+def count_common_rebalances(conn, control_id, candidate_id, start):
+    """(count, sorted keys): rebalances both arms executed since start."""
+    common = (rebalance_asofs(conn, control_id, start)
+              & rebalance_asofs(conn, candidate_id, start))
+    return len(common), sorted(common)
+
+
+def analyze_pair_arm(conn, trader_id, start, window_dates):
+    """One arm's stats restricted to the common window (sampling logic reused)."""
+    baseline, points = load_snapshots(conn, trader_id, start)
+    by_date = {ts.date(): (ts, eq) for ts, eq in points}
+    common_points = [by_date[date] for date in window_dates]
+    returns = returns_over(baseline, common_points)
+    cum = None
+    if baseline is not None and common_points:
+        last = common_points[-1][1]
+        if math.isfinite(baseline[1]) and math.isfinite(last) and baseline[1] > 0:
+            cum = last / baseline[1] - 1.0
+    dd = max_drawdown(baseline, common_points)
+    kill, kill_info = kill_switch(conn, trader_id, start, dd)
+    return {
+        'trader_id': trader_id, 'baseline': baseline, 'points': common_points,
+        'returns': returns, 'n_days': len(returns),
+        'mean': sum(returns) / len(returns) if returns else None,
+        'sharpe': sharpe_ratio(returns), 'cum': cum, 'max_drawdown': dd,
+        'rebalances': count_rebalances(conn, trader_id, start),
+        'kill': kill, 'kill_info': kill_info,
+    }
+
+
+def decide_pair(n_days, common_rebalances, control, candidate):
+    """Pre-registered pair verdict (order as written in the prereg) + reasons."""
+    reasons = []
+    if control['kill'] and not candidate['kill']:
+        reasons.append('对照触发 25% 回撤熔断而候选未触发，按预注册提前判 pass')
+        return 'pass', reasons
+    if candidate['kill']:
+        reasons.append('候选触发 25% 回撤熔断，按预注册提前判 fail')
+        return 'fail', reasons
+    if n_days < MIN_DAYS:
+        reasons.append(f'样本不足：共同窗口 {n_days} 个日收益 < {MIN_DAYS}')
+    if common_rebalances < MIN_REBALANCES:
+        reasons.append(f'共同调仓不足：{common_rebalances} 次 < {MIN_REBALANCES}')
+    if n_days < MIN_DAYS or common_rebalances < MIN_REBALANCES:
+        return 'pending', reasons
+
+    def fmt(value):
+        return '无' if value is None else f'{value:.2f}'
+
+    sharpe_c, sharpe_k = candidate['sharpe'], control['sharpe']
+    dd_c, dd_k = candidate['max_drawdown'], control['max_drawdown']
+    sharpe_ok = sharpe_c is not None and sharpe_k is not None and sharpe_c >= sharpe_k
+    sharpe_worse = sharpe_c is not None and sharpe_k is not None and sharpe_c < sharpe_k
+    dd_ok = dd_c < dd_k
+    stats = (f'Sharpe 候选 {fmt(sharpe_c)} 对 对照 {fmt(sharpe_k)}，'
+             f'MaxDD 候选 {dd_c:.2%} 对 对照 {dd_k:.2%}')
+    if n_days >= EXTENSION_DAYS:
+        if sharpe_ok and dd_ok:
+            reasons.append(f'延长阶段（n={n_days}）：两项条件同时满足（{stats}），判 pass')
+            return 'pass', reasons
+        reasons.append(f'延长阶段（n={n_days}）：两项条件未同时满足（{stats}），判 fail')
+        return 'fail', reasons
+    if sharpe_ok and dd_ok:
+        reasons.append(f'第一阶段（n={n_days}）：候选 Sharpe 不变差且回撤更小（{stats}），判 pass')
+        return 'pass', reasons
+    if sharpe_worse and not dd_ok:
+        reasons.append(f'第一阶段（n={n_days}）：候选 Sharpe 更差且回撤不更小（{stats}），判 fail')
+        return 'fail', reasons
+    reasons.append(f'第一阶段（n={n_days}）：两项条件互有胜负（{stats}），'
+                   f'判 inconclusive，延长一次至 {EXTENSION_DAYS} 天')
+    return 'inconclusive', reasons
+
+
+def build_pair_report(conn, control_id, candidate_id, start, now):
+    """Pair report: per-arm stats on the common window + pre-registered verdict."""
+    _, control_points = load_snapshots(conn, control_id, start)
+    _, candidate_points = load_snapshots(conn, candidate_id, start)
+    window_dates = sorted({ts.date() for ts, _ in control_points}
+                          & {ts.date() for ts, _ in candidate_points})
+    arms = {role: analyze_pair_arm(conn, trader_id, start, window_dates)
+            for role, trader_id in (('control', control_id), ('candidate', candidate_id))}
+    n_days = min(arms['control']['n_days'], arms['candidate']['n_days'])
+    common_rebalances, common_keys = count_common_rebalances(conn, control_id,
+                                                             candidate_id, start)
+    verdict, reasons = decide_pair(n_days, common_rebalances,
+                                   arms['control'], arms['candidate'])
+
+    def arm_summary(arm):
+        return {
+            'trader_id': arm['trader_id'],
+            'baseline': {'timestamp': iso(arm['baseline'][0]),
+                         'total_equity': arm['baseline'][1]} if arm['baseline'] else None,
+            'first_point': {'timestamp': iso(arm['points'][0][0]),
+                            'total_equity': arm['points'][0][1]} if arm['points'] else None,
+            'last_point': {'timestamp': iso(arm['points'][-1][0]),
+                           'total_equity': arm['points'][-1][1]} if arm['points'] else None,
+            'n_days': arm['n_days'],
+            'mean_daily_return': arm['mean'],
+            'daily_returns': arm['returns'],
+            'sharpe': arm['sharpe'],
+            'cum_return': arm['cum'],
+            'max_drawdown': arm['max_drawdown'],
+            'rebalances': arm['rebalances'],
+            'kill_fired': arm['kill'],
+            'kill_sources': arm['kill_info']['sources'],
+            'kill_state': {k: v for k, v in arm['kill_info'].items() if k != 'sources'},
+        }
+
+    return {
+        'idea_id': PAIR_IDEA_ID,
+        'mode': 'pair',
+        'control': arm_summary(arms['control']),
+        'candidate': arm_summary(arms['candidate']),
+        'start': iso(start),
+        'generated_at': iso(now),
+        'stage': 'S2',
+        'sample_stage': sample_stage(n_days),
+        'n_days': n_days,
+        'window_dates': [date.isoformat() for date in window_dates],
+        'window_start': window_dates[0].isoformat() if window_dates else None,
+        'window_end': window_dates[-1].isoformat() if window_dates else None,
+        'common_rebalances': common_rebalances,
+        'common_rebalance_asofs': common_keys,
+        'rebalance_key_method': REBALANCE_KEY_METHOD,
+        'verdict': verdict,
+        'reasons': reasons,
+        'thresholds': {'min_days': MIN_DAYS, 'min_rebalances': MIN_REBALANCES,
+                       'max_drawdown': MAX_DRAWDOWN, 'extension_days': EXTENSION_DAYS,
+                       'sharpe_annual_days': SHARPE_ANNUAL_DAYS},
+    }
+
+
+PAIR_VERDICT_LABELS = {
+    'pending': '样本未达标，继续观察',
+    'pass': '通过',
+    'fail': '不通过',
+    'inconclusive': '尚不能判定，延长一次至 252 天',
+}
+
+
+def pair_summary(data) -> str:
+    def pct(value):
+        return '无' if value is None else f'{value * 100:.2f}%'
+
+    def sharpe_text(value):
+        return '无' if value is None else f'{value:.2f}'
+
+    def kill_text(arm):
+        return ('已触发（' + '、'.join(arm['kill_sources']) + '）'
+                if arm['kill_fired'] else '未触发')
+
+    control, candidate = data['control'], data['candidate']
+    lines = [
+        f"fq_us S2 配对报告（{data['idea_id']}，预注册口径）",
+        f"对照 {control['trader_id']}",
+        f"候选 {candidate['trader_id']}",
+        f"起始 {data['start']}，报告时间 {data['generated_at']}，阶段 {data['sample_stage']}",
+        f"共同窗口：{data['n_days']} 个共同日收益"
+        f"（{data['window_start'] or '无'} … {data['window_end'] or '无'}），"
+        f"共同调仓 {data['common_rebalances']} 次",
+        f"对照：夏普 {sharpe_text(control['sharpe'])}，最大回撤 {pct(control['max_drawdown'])}，"
+        f"累计 {pct(control['cum_return'])}，自身调仓 {control['rebalances']} 次，"
+        f"熔断 {kill_text(control)}",
+        f"候选：夏普 {sharpe_text(candidate['sharpe'])}，最大回撤 {pct(candidate['max_drawdown'])}，"
+        f"累计 {pct(candidate['cum_return'])}，自身调仓 {candidate['rebalances']} 次，"
+        f"熔断 {kill_text(candidate)}",
+        f"判定：{data['verdict']}（{PAIR_VERDICT_LABELS[data['verdict']]}）",
+    ]
+    for reason in data['reasons']:
+        lines.append(f'  - {reason}')
+    return '\n'.join(lines)
+
+
+def render_pair_markdown(data) -> str:
+    def pct(value):
+        return '无' if value is None else f'{value * 100:.2f}%'
+
+    def sharpe_text(value):
+        return '无' if value is None else f'{value:.4f}'
+
+    def kill_text(arm):
+        return '已触发：' + '、'.join(arm['kill_sources']) if arm['kill_fired'] else '未触发'
+
+    control, candidate = data['control'], data['candidate']
+    lines = [
+        f"# fq_us 波动率缩放在线配对 S2 报告（{data['idea_id']}）",
+        '',
+        f"- 对照：`{control['trader_id']}`（mom_ls_invvol_v1）",
+        f"- 候选：`{candidate['trader_id']}`（mom_ls_invvol_volscale_v1）",
+        f"- S2 起始：{data['start']}；报告时间：{data['generated_at']}",
+        f"- 样本阶段：{data['sample_stage']}（判定要求 ≥ {MIN_DAYS} 个共同交易日、"
+        f"≥ {MIN_REBALANCES} 次共同调仓，可延长一次至 {EXTENSION_DAYS} 天）",
+        f"- **判定：{data['verdict']}（{PAIR_VERDICT_LABELS[data['verdict']]}）**",
+        '',
+        '## 共同窗口',
+        '',
+        '| 指标 | 值 |',
+        '|---|---|',
+        f"| 共同交易日点 | {len(data['window_dates'])}"
+        f"（{data['window_start'] or '无'} … {data['window_end'] or '无'}） |",
+        f"| 共同日收益 n_days | {data['n_days']} |",
+        f"| 共同调仓 | {data['common_rebalances']} 次 |",
+        f'| as_of 口径 | {data["rebalance_key_method"]} |',
+        '',
+        '## 两组统计（公共窗口内）',
+        '',
+        '| 指标 | 对照 | 候选 |',
+        '|---|---|---|',
+        f"| 夏普（日均 ÷ sd(ddof=1) × √{SHARPE_ANNUAL_DAYS}） "
+        f"| {sharpe_text(control['sharpe'])} | {sharpe_text(candidate['sharpe'])} |",
+        f"| 最大回撤 | {pct(control['max_drawdown'])} | {pct(candidate['max_drawdown'])} |",
+        f"| 累计收益 | {pct(control['cum_return'])} | {pct(candidate['cum_return'])} |",
+        f"| 日收益均值 | "
+        f"{'无' if control['mean_daily_return'] is None else format(control['mean_daily_return'], '.6f')} "
+        f"| "
+        f"{'无' if candidate['mean_daily_return'] is None else format(candidate['mean_daily_return'], '.6f')} |",
+        f"| 日收益数 | {control['n_days']} | {candidate['n_days']} |",
+        f"| 自身调仓次数 | {control['rebalances']} | {candidate['rebalances']} |",
+        f"| {MAX_DRAWDOWN:.0%} 回撤熔断 | {kill_text(control)} | {kill_text(candidate)} |",
+        '',
+        '## 判定依据',
+        '',
+    ]
+    lines += [f'- {reason}' for reason in data['reasons']] or ['- 无']
+    lines += [
+        '',
+        '## 预注册规则（docs/research/2026-11-05-fq-us-volscale-pair-prereg.md）',
+        '',
+        '- 对照触发 25% 熔断而候选未触发 → `pass`（提前）；候选触发熔断 → `fail`（提前）；',
+        f'- 共同窗口 ≥ {MIN_DAYS} 个交易日且共同调仓 ≥ {MIN_REBALANCES} 次，否则 `pending`；',
+        '- 第一阶段（126 ≤ n < 252）：候选 Sharpe ≥ 对照且候选 MaxDD 更小 → `pass`；'
+        '候选 Sharpe 更差且 MaxDD 不更小 → `fail`；其余 `inconclusive`，延长一次；',
+        f'- n ≥ {EXTENSION_DAYS}：两项条件同时满足 → `pass`，否则 `fail`。',
+        '',
+    ]
+    return '\n'.join(lines)
+
+
+def write_pair_report(data, out_dir: Path):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / 'report.json'
+    md_path = out_dir / 'report.md'
+    json_path.write_text(json.dumps(json_safe(data), ensure_ascii=False, indent=2,
+                                    allow_nan=False) + '\n', encoding='utf-8')
+    md_path.write_text(render_pair_markdown(data), encoding='utf-8')
+    return json_path, md_path
+
+
+def pair_ledger_row(data):
+    """One evolution_ledger row (stage S2, change_type C); pending never lands."""
+    def arm_stats(arm):
+        return {'trader_id': arm['trader_id'], 'n_days': arm['n_days'],
+                'sharpe': arm['sharpe'], 'cum_return': arm['cum_return'],
+                'max_drawdown': arm['max_drawdown'], 'kill_fired': arm['kill_fired']}
+
+    return {
+        'stage': 'S2',
+        'change_type': 'C',
+        'idea_id': PAIR_IDEA_ID,
+        'baseline_version': PAIR_BASELINE_VERSION,
+        'verdict': data['verdict'],
+        'n_days': data['n_days'],
+        'common_rebalances': data['common_rebalances'],
+        'sample_stage': data['sample_stage'],
+        'start': data['start'],
+        'window_end': data['window_end'],
+        'control': arm_stats(data['control']),
+        'candidate': arm_stats(data['candidate']),
+        'report': 'scripts/promotion/fq_us_s2_report.py',
+    }
+
+
+def append_pair_ledger(data, path) -> dict:
+    def build(k, previous):
+        row = pair_ledger_row(data)
+        row['previous_verdicts'] = [r.get('verdict') for r in previous
+                                    if r.get('track') == 'fq_us'
+                                    and r.get('idea_id') == PAIR_IDEA_ID][-5:]
+        return row
+
+    return append_event(Path(path), 'fq_us', build)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--db', required=True, help='SQLite 数据库路径（只读打开）')
-    parser.add_argument('--trader-id', required=True, help='fq_us 交易员 id')
+    parser.add_argument('--trader-id', default=None, help='fq_us 交易员 id（单交易员模式）')
+    parser.add_argument('--control', default=None, help='配对模式：对照交易员 id（现行规则）')
+    parser.add_argument('--candidate', default=None, help='配对模式：候选交易员 id（新规则）')
     parser.add_argument('--start', required=True, help='S2 起始时间 ISO8601，如 2026-11-01T00:00:00Z')
     parser.add_argument('--out', default=None, help='输出目录（写 report.json 与 report.md）')
     parser.add_argument('--ledger', default=None, help='evolution_ledger 路径；pending 不记账')
     parser.add_argument('--now', default=None, help='报告时间 ISO8601（默认当前时间）')
     args = parser.parse_args(argv)
+    pair = args.control is not None or args.candidate is not None
+    if pair != (args.control is not None and args.candidate is not None) or (pair and args.trader_id):
+        print('fq_us S2 报告失败：单交易员模式用 --trader-id，配对模式需同时给出 '
+              '--control 与 --candidate，两者不能混用', file=sys.stderr)
+        return 1
+    if not pair and not args.trader_id:
+        print('fq_us S2 报告失败：需要 --trader-id（单交易员模式）'
+              '或 --control 与 --candidate（配对模式）', file=sys.stderr)
+        return 1
     try:
         start = parse_instant(args.start)
         now = parse_instant(args.now) if args.now else datetime.now(UTC)
@@ -455,22 +822,25 @@ def main(argv=None) -> int:
         return 1
     try:
         with conn:
-            report = build_report(conn, args.trader_id, start, now)
+            report = (build_pair_report(conn, args.control, args.candidate, start, now)
+                      if pair else build_report(conn, args.trader_id, start, now))
     except sqlite3.Error as error:
         print(f'fq_us S2 报告失败：{error}', file=sys.stderr)
         return 1
     finally:
         conn.close()
     if args.out:
-        json_path, md_path = write_report(report, Path(args.out))
+        json_path, md_path = (write_pair_report(report, Path(args.out)) if pair
+                              else write_report(report, Path(args.out)))
         print(f'报告已写入 {json_path} 与 {md_path}')
     if args.ledger:
         if report['verdict'] == 'pending':
             print('判定为 pending，按约定不写 evolution_ledger')
         else:
-            row = append_ledger(report, args.ledger)
+            row = (append_pair_ledger(report, args.ledger) if pair
+                   else append_ledger(report, args.ledger))
             print(f"evolution_ledger 已记账 K={row.get('K')} verdict={row.get('verdict')}")
-    print(summary(report))
+    print(pair_summary(report) if pair else summary(report))
     return 0
 
 

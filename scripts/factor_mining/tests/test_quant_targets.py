@@ -2,6 +2,7 @@
 import contextlib
 import copy
 import datetime as dt
+import hashlib
 import io
 import json
 import os
@@ -18,6 +19,7 @@ from scripts.factor_mining import ensemble, live_scores, miner, quant_targets as
 from scripts.factor_mining.panel import Panels
 from scripts.factor_mining.tests.synth import SIGNAL_SEED, write_market
 from scripts.backtest import fq_us_momentum_study as study
+from scripts.backtest import fq_us_volscale_study as volstudy
 
 
 def fixture(names=60, rows=120):
@@ -342,14 +344,252 @@ class USMomentumTests(unittest.TestCase):
                                  env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stderr)
             commands = calls.read_text().splitlines()
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 5)
             self.assertTrue(all('run_mining' in c for c in commands[:2]))
             self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --write')
-            self.assertIn('promotion.report', commands[3])
+            self.assertIn('--rule volscale', commands[3])
+            self.assertIn('promotion.report', commands[4])
             log = (Path(root) / 'fm/nightly.log').read_text()
             for expected in ('crypto exited non-zero', 'us exited non-zero', 'targets test failure',
                              'us momentum targets exited non-zero', 'promotion ran'):
                 self.assertIn(expected, log)
+
+
+class USVolscaleTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(temporary.cleanup)
+        cls.root = Path(temporary.name)
+        _, _, _, cls.mapping = us_fixture(cls.root, rows=792)
+        cls.features = qt._load_us_features(cls.root)
+        cls.perps = qt._load_perp_map(cls.mapping)
+        cls.date = cls.features['close'].index[-1]
+
+    def test_s1_d2_k_matches_every_rebalance_with_truncated_live_features(self):
+        snapshot = Path('/Users/zhangyun/workspace/nofx/data/factor_mining/us_momentum/snapshot_20261105')
+        report = snapshot.parents[1] / 'us_volscale/study/s1_v1/report.json'
+        if not (snapshot / 'daily/SPY.json').is_file():
+            self.skipTest(f'read-only D2 snapshot is absent: {snapshot}')
+        if not report.is_file():
+            self.skipTest(f'read-only volscale S1 report is absent: {report}')
+        rebalances = json.loads(report.read_bytes())['datasets']['D2']['arms']['V']['signal_rebalances']
+        self.assertTrue(rebalances)
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / 'us').mkdir()
+            (Path(root) / 'us/daily').symlink_to(snapshot / 'daily', target_is_directory=True)
+            features = qt._load_us_features(root)
+            for row in rebalances:
+                date = pd.Timestamp(row['date'])
+                with self.subTest(date=row['date']):
+                    prefix = {key: frame.loc[:date] for key, frame in features.items()}
+                    with patch.object(qt, '_load_us_features', return_value=prefix):
+                        result = qt.build_targets('us', root=root, perp_map=snapshot / study.MAP_FILE,
+                                                  now=date, rule='volscale')
+                    self.assertEqual(result['as_of'], row['date'])
+                    self.assertEqual(result['k_date'], row['date'])
+                    self.assertAlmostEqual(result['k'], row['k'], delta=1e-9)
+                    self.assertEqual(result['sigma_observations'], row['sigma_observations'])
+                    for key in ('sigma_hat', 'sigma_ref'):
+                        if row[key] is None:
+                            self.assertIsNone(result[key])
+                        else:
+                            self.assertAlmostEqual(result[key], row[key], delta=1e-12)
+
+    def test_weights_scale_rounded_base_with_identical_exclusions_and_keys(self):
+        decision = study.decision_at(self.features, self.date)
+        perps = dict(self.perps)
+        del perps[next(iter(decision['long']))]
+        perps[next(iter(decision['short']))] = None
+        base = qt._build_us_targets(self.features, perps, now=self.date)
+        result = qt._build_us_volscale_targets(self.features, perps, now=self.date)
+        self.assertEqual(base['status'], 'ok')
+        self.assertEqual(result['status'], 'ok')
+        self.assertGreater(result['k'], 0)
+        self.assertLess(result['k'], 1)
+        self.assertEqual(result['weights'], {s: round(w * result['k'], 6)
+                                            for s, w in base['weights'].items()})
+        self.assertEqual(result['weights'].keys(), base['weights'].keys())
+        self.assertEqual(set(result['excluded'].values()), {'not_listed', 'no_perp'})
+        for key in ('as_of', 'excluded', 'pct', 'universe_size', 'horizon', 'factor_ids'):
+            self.assertEqual(result[key], base[key])
+        self.assertEqual(result['rule'], dict(base['rule'], name='mom_ls_invvol_volscale_v1'))
+        self.assertEqual(result['base_rule'], 'mom_ls_invvol_v1')
+        self.assertEqual(result['start_as_of'], '2026-12-01')
+
+    def test_k_includes_as_of_after_last_scheduled_rebalance(self):
+        calendar = self.features['close'].index
+        sessions, decisions = study.rebalance_schedule(self.features, calendar)
+        self.assertLess(sessions[-1], self.date)
+        close = self.features['close'].ffill().loc[sessions[0]:self.date]
+        expected = volstudy.volatility_signal(volstudy.unscaled_returns(close, decisions))
+        result = qt._build_us_volscale_targets(self.features, self.perps, now=self.date)
+        self.assertEqual(result['k_date'], str(self.date.date()))
+        self.assertEqual(result['k'], expected.loc[self.date, 'k'])
+        self.assertNotAlmostEqual(result['k'], expected.loc[sessions[-1], 'k'], delta=1e-9)
+
+    def test_before_start_has_empty_weights_but_computed_monitoring_signal(self):
+        date = pd.Timestamp('2026-11-30')
+        shifted = {key: frame.set_axis(frame.index + (date - self.date))
+                   for key, frame in self.features.items()}
+        result = qt._build_us_volscale_targets(shifted, self.perps, now=date)
+        self.assertEqual(result['status'], 'not_started')
+        self.assertEqual(result['reason'], 'before_start_as_of')
+        self.assertEqual(result['weights'], {})
+        self.assertGreater(result['k'], 0)
+        self.assertLess(result['k'], 1)
+        self.assertIsNotNone(result['sigma_hat'])
+        self.assertIsNotNone(result['sigma_ref'])
+        self.assertEqual(result['k_date'], '2026-11-30')
+        # The gate is based on the data's as_of, even if generated after start.
+        later = qt._build_us_volscale_targets(shifted, self.perps, now='2026-12-01')
+        self.assertEqual(later['status'], 'not_started')
+        started = {key: frame.set_axis(frame.index + dt.timedelta(days=1))
+                   for key, frame in shifted.items()}
+        self.assertEqual(qt._build_us_volscale_targets(started, self.perps, now='2026-12-01')['status'], 'ok')
+
+    def test_non_ok_base_status_and_reason_propagate_with_no_weights(self):
+        small = {key: frame.copy() for key, frame in self.features.items()}
+        small['eligible'].iloc[-1, :] = False
+        small['eligible'].iloc[-1, :14] = True
+        for features, perps, now in ((self.features, None, self.date),
+                                     (None, self.perps, self.date),
+                                     (self.features, self.perps, self.date + dt.timedelta(days=5)),
+                                     (small, self.perps, self.date)):
+            base = qt._build_us_targets(features, perps, now=now)
+            with self.subTest(reason=base['reason']):
+                self.assertNotEqual(base['status'], 'ok')
+                result = qt._build_us_volscale_targets(features, perps, now=now)
+                self.assertEqual(result['status'], base['status'])
+                self.assertEqual(result['reason'], base['reason'])
+                self.assertEqual(result['weights'], {})
+                self.assertTrue(all(key in result for key in qt.US_VOLSCALE_FIELDS))
+
+    def test_insufficient_sigma_or_reference_history_cannot_authorize_targets(self):
+        for rows in (310, 629, 630):
+            prefix = {key: frame.iloc[:rows] for key, frame in self.features.items()}
+            date = prefix['close'].index[-1]
+            # Keep the historical warmup but put as_of after the start gate.
+            shift = self.date - date
+            prefix = {key: frame.set_axis(frame.index + shift) for key, frame in prefix.items()}
+            with self.subTest(rows=rows):
+                self.assertEqual(qt._build_us_targets(prefix, self.perps, now=self.date)['status'], 'ok')
+                result = qt._build_us_volscale_targets(prefix, self.perps, now=self.date)
+                if rows < 630:
+                    self.assertEqual(result['status'], 'insufficient_universe')
+                    self.assertEqual(result['reason'], 'volscale_signal_unavailable')
+                    self.assertEqual(result['weights'], {})
+                    self.assertIsNone(result['sigma_ref'])
+                    self.assertEqual(result['k'], 1)  # S1's explicit warmup value, visibly gated.
+                else:
+                    self.assertEqual(result['sigma_observations'], 252)
+                    self.assertEqual(result['status'], 'ok')
+                    self.assertTrue(result['weights'])
+
+    def test_base_cli_print_and_file_bytes_match_prechange_fixtures(self):
+        # Captured from the original CLI before adding --rule, with the same
+        # fixed fixtures and UTC timestamp. Cover both existing markets.
+        hashes = {
+            'us': ('af3c1d4613578f7a9b3365c1c2bed10102e69f0f015b9bcb1e7da37b58439e4a',
+                   '6b2f899f010e3e2f1e411065471aaaedc7af5edc0791795562fc9582b54021f0'),
+            'crypto': ('aeea48201016ceda739168fbe741370e574f1495e52be6a0b4ad0cfe0e05ce89',
+                       '79590e19efb7d917ef499054196728cb8cb346c97b89c9e21a604d7c5623b59f')}
+        for market in hashes:
+            with self.subTest(market=market), tempfile.TemporaryDirectory() as root:
+                args = ['--market', market, '--root', root]
+                if market == 'us':
+                    _, _, calendar, mapping = us_fixture(root)
+                    now = calendar[-1].tz_localize('UTC')
+                    args += ['--perp-map', str(mapping)]
+                    setup = contextlib.nullcontext()
+                else:
+                    panels, doc = fixture()
+                    store.write_json(Path(root) / market / 'live_scores.json', doc)
+                    now = pd.Timestamp(doc['as_of'], tz='UTC')
+                    setup = patch.object(qt.panel, 'load_panels', return_value=panels)
+                utc = qt._utc
+                with setup, patch.object(qt, '_utc', side_effect=lambda v: now if v is None else utc(v)), \
+                     patch.object(qt, '_us_volscale_signal', side_effect=AssertionError('base is independent')):
+                    for extra in ([], ['--rule', 'base']):
+                        with contextlib.redirect_stdout(io.StringIO()) as output:
+                            qt.main(args + extra + ['--print'])
+                        self.assertEqual(hashlib.sha256(output.getvalue().encode()).hexdigest(), hashes[market][0])
+                        with contextlib.redirect_stdout(io.StringIO()) as output:
+                            qt.main(args + extra + ['--write', '--print'])
+                        self.assertEqual(hashlib.sha256(output.getvalue().encode()).hexdigest(), hashes[market][0])
+                        raw = (Path(root) / market / 'quant_targets.json').read_bytes()
+                        self.assertEqual(hashlib.sha256(raw).hexdigest(), hashes[market][1])
+
+    def test_volscale_cli_print_is_read_only_and_write_only_replaces_variant(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root) / 'us'
+            base.mkdir()
+            (base / 'daily').symlink_to(self.root / 'us/daily', target_is_directory=True)
+            control = base / 'quant_targets.json'
+            control.write_bytes(b'control must remain byte-identical')
+            args = ['--market', 'us', '--rule', 'volscale', '--root', root,
+                    '--perp-map', str(self.mapping), '--print']
+            now, utc = self.date.tz_localize('UTC'), qt._utc
+            with patch.object(qt, '_utc', side_effect=lambda v: now if v is None else utc(v)):
+                with patch.object(store, 'write_json', side_effect=AssertionError('print is read-only')), \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    qt.main(args)
+                summary = json.loads(output.getvalue())
+                self.assertEqual(summary['rule'], 'mom_ls_invvol_volscale_v1')
+                self.assertEqual(summary['status'], 'ok')
+                self.assertTrue(all(key in summary for key in qt.US_VOLSCALE_FIELDS))
+                replace = store.os.replace
+                def atomic(source, destination):
+                    self.assertEqual(Path(source).parent, base)
+                    self.assertEqual(Path(destination), base / 'quant_targets_volscale.json')
+                    replace(source, destination)
+                with patch.object(store.os, 'replace', side_effect=atomic) as swaps, \
+                     contextlib.redirect_stdout(io.StringIO()) as written:
+                    qt.main(args + ['--write'])
+                swaps.assert_called_once()
+            self.assertEqual(json.loads(written.getvalue()), summary)
+            stored = json.loads((base / 'quant_targets_volscale.json').read_text())
+            self.assertIsInstance(stored['rule'], dict)
+            self.assertEqual(qt._summary(stored), summary)
+            self.assertEqual(control.read_bytes(), b'control must remain byte-identical')
+            self.assertEqual({p.name for p in base.iterdir()},
+                             {'daily', 'quant_targets.json', 'quant_targets_volscale.json'})
+
+    def test_volscale_rule_rejects_crypto_and_backtest(self):
+        with self.assertRaisesRegex(ValueError, 'US-only'):
+            qt.build_targets('crypto', rule='volscale')
+        with self.assertRaisesRegex(ValueError, 'rule must be'):
+            qt.build_targets('us', rule='unknown')
+        for args in (['--rule', 'volscale'], ['--market', 'us', '--rule', 'volscale', '--backtest']):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as stopped:
+                    qt.main(args)
+                self.assertEqual(stopped.exception.code, 2)
+
+    def test_nightly_volscale_follows_base_and_failure_is_logged_without_abort(self):
+        with tempfile.TemporaryDirectory() as root:
+            fake, calls = Path(root) / 'python', Path(root) / 'calls.log'
+            fake.write_text('#!/bin/sh\n'
+                'echo "$*" >> "$CALLS_LOG"\n'
+                'case "$*" in\n'
+                '  *--rule\\ volscale*) echo "volscale test failure"; exit 9 ;;\n'
+                '  *promotion.report*) echo "promotion ran" ;;\n'
+                'esac\n')
+            fake.chmod(0o755)
+            env = dict(os.environ, AR_PYTHON=str(fake), FACTOR_MINING_DIR=str(Path(root) / 'fm'),
+                       CALLS_LOG=str(calls), FM_FETCH_RETRIES='0')
+            run = subprocess.run(['sh', str(Path(qt.__file__).with_name('run_nightly.sh'))],
+                                 env=env, text=True, capture_output=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            commands = calls.read_text().splitlines()
+            self.assertEqual(len(commands), 5)
+            self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --write')
+            self.assertEqual(commands[3], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --rule volscale --write')
+            self.assertIn('promotion.report', commands[4])
+            log = (Path(root) / 'fm/nightly.log').read_text()
+            for expected in ('volscale test failure', 'us volscale targets exited non-zero', 'promotion ran'):
+                self.assertIn(expected, log)
+            self.assertLess(log.index('=== us momentum targets'), log.index('=== us volscale targets'))
 
 
 class TargetRulesTests(unittest.TestCase):

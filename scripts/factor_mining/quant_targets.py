@@ -28,6 +28,9 @@ US_HORIZON = 28
 # Daily data may bridge weekends/holidays for four calendar days. The 28-day
 # rebalance horizon does not extend freshness; Go also applies max_stale_days.
 US_MAX_STALE_DAYS = 4
+US_VOLSCALE_START_AS_OF = '2026-12-01'
+US_VOLSCALE_FIELDS = ('k', 'sigma_hat', 'sigma_ref', 'sigma_observations', 'k_date',
+                      'start_as_of', 'base_rule')
 
 
 def _rule(market):
@@ -168,8 +171,54 @@ def _build_us_targets(features, perps, *, now=None):
     return result
 
 
+def _us_volscale_signal(features):
+    from scripts.backtest.fq_us_momentum_study import PARAMS, decision_at
+    from scripts.backtest.fq_us_volscale_study import unscaled_returns, volatility_signal
+
+    result = dict(k=None, sigma_hat=None, sigma_ref=None, sigma_observations=0)
+    if features is None or features['close'].empty:
+        return result
+    calendar = features['close'].index
+    counts = features['eligible'].sum(axis=1)
+    possible = counts.index[counts.ge(PARAMS['min_eligible'])]
+    if possible.empty:
+        return result
+    start = calendar.get_loc(possible[0])
+    # Match S1's first eligible date and 20-session decision clock, including
+    # its warmup k=1 values. Unlike the study, retain the incomplete last period:
+    # the live rebalance is at as_of, so u_d and k must include as_of's close,
+    # rather than use k from the most recent historical schedule date.
+    dates = calendar[start::PARAMS['rebalance_trading_days']]
+    decisions = [decision_at(features, date) for date in dates]
+    close = features['close'].ffill().loc[calendar[start:]]
+    signal = volatility_signal(unscaled_returns(close, decisions)).iloc[-1]
+    for key in ('k', 'sigma_hat', 'sigma_ref'):
+        result[key] = float(signal[key]) if np.isfinite(signal[key]) else None
+    result['sigma_observations'] = int(signal['sigma_observations'])
+    return result
+
+
+def _build_us_volscale_targets(features, perps, *, now=None):
+    result = _build_us_targets(features, perps, now=now)
+    base_weights = result['weights']
+    result.update(_us_volscale_signal(features), base_rule=result['rule']['name'],
+                  start_as_of=US_VOLSCALE_START_AS_OF, k_date=result['as_of'], weights={})
+    result['rule'] = dict(result['rule'], name='mom_ls_invvol_volscale_v1')
+    if result['as_of'] is not None and result['as_of'] < US_VOLSCALE_START_AS_OF:
+        result.update(status='not_started', reason='before_start_as_of')
+    elif result['status'] != 'ok':
+        pass  # Preserve the base status and reason, with empty weights.
+    elif any(result[key] is None for key in ('k', 'sigma_hat', 'sigma_ref')):
+        # S1 reports k=1 during warmup; expose it for historical parity and
+        # monitoring, but never let that placeholder authorize live targets.
+        result.update(status='insufficient_universe', reason='volscale_signal_unavailable')
+    else:
+        result['weights'] = {s: round(w * result['k'], 6) for s, w in base_weights.items()}
+    return result
+
+
 def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, now=None,
-                  root=ROOT, perp_map=None) -> dict:
+                  root=ROOT, perp_map=None, rule='base') -> dict:
     """Build schema v1 from local US rows or supplied crypto snapshot/panels.
 
     ``horizon`` is an optional consistency assertion, not a rule override.
@@ -179,10 +228,15 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
     US ignores live_scores_doc and miner panels: its S1 features come directly
     from <root>/us/daily and the repository's frozen universe.
     """
+    if rule not in ('base', 'volscale'):
+        raise ValueError('rule must be base or volscale')
+    if rule == 'volscale' and market != 'us':
+        raise ValueError('volscale rule is US-only')
     if market == 'us':
         if horizon is not None and horizon != US_HORIZON:
             raise ValueError(f'horizon must match the fixed live selection ({US_HORIZON})')
-        return _build_us_targets(_load_us_features(root), _load_perp_map(perp_map), now=now)
+        builder = _build_us_volscale_targets if rule == 'volscale' else _build_us_targets
+        return builder(_load_us_features(root), _load_perp_map(perp_map), now=now)
     rule = _rule(market)
     generated = _utc(now)
     doc = live_scores_doc or {}
@@ -256,19 +310,20 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
     return result
 
 
-def _load_targets(market, root, *, panels=None, now=None, perp_map=None):
+def _load_targets(market, root, *, panels=None, now=None, perp_map=None, rule='base'):
     if market == 'us':
-        return build_targets(market, root=root, perp_map=perp_map, now=now)
+        return build_targets(market, root=root, perp_map=perp_map, now=now, rule=rule)
     doc = store.read_json(Path(root) / market / 'live_scores.json')
     if panels is None and _scores_entry(market, doc)[1]:
         panels = panel.load_panels(market, root)
-    return build_targets(market, doc, panels, now=now)
+    return build_targets(market, doc, panels, now=now, rule=rule)
 
 
-def write_targets(market, root, *, panels=None, now=None, perp_map=None) -> Path:
-    """Read local inputs and atomically replace only quant_targets.json."""
-    result = _load_targets(market, root, panels=panels, now=now, perp_map=perp_map)
-    path = Path(root) / market / 'quant_targets.json'
+def write_targets(market, root, *, panels=None, now=None, perp_map=None, rule='base') -> Path:
+    """Read local inputs and atomically replace the selected rule's target file."""
+    result = _load_targets(market, root, panels=panels, now=now, perp_map=perp_map, rule=rule)
+    filename = 'quant_targets_volscale.json' if rule == 'volscale' else 'quant_targets.json'
+    path = Path(root) / market / filename
     # store uses a same-directory mkstemp, fsync, os.replace and finally cleanup.
     store.write_json(path, result)
     return path
@@ -427,12 +482,16 @@ def _summary(doc):
     result.update(rule=doc['rule']['name'],
                   long_gross=round(sum(w for w in doc['weights'].values() if w > 0), 6),
                   short_gross=round(-sum(w for w in doc['weights'].values() if w < 0), 6))
+    if doc['rule']['name'] == 'mom_ls_invvol_volscale_v1':
+        result.update({key: doc[key] for key in US_VOLSCALE_FIELDS})
     return result
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--market', choices=('crypto', 'us'), default='crypto')
+    parser.add_argument('--rule', choices=('base', 'volscale'), default='base',
+                        help='volscale is the US momentum volatility-scaling variant')
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--perp-map', type=Path, default=DEFAULT_PERP_MAP,
                         help='US version 2 perp map; relative paths resolve from the repo root')
@@ -442,6 +501,8 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, default=Path('.quant_targets_out/backtest.md'))
     parser.add_argument('--json', type=Path, dest='json_path', default=Path('.quant_targets_out/backtest.json'))
     args = parser.parse_args(argv)
+    if args.rule == 'volscale' and (args.market != 'us' or args.backtest):
+        parser.error('--rule volscale requires --market us and cannot be combined with --backtest')
     if args.backtest:
         if args.market != 'crypto' or args.write:
             parser.error('--backtest is crypto-only and cannot be combined with --write')
@@ -451,13 +512,14 @@ def main(argv=None):
         args.out.write_text(_report(result), encoding='utf-8')
         print(f'Backtest reports: {args.out}, {args.json_path}')
     elif args.write:
-        path = write_targets(args.market, args.root, perp_map=args.perp_map)
+        path = write_targets(args.market, args.root, perp_map=args.perp_map, rule=args.rule)
         if args.print_summary:
             print(json.dumps(_summary(store.read_json(path)), ensure_ascii=False, indent=2))
         else:
             print(path)
     else:
-        print(json.dumps(_summary(_load_targets(args.market, args.root, perp_map=args.perp_map)),
+        print(json.dumps(_summary(_load_targets(args.market, args.root, perp_map=args.perp_map,
+                                              rule=args.rule)),
                          ensure_ascii=False, indent=2))
 
 
