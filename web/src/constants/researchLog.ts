@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-us-volscale',
+    date: '2026-11-05',
+    title: 'fq_us 动量多空 + 波动率缩放',
+    domain: '美股 · 因子量化 · 增量评估',
+    verdict: 'partial',
+    verdictText: 'S1 screen_pass · 降回撤，宽池仍不赚钱',
+    idea: '2008 压力测试显示 mom_ls_invvol_v1 在 2009 年反弹中亏损 29%。按文献（Barroso 和 Santa-Clara、Daniel 和 Moskowitz）加波动率缩放：每次调仓按未缩放组合 126 日波动率与其扩展中位数之比，取 k=min(1, σ_ref/σ̂)，两腿敞口乘以 k，只缩不放。在 D1（标普 500，2006–2011H1）、D2（bStock，2021–2026）、D3（标普 500，2012–2026）三组上与基础规则配对，要求三组夏普都不低、最大回撤都更低，且 D1 不触发 25% 熔断。数据都已看过，只作筛选。',
+    bullets: [
+      'S1 判 screen_pass（fq_us K=4，已记账）：夏普 D1 −0.65→−0.48、D2 0.90→0.98、D3 0.01→0.17；最大回撤 35.4%→20.7%、26.0%→20.1%、29.1%→14.6%；D1 缩放版没有触发熔断。',
+      '2009 年反弹窗从 −29.1% 降到 −12.0%；平均缩放系数 D1 0.83、D2 0.91、D3 0.78，最小约 0.3。',
+      '重要提醒：基础规则在 D3 宽池 14 年累计 −3.4%（夏普 0.01），在 bStock 上却是 +134%，说明 S1 的好结果主要来自名单的选择偏差。缩放能降风险，不能制造收益。',
+    ],
+    conclusion:
+      '波动率缩放作为风控层有效。按预注册，下一步需另写在线配对设计（缩放版新交易员对现行 S2），由用户决定；现行 S2 不改。宽池结果提示：对动量规则本身的预期应放低。',
+    source:
+      'docs/research/2026-11-05-fq-us-volscale-prereg.md · docs/research/2026-11-05-fq-us-volscale-study.md · scripts/backtest/fq_us_volscale_study.py · data/factor_mining/us_volscale/study/s1_v1/report.md',
+  },
+  {
     id: 'fq-us-momentum-stress-2008',
     date: '2026-11-05',
     title: 'fq_us 动量多空规则：2008 压力测试（描述性）',
