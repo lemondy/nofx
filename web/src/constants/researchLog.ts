@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'us-range-reversal',
+    date: '2026-11-05',
+    title: '美股候选排序：52 周区间位置 / 6 个月反转 vs 12-1 动量',
+    domain: '美股 · LLM 交易路径 · 候选排序 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 反转排序明显更差',
+    idea: '来自 Yartseva (2025) 10 倍股论文：6 个月动量系数为负、越接近 12 个月高点下一年收益越低。论文按结果选样（只看已涨 10 倍的股票），不能直接当选股规则，只检验其技术面部分。us_stock 扫描现按 TopMomentum 选候选：动量有效且高于 SMA200 的个股中按 mom12_1 取前 5。E 类改动：同一合格池内改按 52 周区间位置（V1）或 6 个月动量（V2）从低到高取前 5，比较之后 20 个交易日收益。数据为 90 只 bStock 个股的 Yahoo 复权日线（排除 11 个 ETF/杠杆 ETF），2021-11 至 2026-10 共 1166 天；Newey-West lag 19，us_llm 线 K=1、2。',
+    bullets: [
+      'S1 两个变体都判 fail（已记账）：V1 每日 Δ = −4.72%/20 日，z = −3.36（z_K 1.96），两半 −2.6%/−6.8%；V2 Δ = −4.25%，z = −2.77（z_K 2.24），两半 −2.8%/−5.7%。',
+      '随机前 5 安慰剂（200 次）：随机挑选平均比动量前 5 少 3.2%/20 日，两个变体比全部随机结果都差（分位 0%）。',
+      '全币池 RankIC 三个信号都为正：range_pos 20 日 +0.073（t 3.4），mom6 +0.046，mom12_1 +0.057。越接近 52 周高点之后越强，是动量延续，不是反转。去掉 SMA200 条件仍为负；变体换手为动量排序的 3.4–3.7 倍。',
+    ],
+    conclusion:
+      '不进入线上配对，线上排序不变。论文的反转是“已知赢家”内部的选样均值回归。现行 12-1 动量 + SMA200 排序在现有币池内跑赢随机和等权，但币池是 2026 年仍上架的 bStock（多为近年走强后上架），动量优势会被幸存者偏差高估。',
+    source:
+      'docs/research/2026-11-05-us-range-reversal-prereg.md · docs/research/2026-11-05-us-range-reversal-study.md · scripts/factor_mining/us_range_reversal_study.py',
+  },
+  {
     id: 'fq-us-momentum-ls',
     date: '2026-11-05',
     title: 'fq_us 动量多空单一信号（mom_ls_invvol_v1）',
