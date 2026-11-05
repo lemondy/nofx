@@ -7,6 +7,7 @@ import json
 import math
 import random
 import sqlite3
+import statistics
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,9 +69,81 @@ def equity_returns_db(directory, returns, rebalances=6, first=START, base_equity
     return str(path)
 
 
-def run_report(db_path, ledger=None, out=None, start=START):
-    argv = ['--db', db_path, '--trader-id', TRADER, '--start', report.iso(start),
+def run_report(db_path, ledger=None, out=None, start=START, trader=TRADER):
+    argv = ['--db', db_path, '--trader-id', trader, '--start', report.iso(start),
             '--now', '2026-11-05T12:00:00Z']
+    if out:
+        argv += ['--out', str(out)]
+    if ledger:
+        argv += ['--ledger', str(ledger)]
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        code = report.main(argv)
+    return code, buffer.getvalue()
+
+
+CONTROL = 'fq_us_control'
+CANDIDATE = 'fq_us_candidate'
+STAGE_EVENTS = [(i, f'2026-11-{i + 2:02d}') for i in range(6)]  # 6 shared as_of rebalances
+
+
+def pair_equity_db(directory, control_returns, candidate_returns, control_drop=(),
+                   candidate_drop=(), control_events=None, candidate_events=None,
+                   control_kill=None, candidate_kill=None, base_equity=10000.0,
+                   name='pair.db'):
+    """Two-arm fixture mirroring equity_returns_db, once per trader.
+
+    Each arm gets a baseline snapshot before start plus a 14:00 UTC snapshot
+    per weekday return. `*_drop` are weekday indexes without snapshots for
+    that arm (the common window shrinks to the intersection). `*_events` are
+    [(weekday_index, as_of_or_None)] rebalance records; as_of None omits the
+    `as_of=` line so the UTC-date fallback applies. `*_kill` are
+    (halt_kind, halted_at_ms, halt_reason) factor_quant_state latches.
+    """
+    path = Path(directory) / name
+    span = max(len(control_returns), len(candidate_returns))
+    for events in (control_events, candidate_events):
+        for day_index, _ in events or []:
+            span = max(span, day_index + 1)
+    days = weekdays(span, START)
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(SCHEMA)
+        for trader, returns, drop, events, kill in (
+                (CONTROL, control_returns, control_drop, control_events, control_kill),
+                (CANDIDATE, candidate_returns, candidate_drop, candidate_events,
+                 candidate_kill)):
+            conn.execute('INSERT INTO trader_equity_snapshots (trader_id, timestamp,'
+                         ' total_equity) VALUES (?, ?, ?)',
+                         (trader, ts_text(START - timedelta(hours=1)), base_equity))
+            equity = base_equity
+            for i, ret in enumerate(returns):
+                if i in drop:
+                    continue
+                equity *= 1.0 + ret
+                conn.execute('INSERT INTO trader_equity_snapshots (trader_id, timestamp,'
+                             ' total_equity) VALUES (?, ?, ?)',
+                             (trader, ts_text(days[i] + timedelta(hours=14)), equity))
+            for i, (day_index, as_of) in enumerate(events or []):
+                trace = f'{report.REBALANCE_PREFIX}美股 bStock 模拟账本，仅模拟盘，未调用大模型）'
+                if as_of is not None:
+                    trace += f'\nas_of={as_of} 规则=mom_ls_invvol_v1 horizon=28 天 run_id='
+                conn.execute('INSERT INTO decision_records (trader_id, cycle_number,'
+                             ' timestamp, cot_trace, success) VALUES (?, ?, ?, ?, 1)',
+                             (trader, i + 1,
+                              ts_text(days[day_index] + timedelta(hours=10, minutes=i)),
+                              trace))
+            if kill:
+                conn.execute('INSERT INTO factor_quant_state (trader_id, halt_kind,'
+                             ' halted_at, halt_reason) VALUES (?, ?, ?, ?)',
+                             (trader, kill[0], kill[1], kill[2]))
+        conn.commit()
+    return str(path)
+
+
+def run_pair(db_path, ledger=None, out=None, start=START, control=CONTROL,
+             candidate=CANDIDATE):
+    argv = ['--db', db_path, '--control', control, '--candidate', candidate,
+            '--start', report.iso(start), '--now', '2026-11-05T12:00:00Z']
     if out:
         argv += ['--out', str(out)]
     if ledger:
@@ -344,6 +417,287 @@ class LedgerAndOutput(unittest.TestCase):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             code = report.main(['--db', db, '--trader-id', TRADER, '--start', 'not-a-date'])
+        self.assertEqual(code, 1)
+
+
+class PairMode(unittest.TestCase):
+    """Pair mode (--control/--candidate) per the volscale pair prereg."""
+
+    maxDiff = None
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def build(self, **kwargs):
+        db = pair_equity_db(self.tmp.name, name=f'pair-{self.id()}.db', **kwargs)
+        with closing(report.open_db(db)) as conn:
+            return report.build_pair_report(conn, CONTROL, CANDIDATE, START,
+                                            START + timedelta(days=1))
+
+    # -- fixtures ---------------------------------------------------------
+    def test_common_window_is_the_intersection(self):
+        """Dates present in both series; returns computed on those dates only."""
+        data = self.build(control_returns=[0.0, 0.0, 0.1, -0.1, 0.05],
+                          candidate_returns=[0.02] * 5, candidate_drop={1, 3})
+        self.assertEqual(data['window_dates'], ['2026-11-02', '2026-11-04', '2026-11-06'])
+        self.assertEqual(data['n_days'], 3)
+        self.assertEqual(data['control']['n_days'], 3)
+        self.assertEqual(data['candidate']['n_days'], 3)
+        # Control compounds all five returns but is only sampled on common dates.
+        for got, want in zip(data['control']['daily_returns'],
+                             [0.0, 0.1, 10395.0 / 11000.0 - 1.0]):
+            self.assertAlmostEqual(got, want, places=12)
+        for got, want in zip(data['candidate']['daily_returns'], [0.02, 0.02, 0.02]):
+            self.assertAlmostEqual(got, want, places=12)
+
+    def test_per_arm_sharpe_and_max_drawdown(self):
+        data = self.build(control_returns=[0.01, -0.03, 0.02, -0.01, 0.005],
+                          candidate_returns=[0.02, -0.01, 0.015, 0.0, -0.02])
+        for arm in ('control', 'candidate'):
+            returns = data[arm]['daily_returns']
+            expected = (sum(returns) / len(returns)) / statistics.stdev(returns) * math.sqrt(252)
+            self.assertAlmostEqual(data[arm]['sharpe'], expected, places=12)
+        # equity paths: control 10000→10100→9797→… (trough 9797), candidate dd exactly 2%
+        self.assertAlmostEqual(data['control']['max_drawdown'], 0.03)
+        self.assertAlmostEqual(data['candidate']['max_drawdown'], 0.02)
+        cum = 1.0
+        for ret in (0.02, -0.01, 0.015, 0.0, -0.02):
+            cum *= 1.0 + ret
+        self.assertAlmostEqual(data['candidate']['cum_return'], cum - 1.0, places=12)
+
+    def test_candidate_without_snapshots_is_pending(self):
+        data = self.build(control_returns=[0.001] * 10, candidate_returns=[])
+        self.assertEqual(data['window_dates'], [])
+        self.assertEqual(data['n_days'], 0)
+        self.assertEqual(data['verdict'], 'pending')
+
+    # -- verdict branches -------------------------------------------------
+    def test_early_pass_when_only_control_kills(self):
+        fired = int((START + timedelta(hours=2)).timestamp() * 1000)
+        data = self.build(control_returns=[0.01] * 5, candidate_returns=[0.01] * 5,
+                          control_kill=('drawdown', fired, '回撤熔断'))
+        self.assertEqual(data['verdict'], 'pass')
+        self.assertEqual(data['control']['kill_sources'], ['state_latch'])
+        self.assertFalse(data['candidate']['kill_fired'])
+        self.assertIn('提前判 pass', ''.join(data['reasons']))
+
+    def test_early_fail_when_candidate_kills(self):
+        fired = int((START + timedelta(hours=2)).timestamp() * 1000)
+        data = self.build(control_returns=[0.01] * 5, candidate_returns=[0.01] * 5,
+                          candidate_kill=('drawdown', fired, '回撤熔断'))
+        self.assertEqual(data['verdict'], 'fail')
+        self.assertEqual(data['candidate']['kill_sources'], ['state_latch'])
+
+    def test_both_killed_fails_on_candidate_rule(self):
+        fired = int((START + timedelta(hours=2)).timestamp() * 1000)
+        kill = ('drawdown', fired, '回撤熔断')
+        data = self.build(control_returns=[0.01] * 5, candidate_returns=[0.01] * 5,
+                          control_kill=kill, candidate_kill=kill)
+        self.assertEqual(data['verdict'], 'fail')
+
+    def test_pending_when_common_days_missing(self):
+        data = self.build(control_returns=[0.001] * 100, candidate_returns=[0.001] * 100,
+                          control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS)
+        self.assertEqual(data['verdict'], 'pending')
+        self.assertEqual(data['common_rebalances'], 6)
+        self.assertEqual(data['sample_stage'], 'stage_1')
+        self.assertIn('样本不足', ''.join(data['reasons']))
+
+    def test_pending_when_common_rebalances_missing(self):
+        events = [(i, f'2026-11-{i + 2:02d}') for i in range(3)]
+        data = self.build(control_returns=[0.001] * 130, candidate_returns=[0.001] * 130,
+                          control_events=events, candidate_events=events)
+        self.assertEqual(data['verdict'], 'pending')
+        self.assertEqual(data['common_rebalances'], 3)
+        self.assertIn('共同调仓不足', ''.join(data['reasons']))
+
+    def test_stage_one_pass(self):
+        control = [0.001] * 130
+        control[10] = -0.10  # 10% drawdown, weak Sharpe
+        data = self.build(control_returns=control,
+                          candidate_returns=[0.001, 0.003] * 65,  # dd 0, Sharpe ~31.7
+                          control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS)
+        self.assertEqual(data['n_days'], 130)
+        self.assertEqual(data['sample_stage'], 'extension')
+        self.assertGreater(data['candidate']['sharpe'], data['control']['sharpe'])
+        self.assertLess(data['candidate']['max_drawdown'], data['control']['max_drawdown'])
+        self.assertEqual(data['verdict'], 'pass')
+
+    def test_stage_one_fail(self):
+        candidate = [0.001] * 130
+        candidate[10] = -0.10
+        data = self.build(control_returns=[0.001, 0.003] * 65,
+                          candidate_returns=candidate,
+                          control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS)
+        self.assertLess(data['candidate']['sharpe'], data['control']['sharpe'])
+        self.assertGreaterEqual(data['candidate']['max_drawdown'],
+                                data['control']['max_drawdown'])
+        self.assertEqual(data['verdict'], 'fail')
+
+    def test_stage_one_inconclusive(self):
+        # Candidate Sharpe is fine but its MaxDD is larger: conditions disagree.
+        data = self.build(control_returns=[0.0005, -0.0005] * 65,
+                          candidate_returns=[0.003] * 129 + [-0.03],
+                          control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS)
+        self.assertEqual(data['n_days'], 130)
+        self.assertGreaterEqual(data['candidate']['sharpe'], data['control']['sharpe'])
+        self.assertGreater(data['candidate']['max_drawdown'], data['control']['max_drawdown'])
+        self.assertEqual(data['verdict'], 'inconclusive')
+        self.assertIn('互有胜负', ''.join(data['reasons']))
+
+    def test_extension_pass(self):
+        control = [0.001] * 260
+        control[10] = -0.10
+        data = self.build(control_returns=control,
+                          candidate_returns=[0.001, 0.003] * 130,
+                          control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS)
+        self.assertEqual(data['n_days'], 260)
+        self.assertEqual(data['sample_stage'], 'extension_final')
+        self.assertEqual(data['verdict'], 'pass')
+
+    def test_extension_fail_even_when_dd_is_smaller(self):
+        # n >= 252 needs BOTH conditions: weak candidate Sharpe fails outright.
+        control = [0.004] * 259 + [-0.20]  # dd 20% < 25%, no kill; Sharpe ~4
+        data = self.build(control_returns=control,
+                          candidate_returns=[-0.0005, -0.0007] * 130,  # dd ~8%, Sharpe << 0
+                          control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS)
+        self.assertEqual(data['n_days'], 260)
+        self.assertLess(data['candidate']['sharpe'], data['control']['sharpe'])
+        self.assertLess(data['candidate']['max_drawdown'], data['control']['max_drawdown'])
+        self.assertFalse(data['control']['kill_fired'])
+        self.assertFalse(data['candidate']['kill_fired'])
+        self.assertEqual(data['verdict'], 'fail')
+
+    # -- common rebalance counting ---------------------------------------
+    def test_common_rebalances_intersect_by_as_of(self):
+        control = [(0, '2026-11-02'), (1, '2026-11-03'), (2, '2026-11-04')]
+        candidate = [(0, '2026-11-03'), (1, '2026-11-04'), (2, '2026-11-06')]
+        data = self.build(control_returns=[0.0], candidate_returns=[0.0],
+                          control_events=control, candidate_events=candidate)
+        self.assertEqual(data['common_rebalance_asofs'], ['2026-11-03', '2026-11-04'])
+        self.assertEqual(data['common_rebalances'], 2)
+        self.assertEqual(data['control']['rebalances'], 3)  # own counts kept for reference
+        self.assertEqual(data['candidate']['rebalances'], 3)
+
+    def test_rebalance_fallback_matches_utc_date(self):
+        """No as_of line in cot_trace → the record's UTC date is the key."""
+        data = self.build(control_returns=[0.0], candidate_returns=[0.0],
+                          control_events=[(0, None), (1, None)],
+                          candidate_events=[(0, None)])
+        self.assertEqual(data['common_rebalance_asofs'], ['2026-11-02'])
+        self.assertEqual(data['common_rebalances'], 1)
+
+    def test_rebalance_asofs_do_not_cross_arms_when_dates_differ(self):
+        data = self.build(control_returns=[0.0], candidate_returns=[0.0],
+                          control_events=[(0, '2026-11-05')],
+                          candidate_events=[(0, '2026-11-02')])
+        self.assertEqual(data['common_rebalances'], 0)
+        self.assertEqual(data['verdict'], 'pending')
+
+    # -- output: stdout / files / ledger ----------------------------------
+    def test_pass_appends_pair_ledger_row_and_writes_reports(self):
+        control = [0.001] * 130
+        control[10] = -0.10
+        db = pair_equity_db(self.tmp.name, control, [0.001, 0.003] * 65,
+                            control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS,
+                            name='pair-ledger.db')
+        ledger = Path(self.tmp.name) / LEDGER_PATH
+        out = Path(self.tmp.name) / 'out'
+        code, printed = run_pair(db, ledger=ledger, out=out)
+        self.assertEqual(code, 0)
+        self.assertIn('fq_us S2 配对报告', printed)
+        self.assertIn('fq-us-volscale-pair-v1', printed)
+        self.assertIn('判定：pass', printed)
+        self.assertTrue((out / 'report.json').exists())
+        self.assertTrue((out / 'report.md').exists())
+        payload = json.loads((out / 'report.json').read_text())
+        self.assertEqual(payload['verdict'], 'pass')
+        self.assertEqual(payload['common_rebalances'], 6)
+        self.assertIn('as_of', payload['rebalance_key_method'])
+        markdown = (out / 'report.md').read_text(encoding='utf-8')
+        self.assertIn('波动率缩放在线配对', markdown)
+        self.assertIn('mom_ls_invvol_volscale_v1', markdown)
+        rows = report.read_rows(ledger)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['track'], 'fq_us')
+        self.assertEqual(row['stage'], 'S2')
+        self.assertEqual(row['change_type'], 'C')
+        self.assertEqual(row['idea_id'], 'fq-us-volscale-pair-v1')
+        self.assertEqual(row['baseline_version'], 'mom_ls_invvol_v1')
+        self.assertEqual(row['verdict'], 'pass')
+        self.assertIsNone(row['K'])  # S2 never counts toward K
+        self.assertFalse(row['counts_toward_k'])
+        self.assertEqual(row['n_days'], 130)
+        self.assertEqual(row['common_rebalances'], 6)
+        self.assertEqual(row['control']['trader_id'], CONTROL)
+        self.assertEqual(row['candidate']['trader_id'], CANDIDATE)
+        self.assertIn('sharpe', row['control'])
+        self.assertIn('max_drawdown', row['candidate'])
+
+    def test_pending_skips_ledger(self):
+        db = pair_equity_db(self.tmp.name, [0.001] * 100, [0.001] * 100,
+                            name='pair-pending.db')
+        ledger = Path(self.tmp.name) / LEDGER_PATH
+        code, printed = run_pair(db, ledger=ledger)
+        self.assertEqual(code, 0)
+        self.assertIn('判定：pending', printed)
+        self.assertIn('不写 evolution_ledger', printed)
+        self.assertFalse(ledger.exists())
+
+    def test_missing_trader_ids_are_a_clean_error(self):
+        db = pair_equity_db(self.tmp.name, [0.001], [0.001], name='pair-args.db')
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = report.main(['--db', db, '--control', CONTROL,
+                                '--start', report.iso(START)])
+        self.assertEqual(code, 1)
+
+
+class SingleModeUnchanged(unittest.TestCase):
+    """The pair mode must not alter single-trader behavior."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_single_mode_report_and_cli_on_pair_fixture(self):
+        control = [0.001] * 130
+        control[10] = -0.10  # dd 10%, no kill; single rules decide on z
+        db = pair_equity_db(self.tmp.name, control, [0.001, 0.003] * 65,
+                            control_events=STAGE_EVENTS, candidate_events=STAGE_EVENTS,
+                            name='single.db')
+        with closing(report.open_db(db)) as conn:
+            data = report.build_report(conn, CONTROL, START, START + timedelta(days=1))
+        self.assertEqual(data['idea_id'], 'fq-us-momentum-ls-v1')
+        self.assertEqual(data['n_days'], 130)
+        self.assertEqual(data['rebalances'], 6)
+        self.assertAlmostEqual(data['max_drawdown'], 0.10, places=12)
+        self.assertFalse(data['kill_fired'])
+        self.assertNotIn(data['verdict'], ('pending', 'fail'))  # cum > 0, no kill
+        ledger = Path(self.tmp.name) / LEDGER_PATH
+        code, printed = run_report(db, ledger=ledger, start=START, trader=CONTROL)
+        self.assertEqual(code, 0)
+        self.assertIn(f"fq_us S2 报告（{report.IDEA_ID}，预注册口径）", printed)
+        self.assertIn(f"交易员 {CONTROL}", printed)
+        rows = report.read_rows(ledger)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['change_type'], 'E')
+
+    def test_conflicting_trader_and_pair_args_are_refused(self):
+        db = pair_equity_db(self.tmp.name, [0.001], [0.001], name='mix.db')
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = report.main(['--db', db, '--trader-id', CONTROL, '--control', CONTROL,
+                                '--candidate', CANDIDATE, '--start', report.iso(START)])
+        self.assertEqual(code, 1)
+
+    def test_no_trader_args_are_refused(self):
+        db = pair_equity_db(self.tmp.name, [0.001], [0.001], name='none.db')
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = report.main(['--db', db, '--start', report.iso(START)])
         self.assertEqual(code, 1)
 
 

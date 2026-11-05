@@ -68,6 +68,11 @@ done
         echo "us momentum targets exited non-zero"
 ) >> "$FM_LOG" 2>&1
 (
+    echo "=== us volscale targets $(date '+%Y-%m-%d %H:%M:%S') ==="
+    "$AR_PYTHON" -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --rule volscale --write || \
+        echo "us volscale targets exited non-zero"
+) >> "$FM_LOG" 2>&1
+(
     echo "=== promotion report $(date '+%Y-%m-%d %H:%M:%S') ==="
     NOFX_DB="${NOFX_DB:-/Users/zhangyun/workspace/nofx/data/data.db}" \
     FACTOR_MINING_DIR="$FM_ROOT" \
