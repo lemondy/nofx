@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-us-momentum-ls',
+    date: '2026-11-05',
+    title: 'fq_us 动量多空单一信号（mom_ls_invvol_v1）',
+    domain: '美股 · 因子量化 · 增量评估',
+    verdict: 'partial',
+    verdictText: 'S1 screen_pass · 非样本外，空头腿为负',
+    idea: 'fq_us 无因子（第 1 步标普 500 经典因子 0/30，第 2 步挖掘器多样化父代 fail），只有 12-1 动量在近期与 bStock 上方向一直为正；用户要求 fq_us 能多能空。预注册规则 mom_ls_invvol_v1：90 只 bStock 个股，12-1 动量每 20 个交易日调仓，前 20% 现货做多、后 20% 永续做空，各 0.5 总敞口，1/σ 加权、单只上限 0.1，成本多 13bp/空 7bp。S1 用 Backtrader 在 2021-11→2026-10 共 62 个周期上检验，判定 z ≥ 1 且两半均值 > 0。声明：数据已看过、名单有幸存者偏差，S1 只筛可行性，最终判定靠 S2 在线模拟。',
+    bullets: [
+      'S1 判 screen_pass（fq_us K=3，已记账）：每周期均值 +3.02%，z = 2.44，两半 +0.62%/+5.43%。两腿每期重置为各 0.5 的复核 z = 2.11，结论不变。',
+      '收益全部来自多头腿：多头腿 +840%（相对 5 万），空头腿 −64%（两半均为负，仅 2022 年盈利）；只做多 +920%，等权持有 +157%，SPY +77%。',
+      '多头 +840% 远超等权，主要反映 bStock 名单的事后选择偏差；另有 9 只股票没有永续映射，实际不能做空。',
+    ],
+    conclusion:
+      '通过的是可行性筛查，不是样本外证据。S2 需用户批准后接入（quant_targets 新规则 + fq_us 永续空头腿）才启动。空头腿回测为负贡献：要么照预注册跑多空 S2，要么另立只做多预注册（K=4），不能事后改规则。',
+    source:
+      'docs/research/2026-11-05-fq-us-momentum-prereg.md · docs/research/2026-11-05-fq-us-momentum-study.md · scripts/backtest/fq_us_momentum_study.py · data/factor_mining/us_momentum/study/s1_v1/report.md',
+  },
+  {
     id: 'us-miner-diverse-parents',
     date: '2026-11-05',
     title: '美股因子挖掘器：多样化变异父代（解决因子库塌缩）',
