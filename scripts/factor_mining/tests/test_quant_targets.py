@@ -146,6 +146,28 @@ class USMomentumTests(unittest.TestCase):
             self.assertEqual(empty['excluded'], {s + 'BUSDT': 'no_perp' for s in short_names})
             self.assertEqual(empty['weights'], {})
 
+    def test_unlisted_long_candidates_are_excluded_and_long_sleeve_reweighted(self):
+        with tempfile.TemporaryDirectory() as root:
+            frames, names, calendar, mapping = us_fixture(root)
+            decision = study.decision_at(study.build_features(frames, names, calendar), calendar[-1])
+            long_names = list(decision['long'])
+            doc = json.loads(mapping.read_text())
+            doc['symbols'] = [r for r in doc['symbols'] if r['underlying'] != long_names[0]]
+            store.write_json(mapping, doc)
+            result = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+            self.assertEqual(result['status'], 'ok')
+            self.assertEqual(result['excluded'], {long_names[0] + 'BUSDT': 'not_listed'})
+            expected = qt._capped_invvol(pd.Series(decision['volatility']).loc[long_names[1:]], .5, .1)
+            self.assertEqual({s: w for s, w in result['weights'].items() if w > 0},
+                             {s + 'BUSDT': round(w, 6) for s, w in expected.items()})
+            self.assert_gross_and_cap(result, len(long_names) - 1, len(decision['short']))
+            doc['symbols'] = [r for r in doc['symbols'] if r['underlying'] not in long_names]
+            store.write_json(mapping, doc)
+            empty = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+            self.assertEqual(empty['status'], 'insufficient_universe')
+            self.assertEqual(empty['reason'], 'empty_long_leg_after_exclusions')
+            self.assertEqual(empty['weights'], {})
+
     def test_four_calendar_day_stale_guard_uses_utc_and_not_horizon_28(self):
         with tempfile.TemporaryDirectory() as root:
             _, _, calendar, mapping = us_fixture(root)
@@ -262,7 +284,7 @@ class USMomentumTests(unittest.TestCase):
             features = qt._load_us_features(root)
             for name in features:
                 pd.testing.assert_frame_equal(features[name], expected_features[name])
-            seen_exclusions = set()
+            seen_exclusions, seen_long_exclusions = set(), set()
             decisions = json.loads(report.read_text())['weights']
             self.assertTrue(decisions)
             for decision in decisions:
@@ -275,9 +297,19 @@ class USMomentumTests(unittest.TestCase):
                     self.assertEqual(result['as_of'], decision['date'])
                     self.assertEqual(result['universe_size'], decision['eligible_count'])
                     longs = {s: w for s, w in result['weights'].items() if w > 0}
-                    self.assertEqual(longs, {s + 'BUSDT': round(w * .5, 6)
-                                             for s, w in decision['long'].items()})
+                    # The snapshot map lists every tradable pair with a perp, so an
+                    # absent underlying is both not_listed (long) and no_perp (short).
+                    unlisted = [s for s in decision['long'] if not perps[s]]
+                    if not unlisted:
+                        expected_long = {s + 'BUSDT': round(w * .5, 6) for s, w in decision['long'].items()}
+                    else:
+                        kept = [s for s in decision['long'] if perps[s]]
+                        weights = qt._capped_invvol(pd.Series(decision['volatility']).loc[kept], .5, .1)
+                        expected_long = {s + 'BUSDT': round(w, 6) for s, w in weights.items()}
+                    self.assertEqual(longs, expected_long)
+                    seen_long_exclusions.add(bool(unlisted))
                     excluded = {s + 'BUSDT': 'no_perp' for s in decision['short'] if not perps[s]}
+                    excluded.update({s + 'BUSDT': 'not_listed' for s in unlisted})
                     self.assertEqual(result['excluded'], excluded)
                     seen_exclusions.add(bool(excluded))
                     shorts = {s: w for s, w in result['weights'].items() if w < 0}
@@ -290,6 +322,7 @@ class USMomentumTests(unittest.TestCase):
                     self.assertEqual(shorts, expected)
                     self.assert_gross_and_cap(result, len(longs), len(shorts))
             self.assertEqual(seen_exclusions, {False, True})
+            self.assertEqual(seen_long_exclusions, {False, True})
 
     def test_nightly_runs_us_targets_after_failed_miners_and_logs_failure(self):
         with tempfile.TemporaryDirectory() as root:

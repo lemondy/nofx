@@ -23,6 +23,7 @@
 - **只做空有永续的股票。** 读 Go 端缓存 `data/cache/usstock_symbols.json`（version 2）。
   - 动量最低的 20% 里没有 perp_symbol 的股票，记入 `excluded`，原因 `no_perp`；剩下的空头重新按 1/σ 分配 0.5。这是接入时的偏离，S1 回测时没有剔除。
   - 映射文件缺失或版本不对时，状态写 `insufficient_universe`，原因 `perp_map_unavailable`，不产生任何权重。
+- **只做多已上架的股票（2026-11-05 上线后补充）。** 动量最高的 20% 里，不在映射文件中的股票（即没有上架的 bStock，例如 STX）记入 `excluded`，原因 `not_listed`；剩下的多头重新按 1/σ 分配 0.5。首次调仓时 STX 因此被跳过，多头只有 0.458。
 - **as_of** 取日线面板最后一个可用日期。权重键统一用 `<代码>BUSDT`，空头为负数。
 - **horizon 写 28。** Go 端按 as_of 的自然日间隔判断是否调仓，28 个自然日约等于 20 个交易日。这是接入偏离，写进文档。
 - **夜间任务。** `run_nightly.sh` 在 us 挖掘之后单独执行一次 `python -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --write`，挖掘失败也不影响目标文件更新。
