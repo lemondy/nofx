@@ -27,6 +27,9 @@ const (
 
 // factorQuantRuntime is the loop's in-memory state, guarded by mu.
 type factorQuantRuntime struct {
+	// Shared by loop and API brokers; do not hold mu during funding I/O.
+	fundingMu      sync.Mutex
+	fundingAt      map[int64]time.Time
 	mu             sync.Mutex
 	memAsOf        string // as_of of the last attempt in this process (covers a failing state store)
 	memRule        string
@@ -55,6 +58,9 @@ func (at *AutoTrader) IsFactorQuantStrategy() bool {
 func (at *AutoTrader) isFactorQuantUS() bool {
 	return at.IsFactorQuantStrategy() && at.config.StrategyConfig.FactorQuantConfig.IsUS()
 }
+
+// IsFactorQuantUSStrategy identifies the US paper-ledger reader for API callers.
+func (at *AutoTrader) IsFactorQuantUSStrategy() bool { return at.isFactorQuantUS() }
 
 func (at *AutoTrader) fqClock() time.Time {
 	if at.fqNow != nil {
@@ -111,7 +117,7 @@ func (at *AutoTrader) newFactorQuantBroker() (fqBroker, error) {
 		return nil, fmt.Errorf("因子量化策略只允许模拟盘账户（当前交易所类型 %q）", at.exchange)
 	}
 	if fq.IsUS() {
-		return &fqStockBroker{at: at, feeBps: fq.EffectiveUSFeeBps(), slipBps: fq.EffectiveUSSlippageBps()}, nil
+		return &fqStockBroker{at: at, feeBps: fq.EffectiveUSFeeBps(), shortFeeBps: fq.EffectiveUSShortFeeBps(), slipBps: fq.EffectiveUSSlippageBps()}, nil
 	}
 	pt, ok := at.trader.(*paper.PaperFuturesTrader)
 	if !ok {
@@ -388,7 +394,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 			at.factorQuantRetry(broker, targets, state, dec, now)
 			return
 		}
-		if at.factorQuantFlattenCheck(broker, targets, state, now) {
+		if dec.Code != fqCodeShortDisabled && at.factorQuantFlattenCheck(broker, targets, state, now) {
 			return
 		}
 		msg := fmt.Sprintf("不调仓 [%s] as_of=%s：%s", dec.Code, targets.AsOf, dec.Reason)
@@ -442,7 +448,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 func fqResolvedPlanConfig(fq *store.FactorQuantConfig) fqPlanConfig {
 	return fqPlanConfig{
 		CapitalFraction: fq.EffectiveCapitalFraction(), Band: fq.EffectiveBand(),
-		MinOrder: fq.EffectiveMinOrderUSDT(), LongOnly: fq.IsUS(), CostRate: fqUSCostRate(fq),
+		MinOrder: fq.EffectiveMinOrderUSDT(), LongOnly: fq.IsUS() && fq.EffectiveUSShortMode() != "paper", CostRate: fqUSCostRate(fq),
 	}
 }
 
@@ -781,14 +787,15 @@ func (at *AutoTrader) factorQuantUSAccountInfo() (map[string]interface{}, error)
 	if at.store == nil {
 		return nil, fmt.Errorf("no store")
 	}
-	st, err := at.stockGatherPaper(nil)
+	broker, err := at.newFactorQuantBroker()
+	if err != nil {
+		return nil, err
+	}
+	st, err := broker.Account()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get paper ledger: %w", err)
 	}
-	unrealized := 0.0
-	for _, h := range st.Holdings {
-		unrealized += (h.Mark - h.Avg) * h.Owned
-	}
+	unrealized := st.Unrealized
 	totalPnL := st.Equity - at.initialBalance
 	pnlPct, usedPct := 0.0, 0.0
 	if at.initialBalance > 0 {
@@ -801,12 +808,12 @@ func (at *AutoTrader) factorQuantUSAccountInfo() (map[string]interface{}, error)
 		"total_equity":      st.Equity,
 		"wallet_balance":    st.Equity - unrealized,
 		"unrealized_profit": unrealized,
-		"available_balance": st.Available,
+		"available_balance": st.Balance,
 		"total_pnl":         totalPnL,
 		"total_pnl_pct":     pnlPct,
 		"initial_balance":   at.initialBalance,
 		"daily_pnl":         at.dailyPnL,
-		"position_count":    len(st.Holdings),
+		"position_count":    len(st.Positions),
 		"margin_used":       st.Exposure,
 		"margin_used_pct":   usedPct,
 		"paper":             true,
@@ -817,21 +824,30 @@ func (at *AutoTrader) factorQuantUSPositions() ([]map[string]interface{}, error)
 	if at.store == nil {
 		return nil, fmt.Errorf("no store")
 	}
-	st, err := at.stockGatherPaper(nil)
+	broker, err := at.newFactorQuantBroker()
+	if err != nil {
+		return nil, err
+	}
+	st, err := broker.Account()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get paper positions: %w", err)
 	}
 	out := []map[string]interface{}{}
-	for _, h := range st.sortedHoldings() {
-		pnl := (h.Mark - h.Avg) * h.Owned
+	sort.Slice(st.Positions, func(i, j int) bool { return st.Positions[i].Symbol < st.Positions[j].Symbol })
+	for _, h := range st.Positions {
+		value := h.Qty * h.Mark
+		pnl := (h.Mark - h.Entry) * h.Qty
+		if h.Side == fqSideShort {
+			value, pnl = -value, -pnl
+		}
 		pct := 0.0
-		if h.Avg > 0 {
-			pct = (h.Mark/h.Avg - 1) * 100
+		if h.Entry > 0 && h.Qty > 0 {
+			pct = pnl / (h.Entry * h.Qty) * 100
 		}
 		out = append(out, map[string]interface{}{
-			"symbol": h.Symbol, "side": "long", "entry_price": h.Avg, "mark_price": h.Mark, "quantity": h.Owned,
+			"symbol": h.Symbol, "side": h.Side, "entry_price": h.Entry, "mark_price": h.Mark, "quantity": h.Qty,
 			"leverage": 1, "unrealized_pnl": pnl, "unrealized_pnl_pct": pct, "liquidation_price": 0.0,
-			"margin_used": h.Owned * h.Mark, "paper": true,
+			"margin_used": h.Qty * h.Mark, "market_value": value, "paper": true,
 		})
 	}
 	return out, nil

@@ -33,13 +33,20 @@ func TestUSStockPaperFallbackShortEquityAndSide(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		Equity float64                    `json:"equity"`
-		Open   []store.StockPaperPosition `json:"open_positions"`
+		Equity float64 `json:"equity"`
+		Open   []struct {
+			store.StockPaperPosition
+			MarketValue   float64 `json:"market_value"`
+			UnrealizedPnL float64 `json:"unrealized_pnl"`
+		} `json:"open_positions"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
 	if math.Abs(body.Equity-999.92) > 1e-8 || len(body.Open) != 2 || body.Open[0].Side != "SHORT" || body.Open[1].Side != "LONG" {
 		t.Fatalf("%s", rec.Body.String())
+	}
+	if body.Open[0].MarketValue != -200 || body.Open[1].MarketValue != 200 || body.Open[0].UnrealizedPnL != 0 {
+		t.Fatalf("side-aware position values: %s", rec.Body.String())
 	}
 }

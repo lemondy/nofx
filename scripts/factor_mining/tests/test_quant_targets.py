@@ -4,7 +4,9 @@ import copy
 import datetime as dt
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,6 +17,7 @@ import pandas as pd
 from scripts.factor_mining import ensemble, live_scores, miner, quant_targets as qt, store
 from scripts.factor_mining.panel import Panels
 from scripts.factor_mining.tests.synth import SIGNAL_SEED, write_market
+from scripts.backtest import fq_us_momentum_study as study
 
 
 def fixture(names=60, rows=120):
@@ -37,6 +40,283 @@ def fixture(names=60, rows=120):
 def build(panels, doc, market='crypto', **kwargs):
     now = kwargs.pop('now', pd.Timestamp(doc['as_of']) + dt.timedelta(days=1))
     return qt.build_targets(market, doc, panels, now=now, **kwargs)
+
+
+def us_fixture(root, names=60, rows=310):
+    """S1-format bars for frozen names, entirely inside a temporary directory."""
+    universe = json.loads(qt.US_UNIVERSE.read_text())['symbols'][:names]
+    calendar = pd.bdate_range('2025-01-01', periods=rows)
+    t = np.arange(rows)
+    frames = {}
+    base = Path(root) / 'us/daily'
+    base.mkdir(parents=True)
+    for i, symbol in enumerate(universe + ['SPY']):
+        prices = 20 * np.exp(.0002 * (i + 1) * t) * (1 + .01 * np.sin(t))
+        frames[symbol] = pd.DataFrame(dict(open=prices, high=prices, low=prices,
+                                          close=prices, volume=5_000_000.), index=calendar)
+        values = [[str(d.date()), *row, row[3]] for d, row in
+                  zip(calendar, frames[symbol].to_numpy().tolist())]
+        (base / f'{symbol}.json').write_text(json.dumps(values))
+    mapping = Path(root) / 'perps.json'
+    store.write_json(mapping, dict(version=2, symbols=[
+        dict(underlying=s, perp_symbol=s + 'USDT') for s in universe]))
+    return frames, universe, calendar, mapping
+
+
+class USMomentumTests(unittest.TestCase):
+    def assert_gross_and_cap(self, result, longs, shorts):
+        self.assertTrue(all(0 < abs(w) <= .1 for w in result['weights'].values()))
+        # Six-decimal per-name rounding can change each sleeve by up to n/2 ppm.
+        self.assertAlmostEqual(sum(w for w in result['weights'].values() if w > 0),
+                               min(.5, longs * .1), delta=max(1, longs) * 5.01e-7)
+        self.assertAlmostEqual(-sum(w for w in result['weights'].values() if w < 0),
+                               min(.5, shorts * .1), delta=max(1, shorts) * 5.01e-7)
+
+    def test_schema_signal_percentiles_s1_sleeve_scaling_and_go_bounds(self):
+        with tempfile.TemporaryDirectory() as root:
+            frames, names, calendar, mapping = us_fixture(root)
+            result = qt.build_targets('us', root=root, perp_map=mapping, now=calendar[-1])
+        decision = study.decision_at(study.build_features(frames, names, calendar), calendar[-1])
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['version'], 1)
+        self.assertEqual(result['market'], 'us')
+        self.assertEqual(result['horizon'], 28)
+        self.assertEqual(result['rule'], dict(name='mom_ls_invvol_v1', quantile=.2,
+            long_gross=.5, short_gross=.5, max_name_weight=.1, vol_window=30, long_only=False))
+        self.assertEqual(result['factor_ids'], [])
+        self.assertEqual(result['excluded'], {})
+        self.assertEqual(result['universe_size'], len(names))
+        self.assertEqual(set(result), {'version', 'market', 'status', 'reason', 'generated_at',
+                                     'as_of', 'run_id', 'horizon', 'rule', 'factor_ids',
+                                     'universe_size', 'weights', 'excluded', 'pct'})
+        expected = {s + 'BUSDT': round(w * .5, 6) for leg in ('long', 'short')
+                    for s, w in decision[leg].items()}
+        self.assertEqual(result['weights'], expected)
+        vol = pd.Series(decision['volatility'])
+        np.testing.assert_allclose(qt._capped_invvol(vol.loc[list(decision['long'])], .5, .1),
+                                   pd.Series(decision['long']) * .5, rtol=0, atol=1e-14)
+        ranks = pd.Series(decision['signals']).rank(pct=True)
+        self.assertEqual(result['pct'], {s + 'BUSDT': round(p, 6) for s, p in ranks.items()})
+        self.assert_gross_and_cap(result, 12, 12)
+
+    def test_perp_map_missing_unparsable_wrong_version_and_bad_schema(self):
+        with tempfile.TemporaryDirectory() as root:
+            _, _, calendar, mapping = us_fixture(root)
+            for raw in (None, '{bad json', '[]', '{"version":1,"symbols":[]}',
+                        '{"version":2,"symbols":{}}', '{"version":2,"symbols":[null]}'):
+                with self.subTest(raw=raw):
+                    if raw is None:
+                        mapping.unlink()
+                    else:
+                        mapping.write_text(raw)
+                    result = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+                    self.assertEqual(result['status'], 'insufficient_universe')
+                    self.assertEqual(result['reason'], 'perp_map_unavailable')
+                    self.assertEqual(result['weights'], {})
+                    self.assertEqual(result['as_of'], str(calendar[-1].date()))
+
+    def test_no_perp_exclusions_reweight_without_refilling_and_empty_leg_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            frames, names, calendar, mapping = us_fixture(root)
+            decision = study.decision_at(study.build_features(frames, names, calendar), calendar[-1])
+            short_names = list(decision['short'])
+            doc = json.loads(mapping.read_text())
+            # One absent underlying and one empty perp_symbol are both no_perp.
+            doc['symbols'] = [r for r in doc['symbols'] if r['underlying'] != short_names[0]]
+            next(r for r in doc['symbols'] if r['underlying'] == short_names[1])['perp_symbol'] = ''
+            store.write_json(mapping, doc)
+            result = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+            self.assertEqual(result['status'], 'ok')
+            self.assertEqual(result['excluded'], {s + 'BUSDT': 'no_perp' for s in short_names[:2]})
+            expected_short = -qt._capped_invvol(pd.Series(decision['volatility']).loc[short_names[2:]], .5, .1)
+            self.assertEqual({s: w for s, w in result['weights'].items() if w < 0},
+                             {s + 'BUSDT': round(w, 6) for s, w in expected_short.items()})
+            self.assertEqual({s: w for s, w in result['weights'].items() if w > 0},
+                             {s + 'BUSDT': round(w * .5, 6) for s, w in decision['long'].items()})
+            self.assert_gross_and_cap(result, 12, 10)
+            doc['symbols'] = [r for r in doc['symbols'] if r['underlying'] not in short_names[:-3]]
+            store.write_json(mapping, doc)
+            reduced = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+            self.assertEqual(reduced['status'], 'ok')
+            self.assert_gross_and_cap(reduced, 12, 3)
+            store.write_json(mapping, dict(version=2, symbols=[]))
+            empty = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+            self.assertEqual(empty['status'], 'insufficient_universe')
+            self.assertEqual(empty['reason'], 'empty_short_leg_after_exclusions')
+            self.assertEqual(empty['excluded'], {s + 'BUSDT': 'no_perp' for s in short_names})
+            self.assertEqual(empty['weights'], {})
+
+    def test_four_calendar_day_stale_guard_uses_utc_and_not_horizon_28(self):
+        with tempfile.TemporaryDirectory() as root:
+            _, _, calendar, mapping = us_fixture(root)
+            day = calendar[-1]
+            for now, status in ((day + dt.timedelta(days=4, hours=23), 'ok'),
+                                (day + dt.timedelta(days=5), 'stale_scores'),
+                                ((day + dt.timedelta(days=5, hours=1)).tz_localize('Asia/Shanghai'), 'ok')):
+                with self.subTest(now=now):
+                    result = qt._load_targets('us', root, perp_map=mapping, now=now)
+                    self.assertEqual(result['status'], status)
+                    self.assertEqual(result['as_of'], str(day.date()))
+                    if status == 'stale_scores':
+                        self.assertEqual(result['weights'], {})
+                        self.assertEqual(result['reason'], 'as_of_older_than_4_days')
+
+    def test_fewer_than_15_eligible_and_short_sleeves_respect_cap(self):
+        for n, rows, eligible in ((14, 310, 14), (60, 252, 0), (15, 310, 15)):
+            with self.subTest(names=n, rows=rows), tempfile.TemporaryDirectory() as root:
+                _, _, calendar, mapping = us_fixture(root, names=n, rows=rows)
+                result = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+                self.assertEqual(result['universe_size'], eligible)
+                self.assertEqual(len(result['pct']), eligible)
+                if eligible < 15:
+                    self.assertEqual(result['status'], 'insufficient_universe')
+                    self.assertEqual(result['reason'], 'fewer_than_15_eligible_symbols')
+                    self.assertEqual(result['weights'], {})
+                else:
+                    self.assertEqual(result['status'], 'ok')
+                    self.assert_gross_and_cap(result, 3, 3)
+
+    def test_spy_calendar_frozen_universe_and_live_scores_are_independent(self):
+        with tempfile.TemporaryDirectory() as root:
+            _, _, calendar, mapping = us_fixture(root)
+            base = Path(root) / 'us'
+            spy = base / 'daily/SPY.json'
+            rows = json.loads(spy.read_text())
+            rows[-1][2] = 1.  # invalid high: S1 also excludes this SPY session
+            spy.write_text(json.dumps(rows))
+            # An unfrozen name with extreme momentum must never join the pool.
+            (base / 'daily/ZZZ.json').write_text((base / 'daily/AAPL.json').read_text())
+            (base / 'live_scores.json').write_text('{invalid: must never be read')
+            with patch.object(qt.panel, 'load_panels', side_effect=AssertionError('not the miner mask')), \
+                 patch.object(store, 'read_json', side_effect=AssertionError('no live_scores read')):
+                result = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1], panels=object())
+                direct = qt.build_targets('us', {'as_of': '1900-01-01'}, object(), root=root,
+                                          perp_map=mapping, now=calendar[-1], horizon=28)
+            self.assertEqual(result, direct)
+            self.assertEqual(result['status'], 'ok')
+            self.assertEqual(result['as_of'], str(calendar[-2].date()))
+            self.assertEqual(result['universe_size'], 60)
+            self.assertNotIn('ZZZBUSDT', result['pct'])
+            with self.assertRaises(ValueError):
+                qt.build_targets('us', root=root, perp_map=mapping, horizon=20)
+            spy.unlink()
+            missing = qt._load_targets('us', root, perp_map=mapping, now=calendar[-1])
+            self.assertEqual(missing['status'], 'insufficient_universe')
+            self.assertEqual(missing['reason'], 'missing_spy_calendar')
+            self.assertEqual(missing['weights'], {})
+
+    def test_us_write_is_atomic_and_cli_print_is_read_only_with_explicit_map(self):
+        with tempfile.TemporaryDirectory() as root:
+            _, _, calendar, mapping = us_fixture(root)
+            before = {p: p.read_bytes() for p in Path(root).rglob('*') if p.is_file()}
+            now = calendar[-1].tz_localize('UTC')
+            utc = qt._utc
+            with patch.object(qt, '_utc', side_effect=lambda value: now if value is None else utc(value)):
+                with patch.object(store, 'write_json', side_effect=AssertionError('read-only CLI')), \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    qt.main(['--market', 'us', '--root', root, '--perp-map', str(mapping), '--print'])
+            self.assertEqual(json.loads(output.getvalue())['status'], 'ok')
+            replace = store.os.replace
+            def atomic(source, destination):
+                self.assertEqual(Path(source).parent, Path(destination).parent)
+                self.assertEqual(json.loads(Path(source).read_text())['rule']['name'], 'mom_ls_invvol_v1')
+                replace(source, destination)
+            with patch.object(store.os, 'replace', side_effect=atomic) as swaps:
+                path = qt.write_targets('us', root, perp_map=mapping, now=now, panels=object())
+            swaps.assert_called_once()
+            self.assertEqual(path, Path(root) / 'us/quant_targets.json')
+            self.assertEqual(json.loads(path.read_text())['status'], 'ok')
+            self.assertEqual({p for p in Path(root).rglob('*') if p.is_file()}, set(before) | {path})
+            self.assertTrue(all(p.read_bytes() == value for p, value in before.items()))
+            self.assertEqual(list(path.parent.glob('.quant_targets.json.*')), [])
+
+    def test_default_and_relative_map_paths_resolve_from_repo_root(self):
+        self.assertEqual(qt.DEFAULT_PERP_MAP, qt.REPO_ROOT / 'data/cache/usstock_symbols.json')
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as root:
+            _, _, _, mapping = us_fixture(root)
+            raw = mapping.read_text()
+            try:
+                os.chdir(root)
+                with patch.object(Path, 'read_text', autospec=True, return_value=raw) as read:
+                    self.assertTrue(qt._load_perp_map(None))
+                read.assert_called_once_with(qt.DEFAULT_PERP_MAP, encoding='utf-8')
+                with patch.object(qt, 'REPO_ROOT', Path(root)):
+                    self.assertTrue(qt._load_perp_map('perps.json'))
+            finally:
+                os.chdir(original_cwd)
+
+    def test_s1_snapshot_every_rebalance_matches_report_with_perp_exclusions(self):
+        snapshot = Path('/Users/zhangyun/workspace/nofx/data/factor_mining/us_momentum/snapshot_20261105')
+        report = snapshot.parent / 'study/s1_v1/report.json'
+        if not snapshot.is_dir():
+            self.skipTest(f'read-only S1 snapshot is absent: {snapshot}')
+        if not report.is_file():
+            self.skipTest(f'read-only S1 report is absent: {report}')
+        names, perps, frames, calendar, _ = study.load_snapshot(snapshot)
+        self.assertEqual(json.loads(qt.US_UNIVERSE.read_text())['symbols'], names)
+        expected_features = study.build_features(frames, names, calendar)
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / 'us').mkdir()
+            (Path(root) / 'us/daily').symlink_to(snapshot / 'daily', target_is_directory=True)
+            features = qt._load_us_features(root)
+            for name in features:
+                pd.testing.assert_frame_equal(features[name], expected_features[name])
+            seen_exclusions = set()
+            decisions = json.loads(report.read_text())['weights']
+            self.assertTrue(decisions)
+            for decision in decisions:
+                date = pd.Timestamp(decision['date'])
+                with self.subTest(date=decision['date']):
+                    prefix = {k: v.loc[:date] for k, v in features.items()}
+                    with patch.object(qt, '_load_us_features', return_value=prefix):
+                        result = qt.build_targets('us', root=root, perp_map=snapshot / study.MAP_FILE, now=date)
+                    self.assertEqual(result['status'], 'ok')
+                    self.assertEqual(result['as_of'], decision['date'])
+                    self.assertEqual(result['universe_size'], decision['eligible_count'])
+                    longs = {s: w for s, w in result['weights'].items() if w > 0}
+                    self.assertEqual(longs, {s + 'BUSDT': round(w * .5, 6)
+                                             for s, w in decision['long'].items()})
+                    excluded = {s + 'BUSDT': 'no_perp' for s in decision['short'] if not perps[s]}
+                    self.assertEqual(result['excluded'], excluded)
+                    seen_exclusions.add(bool(excluded))
+                    shorts = {s: w for s, w in result['weights'].items() if w < 0}
+                    if not excluded:
+                        expected = {s + 'BUSDT': round(w * .5, 6) for s, w in decision['short'].items()}
+                    else:
+                        remaining = [s for s in decision['short'] if perps[s]]
+                        weights = -qt._capped_invvol(pd.Series(decision['volatility']).loc[remaining], .5, .1)
+                        expected = {s + 'BUSDT': round(w, 6) for s, w in weights.items()}
+                    self.assertEqual(shorts, expected)
+                    self.assert_gross_and_cap(result, len(longs), len(shorts))
+            self.assertEqual(seen_exclusions, {False, True})
+
+    def test_nightly_runs_us_targets_after_failed_miners_and_logs_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            fake = Path(root) / 'python'
+            calls = Path(root) / 'calls.log'
+            fake.write_text('#!/bin/sh\n'
+                'echo "$*" >> "$CALLS_LOG"\n'
+                'case "$*" in\n'
+                '  *run_mining*) exit 7 ;;\n'
+                '  *quant_targets*) echo "targets test failure"; exit 9 ;;\n'
+                '  *promotion.report*) echo "promotion ran" ;;\n'
+                'esac\n')
+            fake.chmod(0o755)
+            env = dict(os.environ, AR_PYTHON=str(fake), FACTOR_MINING_DIR=str(Path(root) / 'fm'),
+                       CALLS_LOG=str(calls), FM_FETCH_RETRIES='0')
+            run = subprocess.run(['sh', str(Path(qt.__file__).with_name('run_nightly.sh'))],
+                                 env=env, text=True, capture_output=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            commands = calls.read_text().splitlines()
+            self.assertEqual(len(commands), 4)
+            self.assertTrue(all('run_mining' in c for c in commands[:2]))
+            self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --write')
+            self.assertIn('promotion.report', commands[3])
+            log = (Path(root) / 'fm/nightly.log').read_text()
+            for expected in ('crypto exited non-zero', 'us exited non-zero', 'targets test failure',
+                             'us momentum targets exited non-zero', 'promotion ran'):
+                self.assertIn(expected, log)
 
 
 class TargetRulesTests(unittest.TestCase):
@@ -171,24 +451,6 @@ class TargetRulesTests(unittest.TestCase):
             self.assertNotIn(s, result['pct'])
         self.assertIn('S005', result['weights'])
 
-    def test_us_first_available_horizon_long_only_key_mapping_and_budget(self):
-        panels, doc = fixture()
-        entry = doc['horizons'].pop('3')
-        doc['horizons'] = {'5': {'scores': {}}, '10': entry, '20': copy.deepcopy(entry)}
-        doc['horizons']['20']['scores']['S000']['z'] = 1e6
-        result = build(panels, doc, market='us')
-        self.assertEqual(result['horizon'], 10)
-        self.assertEqual(result['rule']['name'], 'long_invvol_v1')
-        self.assertTrue(result['rule']['long_only'])
-        self.assertEqual(result['excluded'], {})
-        self.assertTrue(all(0 < w <= .1 for w in result['weights'].values()))
-        self.assertAlmostEqual(sum(result['weights'].values()), 1., places=5)
-        self.assertEqual(set(result['weights']), {s + 'BUSDT' for s in panels.mask.columns[-12:]})
-        self.assertIn('S059BUSDT', result['pct'])
-        self.assertNotIn('S059', result['pct'])
-        doc['horizons']['5'] = entry
-        self.assertEqual(build(panels, doc, market='us')['horizon'], 5)
-
     def test_no_future_panel_rows_can_change_targets_or_history_age(self):
         panels, doc = fixture()
         panels.fields['close'].iloc[:40, 0] = np.nan
@@ -201,13 +463,13 @@ class TargetRulesTests(unittest.TestCase):
         self.assertEqual(expected['excluded']['S000'], 'short_listing_lt_90d')
 
     def test_missing_scores_no_factors_ignores_other_horizons_and_extensions(self):
-        for market in ('crypto', 'us'):
+        for market in ('crypto',):
             for doc in (None, {}, {'horizons': {}}, {'horizons': {'3': {'ext_scores': {'EXT': {'z': 1}}}}}):
                 with self.subTest(market=market, doc=doc):
                     result = qt.build_targets(market, doc, None, now='2026-11-01')
                     self.assertEqual(result['status'], 'no_validated_factors')
                     self.assertEqual(result['weights'], {})
-                    self.assertEqual(result['horizon'], 3 if market == 'crypto' else None)
+                    self.assertEqual(result['horizon'], 3)
         panels, doc = fixture()
         doc['horizons']['1'] = doc['horizons'].pop('3')
         self.assertEqual(build(panels, doc)['status'], 'no_validated_factors')
@@ -221,9 +483,6 @@ class TargetRulesTests(unittest.TestCase):
         self.assertEqual(stale['weights'], {})
         local = (day + dt.timedelta(days=6, hours=1)).tz_localize('Asia/Shanghai')
         self.assertEqual(build(panels, doc, now=local)['status'], 'ok')
-        doc['horizons']['5'] = doc['horizons'].pop('3')
-        self.assertEqual(build(panels, doc, market='us', now=day + dt.timedelta(days=7))['status'], 'ok')
-        self.assertEqual(build(panels, doc, market='us', now=day + dt.timedelta(days=8))['status'], 'stale_scores')
 
     def test_missing_asof_or_missing_panel_date_has_no_weights(self):
         panels, doc = fixture()
@@ -275,10 +534,10 @@ class PersistenceIntegrationTests(unittest.TestCase):
     def test_missing_file_writes_no_factors_without_loading_panels(self):
         with tempfile.TemporaryDirectory() as root, \
              patch.object(qt.panel, 'load_panels', side_effect=AssertionError('no panels needed')):
-            path = qt.write_targets('us', root, now='2026-11-01')
+            path = qt.write_targets('crypto', root, now='2026-11-01')
             doc = json.loads(path.read_text())
             self.assertEqual(doc['status'], 'no_validated_factors')
-            self.assertIsNone(doc['horizon'])
+            self.assertEqual(doc['horizon'], 3)
             self.assertEqual(doc['weights'], {})
             self.assertEqual(list(Path(root).rglob('*.json')), [path])
 

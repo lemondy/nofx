@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nofx/logger"
+	"nofx/store"
 	"nofx/trader/paper"
 )
 
@@ -316,7 +317,7 @@ type fqStockBroker struct {
 	at *AutoTrader
 	// Costs applied to every fill (basis points): slippage moves the fill price
 	// against the trade, the fee is a fraction of the notional taken from cash.
-	feeBps, slipBps float64
+	feeBps, shortFeeBps, slipBps float64
 }
 
 func (b *fqStockBroker) now() time.Time {
@@ -331,7 +332,7 @@ func (b *fqStockBroker) Account() (*fqAccount, error) {
 	if at.store == nil {
 		return nil, fmt.Errorf("没有存储，无法读取美股模拟账本")
 	}
-	acct, err := at.store.StockPaper().EnsureAccount(at.id, at.initialBalance)
+	_, err := at.store.StockPaper().EnsureAccount(at.id, at.initialBalance)
 	if err != nil {
 		return nil, fmt.Errorf("读取美股模拟账本失败：%w", err)
 	}
@@ -339,23 +340,90 @@ func (b *fqStockBroker) Account() (*fqAccount, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取美股模拟持仓失败：%w", err)
 	}
-	out := &fqAccount{Balance: acct.Cash}
+	out := &fqAccount{}
+	marketValue := 0.0
 	for _, p := range open {
 		// Refresh the mark so equity snapshots between rebalances move with the
 		// market; a failed quote falls back to the last cached / average price.
-		mark, _ := b.Price(p.Symbol)
+		side := fqSideLong
+		if p.EffectiveSide() == store.StockPaperShort {
+			side = fqSideShort
+		}
+		mark, _ := b.PriceForSide(p.Symbol, side)
 		if mark <= 0 {
-			mark = at.stock.price(p.Symbol)
+			if side == fqSideShort {
+				mark = at.stock.perpPrice(p.Symbol)
+			} else {
+				mark = at.stock.price(p.Symbol)
+			}
 		}
 		if mark <= 0 {
 			mark = p.AvgPrice
 		}
-		out.Positions = append(out.Positions, fqPosition{Symbol: p.Symbol, Side: fqSideLong, Qty: p.Quantity, Entry: p.AvgPrice, Mark: mark})
+		b.applyFunding(p, mark, false)
+		out.Positions = append(out.Positions, fqPosition{Symbol: p.Symbol, Side: side, Qty: p.Quantity, Entry: p.AvgPrice, Mark: mark})
 		out.Exposure += p.Quantity * mark
-		out.Unrealized += (mark - p.AvgPrice) * p.Quantity
+		pnl := (mark - p.AvgPrice) * p.Quantity
+		if side == fqSideShort {
+			pnl = -pnl
+		}
+		out.Unrealized += pnl
+		marketValue += p.MarketValue(mark)
 	}
-	out.Equity = acct.Cash + out.Exposure
+	// Funding changes cash, so read it after settling every open short.
+	acct, err := at.store.StockPaper().GetAccount(at.id)
+	if err != nil || acct == nil {
+		return nil, fmt.Errorf("读取美股模拟现金失败：%v", err)
+	}
+	out.Balance, out.Equity = acct.Cash, acct.Cash+marketValue
 	return out, nil
+}
+
+// applyFunding serializes settlement across the loop and API readers. Failed
+// attempts also consume the 30-minute allowance, preventing retry storms.
+// Reductions bypass the allowance and always settle before changing quantity.
+func (b *fqStockBroker) applyFunding(p *store.StockPaperPosition, mark float64, force bool) {
+	if p.EffectiveSide() != store.StockPaperShort {
+		return
+	}
+	at, now := b.at, b.now()
+	at.fq.fundingMu.Lock()
+	defer at.fq.fundingMu.Unlock()
+	if at.fq.fundingAt == nil {
+		at.fq.fundingAt = map[int64]time.Time{}
+	}
+	if last, ok := at.fq.fundingAt[p.ID]; !force && ok && now.Sub(last) < 30*time.Minute {
+		return
+	}
+	at.fq.fundingAt[p.ID] = now
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := at.stockApplyFunding(ctx, p, mark, now); err != nil {
+		logger.Warnf("⚠️ [%s] factor_quant 空头资金费结算失败 %s：%v", at.name, p.Symbol, err)
+	}
+}
+
+// PriceForSide keeps short sizing and marks on the perpetual quote. Spot
+// prices retain their existing path; no executor is involved in either read.
+func (b *fqStockBroker) PriceForSide(symbol, side string) (float64, error) {
+	if side != fqSideShort {
+		return b.Price(symbol)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	info, ok := stockLookupSymbol(ctx, symbol)
+	if !ok || info.PerpSymbol == "" {
+		return 0, fmt.Errorf("NOT_SHORTABLE: %s", symbol)
+	}
+	q, err := stockGetPerpQuote(ctx, info.PerpSymbol)
+	if err != nil {
+		return 0, err
+	}
+	if q == nil || q.Price <= 0 || math.IsNaN(q.Price) || math.IsInf(q.Price, 0) {
+		return 0, fmt.Errorf("%s 没有有效的永续价格", symbol)
+	}
+	b.at.stock.setPerpPrice(symbol, q.Price)
+	return q.Price, nil
 }
 
 func (b *fqStockBroker) Price(symbol string) (float64, error) {
@@ -379,6 +447,9 @@ func (b *fqStockBroker) FormatQty(symbol string, qty, price float64) (float64, e
 	if !ok {
 		return 0, fmt.Errorf("%s 不是已上市的 bStock 交易对", symbol)
 	}
+	// The registry currently exposes only bStock lot/minimum filters, no perp
+	// step/minimum. Use those for both sides until perp filters are available;
+	// FormatQty has no side parameter, so no target-side state is needed.
 	q := floorStep(qty, info.StepSize)
 	if q <= 0 || (info.MinQty > 0 && q < info.MinQty) {
 		return 0, nil
@@ -397,6 +468,10 @@ func (b *fqStockBroker) Place(o fqOrder) fqResult {
 		return res
 	}
 	if o.Side != fqSideLong {
+		fq := at.config.StrategyConfig.FactorQuantConfig
+		if o.Side == fqSideShort && fq.IsUS() && fq.EffectiveUSShortMode() == "paper" {
+			return b.placeShort(o)
+		}
 		res.Err = "美股模拟账本只做多"
 		return res
 	}
@@ -438,6 +513,48 @@ func (b *fqStockBroker) Place(o fqOrder) fqResult {
 		return res
 	}
 	res.OK, res.FillQty, res.FillPrice, res.Fee, res.Note = true, o.Qty, fill, fee, note
+	return res
+}
+
+func (b *fqStockBroker) placeShort(o fqOrder) fqResult {
+	res := fqResult{Order: o}
+	// Always fetch a fresh perpetual quote, including when the planner has a
+	// cached price. This path writes only store.StockPaper, never an executor.
+	price, err := b.PriceForSide(o.Symbol, fqSideShort)
+	if err != nil {
+		res.Err = err.Error()
+		return res
+	}
+	at, now := b.at, b.now()
+	led := at.store.StockPaper()
+	fill, fee := price*(1-b.slipBps/10000), 0.0
+	if o.opens() {
+		_, fee, err = led.OpenOrAddSideWithFee(at.id, o.Symbol, store.StockPaperShort, o.Qty, fill, 0, 0, b.shortFeeBps, now)
+	} else {
+		rows, readErr := led.ListOpen(at.id)
+		if readErr != nil {
+			res.Err = readErr.Error()
+			return res
+		}
+		for _, p := range rows {
+			if p.Symbol == o.Symbol && p.EffectiveSide() == store.StockPaperShort {
+				b.applyFunding(p, price, true)
+				break
+			}
+		}
+		qty := o.Qty
+		if o.CloseAll {
+			qty = 0
+		}
+		fill = price * (1 + b.slipBps/10000)
+		_, _, fee, err = led.ReduceSideWithFee(at.id, o.Symbol, store.StockPaperShort, qty, fill, b.shortFeeBps, now, "factor_quant_rebalance")
+	}
+	if err != nil {
+		res.Err = err.Error()
+		return res
+	}
+	res.OK, res.FillQty, res.FillPrice, res.Fee = true, o.Qty, fill, fee
+	res.Note = fmt.Sprintf("模拟永续账本成交（滑点 %.4g bp，手续费 %.4g bp）", b.slipBps, b.shortFeeBps)
 	return res
 }
 
@@ -502,8 +619,28 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 	}
 	sort.Strings(names)
 	prices := map[string]float64{}
+	priceSides := map[string]string{}
+	sided, hasSidePrices := b.(interface {
+		PriceForSide(string, string) (float64, error)
+	})
 	for _, s := range names {
-		p, perr := b.Price(s)
+		var p float64
+		var perr error
+		if hasSidePrices {
+			side := fqSideOf(fqSign(t.Weights[s]))
+			if t.Weights[s] == 0 {
+				for _, pos := range before.Positions {
+					if pos.Symbol == s {
+						side = pos.Side
+						break
+					}
+				}
+			}
+			p, perr = sided.PriceForSide(s, side)
+			priceSides[s] = side
+		} else {
+			p, perr = b.Price(s)
+		}
 		if perr != nil || p <= 0 || math.IsNaN(p) || math.IsInf(p, 0) {
 			if perr == nil {
 				perr = fmt.Errorf("价格 %v 无效", p)
@@ -535,6 +672,16 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 		Format:          b.FormatQty,
 	})
 	for _, o := range rep.Plan.Orders {
+		// A direction flip was sized using the target side's venue. Refresh the
+		// old side's close price so a long sale still uses the bStock quote.
+		if side := priceSides[o.Symbol]; side != "" && side != o.Side {
+			price, err := sided.PriceForSide(o.Symbol, o.Side)
+			if err != nil {
+				rep.Results = append(rep.Results, fqResult{Order: o, Err: err.Error()})
+				continue
+			}
+			o.Price, o.Notional = price, o.Qty*price
+		}
 		res := b.Place(o)
 		if res.failed() {
 			logger.Warnf("⚠️ factor_quant %s 失败：%s %s", o.summary(), res.Err, res.StopErr)
