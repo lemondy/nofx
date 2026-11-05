@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'us-miner-diverse-parents',
+    date: '2026-11-05',
+    title: '美股因子挖掘器：多样化变异父代（解决因子库塌缩）',
+    domain: '美股 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 两组均 0 个通过验证',
+    idea: '诊断：us 因子库 h=10 前 300 个候选按 0.8 秩相关聚类只有 1 簇，偏向大盘高流动性（与 −log 成交额秩相关 −0.33；该代理训练段 IC −0.063、验证段 ≈0）。成因是变异父代 = 训练 t 前 20，全在同一簇。改动（开关 FM_DIVERSE_PARENTS，默认关）：父代池与 LLM top-10 在训练 t 前 300 中按训练段秩相关 < 0.8、每个 family_fine 至多 4 个贪心挑选。A/B：从同一冻结快照出发，B 现状 vs D 改动各跑 4 晚（1500 变异、无 LLM、同种子），主指标为新增 accepted 且保留段前向 confirmed 的因子数。“K 按簇计”未做：卡住的是验证段而非 t_req，且会放松多重检验。',
+    bullets: [
+      'S1 判 fail（fq_us K=2，已记账）：B、D 两组新增 accepted 都是 0，前向 confirmed 都是 0。',
+      '前 300 名里按规则只能选出 1～4 个父代（不是 20 个），D 组父代池基本只剩随机种子：塌缩比诊断时更彻底。',
+      'D 组训练通过的新因子 104 个（B 组 513），新增簇数相当，验证 IC 中位数仍为负（−0.010 对 −0.013）。B 组新增因子已分布在 4～8 个簇，同样无一通过验证。',
+    ],
+    conclusion:
+      '第 2 步无增量，线上夜间任务不打开该开关，代码保留为默认关闭。结合第 1 步（标普 500 经典因子 0/30），问题不在搜索方式或池子宽度：2022–25 训练段学到的美股截面方向在 2025–26 验证段不成立。剩下的选项是为 12-1 动量另立预注册（K+1），或暂停 fq_us。',
+    source:
+      'docs/research/2026-11-05-us-miner-diverse-parents-prereg.md · docs/research/2026-11-05-us-miner-diverse-parents-study.md · scripts/factor_mining/diversity.py · scripts/factor_mining/miner_ab_study.py · data/factor_mining/us_miner_ab/report_v1/report.md',
+  },
+  {
     id: 'us-broad-classic-factors',
     date: '2026-11-05',
     title: '美股宽池（标普 500）经典因子检验：能否给 fq_us 提供因子',

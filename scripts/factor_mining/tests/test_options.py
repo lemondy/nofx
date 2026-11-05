@@ -262,5 +262,84 @@ class LlmMemoryTests(unittest.TestCase):
             self.assertNotIn('val', json.dumps(rows))
 
 
+def test_diverse_switch_is_exactly_one():
+    for value in ('', '0', 'true', '01', ' 1', '1 '):
+        with patch.dict(os.environ, {options.DIVERSE_PARENTS: value}):
+            assert not options.enabled(options.DIVERSE_PARENTS)
+    with patch.dict(os.environ, {options.DIVERSE_PARENTS: '1'}):
+        assert options.enabled(options.DIVERSE_PARENTS)
+
+
+def test_diverse_off_preserves_legacy_pool_rng_and_row(tmp_path):
+    from scripts.factor_mining.tests.test_diversity import parent_case
+
+    case = parent_case(tmp_path, enabled=False)
+    assert case['captured']['pool'] == case['legacy_pool']
+    assert case['captured']['parent'] == case['legacy_parent']['expr']
+    assert case['captured']['rng_state'] == case['legacy_rng'].getstate()
+    assert 'diverse_parents' not in case['row']
+
+
+def test_diverse_on_pool_corr_family_and_stats(tmp_path):
+    from collections import Counter
+    from itertools import combinations
+    from scripts.factor_mining.evaluate import cross_corr
+    from scripts.factor_mining.tests.test_diversity import parent_case
+
+    case = parent_case(tmp_path, enabled=True)
+    panels = case['panels']
+    dates = panels.mask.index[case['splits'][1]['train']][::5]
+    stats = case['row']['diverse_parents']
+    assert stats['llm'] is None
+    for h in MARKETS['crypto']['horizons']:
+        parents = [f for f in case['captured']['pool'] if f.get('horizon') == h]
+        assert 1 < len(parents) <= 20
+        assert max(Counter(family_fine(f['expr']) for f in parents).values()) <= 4
+        ranks = [(case['frames'][f['expr']].loc[dates] * f['direction'])
+                 .where(panels.mask.loc[dates]).rank(axis=1, method='average') for f in parents]
+        assert all(abs(cross_corr(a, b, dates)) < .8 for a, b in combinations(ranks, 2))
+        assert stats['per_horizon'][str(h)]['n_selected'] == len(parents)
+        assert stats['per_horizon'][str(h)]['n_families'] == len({family_fine(f['expr']) for f in parents})
+    seeds = [f for f in case['captured']['pool'] if f['source'] == 'seed']
+    assert seeds == case['legacy_pool'][-20:]
+    assert max(case['counts'].values()) > 1  # discarded rejected values were recomputed
+
+
+def test_diverse_on_ignores_validation_only_value_changes(tmp_path):
+    from scripts.factor_mining.tests.test_diversity import parent_case
+
+    a = parent_case(tmp_path / 'a', enabled=True)
+    b = parent_case(tmp_path / 'b', enabled=True, poison=True)
+    key = lambda f: (f.get('horizon'), f['expr'])
+    assert [key(f) for f in a['captured']['pool']] == [key(f) for f in b['captured']['pool']]
+    assert a['row']['diverse_parents'] == b['row']['diverse_parents']
+    assert any(x['val']['ic'] != y['val']['ic'] for x, y in zip(a['refreshed'], b['refreshed']))
+
+
+def test_diverse_llm_view_lists_greedy_train_selection(tmp_path):
+    from collections import Counter
+    from itertools import combinations
+    from scripts.factor_mining.evaluate import cross_corr
+    from scripts.factor_mining.tests.test_diversity import parent_case
+
+    case = parent_case(tmp_path, enabled=True, llm=True)
+    prompt = case['captured']['prompt']
+    text = prompt.split('训练集 top-10（仅 train 指标）：\n', 1)[1].split('\n', 1)[0]
+    view = json.loads(text)
+    assert len(view) == 10
+    assert all(set(f) == {'expr', 'horizon', 'train_t'} for f in view)
+    assert max(Counter(family_fine(f['expr']) for f in view).values()) <= 4
+    panels = case['panels']
+    dates = panels.mask.index[case['splits'][1]['train']][::5]
+    by_key = {(f['horizon'], f['expr']): f for f in case['refreshed']}
+    ranks = [(case['frames'][f['expr']].loc[dates] * by_key[f['horizon'], f['expr']]['direction'])
+             .where(panels.mask.loc[dates]).rank(axis=1, method='average') for f in view]
+    assert all(abs(cross_corr(a, b, dates)) < .8 for a, b in combinations(ranks, 2))
+    assert [f['train_t'] for f in view] == sorted([f['train_t'] for f in view], reverse=True)
+    assert case['row']['diverse_parents']['llm']['n_selected'] == len(view)
+    legacy = sorted(case['refreshed'], key=lambda f: (-f['train']['t'], f['id']))[:10]
+    assert [(f['horizon'], f['expr']) for f in view] != [(f['horizon'], f['expr']) for f in legacy]
+
+
 if __name__ == '__main__':
     unittest.main()
