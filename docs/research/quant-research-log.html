@@ -73,6 +73,18 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-05</div>
 
+<article data-v="no" data-id="style-neutral-factors">
+<h2>因子风格中性化：加密 ensemble 的信息有多少是风格 <span class="tag t-no">S1 fail · 因子主要是低波动/低贝塔</span><span class="dom">加密 · 因子量化 · 增量评估</span></h2>
+<p class="k">思路：来源 Quant Bible（MIT）的遗漏变量偏差 / 回归解剖。对线上 fq_crypto 的 h=3 ensemble（7 个因子）做风格中性化：每日把因子百分位秩对 5 个风格秩（30 日成交额、60 日 BTC 贝塔、30 日波动率、7 日与 30 日动量）做 OLS，取残差再合成。B 原始 vs N 中性化，Backtrader 每 3 日调仓、五分位多空、扣成本与资金费，在验证段与前向段做配对 Δ（周聚类 SE）。另描述加密 zoo 全部 40 个 accepted 因子和美股 top300 候选。数据已看过，只作筛选。</p>
+<ul>
+<li>S1 判 fail（fq_crypto K=3，已记账）：合并日均 Δ +0.011%，z=0.15；验证段 −0.038%，前向段 +0.107%，中性化没有稳定改善多空。</li>
+<li>7 个因子与 30 日波动率截面相关 −0.48～−0.84，风格 R² 0.54～0.77；ensemble 秩 IC 验证 0.115→0.029、前向 0.077→−0.005。只用 5 个风格合成的分数 IC 验证 0.094、前向 0.070，与 ensemble 几乎相同，多空同样亏。</li>
+<li>40 个 accepted 因子风格 R² 中位数 0.54，验证 IC 中位数 0.082→0.017；美股 top300 候选风格 R² 仅 0.09，中性化前后都没有 t ≥ 1.65。</li>
+</ul>
+<p><b>结论：</b>加密挖掘出的因子本质上是低波动、低贝塔异象的不同写法，秩 IC 好看但多空亏钱（空头腿是高波动币），去掉风格后几乎没有独立信息。线上 fq_crypto 实际在做低波动减高波动。改进方向是挖掘器准入加风格中性门槛（另需预注册），按本次结果现有因子大概率无一能留下。</p>
+<p class="src">来源：<code>docs/research/2026-11-05-style-neutral-factors-prereg.md</code> · <code>docs/research/2026-11-05-style-neutral-factors-study.md</code> · <code>scripts/factor_mining/style_neutral_study.py</code> · <code>data/factor_mining/style_neutral/study/s1_v1/report.md</code></p>
+</article>
+
 <article data-v="no" data-id="fq-us-momentum-stress-2008">
 <h2>fq_us 动量多空规则：2008 压力测试（描述性） <span class="tag t-no">描述性 · 2009 反弹亏 29%，25% 熔断触发</span><span class="dom">美股 · 因子量化 · 压力测试</span></h2>
 <p class="k">思路：用户问美股量化是否考虑 2008 这类极端行情。线上 S2 规则 mom_ls_invvol_v1（12-1 动量、20 日调仓、多空各 0.5、1/σ）原样放到 2005-01→2011-06 的 Yahoo 复权日线上，复用 S1 的选股与 Backtrader 两腿：bstock90（冻结名单中当年有数据的 40 只）与 sp500（当前成分 432 只），均有幸存者偏差。线上做法（每次调仓多空重设各 0.5）与 25% 回撤 / 7% 单日熔断按日收盘后处理。只作描述，不计 K，不改 S2。</p>

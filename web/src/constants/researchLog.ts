@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'style-neutral-factors',
+    date: '2026-11-05',
+    title: '因子风格中性化：加密 ensemble 的信息有多少是风格',
+    domain: '加密 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 因子主要是低波动/低贝塔',
+    idea: '来源 Quant Bible（MIT）的遗漏变量偏差 / 回归解剖。对线上 fq_crypto 的 h=3 ensemble（7 个因子）做风格中性化：每日把因子百分位秩对 5 个风格秩（30 日成交额、60 日 BTC 贝塔、30 日波动率、7 日与 30 日动量）做 OLS，取残差再合成。B 原始 vs N 中性化，Backtrader 每 3 日调仓、五分位多空、扣成本与资金费，在验证段与前向段做配对 Δ（周聚类 SE）。另描述加密 zoo 全部 40 个 accepted 因子和美股 top300 候选。数据已看过，只作筛选。',
+    bullets: [
+      'S1 判 fail（fq_crypto K=3，已记账）：合并日均 Δ +0.011%，z=0.15；验证段 −0.038%，前向段 +0.107%，中性化没有稳定改善多空。',
+      '7 个因子与 30 日波动率截面相关 −0.48～−0.84，风格 R² 0.54～0.77；ensemble 秩 IC 验证 0.115→0.029、前向 0.077→−0.005。只用 5 个风格合成的分数 IC 验证 0.094、前向 0.070，与 ensemble 几乎相同，多空同样亏。',
+      '40 个 accepted 因子风格 R² 中位数 0.54，验证 IC 中位数 0.082→0.017；美股 top300 候选风格 R² 仅 0.09，中性化前后都没有 t ≥ 1.65。',
+    ],
+    conclusion:
+      '加密挖掘出的因子本质上是低波动、低贝塔异象的不同写法，秩 IC 好看但多空亏钱（空头腿是高波动币），去掉风格后几乎没有独立信息。线上 fq_crypto 实际在做低波动减高波动。改进方向是挖掘器准入加风格中性门槛（另需预注册），按本次结果现有因子大概率无一能留下。',
+    source:
+      'docs/research/2026-11-05-style-neutral-factors-prereg.md · docs/research/2026-11-05-style-neutral-factors-study.md · scripts/factor_mining/style_neutral_study.py · data/factor_mining/style_neutral/study/s1_v1/report.md',
+  },
+  {
     id: 'fq-us-momentum-stress-2008',
     date: '2026-11-05',
     title: 'fq_us 动量多空规则：2008 压力测试（描述性）',
