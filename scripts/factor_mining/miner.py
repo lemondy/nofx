@@ -21,6 +21,7 @@ from . import allocation, evaluate, feedback, forward, llm_memory, options, pane
 from .config import CORR_REDUNDANT, MARKETS
 from .data_fetch import ROOT
 from .ensemble import build_ensemble
+from .diversity import diverse_select
 from .expr import OPERATORS, ExprError, canonical, dsl_help, evaluate_expr, expr_hash, validate_expr
 from .families import family_fine
 from .panel import forward_target, load_panels, make_splits
@@ -293,6 +294,9 @@ class Miner:
                    llm_valid=0, llm_invalid=0, llm_evaluated=0, invalid=0, new_accepted=0,
                    new_candidate=0, trials_total=0, error=self.fetch_error,
                    seed=seed, budget_exhausted=False, **hashes)
+        diverse_parents = options.enabled(options.DIVERSE_PARENTS)
+        if diverse_parents:
+            row['diverse_parents'] = dict(per_horizon={}, llm=None)
         def stage(name):
             store.write_status(dict(running=True, current=dict(market=market, stage=name, started_at=stamp),
                                     **hashes), self.root)
@@ -302,6 +306,8 @@ class Miner:
             panels = load_panels(market, self.root)
             store.write_status({'markets': {market: panels.meta}}, self.root)
             splits = {h: make_splits(panels.mask.index, h, panels.windows) for h in cfg['horizons']}
+            if diverse_parents:
+                parent_dates = panels.mask.index[splits[min(cfg['horizons'])]['train']][::5]
             targets = {h: forward_target(panels, h) for h in cfg['horizons']}
             ledger = store.read_ledger(market, self.root)
             seen = {(r['horizon'], r['id']) for r in ledger}
@@ -335,6 +341,12 @@ class Miner:
                 if key not in values_cache:
                     values_cache[key] = evaluate_expr(expr, panels.fields)
                 return values_cache[key]
+            def parent_rank(f):
+                try:
+                    values = values_for(f['id'], f['expr']).loc[parent_dates] * f['direction']
+                except ExprError:
+                    return None
+                return values.where(panels.mask.loc[parent_dates]).rank(axis=1, method='average')
             def discard_unused_values(key, entries=None, *, finished=False):
                 # Rejected expressions with no registration cannot be promoted
                 # by a growing K. Do not keep their full panels for the run.
@@ -387,9 +399,15 @@ class Miner:
             rng = random.Random(seed)
             pool = []
             for h in cfg['horizons']:
-                pool.extend(sorted(({k: v for k, v in f.items() if k != 'forward'}
-                                    for f in factors.values() if f['horizon'] == h),
-                                   key=lambda f: (-f['train']['t'], f['id']))[:20])
+                ranked = sorted(({k: v for k, v in f.items() if k != 'forward'}
+                                 for f in factors.values() if f['horizon'] == h),
+                                key=lambda f: (-f['train']['t'], f['id']))
+                if diverse_parents:
+                    parents, stats = diverse_select(ranked, 20, parent_rank, parent_dates)
+                    row['diverse_parents']['per_horizon'][h] = stats
+                    pool.extend(parents)
+                else:
+                    pool.extend(ranked[:20])
             pool.extend(rng.sample(seeds, min(20, len(seeds))))
             candidate_ids = set()
             def add(expr, source, category=None, into=None):
@@ -487,7 +505,12 @@ class Miner:
             evaluate_batch(seed_batch)
             if use_llm and n_llm > 0 and not out_of_time():
                 stage('llm')
-                top = sorted(factors.values(), key=lambda f: (-f['train']['t'], f['id']))[:10]
+                top = sorted(factors.values(), key=lambda f: (-f['train']['t'], f['id']))
+                if diverse_parents:
+                    top, stats = diverse_select(top, 10, parent_rank, parent_dates)
+                    row['diverse_parents']['llm'] = stats
+                else:
+                    top = top[:10]
                 # Construct the model view explicitly; never serialize zoo/ledger rows.
                 pool_text = json.dumps([dict(expr=f['expr'], horizon=f['horizon'], train_t=f['train']['t'])
                                         for f in top], ensure_ascii=False)
