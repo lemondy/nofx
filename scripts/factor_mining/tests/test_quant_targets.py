@@ -346,13 +346,38 @@ class USMomentumTests(unittest.TestCase):
             commands = calls.read_text().splitlines()
             self.assertEqual(len(commands), 5)
             self.assertTrue(all('run_mining' in c for c in commands[:2]))
-            self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --write')
+            # US mining is paused by default: only a fetch-only pass runs, even with 0 retries.
+            self.assertIn('--market us --fetch-only', commands[1])
+            self.assertNotIn('--mutations', commands[1])
+            perp_map = f'{root}/fm/../cache/usstock_symbols.json'
+            self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm '
+                                          f'--perp-map {perp_map} --write')
             self.assertIn('--rule volscale', commands[3])
             self.assertIn('promotion.report', commands[4])
             log = (Path(root) / 'fm/nightly.log').read_text()
-            for expected in ('crypto exited non-zero', 'us exited non-zero', 'targets test failure',
-                             'us momentum targets exited non-zero', 'promotion ran'):
+            for expected in ('crypto exited non-zero', 'us mining paused', 'us fetch-only failed',
+                             'targets test failure', 'us momentum targets exited non-zero', 'promotion ran'):
                 self.assertIn(expected, log)
+            self.assertNotIn('us exited non-zero', log)
+
+    def test_nightly_us_mining_switch_restores_miner_and_perp_map_override(self):
+        with tempfile.TemporaryDirectory() as root:
+            fake = Path(root) / 'python'
+            calls = Path(root) / 'calls.log'
+            fake.write_text('#!/bin/sh\necho "$*" >> "$CALLS_LOG"\n')
+            fake.chmod(0o755)
+            env = dict(os.environ, AR_PYTHON=str(fake), FACTOR_MINING_DIR=str(Path(root) / 'fm'),
+                       CALLS_LOG=str(calls), FM_FETCH_RETRIES='0', FM_US_MINING='1',
+                       FM_US_PERP_MAP='/x/perps.json')
+            run = subprocess.run(['sh', str(Path(qt.__file__).with_name('run_nightly.sh'))],
+                                 env=env, text=True, capture_output=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            commands = calls.read_text().splitlines()
+            self.assertEqual(len(commands), 5)
+            self.assertIn('--market us --mutations', commands[1])
+            self.assertIn('--perp-map /x/perps.json --write', commands[2])
+            self.assertIn('--perp-map /x/perps.json --rule volscale --write', commands[3])
+            self.assertNotIn('us mining paused', (Path(root) / 'fm/nightly.log').read_text())
 
 
 class USVolscaleTests(unittest.TestCase):
@@ -583,8 +608,11 @@ class USVolscaleTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             commands = calls.read_text().splitlines()
             self.assertEqual(len(commands), 5)
-            self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --write')
-            self.assertEqual(commands[3], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm --rule volscale --write')
+            perp_map = f'{root}/fm/../cache/usstock_symbols.json'
+            self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm '
+                                          f'--perp-map {perp_map} --write')
+            self.assertEqual(commands[3], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm '
+                                          f'--perp-map {perp_map} --rule volscale --write')
             self.assertIn('promotion.report', commands[4])
             log = (Path(root) / 'fm/nightly.log').read_text()
             for expected in ('volscale test failure', 'us volscale targets exited non-zero', 'promotion ran'):

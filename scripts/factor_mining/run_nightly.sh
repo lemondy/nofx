@@ -53,9 +53,20 @@ fetch_preflight() {
         fp_round=$(( fp_round + 1 ))
     done
 }
+# US factor mining is paused by default (2026-11-06: price/volume and fundamental factor
+# studies found no stable US premium). The US daily bars are still fetched because the
+# fq_us momentum and volscale target steps below read them. FM_US_MINING=1 restores mining.
+FM_US_MINING=${FM_US_MINING:-0}
+FM_US_PERP_MAP=${FM_US_PERP_MAP:-$FM_ROOT/../cache/usstock_symbols.json}
 for FM_MARKET in crypto us; do
     (
         echo "=== $FM_MARKET $(date '+%Y-%m-%d %H:%M:%S') ==="
+        if [ "$FM_MARKET" = us ] && [ "$FM_US_MINING" != 1 ]; then
+            echo "us mining paused (FM_US_MINING=$FM_US_MINING); fetching us bars only"
+            [ "$FM_FETCH_RETRIES" -gt 0 ] || FM_FETCH_RETRIES=1
+            fetch_preflight us || echo "us fetch-only failed; us targets use existing bars"
+            exit 0
+        fi
         fetch_preflight "$FM_MARKET" || true
         "$AR_PYTHON" -m scripts.factor_mining.run_mining --market "$FM_MARKET" \
             --mutations "${FM_MUTATIONS:-1500}" --llm "${FM_LLM:-60}" || \
@@ -64,12 +75,12 @@ for FM_MARKET in crypto us; do
 done
 (
     echo "=== us momentum targets $(date '+%Y-%m-%d %H:%M:%S') ==="
-    "$AR_PYTHON" -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --write || \
+    "$AR_PYTHON" -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --perp-map "$FM_US_PERP_MAP" --write || \
         echo "us momentum targets exited non-zero"
 ) >> "$FM_LOG" 2>&1
 (
     echo "=== us volscale targets $(date '+%Y-%m-%d %H:%M:%S') ==="
-    "$AR_PYTHON" -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --rule volscale --write || \
+    "$AR_PYTHON" -m scripts.factor_mining.quant_targets --market us --root "$FM_ROOT" --perp-map "$FM_US_PERP_MAP" --rule volscale --write || \
         echo "us volscale targets exited non-zero"
 ) >> "$FM_LOG" 2>&1
 (
