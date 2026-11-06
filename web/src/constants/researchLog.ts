@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'kelly-xiu-financial-ml',
+    date: '2026-11-07',
+    title: 'Kelly & Xiu《Financial Machine Learning》综述评估',
+    domain: '加密 + 美股 · 方法论 · 外部资料',
+    verdict: 'running',
+    verdictText: '方案阶段 · 3 个待检验假设',
+    idea: '用户给出 Kelly 与 Xiu 的综述《Financial Machine Learning》（SSRN 4501707，159 页），问能否融入 nofx。按 AGENTS.md 外部资料流程完成阅读、对照与实验方案，本轮不做离线验证。综述没有代码、数据和可直接交易的规则，数字均来自所引论文的美股月频样本。',
+    bullets: [
+      '可借鉴：①多重检验当选择器会过于保守，应对候选池做联合收缩（p.102–104），对应挖掘器逐因子 Bonferroni 准入（K≈1.5 万、t≥4.65）；②MSRR：对因子管理组合做带岭收缩的夏普最优权重（p.112–118）；③交易成本下的部分调整 w_t = m·w_{t−1} + (1−m)·A_t（p.126–130）。',
+      '已覆盖或不适用：经济指标优先、时间切分（增量评估框架已有）；信号层 ML 过滤已失败（meta-labeling AUC 0.43–0.54）；复杂模型需要信号分散且样本大，加密 60 币 × 4 年、因子主要是低波动风格，不适用；ML 收益主要来自小盘低流动性股（p.126），与美股挖掘暂停一致；LLM 新闻嵌入缺历史新闻数据。',
+      '校准预期：Da 等（2022）测得美股可实现夏普约 0.5（扣成本前），只有不可实现值的约 1/4（p.101）。',
+    ],
+    conclusion:
+      '证据不足，没有可以直接接入的内容。提出 3 个待检验假设：H1 用 MSRR 岭收缩组合权重替换 fq_crypto 的等权打分加五分位多空（针对“IC 为正但多空亏钱”，优先）；H2 部分调整降换手；H3 联合收缩准入（先验低，H1 通过后再做）。需另写预注册并经用户同意后做 S1。',
+    source:
+      'docs/research/2026-11-07-kelly-xiu-financial-ml-assessment.md · ~/Downloads/ssrn-4501707.pdf',
+  },
+  {
     id: 'style-neutral-factors',
     date: '2026-11-05',
     title: '因子风格中性化：加密 ensemble 的信息有多少是风格',
