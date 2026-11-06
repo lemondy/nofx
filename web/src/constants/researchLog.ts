@@ -30,12 +30,30 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-crypto-msrr',
+    date: '2026-11-07',
+    title: 'fq_crypto 组合权重：岭收缩 MSRR vs 等权五分位多空（H1）',
+    domain: '加密 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 回撤降低但收益无改善',
+    idea: '来自 Kelly & Xiu 综述评估的 H1。fq_crypto 线上组合是 7 个因子 z 分数等权、前后 20% 多空；IC 为正但多空亏钱。改为 MSRR：把每个因子的多头腿、空头腿各作一个管理组合（14 列）再加 BTC 列，训练段（2022-05→2025-05，363 期）用岭收缩求夏普最优权重，5 折分块交叉验证选收缩参数，β 冻结；币级权重归一到总杠杆 1、单币 ≤10%。与基线 B（等权五分位，style-neutral 研究同口径）在验证段与前向段做配对 Δ（周聚类 SE），Backtrader 扣成本与资金费。数据已被多项研究看过，只作筛选。',
+    bullets: [
+      'S1 判 fail（fq_crypto K=4，已记账）：合并日均 Δ +0.025%，z=0.24；验证段 +0.027%（z 0.27），前向段 +0.020%（z 0.09）；BTC 权重占比 10.2%。',
+      '回撤明显变小（验证 41.5%→21.6%，前向 38.3%→16.1%），但 M 仍亏（−4.0%、−14.6%），换手为 B 的 1.5–1.8 倍；回撤变小来自 15 条腿互相抵消、方向性风险降低。',
+      'β 过拟合：交叉验证选中网格最小收缩，训练样本内夏普 3.0 → 交叉验证 0.83 → 验证/前向亏损；多个因子的多头腿系数为负、空头腿为正。分解后验证段空头赚、多头亏，前向段反过来，没有稳定的腿。去掉 BTC 列（M₀，只描述）z=0.30。',
+    ],
+    conclusion:
+      '组合权重这一层救不回来：问题在信号（7 个因子本质是低波动风格），不在权重分配。线上不变；H3（联合收缩准入）不再推进；H2（部分调仓）只省成本，B 扣掉全部交易成本后仍亏，不建议单独做。',
+    source:
+      'docs/research/2026-11-07-fq-crypto-msrr-prereg.md · docs/research/2026-11-07-fq-crypto-msrr-study.md · scripts/factor_mining/msrr_study.py · data/factor_mining/msrr/study/s1_v1/report.md',
+  },
+  {
     id: 'kelly-xiu-financial-ml',
     date: '2026-11-07',
     title: 'Kelly & Xiu《Financial Machine Learning》综述评估',
     domain: '加密 + 美股 · 方法论 · 外部资料',
-    verdict: 'running',
-    verdictText: '方案阶段 · 3 个待检验假设',
+    verdict: 'none',
+    verdictText: '无可接入内容 · H1 已检验 fail',
     idea: '用户给出 Kelly 与 Xiu 的综述《Financial Machine Learning》（SSRN 4501707，159 页），问能否融入 nofx。按 AGENTS.md 外部资料流程完成阅读、对照与实验方案，本轮不做离线验证。综述没有代码、数据和可直接交易的规则，数字均来自所引论文的美股月频样本。',
     bullets: [
       '可借鉴：①多重检验当选择器会过于保守，应对候选池做联合收缩（p.102–104），对应挖掘器逐因子 Bonferroni 准入（K≈1.5 万、t≥4.65）；②MSRR：对因子管理组合做带岭收缩的夏普最优权重（p.112–118）；③交易成本下的部分调整 w_t = m·w_{t−1} + (1−m)·A_t（p.126–130）。',
