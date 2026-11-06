@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'us-fundamental-data-sources',
+    date: '2026-11-06',
+    title: '美股基本面数据源调研',
+    domain: '美股 · 因子量化 · 数据',
+    verdict: 'partial',
+    verdictText: '调研 · SEC EDGAR 可用',
+    idea: '美股量价三步检验无因子，诊断认为缺基本面信息。实测调研免费、可编程、能按时点回放的基本面数据源：SEC EDGAR companyfacts / submissions / frames、Nasdaq 盈利意外、Yahoo 报表序列，并核对标普 500 与 bStock 90 的覆盖率。',
+    bullets: [
+      'SEC EDGAR companyfacts 每个数值带 filed/accn，可以按“截至 t 首次披露”回放，申报从 2009 年起；submissions 中 8-K Item 2.02 的 acceptanceDateTime 给出精确的财报发布时点。',
+      'Nasdaq 盈利意外只有最近 4 季、Yahoo 报表只有约 4–5 年且无提交日，都不能用于回测；分析师预期没有免费历史。',
+      '覆盖率：标普 500 共 503 只全部映射到 CIK；bStock 90 只中 78 只有季度 us-gaap XBRL，另有 12 只外国发行人（ARM、ASML、TSM、BABA、PDD 等）没有。',
+    ],
+    conclusion:
+      '可以用 EDGAR 加 Yahoo 价格构建 GP/A、ROE、B/M、E/P、S/P、应计项、资产增长、SUE、财报日超额收益。正式抓取需要用户提供 SEC User-Agent 联系方式；下一步是数据管道加预注册 S1（fq_us K 加 1）。文献中这些因子在大盘股里同样偏弱，不保证有结果。',
+    source:
+      'docs/research/2026-11-06-us-fundamental-data-sources.md · data/factor_mining/fundamentals_probe/coverage_20261106.json',
+  },
+  {
     id: 'style-neutral-factors',
     date: '2026-11-05',
     title: '因子风格中性化：加密 ensemble 的信息有多少是风格',
