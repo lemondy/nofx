@@ -43,7 +43,7 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '线上 h=3 的 7 个因子算术多空 t 在训练段 0.003–0.13、验证段 0.03–0.42（不计资金费），计资金费后多为负；当初靠秩 IC 加“ls_ret>0”通过。',
     ],
     conclusion:
-      '候选池在算术意义上没有可兑现的多空边际，不是门槛太严。若把准入改成 A，fq_crypto 组合为空、等于停掉这条模拟盘。是否改挖掘器 v2 准入、维持现状只观察、或改挖掘目标，需用户决定；本研究未改挖掘器、每晚任务与交易配置。',
+      '候选池在算术意义上没有可兑现的多空边际，不是门槛太严。若把准入改成 A，fq_crypto 组合为空、等于停掉这条模拟盘。用户 2026-11-07 决定维持现状只观察：挖掘器准入、每晚任务与模拟盘不变，fq_crypto 结果不作为扩大或接入实盘的依据。',
     source:
       'docs/research/2026-11-07-fq-crypto-admission-arith-prereg.md · docs/research/2026-11-07-fq-crypto-admission-arith-study.md · scripts/factor_mining/admission_arith_study.py · data/factor_mining/admission_arith/s1_v1/report.md',
   },
