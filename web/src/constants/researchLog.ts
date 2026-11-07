@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'quant-theory-sheet',
+    date: '2026-11-07',
+    title: '《the entire quant theory on one sheet》量化速查表评估',
+    domain: '加密 + 美股 · 方法论 · 外部资料',
+    verdict: 'none',
+    verdictText: '无可直接接入内容 · 3 个待检验假设',
+    idea: '用户给出一张《the entire quant theory on one sheet》长图（@RitOnchain，10 层 50 个公式：概率、统计、线性代数、优化、时间序列、随机微积分、衍生品、组合与风险、微观结构、研究与 ML），要求识别方案并分析能否融入 nofx。按 AGENTS.md 外部资料流程完成阅读、对照与实验方案。资料是面试/入门速查表，没有数据、代码、回测或可执行规则；图中数值例子全部复算正确（贝叶斯 50%、BS 看涨 10.45、DSR 门槛 1.14 等）。',
+    bullets: [
+      '对照 50 张卡片：第 2、3、8、10 层（标准误、多重检验、PCA/风格、收缩、均值方差、凯利、回撤熔断、滚动验证、DSR、精确率）nofx 已实现或已检验并否定；第 6、7 层（随机微积分、期权）与第 9 层做市不适用；盘口不平衡已在 breakout 模块计算，但无历史 L2 无法检验。',
+      '未检验的只有：4.5 凸性/波动拖累、5.5 GARCH、5.3–5.4 系统化协整配对、8.5 ES。协整配对因加密短周期反转被换手吃掉（alpha101）、单币空头被右尾和资金费吃掉（pit60-btchedge）而不提出。',
+      '假设：H1 fq_us 熊市状态停空头腿（Daniel-Moskowitz，叠加波动率缩放；但 SPY 24 个月收益为负在 2012–2026 年只有 40 天，效力几乎全靠已看过的 2008–10）；H2 用 GARCH/EWMA 替换 126 日波动做缩放（先验偏低）；H3 描述性分解 fq_crypto 空头腿亏损中的凸性项 σ²T/2（日波动 6–8% 时 3 日约 0.54–0.96%，与 ML 研究空头腿每期约 −0.65% 同量级）。',
+    ],
+    conclusion:
+      '证据不足，没有可直接接入的内容。H1 针对已知动量崩溃风险但统计效力弱，H2 先验低，二者都需另写预注册并经用户同意后做 S1（fq_us K 8/9）；H3 只做描述，不计 K，用于修正加密因子“看秩 IC 不看算术收益”的评估口径。交易配置未改。',
+    source:
+      'docs/research/2026-11-07-quant-theory-sheet-assessment.md',
+  },
+  {
     id: 'fq-us-ml-multifeature',
     date: '2026-11-07',
     title: 'fq_us 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 12-1 动量',
