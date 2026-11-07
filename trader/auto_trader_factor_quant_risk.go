@@ -112,13 +112,23 @@ func (at *AutoTrader) factorQuantRiskCheck(broker fqBroker, now time.Time) (read
 	peak := state.PeakEquity
 	if peak == 0 {
 		peak = math.Max(at.initialBalance, acct.Equity)
+		source, since := "initial", "none"
+		if acct.Equity > at.initialBalance {
+			source = "current"
+		}
 		if at.store != nil {
-			if historical, qerr := at.store.Equity().MaxEquity(at.id); qerr == nil {
-				peak = math.Max(peak, historical)
+			if historical, start, qerr := at.store.Equity().FactorQuantPeakEquity(at.id); qerr == nil {
+				if !start.IsZero() {
+					since = start.Format(time.RFC3339Nano)
+				}
+				if historical > peak {
+					peak, source = historical, "fq-history"
+				}
 			} else {
-				logger.Warnf("⚠️ [%s] factor_quant 读取历史权益峰值失败，使用初始及当前权益：%v", at.name, qerr)
+				logger.Warnf("⚠️ [%s] factor_quant 读取 fq 历史权益峰值失败，使用初始及当前权益：%v", at.name, qerr)
 			}
 		}
+		logger.Infof("📐 [%s] factor_quant 权益峰值初始化 peak=%.2f source=%s at=%s fq_since=%s", at.name, peak, source, now.UTC().Format(time.RFC3339Nano), since)
 	}
 	peak = math.Max(peak, acct.Equity)
 	if peak != state.PeakEquity {
@@ -195,6 +205,9 @@ func (at *AutoTrader) factorQuantHaltFlatten(broker fqBroker, acct *fqAccount, s
 		planCfg := fqResolvedPlanConfig(fq)
 		planCfg.Flatten = true
 		rep = fqRunRebalance(broker, synthetic, planCfg)
+	}
+	if len(rep.Warnings) > 0 {
+		at.fqNote("halted", rep.withWarnings(fmt.Sprintf("风控停机 [%s]：%s", state.HaltKind, state.HaltReason)))
 	}
 	complete := rep.Err == nil && rep.failedCount() == 0 && rep.After != nil && (state.LastAsOf == "" || len(rep.After.Positions) == 0)
 	key := fmt.Sprintf("halt|%s|%d", state.HaltKind, state.HaltedAt)

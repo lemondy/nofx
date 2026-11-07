@@ -440,7 +440,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	}
 	rec := fqBuildRecord(rep, dec, fq, at.initialBalance, now)
 	at.saveFactorQuantRecord(rec)
-	at.fqNote("rebalanced", fmt.Sprintf("调仓完成 as_of=%s：%d 笔下单，%d 笔失败，%d 个跳过", targets.AsOf, len(rep.Results), rep.failedCount(), len(rep.Plan.Skips)))
+	at.fqNote("rebalanced", rep.withWarnings(fmt.Sprintf("调仓完成 as_of=%s：%d 笔下单，%d 笔失败，%d 个跳过", targets.AsOf, len(rep.Results), rep.failedCount(), len(rep.Plan.Skips))))
 	logger.Infof("📐 [%s] factor_quant 调仓完成 as_of=%s：%d 笔下单，%d 笔失败，%d 个跳过", at.name, targets.AsOf, len(rep.Results), rep.failedCount(), len(rep.Plan.Skips))
 	at.fqSkipSeen("done|" + targets.AsOf) // a finished rebalance supersedes older skip/failure keys
 }
@@ -494,7 +494,7 @@ func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, s
 	if dec.Code == fqCodeRetryExhausted {
 		code = "retry_exhausted"
 	}
-	at.fqNote(code, fmt.Sprintf("%s：%d 笔下单，%d 笔失败，中止=%v", dec.Reason, len(rep.Results), rep.failedCount(), rep.Err))
+	at.fqNote(code, rep.withWarnings(fmt.Sprintf("%s：%d 笔下单，%d 笔失败，中止=%v", dec.Reason, len(rep.Results), rep.failedCount(), rep.Err)))
 	logger.Infof("📐 [%s] factor_quant %s：%d 笔下单，%d 笔失败，中止=%v", at.name, dec.Reason, len(rep.Results), rep.failedCount(), rep.Err)
 }
 
@@ -542,10 +542,10 @@ func (at *AutoTrader) factorQuantFlattenCheck(broker fqBroker, targets *quantTar
 		at.saveFactorQuantRecord(fqBuildRecord(rep, fqDecision{Code: "flatten", Horizon: horizon, Reason: reason}, fq, at.initialBalance, now))
 	}
 	if !complete {
-		at.fqNote("flatten", fmt.Sprintf("%s：%d 笔失败，中止=%v；下个周期继续清仓", reason, rep.failedCount(), rep.Err))
+		at.fqNote("flatten", rep.withWarnings(fmt.Sprintf("%s：%d 笔失败，中止=%v；下个周期继续清仓", reason, rep.failedCount(), rep.Err)))
 		logger.Warnf("⚠️ [%s] factor_quant %s：%d 笔失败，中止=%v；下个周期继续清仓", at.name, reason, rep.failedCount(), rep.Err)
 	} else {
-		at.fqNote("flatten", reason+"：清仓完成")
+		at.fqNote("flatten", rep.withWarnings(reason+"：清仓完成"))
 		logger.Infof("📐 [%s] factor_quant %s：清仓完成", at.name, reason)
 	}
 	return true
@@ -660,6 +660,10 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 	fmt.Fprintf(&sb, "因子量化调仓（%s，仅模拟盘，未调用大模型）\n", fqModeLabel(fq))
 	fmt.Fprintf(&sb, "as_of=%s 规则=%s horizon=%d 天 run_id=%s\n", t.AsOf, fqRuleName(t), dec.Horizon, t.RunID)
 	fmt.Fprintf(&sb, "触发：%s\n", dec.Reason)
+	for _, warning := range rep.Warnings {
+		sb.WriteString("警告：" + warning + "\n")
+		rec.ExecutionLog = append(rec.ExecutionLog, "[factor_quant] 警告："+warning)
+	}
 
 	for _, stop := range rep.Stops {
 		label := "止损（" + fqStopSideLabel(stop.Side) + "）"

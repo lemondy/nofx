@@ -1,7 +1,9 @@
 package trader
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"nofx/logger"
 	"nofx/store"
 )
 
@@ -39,18 +42,21 @@ func fqRiskState(t *testing.T, at *AutoTrader) *store.FactorQuantState {
 
 func TestFactorQuantRiskPeakSeedAndRatchet(t *testing.T) {
 	for _, tc := range []struct {
-		name                      string
+		name, source              string
 		historical, current, peak float64
 	}{
-		{"initial", 9000, 8000, 10000},
-		{"snapshots", 12000, 11000, 12000},
-		{"current", 11000, 13000, 13000},
+		{"initial", "initial", 9000, 8000, 10000},
+		{"snapshots", "fq-history", 12000, 11000, 12000},
+		{"current", "current", 11000, 13000, 13000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			at, f, b := fqRiskTrader(t, "fq-peak")
 			cfg := at.config.StrategyConfig.FactorQuantConfig
 			cfg.MaxDrawdownPct, cfg.DrawdownWarnPct, cfg.DailyLossPct = fqPtr(0), fqPtr(0), fqPtr(0)
+			start := fqDay("2026-10-30")
+			at.saveFactorQuantRecord(fqBuildSkipRecord(fqTestTargets("2026-10-30", nil), fqDecision{Code: fqCodeStatus}, cfg, start))
 			for _, snap := range []*store.EquitySnapshot{
+				{TraderID: at.id, TotalEquity: 50000, Timestamp: start.Add(-time.Hour)}, // pre-fq strategy
 				{TraderID: at.id, TotalEquity: tc.historical, Timestamp: fqDay("2026-10-30")},
 				{TraderID: at.id, TotalEquity: tc.historical - 100, Timestamp: fqDay("2026-10-31")},
 				{TraderID: "other", TotalEquity: 999999},
@@ -61,6 +67,10 @@ func TestFactorQuantRiskPeakSeedAndRatchet(t *testing.T) {
 			}
 			f.equity = tc.current
 			now := fqDay("2026-11-01")
+			var logs bytes.Buffer
+			previousOutput := logger.Log.Out
+			logger.Log.SetOutput(&logs)
+			defer logger.Log.SetOutput(previousOutput)
 			at.factorQuantTick(b, now)
 			fqNear(t, fqRiskState(t, at).PeakEquity, tc.peak, "seeded peak")
 			f.equity = tc.peak + 500
@@ -72,20 +82,89 @@ func TestFactorQuantRiskPeakSeedAndRatchet(t *testing.T) {
 			fqNear(t, state.DayStartEquity, tc.current, "unchanged daily baseline")
 			durable, _ := at.store.FactorQuant().Get(at.id)
 			fqNear(t, durable.PeakEquity, tc.peak+500, "durable peak")
+			if strings.Count(logs.String(), "权益峰值初始化") != 1 || !strings.Contains(logs.String(), "source="+tc.source) || !strings.Contains(logs.String(), "at="+now.Format(time.RFC3339Nano)) || !strings.Contains(logs.String(), "fq_since="+start.Format(time.RFC3339Nano)) {
+				t.Fatalf("missing/duplicate seed source: %s", logs.String())
+			}
 		})
 	}
 }
 
 func TestFactorQuantRiskPeakQueryFailureFallsBack(t *testing.T) {
-	at, f, b := fqRiskTrader(t, "fq-peak-fallback")
-	if err := at.store.GormDB().Migrator().DropTable(&store.EquitySnapshot{}); err != nil {
-		t.Fatal(err)
+	for _, model := range []any{&store.EquitySnapshot{}, &store.DecisionRecordDB{}} {
+		t.Run(reflect.TypeOf(model).Elem().Name(), func(t *testing.T) {
+			at, f, b := fqRiskTrader(t, "fq-peak-fallback")
+			at.saveFactorQuantRecord(fqBuildSkipRecord(fqTestTargets("2026-10-30", nil), fqDecision{Code: fqCodeStatus}, at.config.StrategyConfig.FactorQuantConfig, fqDay("2026-10-30")))
+			if err := at.store.GormDB().Migrator().DropTable(model); err != nil {
+				t.Fatal(err)
+			}
+			f.equity = 11000
+			ready, halted := at.factorQuantRiskCheck(b, fqDay("2026-11-01"))
+			fqNear(t, fqRiskState(t, at).PeakEquity, 11000, "fallback peak")
+			if !ready || halted || len(f.calls) != 0 {
+				t.Fatalf("fallback unexpectedly halted/traded: ready=%v halted=%v calls=%v", ready, halted, f.calls)
+			}
+		})
 	}
-	f.equity = 11000
-	at.factorQuantTick(b, fqDay("2026-11-01"))
-	fqNear(t, fqRiskState(t, at).PeakEquity, 11000, "fallback peak")
-	if len(f.calls) != 0 {
-		t.Fatalf("fallback unexpectedly traded: %v", f.calls)
+}
+
+func TestFactorQuantRiskReusedIDIgnoresPreFactorQuantEquity(t *testing.T) {
+	for _, withMarker := range []bool{false, true} {
+		for _, current := range []float64{10000, 11000} {
+			t.Run(fmt.Sprintf("marker=%v/current=%g", withMarker, current), func(t *testing.T) {
+				at, f, b := fqRiskTrader(t, "fq-reused-id")
+				start := fqDay("2026-11-01")
+				if err := at.store.Equity().Save(&store.EquitySnapshot{TraderID: at.id, Timestamp: start.Add(-time.Hour), TotalEquity: 50000}); err != nil {
+					t.Fatal(err)
+				}
+				if withMarker {
+					at.saveFactorQuantRecord(fqBuildSkipRecord(fqTestTargets("2026-11-01", nil), fqDecision{Code: fqCodeStatus}, at.config.StrategyConfig.FactorQuantConfig, start))
+					if err := at.store.Equity().Save(&store.EquitySnapshot{TraderID: at.id, Timestamp: start, TotalEquity: 10000}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				f.equity = current
+				at.factorQuantTick(b, start)
+				state := fqRiskState(t, at)
+				fqNear(t, state.PeakEquity, math.Max(at.initialBalance, current), "reused id peak")
+				if state.HaltKind != "" || state.WarnActive || len(f.calls) != 0 {
+					t.Fatalf("pre-fq history affected risk: state=%+v calls=%v", state, f.calls)
+				}
+			})
+		}
+	}
+}
+
+func TestFactorQuantRiskHistoryPeakSurvivesStateLoss(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("row lost=%v", lost), func(t *testing.T) {
+			at, f, b := fqRiskTrader(t, "fq-lost-peak")
+			cfg := at.config.StrategyConfig.FactorQuantConfig
+			cfg.DrawdownWarnPct, cfg.DailyLossPct = fqPtr(0), fqPtr(0)
+			now := fqDay("2026-11-01")
+			at.saveFactorQuantRecord(fqBuildSkipRecord(fqTestTargets("2026-10-31", nil), fqDecision{Code: fqCodeStatus}, cfg, now.Add(-time.Hour)))
+			if err := at.store.Equity().Save(&store.EquitySnapshot{TraderID: at.id, Timestamp: now.Add(-2 * time.Hour), TotalEquity: 50000}); err != nil {
+				t.Fatal(err)
+			}
+			f.equity = 14000
+			at.factorQuantTick(b, now) // writes a real fq-era peak snapshot
+			f.equity = 11000
+			at.factorQuantTick(b, now.Add(5*time.Minute))
+			if lost {
+				if err := at.store.GormDB().Where("trader_id = ?", at.id).Delete(&store.FactorQuantState{}).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else if err := at.store.FactorQuant().SetPeakEquity(at.id, 0); err != nil {
+				t.Fatal(err)
+			}
+			at.fq = factorQuantRuntime{} // also discard the in-process risk snapshot
+			f.equity = 10000
+			at.factorQuantTick(b, now.Add(10*time.Minute))
+			state := fqRiskState(t, at)
+			fqNear(t, state.PeakEquity, 14000, "restored fq peak")
+			if state.HaltKind != fqHaltDrawdown {
+				t.Fatalf("real fq drawdown forgotten: %+v", state)
+			}
+		})
 	}
 }
 

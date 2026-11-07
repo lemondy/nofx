@@ -71,6 +71,29 @@ func (s *EquityStore) MaxEquity(traderID string) (float64, error) {
 	return peak, err
 }
 
+// FactorQuantPeakEquity excludes snapshots before the first factor_quant
+// decision. All fq record builders use these fixed summary prefixes and no
+// system prompt, including empty rebalances that have no execution log. The
+// decision survives loss/reset of factor_quant_state, whose mutable timestamps
+// cannot identify the start. No marker means no trusted historical equity.
+// The returned time is the inclusive start of the trusted history.
+func (s *EquityStore) FactorQuantPeakEquity(traderID string) (float64, time.Time, error) {
+	var first DecisionRecordDB
+	err := s.db.Select("timestamp").Where("trader_id = ? AND COALESCE(system_prompt, '') = ''", traderID).
+		Where("cot_trace LIKE ? OR cot_trace LIKE ?", "因子量化 · %", "因子量化调仓（%").
+		Order("timestamp ASC").Limit(1).Find(&first).Error
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("failed to query factor_quant start: %w", err)
+	}
+	if first.Timestamp.IsZero() {
+		return 0, time.Time{}, nil
+	}
+	var peak float64
+	err = s.db.Model(&EquitySnapshot{}).Where("trader_id = ? AND timestamp >= ?", traderID, first.Timestamp.UTC()).
+		Select("COALESCE(MAX(total_equity), 0)").Scan(&peak).Error
+	return peak, first.Timestamp.UTC(), err
+}
+
 // GetLatest gets the latest N equity records for specified trader (sorted in ascending chronological order: old to new)
 func (s *EquityStore) GetLatest(traderID string, limit int) ([]*EquitySnapshot, error) {
 	var snapshots []*EquitySnapshot
