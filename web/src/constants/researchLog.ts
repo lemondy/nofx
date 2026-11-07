@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-crypto-admission-arith',
+    date: '2026-11-07',
+    title: 'fq_crypto 挖掘器准入修正：算术多空（含资金费）显著性门槛的影响',
+    domain: '加密 · 因子量化 · 挖掘器准入',
+    verdict: 'none',
+    verdictText: 'no_factors · 新门槛下 0 个因子通过',
+    idea: '凸性分解显示秩 IC 看不到空头凸性，而挖掘器准入主门槛是秩 IC（t≥4.63），算术多空只要求 ls_ret>0（只看符号、不计资金费）。在冻结快照 zoo（13,157 个因子）上保持秩 IC 部分不变，把符号条件换成“训练与验证的算术五分位多空净收益（扣成本、计资金费）ls_t 均 ≥1.65”（A），并描述不计资金费的 A0 和只加资金费仍看符号的 S_f；按挖掘器顺序重做冗余判定，B′ 非空才做前向配对 S1（fq_crypto K=7）。预注册先于计算；S0 复现 13,157 个状态零差异、40 个 accepted 的 ls_ret 误差 1e-16。',
+    bullets: [
+      '判定 no_factors（不计 K）：h=1/3/7 秩 IC 部分通过 5,268/3,626/2,711 个，原规则 accepted 7/7/26，S_f 5/2/22，A0 与 A 全部为 0。不计资金费也是 0，问题在算术多空本身。',
+      '秩 IC 合格因子的训练段算术多空 ls_t 中位数为负（h=1 −2.06，h=3 −1.52，h=7 −0.78）；训练 ls_t 最高的 h=1 量价相关因子验证段约 −2.4。事后放宽到两段 ≥1.0 仍为 0。',
+      '线上 h=3 的 7 个因子算术多空 t 在训练段 0.003–0.13、验证段 0.03–0.42（不计资金费），计资金费后多为负；当初靠秩 IC 加“ls_ret>0”通过。',
+    ],
+    conclusion:
+      '候选池在算术意义上没有可兑现的多空边际，不是门槛太严。若把准入改成 A，fq_crypto 组合为空、等于停掉这条模拟盘。是否改挖掘器 v2 准入、维持现状只观察、或改挖掘目标，需用户决定；本研究未改挖掘器、每晚任务与交易配置。',
+    source:
+      'docs/research/2026-11-07-fq-crypto-admission-arith-prereg.md · docs/research/2026-11-07-fq-crypto-admission-arith-study.md · scripts/factor_mining/admission_arith_study.py · data/factor_mining/admission_arith/s1_v1/report.md',
+  },
+  {
     id: 'fq-crypto-shortleg-convexity',
     date: '2026-11-07',
     title: 'fq_crypto 空头腿凸性分解：秩 IC 为什么高而多空亏钱',
