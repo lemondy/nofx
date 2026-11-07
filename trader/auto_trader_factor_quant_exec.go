@@ -570,8 +570,16 @@ type fqRebalanceReport struct {
 	Stops   []fqStopResult // protection checks, independent of planned market orders
 	// PriceErrs: symbols whose price could not be read (planned around).
 	PriceErrs map[string]string
+	Warnings  []string // execution anomalies retained in tick notes and records
 	// Err: the attempt aborted before any order (account or plan inputs unavailable).
 	Err error
+}
+
+func (r *fqRebalanceReport) withWarnings(message string) string {
+	if len(r.Warnings) > 0 {
+		return message + "；" + strings.Join(r.Warnings, "；")
+	}
+	return message
 }
 
 func (r *fqRebalanceReport) failedCount() int {
@@ -656,7 +664,13 @@ func fqRunRebalance(b fqBroker, t *quantTargets, bandCfg fqPlanConfig) *fqRebala
 		planEquity /= 1 + bandCfg.CostRate
 	}
 	planOrders := fqPlanOrders
-	if bandCfg.Retry {
+	twoSided := fqTwoSidedSymbols(before.Positions)
+	if len(twoSided) > 0 {
+		warning := fmt.Sprintf("检测到双边持仓 %s，按两侧核对目标", strings.Join(twoSided, ", "))
+		rep.Warnings = append(rep.Warnings, warning)
+		logger.Warnf("⚠️ factor_quant %s", warning)
+	}
+	if bandCfg.Retry || len(twoSided) > 0 {
 		planOrders = fqPlanRetryOrders
 	}
 	rep.Plan = planOrders(fqPlanInput{

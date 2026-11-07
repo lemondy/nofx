@@ -223,6 +223,29 @@ func fqSideOf(sign int) string {
 	return fqSideShort
 }
 
+// fqTwoSidedSymbols reports only live long/short pairs, in stable log order.
+func fqTwoSidedSymbols(positions []fqPosition) []string {
+	sides := map[string]uint8{}
+	for _, p := range positions {
+		if p.Qty > 0 {
+			switch p.Side {
+			case fqSideLong:
+				sides[p.Symbol] |= 1
+			case fqSideShort:
+				sides[p.Symbol] |= 2
+			}
+		}
+	}
+	var symbols []string
+	for symbol, mask := range sides {
+		if mask == 3 {
+			symbols = append(symbols, symbol)
+		}
+	}
+	sort.Strings(symbols)
+	return symbols
+}
+
 // fqPlanRetryOrders also reconciles both sides left by a failed flip: the
 // original pass can fail to close the old side while opening the target side.
 // Keep that target holding in the ordinary band calculation, and plan full
@@ -276,6 +299,12 @@ func fqPlanOrders(in fqPlanInput) fqPlan {
 			return plan.Orders[i].Side < plan.Orders[j].Side
 		})
 		return plan
+	}
+	// Reuse side reconciliation rather than hiding a leg in the symbol map.
+	// Retry planning partitions by target side before calling us again; its
+	// unwanted legs use the full-close branch above, so this cannot recurse.
+	if len(fqTwoSidedSymbols(in.Positions)) > 0 {
+		return fqPlanRetryOrders(in)
 	}
 	format := in.Format
 	if format == nil {
