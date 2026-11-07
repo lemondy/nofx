@@ -507,7 +507,8 @@ class NightlyScriptTests(unittest.TestCase):
             root = Path(tmp) / 'fm'
             full = dict(os.environ, AR_PYTHON=str(fake), FAKE_DIR=tmp, FACTOR_MINING_DIR=str(root),
                         FM_FETCH_RETRY_SLEEP='0', PROMOTION_DIR=str(Path(tmp) / 'promo'),
-                        NOFX_DB=str(Path(tmp) / 'none.db'))
+                        NOFX_DB=str(Path(tmp) / 'none.db'), FM_US_MINING='1')
+            # The retry tests below exercise mining for both markets; the paused default is tested separately.
             full.update(env)
             result = subprocess.run(['sh', str(self.SCRIPT)], env=full, capture_output=True, text=True, timeout=60)
             calls = (Path(tmp) / 'calls.log').read_text().splitlines()
@@ -549,6 +550,16 @@ class NightlyScriptTests(unittest.TestCase):
         _, log, calls = self.run_script({}, FM_FETCH_RETRIES='0')
         self.assertFalse(any('--fetch-only' in c for c in calls))
         self.assertNotIn('fetch preflight', log)
+
+    def test_us_mining_paused_by_default_still_fetches_us_bars_with_retries(self):
+        result, log, calls = self.run_script({'crypto': [0], 'us': [3, 0]}, FM_US_MINING='0')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(sum('--market us --fetch-only' in c for c in calls), 2)
+        self.assertIn('fetch preflight OK: us', log)
+        self.assertIn('us mining paused', log)
+        mining = [c for c in calls if '--fetch-only' not in c and 'run_mining' in c]
+        self.assertEqual([('--market crypto' in c) for c in mining], [True])
+        self.assertIn('promotion report', log)
 
 
 if __name__ == '__main__':
