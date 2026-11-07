@@ -30,6 +30,23 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'dao-quant-research',
+    date: '2026-11-08',
+    title: 'laozdao/dao-quant-research「双引擎四层融合模型」知识库评估',
+    domain: '加密 + 美股 · 方法论 · 外部资料',
+    verdict: 'none',
+    verdictText: '证据不足 · 无可直接接入内容，H1/H2 待定',
+    idea: '用户给出 GitHub 仓库 laozdao/dao-quant-research（main 1ba7b89，MIT），要求分析其量化方案能否融合借鉴。按 AGENTS.md 外部资料流程完成阅读、对照与实验方案。仓库 349 个文件中 345 个是 Markdown，没有代码、数据或回测产物；核心是面向 A 股的“双引擎四层融合模型”（基本面 60% + 量价 25% + 风控 15%，0–100 分、五档评级），其余是行业/个股分析、120 多篇宏观事件随笔、开源项目介绍和证书指南。',
+    bullets: [
+      '回测数字不可复现且前后矛盾：M07-01 称 v1.0 年化 19.5%、基准 8.2%，按同表六个年度收益复利只有 18.6% 和 4.6%；M07-02 对同一模型给出另一套年度收益（2019 年 32.5% vs 38.5%）；v0.1 于 2024-06 才开始，却有 2019 年起的收益。M03-08 的 FOMC 事件表把 t=2.31、2.12 标成 p<0.01。',
+      '对照 nofx：基本面引擎（美股 SEC 基本面 S1 0/18）、IC/IR 与状态权重（MSRR、多特征 ML、regime 研究）、Alpha101、订单流、相关集中度与波动缩放都已实现或已检验；“筹码分布”需要 A 股持仓数据，不适用。ai-hedge-fund 的波动分档 + 相关性乘数仓位规则已被现有单笔 R 定额与同向集中度限制覆盖。',
+      '未覆盖的只有两处，证据都来自资料引用的外部工作：H1 宏观事件窗口（FOMC/CPI/非农前入场被事件波动打止损；先做 S0 机制描述，现有 1h 缓存只有约 32 个事件，需补 5 年主流币 1h 数据，再用 incremental_filter 做 crypto_llm B 类过滤 S1，K=2）；H2 开仓前反方复核（TradingAgents 多空辩论的最小版本，用 llmreplay 离线重放配噪声组，成本高，且因子否决过滤的前例是交易变少、方向相反）。H3 GTJA191 与 Alpha101 同族，不单独立项。',
+    ],
+    conclusion:
+      '证据不足，没有可直接接入的内容。H1 值得先做 S0 机制描述，H2 留作备选，二者都需另写预注册并经用户同意。交易配置、挖掘器与模拟盘未改。',
+    source: 'docs/research/2026-11-08-dao-quant-research-assessment.md',
+  },
+  {
     id: 'fq-crypto-admission-arith',
     date: '2026-11-07',
     title: 'fq_crypto 挖掘器准入修正：算术多空（含资金费）显著性门槛的影响',
