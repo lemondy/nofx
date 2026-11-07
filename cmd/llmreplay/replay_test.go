@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -202,6 +203,75 @@ func makeFixtureDB(t *testing.T) string {
 	}
 	return path
 }
+
+func TestReplayPromptQueryLegacyAndDedupe(t *testing.T) {
+	path := makeFixtureDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("UPDATE decision_records SET system_prompt=? WHERE id=4", " \r\n中文\x00精确字节 "); err != nil {
+		t.Fatal(err)
+	}
+	want, err := loadReplayRecords(db, "t", time.Time{}, time.Time{})
+	if err != nil || len(want) != 8 {
+		t.Fatalf("legacy query returned %d records, err=%v", len(want), err)
+	}
+	for _, query := range []string{
+		`ALTER TABLE decision_records ADD COLUMN system_prompt_hash TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE decision_system_prompts (hash TEXT PRIMARY KEY, text TEXT NOT NULL, created_at DATETIME)`,
+	} {
+		if _, err := db.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range want {
+		if r.ID%2 != 0 {
+			continue
+		}
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(r.System)))
+		if _, err := db.Exec("INSERT OR IGNORE INTO decision_system_prompts (hash, text) VALUES (?, ?)", hash, r.System); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("UPDATE decision_records SET system_prompt='', system_prompt_hash=? WHERE id=?", hash, r.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A legacy inline value must win even when a different side value exists.
+	for _, query := range []string{
+		`INSERT INTO decision_system_prompts (hash,text) VALUES ('different','side must not override'), ('blank','   ')`,
+		`UPDATE decision_records SET system_prompt_hash='different' WHERE id=1`,
+		`INSERT INTO decision_records (id,trader_id,timestamp,system_prompt,system_prompt_hash,input_prompt,success) VALUES
+		(9,'t','2026-10-01T01:00:00Z','','missing','input',1),
+		(10,'t','2026-10-01T01:00:00Z','','','input',1),
+		(11,'t','2026-10-01T01:00:00Z','   ','different','input',1),
+		(12,'t','2026-10-01T01:00:00Z','','blank','input',1),
+		(13,'t','2026-10-01T01:00:00Z','','different','',1),
+		(14,'t','2026-10-01T01:00:00Z','','different','input',0),
+		(15,'other','2026-10-01T01:00:00Z','','different','input',1)`,
+	} {
+		if _, err := db.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ro, err := openReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	got, err := loadReplayRecords(ro, "t", time.Time{}, time.Time{})
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("mixed query changed replay records\ngot  %+v\nwant %+v\nerr=%v", got, want, err)
+	}
+	since := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 10, 1, 4, 0, 0, 0, time.UTC)
+	got, err = loadReplayRecords(ro, "t", since, until)
+	if err != nil || !reflect.DeepEqual(got, want[1:3]) {
+		t.Fatalf("time filters changed: got=%+v err=%v", got, err)
+	}
+}
+
 func TestReplayCLIDryRunReadOnlyAndFrozenSample(t *testing.T) {
 	path := makeFixtureDB(t)
 	dir := t.TempDir()
