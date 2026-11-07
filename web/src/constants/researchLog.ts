@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-us-ml-multifeature',
+    date: '2026-11-07',
+    title: 'fq_us 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 12-1 动量',
+    domain: '美股 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 显著输给动量',
+    idea: '用户要求把加密货币上的多特征机器学习检验也用到美股。35 个特征（30 个与加密版同名的通用价量特征 + SPY 贝塔/特质波动 + 12-1、6-1 动量与 52 周高点），在标普 500 宽池（498 只，2012–2021，每 5 日抽样）上预测 20 日收益截面秩；两个判定臂线性岭 R 与随机傅里叶特征岭 RF，各配置换标签噪声组。模型分数替换 fq_us 线上 mom_ls_invvol_v1（90 只 bStock、每 20 日、前后 20% 多空、波动率倒数加权、Backtrader）的动量排序，其余不变；预注册早于加密结果。数据已看过，两池有幸存者偏差，只作筛选。',
+    bullets: [
+      'S1 两臂 fail（fq_us K=6/7，已记账）：60 个周期，按周期聚类；R z=−3.25（验证 −0.117%/日，前向 −0.176%/日），RF z=−2.96，都显著差于动量 B；只做多变体同样落后（z −2.55、−2.22）。',
+      'B 验证 +80%、前向 +192%（收益来自多头腿）；R −21.9%、+53.2%，RF +0.3%、+42.7%。宽池样本外 IC 很弱：R 训练 0.053 → 验证 0.014、前向 0.026，RF 0.066 → 0.011、0.016；RF 不优于 R。',
+      '模型偏好高波动、低流动性、短期反转（对 vol_30 相关 +0.65、对 dvol_30 −0.49），在 bStock 上验证段 IC 为负（R −0.035，t −4.4），与动量多头组只重合 25–34%。空头腿各臂两段都亏。',
+    ],
+    conclusion:
+      '美股上多特征模型样本外信号弱、迁移到 bStock 后 IC 为负，显著输给 12-1 动量（基线被 bStock 幸存者偏差抬高，但宽池 IC 本身也弱）。结合加密结果，“多特征 + 收缩”在两个市场都关闭；线上不变。',
+    source:
+      'docs/research/2026-11-07-fq-us-ml-multifeature-prereg.md · docs/research/2026-11-07-fq-us-ml-multifeature-study.md · scripts/factor_mining/us_ml_multifeature_study.py · data/factor_mining/ml_multifeature/us_study/s1_v1/report.md',
+  },
+  {
     id: 'fq-crypto-ml-multifeature',
     date: '2026-11-07',
     title: 'fq_crypto 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 等权因子合成',
