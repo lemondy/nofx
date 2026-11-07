@@ -1,8 +1,112 @@
 {
   "version": 1,
-  "updated_at": "2026-10-31",
+  "updated_at": "2026-11-07",
   "repo_url": "https://github.com/lemondy/nofx",
   "reviews": [
+    {
+      "id": "2026-11-07-fullstack",
+      "date": "2026-11-07",
+      "title": "第七轮全链审查：factor_quant 与美股做空",
+      "title_en": "Round-7 full-chain review: factor_quant and US short simulation",
+      "kind": "fullstack",
+      "scope": [
+        "factor_quant 引擎",
+        "美股做空模拟",
+        "paper 引擎",
+        "周期锁与 STATE_CHANGED",
+        "限价入场落库",
+        "数据层"
+      ],
+      "baseline_commit": "90ab394b",
+      "summary": "覆盖 10-25 以来 194 个提交，重点是 factor_quant 程序化引擎、美股做空模拟、paper 资金费/并发、周期锁收窄和限价入场先落库。共 10 项：P1 1 项、P2 3 项、P3 6 项。P1（decision_records 1449MB）由 PR #98 用 system_prompt 无损去重处理（不删 input_prompt，研究工具要读），P2 #2 双边持仓丢腿、#3 峰值种子继承旧策略快照由 PR #99 修复，两者合并后的测试回归由 PR #100 修复；三者于 2026-11-07 部署。P2 #4（crypto fq 目标含未通过前向校验的空头腿）经 H3 分解和准入修正评估（门槛改用算术 L/S 后 0 因子）后，用户决定维持现状只观察。6 项 P3 未修。上轮 pubcache P1 确认关闭。",
+      "findings": {
+        "total": 10,
+        "high": 1,
+        "medium": 3,
+        "low": 6,
+        "info": 0,
+        "scheme": "P1×1、P2×3（含 1 项研究一致性）、P3×6（#5 四项 + #6 两项）；#7 已文档化不计数"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 3,
+        "rejected": 0,
+        "open": 7
+      },
+      "commits": [
+        "b1eca38c",
+        "9b35e441",
+        "f737be64",
+        "450abfb7"
+      ],
+      "prs": [
+        98,
+        99,
+        100
+      ],
+      "docs": [
+        {
+          "path": "reviews/2026-11-07/fullstack-review-report.md",
+          "title": "主报告",
+          "role": "report"
+        },
+        {
+          "path": "research/2026-11-07-fq-crypto-shortleg-convexity-study.md",
+          "title": "P2 #4：空头腿凸性分解",
+          "role": "evidence"
+        },
+        {
+          "path": "research/2026-11-07-fq-crypto-admission-arith-study.md",
+          "title": "P2 #4：准入修正影响评估",
+          "role": "evidence"
+        }
+      ]
+    },
+    {
+      "id": "2026-10-25-fullstack",
+      "date": "2026-10-25",
+      "title": "第六轮全链审查：pubcache / fapi v3 / 数据层",
+      "title_en": "Round-6 full-chain review: pubcache, fapi v3, data layer",
+      "kind": "fullstack",
+      "scope": [
+        "pubcache",
+        "fapi v3 对账",
+        "exchangeInfo 缓存",
+        "netmeter",
+        "SQLite busy",
+        "风控与执行抽查"
+      ],
+      "baseline_commit": "c8c59876",
+      "summary": "人工逐模块审查（子代理因并发配额失败）。共 7 项：P1 1 项、P2 3 项、P3 3 项，未发现会直接导致错单的问题。P1（pubcache 初始化时捕获 DefaultTransport，打红 trader 测试）由 36c86136 改用 marketDataFn 注入修复测试，生产侧经 11-07 审查确认 netmeter 先于 coinank_api 初始化，结构性关闭。P2 #3 decision_records 增长在 11-07 由 PR #98 去重处理。截至 2026-11-07 dev 仍未处理：#2 v2 基线失败时 v3 对账整体报错、#4 FundingTTL 10min、#5 ReduceOnly 死分支、#6 K 线收盘边界不缓存、#7 rules_cache 按 baseURL 单文件互覆。",
+      "findings": {
+        "total": 7,
+        "high": 1,
+        "medium": 3,
+        "low": 3,
+        "info": 0,
+        "scheme": "P1×1、P2×3（含 1 项口径）、P3×3"
+      },
+      "resolution": {
+        "status": "partial",
+        "fixed": 2,
+        "rejected": 0,
+        "open": 5
+      },
+      "commits": [
+        "36c86136",
+        "9b35e441"
+      ],
+      "prs": [
+        98
+      ],
+      "docs": [
+        {
+          "path": "reviews/2026-10-25/fullstack-review-report.md",
+          "title": "主报告",
+          "role": "report"
+        }
+      ]
+    },
     {
       "id": "2026-10-28-quant-system",
       "date": "2026-10-28",
