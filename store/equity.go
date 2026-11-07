@@ -79,7 +79,9 @@ func (s *EquityStore) MaxEquity(traderID string) (float64, error) {
 // The returned time is the inclusive start of the trusted history.
 func (s *EquityStore) FactorQuantPeakEquity(traderID string) (float64, time.Time, error) {
 	var first DecisionRecordDB
-	err := s.db.Select("timestamp").Where("trader_id = ? AND COALESCE(system_prompt, '') = ''", traderID).
+	// fq records carry no system prompt at all: neither inline text nor the
+	// deduplicated system_prompt_hash that AI records get since PR #98.
+	err := s.db.Select("timestamp").Where("trader_id = ? AND COALESCE(system_prompt, '') = '' AND COALESCE(system_prompt_hash, '') = ''", traderID).
 		Where("cot_trace LIKE ? OR cot_trace LIKE ?", "因子量化 · %", "因子量化调仓（%").
 		Order("timestamp ASC").Limit(1).Find(&first).Error
 	if err != nil {
