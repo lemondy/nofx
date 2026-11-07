@@ -40,3 +40,12 @@ launchd 执行的是 `/Users/zhangyun/workspace/nofx-autoresearch` 里由 `deplo
 
 - `deploy.sh` 改为同步 `scripts/backtest` 下的 Python/JSON 模块，因为目标步骤要导入 `fq_us_momentum_study` 和 `fq_us_volscale_study`。同步时不加 `--delete`。
 - 合并后运行 `scripts/factor_mining/deploy.sh`，并重新生成美股两个目标文件。
+
+## 2026-11-07 更新：应用户要求恢复
+
+用户要求重新开启每晚的美股因子挖掘。做法：
+
+- 在 `~/Library/LaunchAgents/com.nofx.factor-mining.plist` 的 `EnvironmentVariables` 里加入 `FM_US_MINING=1`，并用 `launchctl bootout`/`bootstrap` 重新加载。原文件备份为 `com.nofx.factor-mining.plist.bak-20261107-before-us-mining`。
+- `run_nightly.sh` 的默认值仍为 0，没有改动。想再暂停，只要删掉 plist 里这一项并重新加载即可。
+- **对 S2 模拟盘没有影响。** 挖掘器结束时虽然会写一次 `us/quant_targets.json`，但循环之后的动量和 volscale 两个目标步骤会带 `--perp-map` 再写一遍，最终生效的仍是固定规则。
+- 暂停原因并没有消失：价量和基本面研究都没有找到稳定的美股溢价。恢复后挖到的因子依然要经过原有准入，不会自动进入交易。
