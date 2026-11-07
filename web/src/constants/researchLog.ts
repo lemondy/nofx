@@ -102,6 +102,42 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       'docs/research/2026-11-07-kelly-xiu-financial-ml-assessment.md · ~/Downloads/ssrn-4501707.pdf',
   },
   {
+    id: 'us-fundamental-factors',
+    date: '2026-11-06',
+    title: '美股基本面因子（SEC EDGAR 按时点）检验',
+    domain: '美股 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · 0/18，SUE 只卡训练段',
+    idea: '量价因子三步检验后，用 SEC EDGAR 按时点构建的基本面数据（PR #90 调研，本分支数据层：提交后下一交易日可用，重述按自身可用日生效，超过 200 天置空，拆股一致市值，8-K 2.02 财报生效日）检验 9 个经典基本面因子：GP/A、ROE、B/M、E/P、S/P、应计项、资产增长、SUE、财报日超额收益。持有 20/60 日，共 18 个检验。宽池为标普 500 现成分股，训练 2012–21、验证 2022–24、前向 2025–26，Bonferroni 训练 t ≥ 2.99，再迁移到 78 只有季度财报的 bStock。',
+    bullets: [
+      'S1 判 fail（fq_us K=5，已记账）：宽池通过 0/18，可迁移通过 0/18。',
+      '价值类（B/M、E/P）训练段反向、2025–26 转正；GP/A、ROE 前向为负；应计项只在训练段显著（t 3.3/3.5），之后失效。',
+      'SUE 是唯一近期方向一致为正的信号：验证 t 2.4/2.5，宽池前向为正，bStock 前向 t 2.1；但 2012–21 年 IC 约为 0，只卡在 G1，与 12-1 动量同样是“近几年才有效”。',
+    ],
+    conclusion:
+      '补上基本面数据也没有改变结论：2012–2026 年美股大盘股的单因子溢价随时期翻转，宽池样本量与按时点取数都足够，问题不在数据缺口。若要用 SUE，只能另立预注册（K=6），作为动量规则的附加项直接进在线配对；否则可结束美股因子挖掘，维持动量加风控。',
+    source:
+      'docs/research/2026-11-06-us-fundamental-factors-prereg.md · docs/research/2026-11-06-us-fundamental-factors-study.md · scripts/factor_mining/fundamentals.py · scripts/factor_mining/us_fundamental_factor_study.py · data/factor_mining/fundamentals_study/s1_v1/report.md',
+  },
+  {
+    id: 'us-fundamental-data-sources',
+    date: '2026-11-06',
+    title: '美股基本面数据源调研',
+    domain: '美股 · 因子量化 · 数据',
+    verdict: 'partial',
+    verdictText: '调研 · SEC EDGAR 可用',
+    idea: '美股量价三步检验无因子，诊断认为缺基本面信息。实测调研免费、可编程、能按时点回放的基本面数据源：SEC EDGAR companyfacts / submissions / frames、Nasdaq 盈利意外、Yahoo 报表序列，并核对标普 500 与 bStock 90 的覆盖率。',
+    bullets: [
+      'SEC EDGAR companyfacts 每个数值带 filed/accn，可以按“截至 t 首次披露”回放，申报从 2009 年起；submissions 中 8-K Item 2.02 的 acceptanceDateTime 给出精确的财报发布时点。',
+      'Nasdaq 盈利意外只有最近 4 季、Yahoo 报表只有约 4–5 年且无提交日，都不能用于回测；分析师预期没有免费历史。',
+      '覆盖率：标普 500 共 503 只全部映射到 CIK；bStock 90 只中 78 只有季度 us-gaap XBRL，另有 12 只外国发行人（ARM、ASML、TSM、BABA、PDD 等）没有。',
+    ],
+    conclusion:
+      '可以用 EDGAR 加 Yahoo 价格构建 GP/A、ROE、B/M、E/P、S/P、应计项、资产增长、SUE、财报日超额收益。正式抓取需要用户提供 SEC User-Agent 联系方式；下一步是数据管道加预注册 S1（fq_us K 加 1）。文献中这些因子在大盘股里同样偏弱，不保证有结果。',
+    source:
+      'docs/research/2026-11-06-us-fundamental-data-sources.md · data/factor_mining/fundamentals_probe/coverage_20261106.json',
+  },
+  {
     id: 'style-neutral-factors',
     date: '2026-11-05',
     title: '因子风格中性化：加密 ensemble 的信息有多少是风格',
