@@ -30,6 +30,24 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-crypto-ml-multifeature',
+    date: '2026-11-07',
+    title: 'fq_crypto 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 等权因子合成',
+    domain: '加密 · 因子量化 · 增量评估',
+    verdict: 'none',
+    verdictText: 'S1 fail · IC 很高但多空更亏',
+    idea: '来自 Kelly & Xiu 的“复杂度的美德”。当前挖掘逐条搜索公式、等权合成，没有模型同时学习多个特征。用 45 个特征（38 个事先固定的通用价量/资金费特征 + 7 个线上因子），每日截面秩变换，预测 3 日超额收益的截面秩；两个判定臂：线性岭 R（45 维）与随机傅里叶特征岭 RF（4096 维），训练段 5 折分块交叉验证选 λ 后冻结，各配一个日内置换标签的噪声组。模型分数直接替换 B 的打分，组合与执行完全相同（每 3 日、五分位多空，Backtrader 扣成本与资金费）。数据已被多项研究看过，只作筛选。',
+    bullets: [
+      'S1 两臂 fail（fq_crypto K=5/6，已记账）：R 合并 z=−2.25（验证 −0.077%/日，前向 −0.073%/日），显著差于 B；RF z=−0.57；两臂都不如各自噪声组（z_noise −0.53、−1.00）。',
+      '截面秩 IC 很高：R 验证 0.113（t 7.2）、前向 0.081（t 4.6）；RF 0.104、0.070。但多空扣成本后验证 −36.6%/−14.2%、前向 −30.7%/−31.0%（B −16.4%、−20.8%）。亏损集中在空头腿（R 验证空头 −29.9%、资金费 6.7%；前向空头 −32.9%，多头 +0.3%）。',
+      '模型学到的就是低波动：分数对 30 日波动率截面相关 R −0.92、RF −0.76，对 B 0.94、0.83；交叉验证两臂都选最强收缩，RF 样本外 IC 与 R 相同，没有非线性增量。噪声组前向反而赚（+0.3%、+7.3%）。',
+    ],
+    conclusion:
+      '多特征、复杂模型只会把低波动风格学得更纯：IC 更高、多空更亏。fq_crypto 的瓶颈是秩 IC 与盈亏错位（空头腿撞上少数暴涨高波动币并付资金费），不是预测精度。线上不变；该方向关闭，不再换树模型重试。若继续改进，应在空头腿风险约束或以收益幅度为目标上另立假设。',
+    source:
+      'docs/research/2026-11-07-fq-crypto-ml-multifeature-prereg.md · docs/research/2026-11-07-fq-crypto-ml-multifeature-study.md · scripts/factor_mining/ml_multifeature_study.py · data/factor_mining/ml_multifeature/study/s1_v1/report.md',
+  },
+  {
     id: 'fq-crypto-msrr',
     date: '2026-11-07',
     title: 'fq_crypto 组合权重：岭收缩 MSRR vs 等权五分位多空（H1）',
