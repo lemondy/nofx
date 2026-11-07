@@ -73,6 +73,42 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-07</div>
 
+<article data-v="no" data-id="fq-crypto-admission-arith">
+<h2>fq_crypto 挖掘器准入修正：算术多空（含资金费）显著性门槛的影响 <span class="tag t-no">no_factors · 新门槛下 0 个因子通过</span><span class="dom">加密 · 因子量化 · 挖掘器准入</span></h2>
+<p class="k">思路：凸性分解显示秩 IC 看不到空头凸性，而挖掘器准入主门槛是秩 IC（t≥4.63），算术多空只要求 ls_ret&gt;0（只看符号、不计资金费）。在冻结快照 zoo（13,157 个因子）上保持秩 IC 部分不变，把符号条件换成“训练与验证的算术五分位多空净收益（扣成本、计资金费）ls_t 均 ≥1.65”（A），并描述不计资金费的 A0 和只加资金费仍看符号的 S_f；按挖掘器顺序重做冗余判定，B′ 非空才做前向配对 S1（fq_crypto K=7）。预注册先于计算；S0 复现 13,157 个状态零差异、40 个 accepted 的 ls_ret 误差 1e-16。</p>
+<ul>
+<li>判定 no_factors（不计 K）：h=1/3/7 秩 IC 部分通过 5,268/3,626/2,711 个，原规则 accepted 7/7/26，S_f 5/2/22，A0 与 A 全部为 0。不计资金费也是 0，问题在算术多空本身。</li>
+<li>秩 IC 合格因子的训练段算术多空 ls_t 中位数为负（h=1 −2.06，h=3 −1.52，h=7 −0.78）；训练 ls_t 最高的 h=1 量价相关因子验证段约 −2.4。事后放宽到两段 ≥1.0 仍为 0。</li>
+<li>线上 h=3 的 7 个因子算术多空 t 在训练段 0.003–0.13、验证段 0.03–0.42（不计资金费），计资金费后多为负；当初靠秩 IC 加“ls_ret&gt;0”通过。</li>
+</ul>
+<p><b>结论：</b>候选池在算术意义上没有可兑现的多空边际，不是门槛太严。若把准入改成 A，fq_crypto 组合为空、等于停掉这条模拟盘。用户 2026-11-07 决定维持现状只观察：挖掘器准入、每晚任务与模拟盘不变，fq_crypto 结果不作为扩大或接入实盘的依据。</p>
+<p class="src">来源：<code>docs/research/2026-11-07-fq-crypto-admission-arith-prereg.md</code> · <code>docs/research/2026-11-07-fq-crypto-admission-arith-study.md</code> · <code>scripts/factor_mining/admission_arith_study.py</code> · <code>data/factor_mining/admission_arith/s1_v1/report.md</code></p>
+</article>
+
+<article data-v="no" data-id="fq-crypto-shortleg-convexity">
+<h2>fq_crypto 空头腿凸性分解：秩 IC 为什么高而多空亏钱 <span class="tag t-no">描述 · 机制成立：空头凸性吃掉排序收益</span><span class="dom">加密 · 因子量化 · 机制诊断</span></h2>
+<p class="k">思路：来自《一页纸量化理论》评估的 H3（图中 4.5 凸性/Jensen）。恒等式：空头持有期价格盈亏 −R = −l − (R−l)，l=ln(1+R)，凸性项 R−l≥0 永远是空头成本，期望约 σ²T/2；秩 IC 对单调变换不变，看不到这一项。对线上 7 因子合成 B 与 ML 线性岭 R，按 fq_crypto 原口径（每 3 日、前后 20%、开盘进出、资金费）逐币逐期分解，核对与 vectorized_replica 逐日一致（误差 ≤7e-16），R 复现 ML 报告 IC 与分腿收益。登记先于计算，只描述、不计 K。</p>
+<ul>
+<li>验证+前向 180 期：B 空头价格 P_S −0.43 = 对数部分 L_S +2.42 + 凸性 C_S −2.84（资金费另 −0.15），ρ=6.7；R 为 −0.91 = +2.00 − 2.92，ρ=3.2。两者都判“机制成立（强）”：对数意义上做空排序是对的，亏损全部来自凸性。</li>
+<li>B 秩 IC 0.105（t 5.2）；五分位多空对数收益 +1.18%/期（t 2.6），算术收益 −0.20%/期（t −0.4），训练段同样（算术 t 0.37 vs 对数 2.06）。最高波动组对数 −1.20%/期、算术 +0.42%/期、凸性 1.62%，空头腿 74% 在这一组；凸性可由事前 σ̂²T/2 部分预测（斜率 0.54，R² 0.07）。</li>
+<li>尾部：涨幅 &gt;30% 的空头币期占 3.9%，价格亏损合计 −4.19，其余 96% 空头币期合计 +3.76。挖掘器准入主门槛是秩 IC 的 t≥t_req，算术多空只要求 ls_ret&gt;0（不看显著性、不计资金费），B 训练段算术价差 t 0.37 仍通过。</li>
+</ul>
+<p><b>结论：</b>解释了 fq_crypto “IC 高、多空亏”：因子识别的是“高波动币的中位数更低”，但高波动币算术均值比中位数高约 σ²T/2，空头腿正好付这一项。研究口径应改为看算术多空净收益（含资金费）或按波动调整的标签；挖掘器准入的修正会改变每晚结果，需另立方案经用户同意。交易配置未改。</p>
+<p class="src">来源：<code>docs/research/2026-11-07-fq-crypto-shortleg-convexity-prereg.md</code> · <code>docs/research/2026-11-07-fq-crypto-shortleg-convexity-study.md</code> · <code>scripts/factor_mining/shortleg_convexity_study.py</code> · <code>data/factor_mining/shortleg_convexity/s1_v1/report.md</code></p>
+</article>
+
+<article data-v="no" data-id="quant-theory-sheet">
+<h2>《the entire quant theory on one sheet》量化速查表评估 <span class="tag t-no">无可直接接入内容 · H3 机制成立，H1/H2 待定</span><span class="dom">加密 + 美股 · 方法论 · 外部资料</span></h2>
+<p class="k">思路：用户给出一张《the entire quant theory on one sheet》长图（@RitOnchain，10 层 50 个公式：概率、统计、线性代数、优化、时间序列、随机微积分、衍生品、组合与风险、微观结构、研究与 ML），要求识别方案并分析能否融入 nofx。按 AGENTS.md 外部资料流程完成阅读、对照与实验方案。资料是面试/入门速查表，没有数据、代码、回测或可执行规则；图中数值例子全部复算正确（贝叶斯 50%、BS 看涨 10.45、DSR 门槛 1.14 等）。</p>
+<ul>
+<li>对照 50 张卡片：第 2、3、8、10 层（标准误、多重检验、PCA/风格、收缩、均值方差、凯利、回撤熔断、滚动验证、DSR、精确率）nofx 已实现或已检验并否定；第 6、7 层（随机微积分、期权）与第 9 层做市不适用；盘口不平衡已在 breakout 模块计算，但无历史 L2 无法检验。</li>
+<li>未检验的只有：4.5 凸性/波动拖累、5.5 GARCH、5.3–5.4 系统化协整配对、8.5 ES。协整配对因加密短周期反转被换手吃掉（alpha101）、单币空头被右尾和资金费吃掉（pit60-btchedge）而不提出。</li>
+<li>假设：H1 fq_us 熊市状态停空头腿（Daniel-Moskowitz，叠加波动率缩放；但 SPY 24 个月收益为负在 2012–2026 年只有 40 天，效力几乎全靠已看过的 2008–10）；H2 用 GARCH/EWMA 替换 126 日波动做缩放（先验偏低）；H3 描述性分解 fq_crypto 空头腿亏损中的凸性项 σ²T/2（日波动 6–8% 时 3 日约 0.54–0.96%，与 ML 研究空头腿每期约 −0.65% 同量级）。</li>
+</ul>
+<p><b>结论：</b>证据不足，没有可直接接入的内容。H1 针对已知动量崩溃风险但统计效力弱，H2 先验低，二者都需另写预注册并经用户同意后做 S1（fq_us K 8/9）；H3 已完成（fq-crypto-shortleg-convexity）：空头腿亏损确实来自凸性，对数意义下排序正确。交易配置未改。</p>
+<p class="src">来源：<code>docs/research/2026-11-07-quant-theory-sheet-assessment.md</code></p>
+</article>
+
 <article data-v="no" data-id="fq-us-ml-multifeature">
 <h2>fq_us 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 12-1 动量 <span class="tag t-no">S1 fail · 显著输给动量</span><span class="dom">美股 · 因子量化 · 增量评估</span></h2>
 <p class="k">思路：用户要求把加密货币上的多特征机器学习检验也用到美股。35 个特征（30 个与加密版同名的通用价量特征 + SPY 贝塔/特质波动 + 12-1、6-1 动量与 52 周高点），在标普 500 宽池（498 只，2012–2021，每 5 日抽样）上预测 20 日收益截面秩；两个判定臂线性岭 R 与随机傅里叶特征岭 RF，各配置换标签噪声组。模型分数替换 fq_us 线上 mom_ls_invvol_v1（90 只 bStock、每 20 日、前后 20% 多空、波动率倒数加权、Backtrader）的动量排序，其余不变；预注册早于加密结果。数据已看过，两池有幸存者偏差，只作筛选。</p>
