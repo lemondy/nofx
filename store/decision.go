@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -10,21 +11,24 @@ import (
 
 // DecisionStore decision log storage
 type DecisionStore struct {
-	db *gorm.DB
+	db                    *gorm.DB
+	missingPromptLog      sync.Once
+	promptBackfillStarter sync.Once
 }
 
 // DecisionRecordDB internal GORM model for decision_records table
 type DecisionRecordDB struct {
-	ID             int64     `gorm:"primaryKey;autoIncrement"`
-	TraderID       string    `gorm:"column:trader_id;not null;index:idx_decision_records_trader_time"`
-	CycleNumber    int       `gorm:"column:cycle_number;not null"`
-	Timestamp      time.Time `gorm:"not null;index:idx_decision_records_trader_time,sort:desc;index:idx_decision_records_timestamp,sort:desc"`
-	SystemPrompt   string    `gorm:"column:system_prompt;default:''"`
-	InputPrompt    string    `gorm:"column:input_prompt;default:''"`
-	CoTTrace       string    `gorm:"column:cot_trace;default:''"`
-	DecisionJSON   string    `gorm:"column:decision_json;default:''"`
-	RawResponse    string    `gorm:"column:raw_response;default:''"`
-	CandidateCoins string    `gorm:"column:candidate_coins;default:''"`
+	ID               int64     `gorm:"primaryKey;autoIncrement"`
+	TraderID         string    `gorm:"column:trader_id;not null;index:idx_decision_records_trader_time"`
+	CycleNumber      int       `gorm:"column:cycle_number;not null"`
+	Timestamp        time.Time `gorm:"not null;index:idx_decision_records_trader_time,sort:desc;index:idx_decision_records_timestamp,sort:desc"`
+	SystemPrompt     string    `gorm:"column:system_prompt;default:''"`
+	SystemPromptHash string    `gorm:"column:system_prompt_hash;type:text;not null;default:''"`
+	InputPrompt      string    `gorm:"column:input_prompt;default:''"`
+	CoTTrace         string    `gorm:"column:cot_trace;default:''"`
+	DecisionJSON     string    `gorm:"column:decision_json;default:''"`
+	RawResponse      string    `gorm:"column:raw_response;default:''"`
+	CandidateCoins   string    `gorm:"column:candidate_coins;default:''"`
 	// 2026-10-10 per-candidate block reasons (JSON []CandidateVerdict).
 	CandidateVerdicts   string    `gorm:"column:candidate_verdicts;type:text;default:''"`
 	ExecutionLog        string    `gorm:"column:execution_log;default:''"`
@@ -135,6 +139,9 @@ func NewDecisionStore(db *gorm.DB) *DecisionStore {
 
 // initTables initializes AI decision log tables
 func (s *DecisionStore) initTables() error {
+	if err := s.db.AutoMigrate(&decisionSystemPrompt{}); err != nil {
+		return err
+	}
 	// For PostgreSQL with existing table, skip AutoMigrate
 	if s.db.Dialector.Name() == "postgres" {
 		var tableExists int64
@@ -149,7 +156,8 @@ func (s *DecisionStore) initTables() error {
 }
 
 // toRecord converts DB model to API struct
-func (db *DecisionRecordDB) toRecord() *DecisionRecord {
+// prompts is resolved once for the entire result set before conversion.
+func (db *DecisionRecordDB) toRecord(prompts map[string]string) *DecisionRecord {
 	record := &DecisionRecord{
 		ID:                  db.ID,
 		TraderID:            db.TraderID,
@@ -164,6 +172,9 @@ func (db *DecisionRecordDB) toRecord() *DecisionRecord {
 		ErrorMessage:        db.ErrorMessage,
 		AIRequestDurationMs: db.AIRequestDurationMs,
 		ConfigHash:          db.ConfigHash,
+	}
+	if record.SystemPrompt == "" && db.SystemPromptHash != "" {
+		record.SystemPrompt = prompts[db.SystemPromptHash]
 	}
 	json.Unmarshal([]byte(db.CandidateCoins), &record.CandidateCoins)
 	if db.CandidateVerdicts != "" {
@@ -211,7 +222,23 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 		ConfigHash:          record.ConfigHash,
 	}
 
-	if err := s.db.Create(dbRecord).Error; err != nil {
+	var err error
+	if decisionPromptDedupeEnabled() && dbRecord.SystemPrompt != "" {
+		err = s.db.Transaction(func(tx *gorm.DB) error {
+			hash, matches, err := storeDecisionSystemPrompt(tx, dbRecord.SystemPrompt)
+			if err != nil {
+				return err
+			}
+			if matches {
+				dbRecord.SystemPrompt = ""
+				dbRecord.SystemPromptHash = hash
+			}
+			return tx.Create(dbRecord).Error
+		})
+	} else {
+		err = s.db.Create(dbRecord).Error
+	}
+	if err != nil {
 		return fmt.Errorf("failed to insert decision record: %w", err)
 	}
 	record.ID = dbRecord.ID
@@ -229,9 +256,9 @@ func (s *DecisionStore) GetLatestRecords(traderID string, n int) ([]*DecisionRec
 		return nil, fmt.Errorf("failed to query decision records: %w", err)
 	}
 
-	records := make([]*DecisionRecord, len(dbRecords))
-	for i, db := range dbRecords {
-		records[i] = db.toRecord()
+	records, err := s.toRecords(dbRecords)
+	if err != nil {
+		return nil, err
 	}
 
 	// Reverse array to sort time from old to new
@@ -277,9 +304,9 @@ func (s *DecisionStore) GetAllLatestRecords(n int) ([]*DecisionRecord, error) {
 		return nil, fmt.Errorf("failed to query decision records: %w", err)
 	}
 
-	records := make([]*DecisionRecord, len(dbRecords))
-	for i, db := range dbRecords {
-		records[i] = db.toRecord()
+	records, err := s.toRecords(dbRecords)
+	if err != nil {
+		return nil, err
 	}
 
 	// Reverse array
@@ -302,12 +329,7 @@ func (s *DecisionStore) GetRecordsByDate(traderID string, date time.Time) ([]*De
 		return nil, fmt.Errorf("failed to query decision records: %w", err)
 	}
 
-	records := make([]*DecisionRecord, len(dbRecords))
-	for i, db := range dbRecords {
-		records[i] = db.toRecord()
-	}
-
-	return records, nil
+	return s.toRecords(dbRecords)
 }
 
 // CleanOldRecords cleans old records from N days ago

@@ -129,40 +129,7 @@ func cli(args []string, w io.Writer, injected clientFactory) error {
 	modelConfig, _ := json.Marshal([]string{model.Provider, model.CustomAPIURL, model.CustomModelName})
 	o.Model = model.ID + "@" + digest(modelConfig)
 	fmt.Fprintf(w, "数据库只读；交易员 %s (%s)；模型 %s / %s / %s\n", tr.Name, tr.ID, model.ID, model.Provider, model.CustomModelName)
-	var records []record
-	query := `SELECT id, timestamp, system_prompt, input_prompt, COALESCE(decision_json,'') FROM decision_records WHERE trader_id=? AND success=1 AND trim(COALESCE(system_prompt,''))!='' AND trim(COALESCE(input_prompt,''))!=''`
-	queryArgs := []any{tr.ID}
-	if !since.IsZero() {
-		query += " AND julianday(timestamp) >= julianday(?)"
-		queryArgs = append(queryArgs, canonicalTime(since))
-	}
-	if !until.IsZero() {
-		query += " AND julianday(timestamp) < julianday(?)"
-		queryArgs = append(queryArgs, canonicalTime(until))
-	}
-	rows, err := db.Query(query+" ORDER BY id", queryArgs...)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var r record
-		var ts any
-		if err = rows.Scan(&r.ID, &ts, &r.System, &r.Input, &r.Original); err != nil {
-			rows.Close()
-			return err
-		}
-		r.Timestamp, err = databaseTime(ts)
-		if err != nil {
-			rows.Close()
-			return fmt.Errorf("记录 %d 时间无效: %w", r.ID, err)
-		}
-		if !since.IsZero() && r.Timestamp.Before(since) || !until.IsZero() && !r.Timestamp.Before(until) {
-			continue
-		}
-		records = append(records, r)
-	}
-	err = rows.Err()
-	rows.Close()
+	records, err := loadReplayRecords(db, tr.ID, since, until)
 	if err != nil {
 		return err
 	}
@@ -208,6 +175,55 @@ func cli(args []string, w io.Writer, injected clientFactory) error {
 	defer cancel()
 	return runReplay(ctx, sampled, o.runOptions, factory, w)
 }
+
+func loadReplayRecords(db *sql.DB, traderID string, since, until time.Time) ([]record, error) {
+	// Historical read-only snapshots may predate the schema migration.
+	var hasPromptHash bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('decision_records') WHERE name='system_prompt_hash')`).Scan(&hasPromptHash); err != nil {
+		return nil, err
+	}
+	prompt := "COALESCE(d.system_prompt,'')"
+	join := ""
+	if hasPromptHash {
+		prompt = "COALESCE(NULLIF(d.system_prompt,''), p.text, '')"
+		join = " LEFT JOIN decision_system_prompts p ON p.hash = d.system_prompt_hash"
+	}
+	query := `SELECT d.id, d.timestamp, ` + prompt + `, d.input_prompt, COALESCE(d.decision_json,'')
+		FROM decision_records d` + join + ` WHERE d.trader_id=? AND d.success=1
+		AND trim(` + prompt + `)!='' AND trim(COALESCE(d.input_prompt,''))!=''`
+	queryArgs := []any{traderID}
+	if !since.IsZero() {
+		query += " AND julianday(d.timestamp) >= julianday(?)"
+		queryArgs = append(queryArgs, canonicalTime(since))
+	}
+	if !until.IsZero() {
+		query += " AND julianday(d.timestamp) < julianday(?)"
+		queryArgs = append(queryArgs, canonicalTime(until))
+	}
+	rows, err := db.Query(query+" ORDER BY d.id", queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []record
+	for rows.Next() {
+		var r record
+		var ts any
+		if err := rows.Scan(&r.ID, &ts, &r.System, &r.Input, &r.Original); err != nil {
+			return nil, err
+		}
+		r.Timestamp, err = databaseTime(ts)
+		if err != nil {
+			return nil, fmt.Errorf("记录 %d 时间无效: %w", r.ID, err)
+		}
+		if !since.IsZero() && r.Timestamp.Before(since) || !until.IsZero() && !r.Timestamp.Before(until) {
+			continue
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 func openReadOnly(path string) (*sql.DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

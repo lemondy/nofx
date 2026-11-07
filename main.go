@@ -87,6 +87,9 @@ func main() {
 		logger.Fatalf("❌ Failed to initialize database: %v", err)
 	}
 	defer st.Close()
+	promptBackfillCtx, cancelPromptBackfill := context.WithCancel(context.Background())
+	defer cancelPromptBackfill()
+	st.Decision().StartSystemPromptBackfill(promptBackfillCtx)
 
 	// Initialize installation ID for experience improvement (anonymous statistics)
 	initInstallationID(st)
