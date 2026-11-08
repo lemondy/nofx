@@ -1,13 +1,13 @@
 """Incremental greedy ensemble selection (opt-in via FM_GREEDY_ENSEMBLE=1).
 
 Walks candidates by train t (descending) and keeps one only if the equal-weight
-ensemble's TRAIN-segment rank-IC Newey-West t improves by at least MIN_GAIN.
+ensemble's TRAIN-segment rank-IC overlap-adjusted z improves by at least MIN_GAIN.
 Labels outside train_mask are never touched: every frame is sliced to the
 training rows before any statistic.
 """
 import numpy as np
 
-from .evaluate import cs_rank_ic, nw_t
+from .evaluate import cs_rank_ic, overlap_t
 from .expr import evaluate_expr
 
 MAX_FACTORS = 20
@@ -35,7 +35,7 @@ def greedy_ensemble_factors(candidates, panels, excess, train_mask, h, cfg, valu
         new_count = z.notna().astype(float) if count is None else count + z.notna()
         score = new_total.div(new_count.where(new_count > 0))
         ic = cs_rank_ic(score, label, mask, cfg['min_names'])
-        t = nw_t(ic.dropna(), h)
+        t = overlap_t(ic, h)
         if best_t is None or (t > best_t and t >= best_t + MIN_GAIN * abs(best_t)):
             kept.append(factor)
             total, count, best_t = new_total, new_count, t
