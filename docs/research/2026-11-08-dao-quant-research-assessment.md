@@ -112,3 +112,10 @@
 - `articles/M03-volume-price-engine/M03-08-fomc-quantification.md` 第 375–466、968 行起：事件研究表与参考文献。
 - `articles/O01-open-source-projects/O01-01-tradingagents-multi-agent-framework.md`：TradingAgents 架构与论文链接。
 - `articles/O02-ai-hedge-fund-agents/O02-18-risk-manager.md` 第 89–182 行：波动分档仓位与相关性乘数。
+
+## 6. 后续状态（2026-11-08 更新）
+
+- **H1 S0 已完成：** 用户同意后先登记（`2026-11-08-macro-event-window-s0-prereg.md`），再计算，结果见 `2026-11-08-macro-event-window-s0-study.md`。
+  - 判定为机制成立：事件前 0–6 小时入场，1.5×ATR 止损在 12 小时内被触及的概率高约 9.4 个百分点，95% CI [+7.2, +11.7]，placebo 分位 1.000。
+  - 但加密实盘入场只有约 2% 落在窗口内，所以建议不做 S1。
+- **H2 仍待定。**
