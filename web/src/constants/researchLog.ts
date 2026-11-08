@@ -30,6 +30,21 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-shortexit-funding',
+    date: '2026-11-08',
+    title: 'fq_crypto 空头腿：浮盈回吐出场（G）与负资金费率排除（F）S1',
+    domain: '加密 · 因子量化 · 出场规则 / 过滤器',
+    verdict: 'running',
+    verdictText: '已预注册 · 进行中',
+    idea: '因子量化-加密模拟盘从峰值 +7.6% 回落到 +0.7%。按小时重算发现主因是 AKE、ERA、ICNT 三个空头被逼空（合计 −649 USDT），加上大盘下跌拖累多头腿（−272）和资金费（−49），并不是缺少止盈。据此预注册两条只针对空头腿的改动，在 val（2025-05 至 2026-04）和 forward（2026-05 至 2026-11）上用 Backtrader 加小时路径，与现行规则（20% 止损）配对比较。',
+    bullets: [
+      'G（出场，K=7）：空头浮盈达到 20% 后，回吐一半就平仓。另设暴露对照，防止改善只来自少持有了空头。',
+      'F（过滤，K=8）：开空时排除近 7 日资金费率均值低于每 8 小时 −0.01% 的币；用 200 次随机排除同样数量的安慰剂检验。',
+      '主分析因子为 H1 部署后线上唯一的 h=3 因子 f_0ce8b2ee。该因子本身倾向做空资金费率低的币，F 去掉的是其中持有成本最高的一部分。',
+    ],
+    source: 'docs/research/2026-11-08-fq-crypto-shortexit-funding-prereg.md',
+  },
+  {
     id: 'ic-overlap-h1',
     date: '2026-11-08',
     title: 'H1：zoo 准入 t 改用不重叠口径（预注册备选 B）',
