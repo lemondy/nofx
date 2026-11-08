@@ -1,7 +1,9 @@
 """FROZEN EVALUATOR: modifying this file defines a different experiment.
 
-Its SHA256 is recorded in status.json and each market run. Daily RankIC uses
-Bartlett/Newey-West HAC with lag=h (the revised T2 evaluation convention).
+Its SHA256 is recorded in status.json and each market run. T3 uses non-overlapping
+RankIC (every h trading days from segment position zero), with Student t(df=k-1)
+tails converted to normal-scale z. The primary uniform HAC failed calibration,
+so preregistered alternative B applies. See 2026-11-08-ic-overlap-h1-prereg.md.
 All entry points used by mining restrict labels to train/val before statistics.
 """
 import math
@@ -54,6 +56,93 @@ def nw_t(series, lag) -> float:
     return float(mean / math.sqrt(variance / n))
 
 
+def _betacf(a, b, x):
+    """Numerical Recipes continued fraction for the incomplete beta function."""
+    floor = 1e-300
+    qab, qap, qam = a + b, a + 1, a - 1
+    c = 1.0
+    d = 1 - qab * x / qap
+    if abs(d) < floor:
+        d = floor
+    d = 1 / d
+    result = d
+    for m in range(1, 301):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1 + aa * d
+        c = 1 + aa / c
+        if abs(d) < floor:
+            d = floor
+        if abs(c) < floor:
+            c = floor
+        d = 1 / d
+        result *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1 + aa * d
+        c = 1 + aa / c
+        if abs(d) < floor:
+            d = floor
+        if abs(c) < floor:
+            c = floor
+        d = 1 / d
+        delta = d * c
+        result *= delta
+        if abs(delta - 1) < 3e-14:
+            return result
+    raise ArithmeticError('incomplete beta continued fraction did not converge')
+
+
+def _betai(a, b, x):
+    """Regularized incomplete beta, with symmetry for rapid convergence."""
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+    scale = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+                     + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1) / (a + b + 2):
+        return scale * _betacf(a, b, x) / a
+    return 1 - scale * _betacf(b, a, 1 - x) / b
+
+
+def student_t_sf(t, df) -> float:
+    """Student t upper-tail probability P(T > t), using incomplete beta."""
+    if df <= 0:
+        raise ValueError('df must be positive')
+    if t == 0:
+        return 0.5
+    tail = 0.5 * _betai(df / 2, 0.5, df / (df + t * t))
+    return 1 - tail if t < 0 else tail
+
+
+def overlap_t(series, h) -> float:
+    """Normal z from offset-zero non-overlapping RankIC Student t(df=k-1).
+
+    Input is the calendar-contiguous segment, including NaNs. Sample every h
+    trading days from segment position zero, matching long_short, then remove
+    missing values. The primary uniform HAC failed calibration, so H1 uses
+    preregistered alternative B.
+    """
+    values = np.asarray(series, dtype=float)
+    if np.isfinite(values).sum() < 20:
+        return 0.0
+    x = values[::h]
+    x = x[np.isfinite(x)]
+    k = len(x)
+    if k < 5:
+        return 0.0
+    mean = float(x.mean())
+    sd = float(x.std(ddof=1))
+    if sd <= 1e-15:
+        return math.copysign(1e12, mean) if mean else 0.0
+    raw = float(mean / (sd / math.sqrt(k)))
+    sf = student_t_sf(abs(raw), k - 1)
+    if sf == 0:
+        return raw
+    # Symmetry avoids losing the upper tail when 1-sf rounds to one.
+    return math.copysign(-NormalDist().inv_cdf(sf), raw)
+
+
 def long_short(values, raw, mask, segment, h, cfg):
     """Return dated net holding-period returns and mean two-leg turnovers.
 
@@ -94,7 +183,7 @@ def segment_metrics(ic, values, raw, mask, segment, h, cfg):
     rmean = float(net.mean()) if len(net) else 0.0
     rstd = float(net.std(ddof=1)) if len(net) > 1 else 0.0
     return dict(ic=mean, icir=mean / std if std > 1e-15 else 0.0,
-                t=nw_t(sample, h), ls_ret=rmean * annual,
+                t=overlap_t(ic.loc[segment], h), ls_ret=rmean * annual,
                 ls_sharpe=rmean / rstd * math.sqrt(annual) if rstd > 1e-15 else 0.0,
                 turnover=float(turnover.mean()) if len(turnover) else 0.0, n=len(sample))
 

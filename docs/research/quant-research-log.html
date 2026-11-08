@@ -73,6 +73,18 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-08</div>
 
+<article data-v="part" data-id="ic-overlap-h1">
+<h2>H1：zoo 准入 t 改用不重叠口径（预注册备选 B） <span class="tag t-part">评估器已改为不重叠口径 · 待部署</span><span class="dom">加密 + 美股 · 研究方法 · 因子评估</span></h2>
+<p class="k">思路：接续重叠样本 IC 审计。计算前登记：主口径为均匀核 HAC（滞后 h）+ Student t(df=⌊n/h⌋−1) 换算到正态 z；判据是 12 组空模型的 |z|&gt;1.96 在 2%–8% 且 z 标准差在 0.85–1.15；不通过只允许退到备选 B（偏移 0 每 h 日取样的普通 t，df=k−1 换算 z）。然后用只读干跑脚本，在 11-07 的 zoo 上按旧/新口径各重分类一遍。</p>
+<ul>
+<li>主口径误判率 2.5%–8.0%，但加密 AR h=1 组 z 标准差 1.15002 超出上限，判为不通过（h=1 时各方法都偏高，原因是收益的一阶横截面自相关）；备选 B 的 12 组误判率 2.5%–7.0%、标准差 0.873–1.103，通过，评估器改为 B（evaluate.py sha256 78f70129…），与审计脚本的 B 数值逐个相同。</li>
+<li>干跑（旧口径重现原状态 100%）：加密 h=7 accepted 12→0，美股 1→0、候选 11084→200；加密 h=3 accepted 2→1（f_eda12cac 训练 z 4.64，门槛 4.65），h=1 4→3（f_a241597b 4.57）。</li>
+<li>模拟盘影响：加密因子量化 h=3 入选因子会从 {f_0ce8b2ee, f_eda12cac} 变成只剩 f_0ce8b2ee；夜间任务会把多出的 rejected 裁出 zoo，所以部署前要备份。</li>
+</ul>
+<p><b>结论：</b>评估口径修正已实现并通过校准，旧口径确实放进了一批证据被高估的慢因子。尚未合并和部署；部署会改变加密因子量化模拟盘的 h=3 组合，需要用户确认。交易配置、提示词和实盘未改。</p>
+<p class="src">来源：<code>docs/research/2026-11-08-ic-overlap-h1-prereg.md</code> · <code>docs/research/2026-11-08-ic-overlap-h1-study.md</code> · <code>scripts/factor_mining/evaluate.py</code> · <code>scripts/factor_mining/zoo_reclassify_dryrun.py</code> · <code>data/factor_mining/ic_overlap_audit/h1/</code></p>
+</article>
+
 <article data-v="no" data-id="ic-overlap-audit">
 <h2>重叠样本 IC 显著性审计：挖矿评估器的 NW lag=h 仍然偏松 <span class="tag t-no">诊断 · 慢因子误判率约 2 倍，评估器修正待定</span><span class="dom">加密 + 美股 · 研究方法 · 因子评估</span></h2>
 <p class="k">思路：用户贴来的帖子：预测周期 h 大于 IC 计算间隔、因子又变得慢时，重叠样本 IC 的普通 t 会严重虚高，NW（滞后 h−1）也只修到一半。nofx 冻结评估器 factor_mining/evaluate.py 每天算 RankIC、用 Bartlett NW lag=h 算 t，正是帖子里“NW 滞后 19 天”那一档。用与收益独立的随机因子（iid 与 AR(1) 0.98）配真实训练段标签（2022-05 至 2025-05）做空模型校准，每个市场 200 个种子，并重算 zoo 已准入因子的不重叠 t。诊断性质，不计 K。</p>

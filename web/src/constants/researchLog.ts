@@ -30,6 +30,22 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'ic-overlap-h1',
+    date: '2026-11-08',
+    title: 'H1：zoo 准入 t 改用不重叠口径（预注册备选 B）',
+    domain: '加密 + 美股 · 研究方法 · 因子评估',
+    verdict: 'partial',
+    verdictText: '评估器已改为不重叠口径 · 待部署',
+    idea: '接续重叠样本 IC 审计。计算前登记：主口径为均匀核 HAC（滞后 h）+ Student t(df=⌊n/h⌋−1) 换算到正态 z；判据是 12 组空模型的 |z|>1.96 在 2%–8% 且 z 标准差在 0.85–1.15；不通过只允许退到备选 B（偏移 0 每 h 日取样的普通 t，df=k−1 换算 z）。然后用只读干跑脚本，在 11-07 的 zoo 上按旧/新口径各重分类一遍。',
+    bullets: [
+      '主口径误判率 2.5%–8.0%，但加密 AR h=1 组 z 标准差 1.15002 超出上限，判为不通过（h=1 时各方法都偏高，原因是收益的一阶横截面自相关）；备选 B 的 12 组误判率 2.5%–7.0%、标准差 0.873–1.103，通过，评估器改为 B（evaluate.py sha256 78f70129…），与审计脚本的 B 数值逐个相同。',
+      '干跑（旧口径重现原状态 100%）：加密 h=7 accepted 12→0，美股 1→0、候选 11084→200；加密 h=3 accepted 2→1（f_eda12cac 训练 z 4.64，门槛 4.65），h=1 4→3（f_a241597b 4.57）。',
+      '模拟盘影响：加密因子量化 h=3 入选因子会从 {f_0ce8b2ee, f_eda12cac} 变成只剩 f_0ce8b2ee；夜间任务会把多出的 rejected 裁出 zoo，所以部署前要备份。',
+    ],
+    conclusion: '评估口径修正已实现并通过校准，旧口径确实放进了一批证据被高估的慢因子。尚未合并和部署；部署会改变加密因子量化模拟盘的 h=3 组合，需要用户确认。交易配置、提示词和实盘未改。',
+    source: 'docs/research/2026-11-08-ic-overlap-h1-study.md',
+  },
+  {
     id: 'ic-overlap-audit',
     date: '2026-11-08',
     title: '重叠样本 IC 显著性审计：挖矿评估器的 NW lag=h 仍然偏松',
