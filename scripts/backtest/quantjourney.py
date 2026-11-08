@@ -58,7 +58,7 @@ class RebalancePolicy:
 
 @dataclass(frozen=True)
 class PerNameExitPolicy:
-    """Optional daily-bar exits; tier fractions refer to the restored quantity.
+    """Optional per-name exits; tier fractions refer to the restored quantity.
 
     Volatility stops consume a strictly prior 30-return sample standard deviation.
     Thresholds are measured from Backtrader's actual average acquisition price.
@@ -70,8 +70,13 @@ class PerNameExitPolicy:
     trailing_activation: float | None = None
     trailing_distance: float | None = None
     breakeven_after_tier: bool = False
+    short_giveback: tuple[float, float] | None = None
 
     def __post_init__(self):
+        if self.short_giveback is not None and (
+                len(self.short_giveback) != 2 or
+                any(not 0 < value < 1 for value in self.short_giveback)):
+            raise ValueError('Giveback activation and fraction must be in (0, 1)')
         for value in (self.long_stop, self.short_stop, self.trailing_activation,
                       self.trailing_distance):
             if value is not None and not 0 < value < 1:
@@ -656,6 +661,7 @@ class WeightStrategy(bt.Strategy):
         self.pending = None
         self.previous_target = None
         self.equity, self.fills = {}, []
+        self.daily_exposure = {}
         self.last_nav, self.bar_turnover = CAPITAL, 0.
         self.turnover = self.commission = 0.
         self.fill_count = self.closed_count = 0
@@ -781,6 +787,10 @@ class WeightStrategy(bt.Strategy):
         self.bankrupt |= nav <= 0
         self.latest_return = nav / self.last_nav - 1. if self.last_nav > 0 else 0.
         self.equity[self.data.datetime.date(0).isoformat()] = float(nav)
+        nominal = self._quantities() * self._marks('close')
+        self.daily_exposure[self.data.datetime.date(0).isoformat()] = dict(
+            long=float(np.maximum(nominal, 0.).sum() / nav) if nav > 0 else 0.,
+            short=float(-np.minimum(nominal, 0.).sum() / nav) if nav > 0 else 0.)
         if nav > 0:
             exposure = float(np.abs(self._quantities() * self._marks('close')).sum() / nav)
             self.exposure_sum += exposure
@@ -833,7 +843,7 @@ class PerNameExitBroker(CarryBroker):
 
 
 class PerNameExitStrategy(WeightStrategy):
-    params = (('exit_policy', None), ('exit_volatility', None))
+    params = (('exit_policy', None), ('exit_volatility', None), ('exit_path', None))
 
     def __init__(self):
         super().__init__()
@@ -842,6 +852,9 @@ class PerNameExitStrategy(WeightStrategy):
         self.exit_locked = np.zeros(len(self.datas), dtype=bool)
         self.exit_target, self.exit_epoch = None, 0
         self.slippage_paid = 0.
+        self.hourly_days = self.hourly_fallback_days = 0
+        self.hourly = {symbol: (frame.index, frame[['open', 'high', 'low', 'close']].to_numpy())
+                       for symbol, frame in (self.p.exit_path or {}).items()}
 
     def _submit(self, intent, i, prices, *, close=False):
         target = self.p.targets[i-1]
@@ -858,10 +871,11 @@ class PerNameExitStrategy(WeightStrategy):
             reference = order.info.get('reference_price', float(order.data.open[0]))
             self.slippage_paid += order.executed.size * (order.executed.price - reference)
 
-    def _exit(self, j, quantity, trigger, kind, *, limit=False, fresh=False):
+    def _exit(self, j, quantity, trigger, kind, *, limit=False, fresh=False,
+              reference_open=None):
         d, i = self.datas[j], len(self.data) - 1
         side = 1 if self.getposition(d).size > 0 else -1
-        opening = float(d.open[0])
+        opening = float(d.open[0]) if reference_open is None else reference_open
         # A stop armed by this bar's TP/extremum did not exist at its open.
         reference_open = trigger if fresh else opening
         gap = (reference_open >= trigger if side < 0 else reference_open <= trigger)
@@ -910,7 +924,38 @@ class PerNameExitStrategy(WeightStrategy):
                 self.exit_states[j] = state
             if state['epoch'] != self.exit_epoch:
                 state.update(epoch=self.exit_epoch, quantity=abs(pos.size), tiers=set(), breakeven=False)
+                if self.p.exit_path is not None:
+                    state.update(m=pos.price, giveback=False)
             entry = pos.price  # native average updates after rebalance additions
+            if self.p.exit_path is not None:
+                day = pd.Timestamp(d.datetime.date(0))
+                index, rows = self.hourly.get(d._name, (pd.DatetimeIndex([]), np.empty((0, 4))))
+                left, right = index.searchsorted([day, day + timedelta(days=1)])
+                if right - left == 24:
+                    self.hourly_days += 1
+                    for hour, (opening, high, low, _) in zip(index[left:right], rows[left:right]):
+                        stop = entry - side * entry * state['pct'] if state['pct'] is not None else None
+                        kind = 'stop_loss'
+                        if side < 0 and state['giveback']:
+                            giveback = state['m'] + p.short_giveback[1] * (entry - state['m'])
+                            if stop is None or giveback < stop:
+                                stop, kind = giveback, 'giveback_stop'
+                        adverse = low if side > 0 else high
+                        if stop is not None and side * (adverse - stop) <= 0:
+                            self._exit(j, abs(pos.size), stop, kind, reference_open=float(opening))
+                            self.exit_events[-1]['hour'] = hour.isoformat()
+                            if kind == 'giveback_stop':
+                                self.exit_events[-1].update(m=state['m'], E=entry,
+                                                           g_star=(entry - state['m']) / entry)
+                            self.exit_states.pop(j, None)
+                            break
+                        state['best'] = max(state['best'], high) if side > 0 else min(state['best'], low)
+                        if side < 0:
+                            state['m'] = min(state['m'], low)
+                            if p.short_giveback is not None:
+                                state['giveback'] |= (entry - state['m']) / entry >= p.short_giveback[0]
+                    continue
+                self.hourly_fallback_days += 1
             stop = entry - side * entry * state['pct'] if state['pct'] is not None else None
             kind = 'stop_loss'
             if state['breakeven']:
@@ -990,7 +1035,7 @@ def daily_logs(run, *, end=None):
 def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
                 commission=None, slippage=None, funding=None, charge_carry=True,
                 benchmark_returns=None, keep_fills=False, exposure_end=None,
-                exit_policy=None, exit_volatility=None):
+                exit_policy=None, exit_volatility=None, exit_path=None):
     """All executable paths use native Backtrader orders/positions/cash/P&L.
 
     next_open only sizes the cached previous-close decision, using current open
@@ -1000,6 +1045,24 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
         raise ValueError('Invalid mode or market')
     if exit_policy is not None and (mode != 'evaluation' or not isinstance(exit_policy, PerNameExitPolicy)):
         raise ValueError('Per-name exit policies require evaluation mode')
+    if exit_policy is not None:
+        if exit_policy.short_giveback is not None and exit_path is None:
+            raise ValueError('short_giveback requires exit_path')
+        if exit_path is not None:
+            if (exit_policy.trailing_activation is not None or exit_policy.take_profit
+                    or exit_policy.breakeven_after_tier or exit_policy.volatility_stop):
+                raise ValueError('exit_path supports only fixed stops and short_giveback')
+            for symbol, hourly in exit_path.items():
+                index = hourly.index
+                if (not isinstance(index, pd.DatetimeIndex) or index.tz is not None
+                        or not index.is_unique or not index.is_monotonic_increasing
+                        or not index.equals(index.floor('h'))):
+                    raise ValueError(f'{symbol}: exit_path requires unique increasing naive UTC hours')
+                values = hourly[['open', 'high', 'low', 'close']].to_numpy(dtype=float)
+                if (not np.isfinite(values).all() or (values <= 0).any()
+                        or (values[:, 1] < values[:, [0, 2, 3]].max(axis=1)).any()
+                        or (values[:, 2] > values[:, [0, 1, 3]].min(axis=1)).any()):
+                    raise ValueError(f'{symbol}: invalid hourly OHLC')
     if not frames or not isinstance(targets.index, pd.DatetimeIndex) or targets.empty:
         raise ValueError('Nonempty frames and dated targets required')
     if not targets.index.is_unique or not targets.index.is_monotonic_increasing:
@@ -1044,7 +1107,7 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
                                                .rolling(30, min_periods=30).std(ddof=1).shift(1)
                                                for s, f in frames.items()})
             exit_volatility = exit_volatility.reindex(index=targets.index, columns=targets.columns).to_numpy()
-        exit_kwargs = dict(exit_policy=exit_policy, exit_volatility=exit_volatility)
+        exit_kwargs = dict(exit_policy=exit_policy, exit_volatility=exit_volatility, exit_path=exit_path)
     strategy_type = WeightStrategy if exit_policy is None else PerNameExitStrategy
     cerebro.addstrategy(strategy_type, targets=targets.to_numpy(), available=available,
                         calendar=calendar_flags(targets.index, policy), policy=policy,
@@ -1066,10 +1129,15 @@ def run_weights(frames, targets, *, policy=None, mode='evaluation', market='us',
     if keep_fills:
         result['fills'] = s.fills
     if exit_policy is not None:
+        result['daily_exposure'] = s.daily_exposure
         metrics.update(exit_trigger_counts=dict(s.exit_counts), slippage_paid=s.slippage_paid,
                        stop_trigger_count=sum(v for k, v in s.exit_counts.items() if k != 'take_profit'),
                        tp_trigger_count=s.exit_counts['take_profit'])
         result['exit_events'] = s.exit_events
+        if exit_path is not None:
+            metrics.update(hourly_days=s.hourly_days, hourly_fallback_days=s.hourly_fallback_days)
+            metrics['exit_trigger_counts'].setdefault('stop_loss', 0)
+            metrics['exit_trigger_counts'].setdefault('giveback_stop', 0)
     return result
 
 
