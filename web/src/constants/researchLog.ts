@@ -30,6 +30,23 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'ic-overlap-audit',
+    date: '2026-11-08',
+    title: '重叠样本 IC 显著性审计：挖矿评估器的 NW lag=h 仍然偏松',
+    domain: '加密 + 美股 · 研究方法 · 因子评估',
+    verdict: 'none',
+    verdictText: '诊断 · 慢因子误判率约 2 倍，评估器修正待定',
+    idea: '用户贴来的帖子：预测周期 h 大于 IC 计算间隔、因子又变得慢时，重叠样本 IC 的普通 t 会严重虚高，NW（滞后 h−1）也只修到一半。nofx 冻结评估器 factor_mining/evaluate.py 每天算 RankIC、用 Bartlett NW lag=h 算 t，正是帖子里“NW 滞后 19 天”那一档。用与收益独立的随机因子（iid 与 AR(1) 0.98）配真实训练段标签（2022-05 至 2025-05）做空模型校准，每个市场 200 个种子，并重算 zoo 已准入因子的不重叠 t。诊断性质，不计 K。',
+    bullets: [
+      '理论：t 放大倍数在 NW lag=h 时，h=3/7/20 分别为 1.13/1.18/1.21，lag=4h 时约 1.04；在 K≈15000 的门槛 4.65 处，单次误判概率是名义值的 6–8 倍。',
+      '空模型 |t|>1.96 比例（慢因子）：普通 t 29%–57%，现行 NW lag=h 为 9%–11%（加密 h=3、h=7 都是 11%），NW lag=4h 为 8%–9.5%，每 h 天取一次样 2.5%–5.5%；iid 随机因子在各口径下都是 2.5%–6.5%，说明虚高来自“重叠 + 持续性”。',
+      '准入因子：加密 h=7 的 12 个 accepted 换成不重叠 t 后训练 t 为 2.79–4.15，全部低于 4.65（验证段仍 ≥2.3）；美股唯一的 h=20 accepted 训练 2.53、验证 1.16，两道门槛都不过。加密 h=1 的 4 个、h=3 的 2 个仍然通过。',
+      '影响面：实盘因子量化（加密）用 h=3 的目标文件，美股用动量规则，都不受影响；历史 S1 中失败的结论方向不变，判“通过”的动量与波动缩放 S1 本来就用不重叠 20 日周期；cycleic 已有不重叠 t；全部使用 RankIC，帖子里 Pearson 被极端值拽偏的问题已规避。',
+    ],
+    conclusion: '现行评估器偏松但不是普通 t 那种量级；建议（需用户同意，因为是冻结文件）把 zoo 准入 t 改为不重叠或 Hansen-Hodrick 口径并重分类，预计清空加密 h=7 与美股的 accepted，h=3 实盘不变。本轮未改评估器、zoo、交易配置、提示词与模拟盘。',
+    source: 'docs/research/2026-11-08-ic-overlap-audit.md',
+  },
+  {
     id: 'macro-event-window-s0',
     date: '2026-11-08',
     title: '宏观事件窗口 S0：FOMC/CPI/非农前入场的止损触发率',

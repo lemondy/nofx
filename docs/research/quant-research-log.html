@@ -73,6 +73,19 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-08</div>
 
+<article data-v="no" data-id="ic-overlap-audit">
+<h2>重叠样本 IC 显著性审计：挖矿评估器的 NW lag=h 仍然偏松 <span class="tag t-no">诊断 · 慢因子误判率约 2 倍，评估器修正待定</span><span class="dom">加密 + 美股 · 研究方法 · 因子评估</span></h2>
+<p class="k">思路：用户贴来的帖子：预测周期 h 大于 IC 计算间隔、因子又变得慢时，重叠样本 IC 的普通 t 会严重虚高，NW（滞后 h−1）也只修到一半。nofx 冻结评估器 factor_mining/evaluate.py 每天算 RankIC、用 Bartlett NW lag=h 算 t，正是帖子里“NW 滞后 19 天”那一档。用与收益独立的随机因子（iid 与 AR(1) 0.98）配真实训练段标签（2022-05 至 2025-05）做空模型校准，每个市场 200 个种子，并重算 zoo 已准入因子的不重叠 t。诊断性质，不计 K。</p>
+<ul>
+<li>理论：t 放大倍数在 NW lag=h 时，h=3/7/20 分别为 1.13/1.18/1.21，lag=4h 时约 1.04；在 K≈15000 的门槛 4.65 处，单次误判概率是名义值的 6–8 倍。</li>
+<li>空模型 |t|&gt;1.96 比例（慢因子）：普通 t 29%–57%，现行 NW lag=h 为 9%–11%（加密 h=3、h=7 都是 11%），NW lag=4h 为 8%–9.5%，每 h 天取一次样 2.5%–5.5%；iid 随机因子在各口径下都是 2.5%–6.5%，说明虚高来自“重叠 + 持续性”。</li>
+<li>准入因子：加密 h=7 的 12 个 accepted 换成不重叠 t 后训练 t 为 2.79–4.15，全部低于 4.65（验证段仍 ≥2.3）；美股唯一的 h=20 accepted 训练 2.53、验证 1.16，两道门槛都不过。加密 h=1 的 4 个、h=3 的 2 个仍然通过。</li>
+<li>影响面：实盘因子量化（加密）用 h=3 的目标文件，美股用动量规则，都不受影响；历史 S1 中失败的结论方向不变，判“通过”的动量与波动缩放 S1 本来就用不重叠 20 日周期；cycleic 已有不重叠 t；全部使用 RankIC，帖子里 Pearson 被极端值拽偏的问题已规避。</li>
+</ul>
+<p><b>结论：</b>现行评估器偏松但不是普通 t 那种量级；建议（需用户同意，因为是冻结文件）把 zoo 准入 t 改为不重叠或 Hansen-Hodrick 口径并重分类，预计清空加密 h=7 与美股的 accepted，h=3 实盘不变。本轮未改评估器、zoo、交易配置、提示词与模拟盘。</p>
+<p class="src">来源：<code>docs/research/2026-11-08-ic-overlap-audit.md</code> · <code>scripts/factor_mining/ic_overlap_audit.py</code> · <code>data/factor_mining/ic_overlap_audit/</code></p>
+</article>
+
 <article data-v="no" data-id="macro-event-window-s0">
 <h2>宏观事件窗口 S0：FOMC/CPI/非农前入场的止损触发率 <span class="tag t-no">描述 · 机制成立，但实盘窗口内入场仅 2%，不做 S1</span><span class="dom">加密 · 风险机制 · 事件窗口</span></h2>
 <p class="k">思路：dao-quant-research 评估的 H1：事件发布时波动跳升，事件前几小时按 ATR 设定的止损容易被直接打掉。补下 BTC/ETH/SOL/BNB/XRP/DOGE 永续 2020-01 至 2026-11 的 1h K 线（0 缺口），从美联储新闻稿和 BLS 档案原文整理 220 次实际发布时刻（FOMC 57、CPI 81、非农 82，含 2020 年紧急会议与 2025 年停摆推迟）。在事件前 0–6 小时的每个整点放多空各一笔 1.5×ATR14 止损的假想入场，看 12 小时内是否触及，对照为同币、同 UTC 整点、±1–4 周且离任何事件 ≥48 小时的普通时段；按事件聚类，配 1000 次时间错位 placebo。登记先于计算，只描述、不计 K。</p>
