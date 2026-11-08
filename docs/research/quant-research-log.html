@@ -73,15 +73,17 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-08</div>
 
-<article data-v="run" data-id="fq-shortexit-funding">
-<h2>fq_crypto 空头腿：浮盈回吐出场（G）与负资金费率排除（F）S1 <span class="tag t-run">已预注册 · 进行中</span><span class="dom">加密 · 因子量化 · 出场规则 / 过滤器</span></h2>
-<p class="k">思路：因子量化-加密模拟盘从峰值 +7.6% 回落到 +0.7%。按小时重算发现主因是 AKE、ERA、ICNT 三个空头被逼空（合计 −649 USDT），加上大盘下跌拖累多头腿（−272）和资金费（−49），并不是缺少止盈。据此预注册两条只针对空头腿的改动，在 val（2025-05 至 2026-04）和 forward（2026-05 至 2026-11）上用 Backtrader 加小时路径，与现行规则（20% 止损）配对比较。</p>
+<article data-v="no" data-id="fq-shortexit-funding">
+<h2>fq_crypto 空头腿：浮盈回吐出场（G）与负资金费率排除（F）S1 <span class="tag t-no">S1 两条均 fail · 线上不改</span><span class="dom">加密 · 因子量化 · 出场规则 / 过滤器</span></h2>
+<p class="k">思路：因子量化-加密模拟盘从峰值 +7.6% 回落到 +0.7%。按小时重算发现主因是 AKE、ERA、ICNT 三个空头被逼空（合计 −649 USDT），加上大盘下跌拖累多头腿（−272）和资金费（−49），并不是缺少止盈。据此预注册两条只针对空头腿的改动，在 val（2025-05 至 2026-04）和 forward（2026-05 至 2026-11）上用 Backtrader 加小时路径，与现行规则（f_0ce8b2ee 因子，20% 止损）配对比较。</p>
 <ul>
-<li>G（出场，K=7）：空头浮盈达到 20% 后，回吐一半就平仓。另设暴露对照，防止改善只来自少持有了空头。</li>
-<li>F（过滤，K=8）：开空时排除近 7 日资金费率均值低于每 8 小时 −0.01% 的币；用 200 次随机排除同样数量的安慰剂检验。</li>
-<li>主分析因子为 H1 部署后线上唯一的 h=3 因子 f_0ce8b2ee。该因子本身倾向做空资金费率低的币，F 去掉的是其中持有成本最高的一部分。</li>
+<li>G 空头浮盈 20% 后回吐一半即平仓（K=7）：z 0.31，val +0.55 bp/日、forward −0.40 bp/日，判 fail；次要因子组 z −1.53。79 次回吐出场锁住约 12% 浮盈，但离场后价格走向的中位数约为 0，回吐并不预示被逼空。</li>
+<li>F 排除 7 日资金费率均值低于 −0.01%/8h 的空头（K=8）：z −1.07，两段都为负，安慰剂分位 0.69，判 fail。val 段空头资金费从 75.7 降到 12.5，但净收益从 +26.7% 掉到 +13.0%：负资金费率的币往往还在下跌，排除它们削弱了因子本身“资金费率越低越做空”的部分。</li>
+<li>小时线校验：11935 个被持有的（币, 日）全部有完整小时线，与日线收盘价 100% 吻合。固定 20% 止损按小时路径与按日线路径结果逐日相同，所以 PR #61 关于固定止损的结论不受日线口径影响。</li>
+<li>基线本身 forward −5.7%（Sharpe −0.47）：模拟盘回吐的根源仍是入场没有优势加空头凸性，不是出场规则。fq_crypto 累计 8 个 S1，全部 fail。</li>
 </ul>
-<p class="src">来源：<code>docs/research/2026-11-08-fq-crypto-shortexit-funding-prereg.md</code></p>
+<p><b>结论：</b>两条空头腿改动都没有通过 S1，线上不做任何改动。在 val、forward 两段上，止盈类出场（含 11-01 的日线研究）和按资金费率筛空头都没有增益，不再沿这个方向调参。</p>
+<p class="src">来源：<code>docs/research/2026-11-08-fq-crypto-shortexit-funding-prereg.md</code> · <code>docs/research/2026-11-08-fq-crypto-shortexit-funding-study.md</code> · <code>scripts/backtest/fq_shortexit_funding_study.py</code> · <code>data/factor_mining/fq_exit_funding/s1_v1/</code></p>
 </article>
 
 <article data-v="part" data-id="ic-overlap-h1">
