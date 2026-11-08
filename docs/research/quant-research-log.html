@@ -71,6 +71,34 @@ th{color:var(--mut);font-weight:600}
 
 <div id="log">
 
+<div class="day">2026-11-08</div>
+
+<article data-v="no" data-id="macro-event-window-s0">
+<h2>宏观事件窗口 S0：FOMC/CPI/非农前入场的止损触发率 <span class="tag t-no">描述 · 机制成立，但实盘窗口内入场仅 2%，不做 S1</span><span class="dom">加密 · 风险机制 · 事件窗口</span></h2>
+<p class="k">思路：dao-quant-research 评估的 H1：事件发布时波动跳升，事件前几小时按 ATR 设定的止损容易被直接打掉。补下 BTC/ETH/SOL/BNB/XRP/DOGE 永续 2020-01 至 2026-11 的 1h K 线（0 缺口），从美联储新闻稿和 BLS 档案原文整理 220 次实际发布时刻（FOMC 57、CPI 81、非农 82，含 2020 年紧急会议与 2025 年停摆推迟）。在事件前 0–6 小时的每个整点放多空各一笔 1.5×ATR14 止损的假想入场，看 12 小时内是否触及，对照为同币、同 UTC 整点、±1–4 周且离任何事件 ≥48 小时的普通时段；按事件聚类，配 1000 次时间错位 placebo。登记先于计算，只描述、不计 K。</p>
+<ul>
+<li>主结果 D=+0.094（触发率约 62% 对 52%），95% CI [+0.072, +0.117]，placebo 分位 1.000（假事件均值 +0.002、标准差 0.011），判定机制成立；220 个事件中 159 个为正。</li>
+<li>FOMC +0.159、CPI +0.083、非农 +0.060；k∈{1,1.5,2.5}×H∈{6,12,24} 全部显著；六个币都显著；2021 与 2026 年 CI 含 0 或贴边，其余年份显著，没有系统性减弱。</li>
+<li>机制形态：发布前 6 小时 |收益| 比普通时段低约 10%（ATR 被低估），发布那一小时 1.76 倍、下一小时 1.24 倍，两小时后恢复；观察窗区间/ATR 1.20 倍。</li>
+<li>S1 潜在样本（只计笔数）：加密已平仓 759 笔中只有 16 笔（2.1%）在事件前 0–6 小时入场，主交易员 436 笔中 7 笔（1.6%）。</li>
+<li>偏离披露：ZCode 触发速率限制无产出、ALFRED 超时，事件时刻改由主 agent 直接核对官方原文（文件名日期与禁发行一致）；定义和判定未改。</li>
+</ul>
+<p><b>结论：</b>机制真实而稳健，但只说明止损更易被触及，不等于亏损；nofx 实盘在窗口内入场极少，按登记设计做 crypto_llm B 类过滤 S1 几乎必然证据不足，建议现在不做 S1，作为风险常识记录。交易配置、提示词与模拟盘未改。</p>
+<p class="src">来源：<code>docs/research/2026-11-08-macro-event-window-s0-prereg.md</code> · <code>docs/research/2026-11-08-macro-event-window-s0-study.md</code> · <code>scripts/backtest/macro_event_study.py</code> · <code>data/macro_events/s0_v1/summary.md</code></p>
+</article>
+
+<article data-v="no" data-id="dao-quant-research">
+<h2>laozdao/dao-quant-research「双引擎四层融合模型」知识库评估 <span class="tag t-no">证据不足 · 无可直接接入内容，H1/H2 待定</span><span class="dom">加密 + 美股 · 方法论 · 外部资料</span></h2>
+<p class="k">思路：用户给出 GitHub 仓库 laozdao/dao-quant-research（main 1ba7b89，MIT），要求分析其量化方案能否融合借鉴。按 AGENTS.md 外部资料流程完成阅读、对照与实验方案。仓库 349 个文件中 345 个是 Markdown，没有代码、数据或回测产物；核心是面向 A 股的“双引擎四层融合模型”（基本面 60% + 量价 25% + 风控 15%，0–100 分、五档评级），其余是行业/个股分析、120 多篇宏观事件随笔、开源项目介绍和证书指南。</p>
+<ul>
+<li>回测数字不可复现且前后矛盾：M07-01 称 v1.0 年化 19.5%、基准 8.2%，按同表六个年度收益复利只有 18.6% 和 4.6%；M07-02 对同一模型给出另一套年度收益（2019 年 32.5% vs 38.5%）；v0.1 于 2024-06 才开始，却有 2019 年起的收益。M03-08 的 FOMC 事件表把 t=2.31、2.12 标成 p&lt;0.01。</li>
+<li>对照 nofx：基本面引擎（美股 SEC 基本面 S1 0/18）、IC/IR 与状态权重（MSRR、多特征 ML、regime 研究）、Alpha101、订单流、相关集中度与波动缩放都已实现或已检验；“筹码分布”需要 A 股持仓数据，不适用。ai-hedge-fund 的波动分档 + 相关性乘数仓位规则已被现有单笔 R 定额与同向集中度限制覆盖。</li>
+<li>未覆盖的只有两处，证据都来自资料引用的外部工作：H1 宏观事件窗口（FOMC/CPI/非农前入场被事件波动打止损；先做 S0 机制描述，现有 1h 缓存只有约 32 个事件，需补 5 年主流币 1h 数据，再用 incremental_filter 做 crypto_llm B 类过滤 S1，K=2）；H2 开仓前反方复核（TradingAgents 多空辩论的最小版本，用 llmreplay 离线重放配噪声组，成本高，且因子否决过滤的前例是交易变少、方向相反）。H3 GTJA191 与 Alpha101 同族，不单独立项。</li>
+</ul>
+<p><b>结论：</b>证据不足，没有可直接接入的内容。H1 值得先做 S0 机制描述，H2 留作备选，二者都需另写预注册并经用户同意。交易配置、挖掘器与模拟盘未改。</p>
+<p class="src">来源：<code>docs/research/2026-11-08-dao-quant-research-assessment.md</code></p>
+</article>
+
 <div class="day">2026-11-07</div>
 
 <article data-v="no" data-id="fq-crypto-admission-arith">
