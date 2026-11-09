@@ -30,6 +30,21 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'crypto-funding-carry',
+    date: '2026-11-09',
+    title: '资金费 carry（现货多 + 永续空）离线 S1',
+    domain: '加密 · 市场中性 · 新策略',
+    verdict: 'running',
+    verdictText: '已预注册 · 待运行',
+    idea: '来自《The Math Inside a Trading Bot》评估的 H1。BTC、ETH 各半资本，过去 7 天年化资金费 ≥10% 时在次日开盘开仓（买现货、等量做空永续，3 倍保证金），<2% 时平仓；成本按现货 0.10%、永续 0.05% 的 taker 费加 0.03% 滑点。区间 2020-01-01 至 2026-11-06，新登记 track crypto_carry，K=1。',
+    bullets: [
+      'pass 需同时满足：年化 ≥5%、周聚类 z ≥1.96、前后两半与近一年都为正、MaxDD ≤10%；只满足“年化与两半都为正”记 weak。',
+      'Backtrader 双数据源撮合，资金费按逐次结算计入，并与算术实现逐日核对；永续涨幅击穿保证金时按当日强平处理（偏保守）。',
+    ],
+    conclusion: '已预注册，尚未运行。',
+    source: 'docs/research/2026-11-09-crypto-funding-carry-s1-prereg.md',
+  },
+  {
     id: 'early-trim-offline',
     date: '2026-11-09',
     title: '提前减仓 0.8R（vs 1.2R）离线复核 S1',

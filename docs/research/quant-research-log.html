@@ -73,6 +73,17 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-09</div>
 
+<article data-v="run" data-id="crypto-funding-carry">
+<h2>资金费 carry（现货多 + 永续空）离线 S1 <span class="tag t-run">已预注册 · 待运行</span><span class="dom">加密 · 市场中性 · 新策略</span></h2>
+<p class="k">思路：来自《The Math Inside a Trading Bot》评估的 H1。BTC、ETH 各半资本，过去 7 天年化资金费 ≥10% 时在次日开盘开仓（买现货、等量做空永续，3 倍保证金），&lt;2% 时平仓；成本按现货 0.10%、永续 0.05% 的 taker 费加 0.03% 滑点。区间 2020-01-01 至 2026-11-06，新登记 track crypto_carry，K=1。</p>
+<ul>
+<li>pass 需同时满足：年化 ≥5%、周聚类 z ≥1.96、前后两半与近一年都为正、MaxDD ≤10%；只满足“年化与两半都为正”记 weak。</li>
+<li>Backtrader 双数据源撮合，资金费按逐次结算计入，并与算术实现逐日核对；永续涨幅击穿保证金时按当日强平处理（偏保守）。</li>
+</ul>
+<p><b>结论：</b>已预注册，尚未运行。</p>
+<p class="src">来源：<code>docs/research/2026-11-09-crypto-funding-carry-s1-prereg.md</code></p>
+</article>
+
 <article data-v="no" data-id="early-trim-offline">
 <h2>提前减仓 0.8R（vs 1.2R）离线复核 S1 <span class="tag t-no">S1 fail · 两档差值≈0，建议结束线上配对</span><span class="dom">加密 · LLM 交易 · 出场规则</span></h2>
 <p class="k">思路：线上配对 early-trim-0p8r 跑了 16 天，avgR 差 −0.033R，但 SE 0.060R，按推演到 44 天也几乎不可能通过。减仓只改出场、不改入场，所以预注册离线复核：取 9-29 至 11-08 的 439 笔真实交易（实盘 AI 单 + 4 个 LLM 模拟盘），按 1m K 线收盘价模拟 0.8R 与 1.2R 两档减 1/3，残余仓位两臂都按实际出场价平仓，Backtrader 撮合并与算术实现逐笔核对。crypto_llm K=2。</p>
