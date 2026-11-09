@@ -686,7 +686,17 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
               }}
     if not pairs:
         return report  # Empty configuration must work even without a database.
-    trusted = any(not tampered(pair) for pair in pairs)
+
+    def ended(pair):
+        # An ended pair (stopped traders, e.g. after an offline S1) is listed,
+        # never re-scored: its elapsed days would otherwise keep growing.
+        if pair.get("ended_at") is None:
+            return False
+        if as_utc(pair["ended_at"]) < as_utc(pair["started_at"]):
+            raise ValueError(f"{pair['id']}: ended_at 早于 started_at")
+        return True
+
+    trusted = any(not tampered(pair) and not ended(pair) for pair in pairs)
     btc_returns, btc_error = load_btc_returns(as_of) if trusted else ({}, None)
     with ExitStack() as stack:
         connection = stack.enter_context(closing(open_readonly(db_path))) if trusted else None
@@ -696,6 +706,16 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
         for pair in pairs:
             if tampered(pair):
                 report["pairs"].append({"id": pair["id"], "verdict": "prereg_tampered"})
+                continue
+            if ended(pair):
+                start, stop = as_utc(pair["started_at"]), as_utc(pair["ended_at"])
+                reason = pair.get("end_reason") or "配对已结束"
+                report["pairs"].append({
+                    **{key: pair.get(key) for key in ("id", "title", "feature", "candidate_trader_id",
+                                                      "control_trader_id", "started_at", "min_days", "min_trades")},
+                    "ended_at": iso(stop), "end_reason": reason, "verdict": "ended",
+                    "elapsed_days": (stop - start).total_seconds() / 86400,
+                    "reasons": [reason], "warnings": [], "caveats": CAVEAT})
                 continue
             start = as_utc(pair["started_at"])
 
@@ -819,6 +839,10 @@ def summary(report: dict) -> str:
     for item in report["pairs"]:
         if item["verdict"] == "prereg_tampered":
             lines.append(f"[{item['id']}] prereg_tampered")
+            continue
+        if item["verdict"] == "ended":
+            lines.append(f"[{item['id']}] ended（已结束 {item['ended_at']}，运行 {item['elapsed_days']:.2f} 天）")
+            lines.append(f"  - {item['end_reason']}")
             continue
         verdict = "insufficient（样本不足）" if item['verdict'] == 'insufficient' else item['verdict']
         lines.append(f"[{item['id']}] {verdict} | 已运行 {item['elapsed_days']:.2f} 天")

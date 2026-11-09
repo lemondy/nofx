@@ -299,6 +299,37 @@ class SQLiteReportTests(unittest.TestCase):
         self.assertNotIn("live", hold)
         self.assertTrue(all(item["caveats"] == promotion.CAVEAT for item in result["pairs"]))
 
+    def test_ended_pair_is_listed_not_rescored_and_never_recorded(self):
+        self.populate("candidate", n=50, daily_gain=2, days=40)
+        self.populate("control", n=50, daily_gain=1, days=40)
+        ended_at = promotion.iso(START + timedelta(days=3, hours=6))
+        result = promotion.build_report([
+            pair(id="running"),
+            pair(id="stopped", ended_at=ended_at, end_reason="离线 S1 fail"),
+        ], self.db, START + timedelta(days=40, hours=12))
+        running, stopped = result["pairs"]
+        self.assertNotEqual(running["verdict"], "ended")
+        self.assertEqual(stopped["verdict"], "ended")
+        self.assertEqual(stopped["elapsed_days"], 3.25)  # frozen at ended_at, not as_of
+        self.assertEqual(stopped["ended_at"], ended_at)
+        self.assertEqual(stopped["reasons"], ["离线 S1 fail"])
+        self.assertNotIn("candidate", stopped)
+        text = promotion.summary(result)
+        self.assertIn("[stopped] ended（已结束", text)
+        self.assertIn("离线 S1 fail", text)
+        ledger = self.directory / "ledger.jsonl"
+        promotion.record_ledger(result, ledger)
+        self.assertFalse(ledger.exists())
+
+    def test_only_ended_pairs_need_no_database_and_bad_end_is_rejected(self):
+        ended = pair(id="stopped", ended_at=promotion.iso(START + timedelta(days=1)))
+        result = promotion.build_report([ended], self.directory / "missing.db", NOW)
+        self.assertEqual(result["pairs"][0]["verdict"], "ended")
+        self.assertEqual(result["pairs"][0]["end_reason"], "配对已结束")
+        self.assertFalse((self.directory / "missing.db").exists())
+        with self.assertRaises(ValueError):
+            promotion.build_report([pair(ended_at=promotion.iso(START - timedelta(days=1)))], self.db, NOW)
+
     def test_exit_time_window_closed_status_open_count_and_no_history(self):
         with sqlite3.connect(self.db) as connection:
             for status, entry, exit_ms in (

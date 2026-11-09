@@ -20,6 +20,7 @@ const VERDICT_VARIANT: Record<PromotionVerdict, 'up' | 'warn' | 'neutral'> = {
   ready: 'up',
   hold: 'warn',
   insufficient: 'neutral',
+  ended: 'neutral',
 }
 
 const percent = (value: unknown) =>
@@ -154,6 +155,11 @@ function PairCard({
           <p className="mt-1 break-words text-xs text-fg-3">
             {L('开始于', 'Started', language)} {fmtText(pair.started_at)}
           </p>
+          {pair.ended_at && (
+            <p className="mt-1 break-words text-xs text-fg-3">
+              {L('已结束于', 'Ended', language)} {fmtText(pair.ended_at)}
+            </p>
+          )}
         </div>
         <Badge variant={VERDICT_VARIANT[pair.verdict ?? 'insufficient']}>
           {pair.verdict ?? 'insufficient'}
