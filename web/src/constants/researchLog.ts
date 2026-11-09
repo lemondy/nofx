@@ -30,6 +30,23 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'quantbot-math-sheet',
+    date: '2026-11-09',
+    title: '《The Math Inside a Trading Bot》网页评估（48 张公式卡）',
+    domain: '加密 + 美股 · 外部资料 · 知识速查',
+    verdict: 'none',
+    verdictText: '证据不足 · 无可直接接入的策略',
+    idea: '用户给出网页 quantbot-math.netlify.app（@qwinsi0x）：交易机器人的 8 个阶段（数据、信号、过滤、优势、仓位、执行、风险、验证）各 6 张公式卡，每张有用途和常见致命误用。按外部资料流程逐张对照 nofx 代码和历史研究；与 11-07 评估的《一页纸量化理论》大量重叠。',
+    bullets: [
+      '48 张中 38 张 nofx 已实现、已检验或不适用（Z 分数回归、Hurst、波动状态切换、RSI、VWAP、凯利等都已检验无效），8 张部分覆盖，2 张未覆盖：资金费 carry（2.6）与蒙特卡洛回撤（8.6）。',
+      '描述性核对（"亏钱的机器人先查执行"）：9-29 起实盘 AI 单 131 笔，未扣费 E[R] −0.017、手续费 0.027R；LLM 模拟盘 323 笔，未扣费 +0.023、手续费 0.039R。费用与优势同量级，但未扣费优势与 0 无法区分，问题仍在入场。',
+      '假设：H1 资金费 carry（现货多 + 永续空，按资金费门槛持有）作为独立市场中性策略做 S1，数据已在因子面板 alt_daily；H2 LLM 交易员账户熔断改为按峰值计算（现按初始资金）；H3 模拟盘报告加蒙特卡洛回撤分位。',
+      '不提：贝叶斯胜率替换 POOR_HISTORY 闸门方向合理，但影子样本只有 27 笔，无法检验；盘口不平衡、微观价格缺 L2 历史。',
+    ],
+    conclusion: '入门速查表，没有可直接接入的策略。唯一的新收益来源是资金费 carry，值得预注册离线 S1；峰值熔断和蒙特卡洛回撤是低成本的风险与报告改进。均需用户同意后再做，本次未改任何配置。',
+    source: 'docs/research/2026-11-09-quantbot-math-assessment.md',
+  },
+  {
     id: 'early-trim-offline',
     date: '2026-11-09',
     title: '提前减仓 0.8R（vs 1.2R）离线复核 S1',
