@@ -399,3 +399,18 @@ python -m scripts.backtest.early_trim_offline_study run \
 `export` 核对模拟盘策略更新时间和档位，写交易 SHA256 与策略元数据。`fetch` 复用 `market_cache.fetch_binance_klines`，保留缓存行，完整文件跳过。`run` 校验预注册 SHA、manifest、分钟覆盖、入场价和机制一致率，写 `results.json` 与中文 `report.md`；校验失败仍写报告并返回 1。撮合使用 Backtrader 原生 Market 订单及 cheat-on-close，逐笔核对算术参考，净 R 差上限为 `1e-9`。
 
 `run --write-ledger [PATH]` 追加 S1 记录，省略 PATH 时使用 `data/evolution/ledger.jsonl`。默认仅生成报告。判定固定 K=2、z≥2.241；有效结果追加时核对账本实际 K=2，invalid 按账本惯例不计 K，另记 `preregistered_K=2`。缺少 `export_meta.json` 时使用预注册固定机制时间和档位，结果注明来源。补充约定、描述项口径及预先承认的局限均写入报告。
+
+## 资金费 carry 离线 S1
+
+`crypto_carry_study` 执行 `docs/research/2026-11-09-crypto-funding-carry-s1-prereg.md` 的冻结规格。
+
+```bash
+python -m scripts.backtest.crypto_carry_study fetch --data-dir data/carry --sleep 0.3
+python -m scripts.backtest.crypto_carry_study run --data-dir data/carry \
+  --panel-daily data/factor_mining/crypto/daily --out data/carry_results
+python -m unittest scripts.backtest.tests.test_crypto_carry_study -v
+```
+
+`fetch` 通过默认代理增量补齐六个币的结算历史及两腿日线，保留旧行并写 manifest，日线只收录完整 UTC 日。`run` 离线校验预注册 SHA、manifest、覆盖率、4h/8h 分段结算周期和面板收盘价，使用 Backtrader 双数据源撮合，逐日核对独立算术参考及收益拆分。输出 `results.json` 和中文 `report.md`，校验失败也输出报告并返回 1。强平时刻、现货强平价格、容许缺日的处理等补充约定写入报告。
+
+`run --write-ledger [PATH]` 可追加 `crypto_carry` 的 S1/E 记录，省略 PATH 时使用 `data/evolution/ledger.jsonl`。有效记录要求实际 K=1，invalid 不计 K。主检验、日期、门槛和判定固定，描述项单独列出，正式研究按预注册只执行一次。

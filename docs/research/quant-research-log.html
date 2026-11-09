@@ -73,15 +73,17 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-09</div>
 
-<article data-v="run" data-id="crypto-funding-carry">
-<h2>资金费 carry（现货多 + 永续空）离线 S1 <span class="tag t-run">已预注册 · 待运行</span><span class="dom">加密 · 市场中性 · 新策略</span></h2>
-<p class="k">思路：来自《The Math Inside a Trading Bot》评估的 H1。BTC、ETH 各半资本，过去 7 天年化资金费 ≥10% 时在次日开盘开仓（买现货、等量做空永续，3 倍保证金），&lt;2% 时平仓；成本按现货 0.10%、永续 0.05% 的 taker 费加 0.03% 滑点。区间 2020-01-01 至 2026-11-06，新登记 track crypto_carry，K=1。</p>
+<article data-v="part" data-id="crypto-funding-carry">
+<h2>资金费 carry（现货多 + 永续空）离线 S1 <span class="tag t-part">S1 weak · 机制成立但近一年无收益，不接入</span><span class="dom">加密 · 市场中性 · 新策略</span></h2>
+<p class="k">思路：来自《The Math Inside a Trading Bot》评估的 H1。BTC、ETH 各半资本，过去 7 天年化资金费 ≥10% 时在次日开盘开仓（买现货、等量做空永续，3 倍保证金），&lt;2% 时平仓；现货 0.10%、永续 0.05% taker 费加 0.03% 滑点。2020-01-01 至 2026-11-06，新 track crypto_carry，K=1；Backtrader 双数据源，与算术实现逐日核对误差 6e-15。</p>
 <ul>
-<li>pass 需同时满足：年化 ≥5%、周聚类 z ≥1.96、前后两半与近一年都为正、MaxDD ≤10%；只满足“年化与两半都为正”记 weak。</li>
-<li>Backtrader 双数据源撮合，资金费按逐次结算计入，并与算术实现逐日核对；永续涨幅击穿保证金时按当日强平处理（偏保守）。</li>
+<li>结果：年化 3.8%、z 0.99、前后两半 +4.2% / +3.4%、近一年 −0.06%、MaxDD 25.8%，判 weak（只满足两半为正）。</li>
+<li>MaxDD 几乎全部来自 2020-03-13 ETH 永续成交价插针（最高 323，而现货 139.7、标记价格 139.3）：预注册按成交价最高价判保证金击穿，交易所实际按标记价格强平，不会触发。事后只修正这一天（仅描述）：年化 7.7%、MaxDD 0.6%，但近一年仍为 −0.08%，判定不变。</li>
+<li>收益集中在牛市：2021 年约 +25%、2024 年约 +8%；2022 年以来除 2024 外接近 0。近一年接近 0 是因为资金费长期低于门槛、多数时间空仓。始终持有、零成本、门槛敏感性及 XRP、DOGE、BNB 单币版本的近一年也都接近 0。</li>
+<li>数据：Binance fundingRate 把 startTime=0 当作未传，只返回最近 500 条；已改为从 2019-09-01 分页并加回归测试，正式运行用完整历史。</li>
 </ul>
-<p><b>结论：</b>已预注册，尚未运行。</p>
-<p class="src">来源：<code>docs/research/2026-11-09-crypto-funding-carry-s1-prereg.md</code></p>
+<p><b>结论：</b>资金费 carry 的机制真实，牛市阶段有可观收益，但近两年资金费被压缩，扣成本后接近 0，不值得为它给加密模拟盘补现货腿。等资金费重新长期处于高位时，再用新的样本外数据另行预注册。方法教训：涉及强平的回测应使用标记价格。</p>
+<p class="src">来源：<code>docs/research/2026-11-09-crypto-funding-carry-s1-prereg.md</code> · <code>docs/research/2026-11-09-crypto-funding-carry-s1-study.md</code> · <code>scripts/backtest/crypto_carry_study.py</code> · <code>data/carry/</code> · <code>data/carry_results/s1_v1/</code></p>
 </article>
 
 <article data-v="no" data-id="early-trim-offline">
