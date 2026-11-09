@@ -234,6 +234,37 @@ describe('PaperPromotionPage', () => {
     ).toHaveAttribute('aria-valuenow', '1.5')
   })
 
+  it('renders an ended pair with its end time and reason', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response([
+          {
+            id: 'early-trim',
+            title: '提前减仓实验',
+            started_at: '2026-10-24T09:49:29Z',
+            ended_at: '2026-11-09T14:46:01Z',
+            end_reason: '离线 S1 fail，提前结束',
+            verdict: 'ended',
+            elapsed_days: 16.2,
+            min_days: 30,
+            min_trades: 50,
+            reasons: ['离线 S1 fail，提前结束'],
+            warnings: [],
+          },
+        ])
+      )
+    )
+    render(<PaperPromotionPage language="zh" />)
+    const card = await screen.findByRole('article', { name: '提前减仓实验' })
+    const content = within(card)
+    expect(content.getByText('ended')).toHaveClass('text-fg-2')
+    expect(
+      content.getByText(/已结束于 2026-11-09T14:46:01Z/)
+    ).toBeInTheDocument()
+    expect(content.getByText('离线 S1 fail，提前结束')).toBeInTheDocument()
+  })
+
   it('refreshes when the page becomes visible', async () => {
     const fetchMock = vi.fn().mockResolvedValue(response())
     vi.stubGlobal('fetch', fetchMock)

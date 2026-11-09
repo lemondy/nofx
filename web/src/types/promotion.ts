@@ -1,5 +1,5 @@
 // Read-only scripts/promotion/report.py output. Rates are fractions (0.01 = 1%).
-export type PromotionVerdict = 'insufficient' | 'ready' | 'hold'
+export type PromotionVerdict = 'insufficient' | 'ready' | 'hold' | 'ended'
 
 export interface PromotionStats {
   trader_id?: string | null
@@ -25,6 +25,9 @@ export interface PromotionPair {
   control_trader_id?: string | null
   live_trader_id?: string | null
   started_at?: string | null
+  /** Set when the pair was ended early; the report then skips scoring. */
+  ended_at?: string | null
+  end_reason?: string | null
   elapsed_days?: number | null
   min_days?: number | null
   min_trades?: number | null
