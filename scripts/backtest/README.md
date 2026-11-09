@@ -380,3 +380,22 @@ python -m scripts.backtest.incremental_filter shadow \
 掩码每行 `{"trade_id": 123, "drop": true}`，每笔交易均应有一行；缺失不超过 5% 时计错并按保留处理，超过 5% 中止绩效计算、记 `invalid` 并返回非零状态。重复 ID、非布尔 `drop`、无效 R/时间均报错。`evaluate --no-ledger` 只打印预览，K 取当前账本；正常评估在账本锁内计算 K 和判定，并记录两个输入文件的 SHA256。时间排序后前半为 dev、后半为 holdout；被剔除集的 CI 按 UTC 入场周聚类，不足三周不报告 CI。`screen_pass/strong` 仅进入线上配对队列，不直接上线。
 
 `shadow` 可重复指定 `--trader`，默认全选；每个代码与贡献该代码的交易员在同一时间窗内的真实执行 avgR 比较。未指定 `since` 时从所选影子的最早创建时间开始，截止运行时间；空结果、`no_data`、`unfilled` 和无效止损排除并计数，多代码记录分别计入各代码。该分析仅作描述，不写账本、不作判定；影子结果按计划止损止盈先到先算，非大模型逐周期管理的真实离场。
+
+## 提前减仓 0.8R 离线复核 S1
+
+`early_trim_offline_study` 按 `docs/research/2026-11-09-early-trim-offline-s1-prereg.md` 的冻结规格运行。先导出只读数据库快照，再增量下载分钟线，最后离线校验和撮合。
+
+```bash
+python -m scripts.backtest.early_trim_offline_study export \
+  --db data/data.db --out data/llm_trim_offline/export
+python -m scripts.backtest.early_trim_offline_study fetch \
+  --trades data/llm_trim_offline/export/trades.jsonl \
+  --klines-dir data/llm_trim_offline/kl1m --sleep 0.3
+python -m scripts.backtest.early_trim_offline_study run \
+  --trades data/llm_trim_offline/export/trades.jsonl \
+  --klines-dir data/llm_trim_offline/kl1m --out data/llm_trim_offline/results
+```
+
+`export` 核对模拟盘策略更新时间和档位，写交易 SHA256 与策略元数据。`fetch` 复用 `market_cache.fetch_binance_klines`，保留缓存行，完整文件跳过。`run` 校验预注册 SHA、manifest、分钟覆盖、入场价和机制一致率，写 `results.json` 与中文 `report.md`；校验失败仍写报告并返回 1。撮合使用 Backtrader 原生 Market 订单及 cheat-on-close，逐笔核对算术参考，净 R 差上限为 `1e-9`。
+
+`run --write-ledger [PATH]` 追加 S1 记录，省略 PATH 时使用 `data/evolution/ledger.jsonl`。默认仅生成报告。判定固定 K=2、z≥2.241；有效结果追加时核对账本实际 K=2，invalid 按账本惯例不计 K，另记 `preregistered_K=2`。缺少 `export_meta.json` 时使用预注册固定机制时间和档位，结果注明来源。补充约定、描述项口径及预先承认的局限均写入报告。
