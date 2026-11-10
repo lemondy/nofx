@@ -440,3 +440,18 @@ python -m unittest scripts.backtest.tests.test_dvol_sizing_study -v
 ```
 
 脚本核对九个冻结输入 SHA256、两个 manifest、覆盖率和取值，校准 B/C 的月度残差方差，比较 U/T/B/C 的同敞口风险。输出逐日缩放、月度系数与 s²、中文报告及描述性 LLM 交易叠加。哈希不符拒绝运行，数据校验失败输出 `invalid` 并返回 1。`--write-ledger [PATH]` 可选追加 `crypto_llm` S1/C，省略 PATH 使用 `data/evolution/ledger.jsonl`，有效结果要求实际 K=3。正式研究按预注册只运行一次，补充口径见报告。
+
+## 币种相关性状态缩放离线 S1
+
+`corr_state_scaler_study` 按 `docs/research/2026-11-10-corr-state-scaler-s1-prereg.md` 执行冻结的离线研究。
+
+```bash
+python -m scripts.backtest.corr_state_scaler_study run \
+  --data-dir data/factor_mining/crypto_full \
+  --trades data/llm_trim_offline/export_v1/trades.jsonl --out data/corr_state_results
+python -m unittest scripts.backtest.tests.test_corr_state_scaler_study -v
+```
+
+脚本校验 manifest、validation、按文件名拼接的 685 个日线文件及交易 JSONL 的冻结哈希，分别构建 TOP10、TOP20、TOP50 时点组合。比较 HAR 与加入相关性状态的月度校准预测和只减不加的仓位缩放，输出 `results.json` 与中文 `report.md`，包括无目标尾端预测及 TOP20 的 LLM 交易叠加。数据校验失败保留诊断并返回 1。`--write-ledger [PATH]` 可选追加 `crypto_llm` S1/C，默认账本为 `data/evolution/ledger.jsonl`，非 invalid 结果要求实际 K=4。
+
+预注册同时要求 TOP10 与至少 15 个可用相关性成员，故 TOP10 无有效特征，R3 必定不通过。脚本严格保留该约束并报告空样本。正式研究只运行一次，补充约定见报告。
