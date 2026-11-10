@@ -73,6 +73,18 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-10</div>
 
+<article data-v="no" data-id="dvol-sizing-s1">
+<h2>含 DVOL 的波动预测用于仓位缩放 S1 <span class="tag t-no">S1 fail · 校准成功但缩放不如 HAR，不接入</span><span class="dom">加密 · 风险与仓位层 · 仓位缩放</span></h2>
+<p class="k">思路：DVOL 波动预测 S1 通过后的仓位检验：校准后（加 s²/2）的 HAR + DVOL 与 HAR 各自驱动只减不加的缩放 k = min(1, σ_ref/σ̂)，在 BTC、ETH（各用自身 DVOL）与 SOL/BNB/XRP/DOGE 等权（借用 BTC DVOL）上，按平均敞口归一化后比较与方向无关的尾部风险（2023-01 至 2026-10，1400 天）。crypto_llm K=3。</p>
+<ul>
+<li>校准成功：校准后 C 的 QLIKE 在 BTC 0.436→0.401、ETH 0.482→0.437，且 4 个山寨币中 3 个更好（XRP 例外）。</li>
+<li>风险结果反向：周超额风险损失配对 t（正为 C 更好）BTC −1.67、ETH −1.84、ALT4 −2.61；最差 2.5% 交易日 ES，C 都高于 B（BTC 0.0820 vs 0.0812、ETH 0.1143 vs 0.1101、ALT4 0.1063 vs 0.1046），判 fail。</li>
+<li>原因：DVOL 平滑、反应慢，C 触发减仓的天数少（BTC 6% vs B 17%），BTC 最大 5 次单日跌幅前有 4 次 C 是满仓。描述：只看历史波动的 HAR 缩放 B 比不缩放 ES 低约 3%–6%，非检验假设；LLM 近期交易期间 k 全为 1，叠加无效果。</li>
+</ul>
+<p><b>结论：</b>预测更准不等于缩放更好：含 DVOL 的波动预测不接入仓位层，按预注册记录在案，不调参重跑。HAR 缩放的轻微改善只是描述，接入需另行预注册且优先级低。本次未改任何交易配置。</p>
+<p class="src">来源：<code>docs/research/2026-11-10-dvol-sizing-s1-prereg.md</code> · <code>docs/research/2026-11-10-dvol-sizing-s1-study.md</code> · <code>scripts/backtest/dvol_sizing_study.py</code> · <code>data/dvol_sizing_results/s1_v1/</code></p>
+</article>
+
 <article data-v="part" data-id="dvol-vol-forecast">
 <h2>DVOL 对永续未来 7 日波动的增量预测 S1 <span class="tag t-part">S1 pass（风险层）· 水平需校准，未接入</span><span class="dom">加密 · 风险与仓位层 · 波动预测</span></h2>
 <p class="k">思路：来自《A Practical Guide to Quantitative Volatility Trading》评估的 H1：隐含波动率是未来已实现波动的前瞻性定价。BTC、ETH 上比较 HAR（Parkinson 日/周/月方差）与 HAR + Deribit DVOL 对未来 7 日已实现方差的样本外预测（2023-01 至 2026-10，扩展窗口每月重估，1400 天），不计 K。</p>
