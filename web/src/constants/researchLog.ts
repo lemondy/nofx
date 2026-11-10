@@ -30,6 +30,22 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'lob-imbalance-paper',
+    date: '2026-11-10',
+    title: '订单簿不平衡预测下一次中间价变动（VisualHFT 论文）评估',
+    domain: '美股 + 加密 · 外部资料 · 执行与微观结构',
+    verdict: 'none',
+    verdictText: '证据不足 · 毫秒级信号，与 nofx 时间尺度不匹配',
+    idea: '用户给出 VisualHFT Research 工作论文（2026-11-09 第 2 版，作者为被测软件厂商）：Nasdaq TotalView-ITCH 逐笔数据，每天最活跃的 100 只股票，按距最优价加权的前 10 档不平衡，预测下一次中间价变动的方向；回放前提交预分析计划，4 个留出日。按外部资料流程对照 nofx 的盘口数据、执行层和历史研究。',
+    bullets: [
+      '论文结果：留出日命中率 55.1%，基准 50.0%（z 16.9）；1 tick 价差时斜率 0.413，宽价差时 0.134；控制上一次变动和最近 1 秒主动成交量后仍保留 89%。但中位预测时长只有 2.46 毫秒，按方向计的平均变动 0.186 tick，平均半价差 5.73 tick（比值 0.032）。作者自评中档 MECHANISM：机制成立，跨价差交易不划算。',
+      '对照 nofx：LLM 交易员是分钟级周期，factor_quant 为日频，与论文差 4–6 个数量级；系统只在点差门里取前 5 档 REST 快照，不存盘口历史；美股 LLM 交易员走币安的股票代币和永续，不是 Nasdaq 簿。订单流/VWAP 研究（PR #59）已显示主动成交量在分钟和小时级没有增量。',
+      '唯一可借鉴：限价入场的执行层（Balanced、Aggressive、做空三个策略启用了 limit_entry）。H1：下单时和成交时只记录盘口不平衡，攒满 200 笔成交后检验它能否预测成交后 1、5、15 分钟的逆向选择。需要改实盘进程，先验偏低，由用户决定是否做。',
+    ],
+    conclusion: '论文的机制结论可信，但时间尺度、数据和成本都与 nofx 不匹配，没有可直接接入的内容（美股、加密都一样）。不建议把盘口不平衡作为方向信号写进 LLM 提示词。本次只读资料并只读查询配置，未改任何交易配置。',
+    source: 'docs/research/2026-11-10-lob-imbalance-assessment.md',
+  },
+  {
     id: 'crypto-funding-carry',
     date: '2026-11-09',
     title: '资金费 carry（现货多 + 永续空）离线 S1',
