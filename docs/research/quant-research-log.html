@@ -85,6 +85,42 @@ th{color:var(--mut);font-weight:600}
 <p class="src">来源：<code>docs/research/2026-11-10-lob-imbalance-assessment.md</code> · 用户附件 lob-imbalance.pdf</p>
 </article>
 
+<article data-v="no" data-id="dvol-sizing-s1">
+<h2>含 DVOL 的波动预测用于仓位缩放 S1 <span class="tag t-no">S1 fail · 校准成功但缩放不如 HAR，不接入</span><span class="dom">加密 · 风险与仓位层 · 仓位缩放</span></h2>
+<p class="k">思路：DVOL 波动预测 S1 通过后的仓位检验：校准后（加 s²/2）的 HAR + DVOL 与 HAR 各自驱动只减不加的缩放 k = min(1, σ_ref/σ̂)，在 BTC、ETH（各用自身 DVOL）与 SOL/BNB/XRP/DOGE 等权（借用 BTC DVOL）上，按平均敞口归一化后比较与方向无关的尾部风险（2023-01 至 2026-10，1400 天）。crypto_llm K=3。</p>
+<ul>
+<li>校准成功：校准后 C 的 QLIKE 在 BTC 0.436→0.401、ETH 0.482→0.437，且 4 个山寨币中 3 个更好（XRP 例外）。</li>
+<li>风险结果反向：周超额风险损失配对 t（正为 C 更好）BTC −1.67、ETH −1.84、ALT4 −2.61；最差 2.5% 交易日 ES，C 都高于 B（BTC 0.0820 vs 0.0812、ETH 0.1143 vs 0.1101、ALT4 0.1063 vs 0.1046），判 fail。</li>
+<li>原因：DVOL 平滑、反应慢，C 触发减仓的天数少（BTC 6% vs B 17%），BTC 最大 5 次单日跌幅前有 4 次 C 是满仓。描述：只看历史波动的 HAR 缩放 B 比不缩放 ES 低约 3%–6%，非检验假设；LLM 近期交易期间 k 全为 1，叠加无效果。</li>
+</ul>
+<p><b>结论：</b>预测更准不等于缩放更好：含 DVOL 的波动预测不接入仓位层，按预注册记录在案，不调参重跑。HAR 缩放的轻微改善只是描述，接入需另行预注册且优先级低。本次未改任何交易配置。</p>
+<p class="src">来源：<code>docs/research/2026-11-10-dvol-sizing-s1-prereg.md</code> · <code>docs/research/2026-11-10-dvol-sizing-s1-study.md</code> · <code>scripts/backtest/dvol_sizing_study.py</code> · <code>data/dvol_sizing_results/s1_v1/</code></p>
+</article>
+
+<article data-v="part" data-id="dvol-vol-forecast">
+<h2>DVOL 对永续未来 7 日波动的增量预测 S1 <span class="tag t-part">S1 pass（风险层）· 水平需校准，未接入</span><span class="dom">加密 · 风险与仓位层 · 波动预测</span></h2>
+<p class="k">思路：来自《A Practical Guide to Quantitative Volatility Trading》评估的 H1：隐含波动率是未来已实现波动的前瞻性定价。BTC、ETH 上比较 HAR（Parkinson 日/周/月方差）与 HAR + Deribit DVOL 对未来 7 日已实现方差的样本外预测（2023-01 至 2026-10，扩展窗口每月重估，1400 天），不计 K。</p>
+<ul>
+<li>对数口径样本外 R²：BTC 0.234 → 0.294（+6.0 个百分点），ETH 0.236 → 0.311（+7.5）；不重叠 7 日样本配对 t 2.46 / 2.68；前后两半都为正，判 pass。只用 DVOL 一个变量也有 0.300 / 0.332，单独就好于 HAR。</li>
+<li>反向信号：按方差水平计算的 QLIKE 加入 DVOL 后变差（BTC +0.034、ETH +0.007）。对数模型未做偏差修正会低估方差水平，所以不能直接用于仓位缩放，必须先校准。</li>
+<li>描述：隐含方差高于之后 7 日实际方差的时间 BTC 74%、ETH 69%（波动率风险溢价为正）；能事先算出的 DVOL − RV30 五分位与未来 7 日回撤、收益都没有单调关系，没有择时信号。</li>
+</ul>
+<p><b>结论：</b>DVOL 能改善永续未来波动的预测（风险层增量筛选通过），但水平校准变差。接入前需另做预注册：用校准后、含 DVOL 的波动预测给永续仓位做缩放（LLM 的 vol_target 或 factor_quant 的 1/σ），与现行做法配对比较。本次未改任何交易配置。</p>
+<p class="src">来源：<code>docs/research/2026-11-10-dvol-vol-forecast-s1-prereg.md</code> · <code>docs/research/2026-11-10-dvol-vol-forecast-s1-study.md</code> · <code>scripts/backtest/dvol_vol_forecast_study.py</code> · <code>data/dvol/</code> · <code>data/dvol_results/s1_v1/</code></p>
+</article>
+
+<article data-v="no" data-id="vol-trading-book">
+<h2>《A Practical Guide to Quantitative Volatility Trading》评估（Bloch 2016，327 页） <span class="tag t-no">证据不足 · 期权教材，无可直接接入的策略</span><span class="dom">加密 + 美股 · 外部资料 · 期权与波动率</span></h2>
+<p class="k">思路：用户给出 SSRN 2715517（Daniel Bloch，2016）：期权定价、隐含波动率曲面、多重分形市场、MixVol 参数化模型、方差互换与离散度交易。按外部资料流程通读全书，并按“能否借鉴到永续交易”逐项对照 nofx。</p>
+<ul>
+<li>全书没有任何回测或收益统计；唯一实证是 MixVol 在 BMW 期权上的校准。5.4 的策略（波动率套利、偏斜、日历价差、离散度交易）全部是期权组合，nofx 无法执行。</li>
+<li>可迁移到永续的两条：期权市场的前瞻信息（隐含波动率、波动率风险溢价）用于风险与仓位，即 H1，已预注册；截面平均相关性作为组合风险状态，即 H2，先验偏低，暂不做。</li>
+<li>已覆盖或无效：波动聚集与厚尾（regime-statistics 中波动特征有小幅增量），局部 Hurst / 多重分形择时（regime-statistics 无效）。</li>
+</ul>
+<p><b>结论：</b>期权教材，没有可直接接入的策略；可借鉴的是把期权市场信息用在永续的风控与仓位上，先检验 DVOL 能否改进波动预测。</p>
+<p class="src">来源：<code>docs/research/2026-11-10-quant-volatility-trading-book-assessment.md</code> · SSRN 2715517</p>
+</article>
+
 <div class="day">2026-11-09</div>
 
 <article data-v="part" data-id="crypto-funding-carry">
