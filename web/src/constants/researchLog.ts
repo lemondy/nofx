@@ -30,6 +30,37 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'dvol-vol-forecast',
+    date: '2026-11-10',
+    title: 'DVOL 对永续未来 7 日波动的增量预测 S1',
+    domain: '加密 · 风险与仓位层 · 波动预测',
+    verdict: 'running',
+    verdictText: '已预注册 · 待运行',
+    idea: '来自《A Practical Guide to Quantitative Volatility Trading》评估的 H1：隐含波动率是未来已实现波动的前瞻性定价。BTC、ETH 上比较 HAR（Parkinson 日/周/月方差）与 HAR + Deribit DVOL 对未来 7 日已实现方差的样本外预测（2023-01 至 2026-10，扩展窗口每月重估），不计 K。',
+    bullets: [
+      'pass 需两个币都满足：样本外 ΔR² ≥ 0.02、不重叠 7 日样本的配对损失 t ≥ 2、样本外前后两半 ΔR² 都 > 0。',
+      '通过后才另做预注册，检验用含 DVOL 的波动预测给永续仓位做缩放的效果。',
+    ],
+    conclusion: '已预注册，尚未运行。',
+    source: 'docs/research/2026-11-10-dvol-vol-forecast-s1-prereg.md',
+  },
+  {
+    id: 'vol-trading-book',
+    date: '2026-11-10',
+    title: '《A Practical Guide to Quantitative Volatility Trading》评估（Bloch 2016，327 页）',
+    domain: '加密 + 美股 · 外部资料 · 期权与波动率',
+    verdict: 'none',
+    verdictText: '证据不足 · 期权教材，无可直接接入的策略',
+    idea: '用户给出 SSRN 2715517（Daniel Bloch，2016）：期权定价、隐含波动率曲面、多重分形市场、MixVol 参数化模型、方差互换与离散度交易。按外部资料流程通读全书，并按“能否借鉴到永续交易”逐项对照 nofx。',
+    bullets: [
+      '全书没有任何回测或收益统计；唯一实证是 MixVol 在 BMW 期权上的校准。5.4 的策略（波动率套利、偏斜、日历价差、离散度交易）全部是期权组合，nofx 无法执行。',
+      '可迁移到永续的两条：期权市场的前瞻信息（隐含波动率、波动率风险溢价）用于风险与仓位，即 H1，已预注册；截面平均相关性作为组合风险状态，即 H2，先验偏低，暂不做。',
+      '已覆盖或无效：波动聚集与厚尾（regime-statistics 中波动特征有小幅增量），局部 Hurst / 多重分形择时（regime-statistics 无效）。',
+    ],
+    conclusion: '期权教材，没有可直接接入的策略；可借鉴的是把期权市场信息用在永续的风控与仓位上，先检验 DVOL 能否改进波动预测。',
+    source: 'docs/research/2026-11-10-quant-volatility-trading-book-assessment.md',
+  },
+  {
     id: 'crypto-funding-carry',
     date: '2026-11-09',
     title: '资金费 carry（现货多 + 永续空）离线 S1',
