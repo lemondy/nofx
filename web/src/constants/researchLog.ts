@@ -30,6 +30,25 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'kronos-kit-assessment',
+    date: '2026-11-10',
+    title: 'Kronos 与 KiT（K 线基础模型）评估',
+    domain: '美股 + 加密 · 外部资料 · 信号层（K 线预测）',
+    verdict: 'none',
+    verdictText: '证据不足 · 不接入；H1 开仓否决已预注册，待用户同意',
+    idea: '用户要求深入分析两个开源 K 线基础模型：Kronos（arXiv 2508.02739，AAAI 2026；分层离散 token + 自回归 Transformer，45 个交易所的 120 亿根 K 线，预训练截止 2024-06，MIT 许可，safetensors 权重）和 KiT（arXiv 2609.34507；flow matching 扩散 Transformer，五维对数比 K 线编码，A 股 3914 只 / 美股 888 只 / 加密 28 个，AGPL 许可）。核对宣称指标、切分、偏差和成本，判断能否接入 nofx 的两个市场和两条路径。',
+    bullets: [
+      'Kronos：时间切分干净（测试从 2024-07 开始），推理代码无前视。收益 RankIC 主要来自 A 股（XSHG 0.064、XNAS 0.060、加密 0.033），线性模型 DLinear 已接近 Kronos。A 股回测超额 0.21 中，很多非预训练模型也为正，有规模暴露混入。',
+      'KiT：论文回测 2025.05–2026.04 年化 +65%，但其中 8 个月落在验证期，按发布权重口径甚至在训练期；训练截止日在论文、权重说明、配置三处不一致。标的看起来只含当前仍在交易的，测试窗只有 3.3 个月（日线 3–5 个锚点），没有标准误。美股 RankIC 约为 0，加密只有 28 个币。波动率基线 GARCH 未拟合。权重需 torch.load(weights_only=False) 加载 pickle，有安全风险，未下载。',
+      '对照 nofx：两者评价的都是截面排序，LLM 交易员需要的是单币方向和路径风险；fq 截面打分已有 ML 多特征失败的教训（RankIC 高而 P&L 差）；DVOL 研究已表明预测更准不等于决策更好。美股不提假设。',
+      '唯一的低成本检验 H1：开仓前用 Kronos-small 零样本从 512 根 5m K 线生成 16 条 5 小时路径，不利路径 ≥ 12 条时否决开仓（B 类，crypto_llm K=5，439 笔冻结交易）。先验偏低，预注册 docs/research/2026-11-11-kronos-entry-veto-s1-prereg.md，未运行。',
+      '合成数据冒烟测试（不计 K）：CPU 每次预测约 30 秒，同种子可复现。但在 50 条无漂移随机游走上，82% 的序列 16 条路径几乎同向，预测偏移中位 2.5σ（应约为 0），与窗口 z 分数相关 −0.78，12% 的 K 线不合法。模型读数近似“区间位置反转”，所以预注册加了同剔除笔数的窗口 z 分数代理对照，Kronos 必须胜过代理才进入 S2。',
+    ],
+    conclusion:
+      '两个模型都不能直接接入 nofx（美股、加密，LLM 与 factor_quant 均是）。KiT 的收益宣称不可信，不推荐接入；Kronos 只值得做一次 H1 S1，是否运行由用户决定。本次未改任何交易配置，未用真实价格计算任何收益或 IC。',
+    source: 'docs/research/2026-11-10-kronos-kit-assessment.md',
+  },
+  {
     id: 'quantbot-h2-h3-risk-report',
     date: '2026-11-10',
     title: '峰值回撤熔断选项与蒙特卡洛回撤分位（quantbot H2、H3 落地）',
@@ -42,7 +61,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '实盘账户的峰值回撤被入金和手动交易放大（us-stock 初始口径 0.08%、峰值口径 12.5%），所以峰值口径默认关闭，只建议用于模拟盘或独立账户。',
       '重排分位示例：因子 ensemble 候选实际 MaxDD 17.3%，重排中位数 21.8%、第 95 百分位 29.2%，实际路径只排在第 15 百分位，说明单条路径回撤偏乐观。',
     ],
-    conclusion: '两项都不改变现有交易行为：峰值口径需在策略里显式设为 peak 才启用，并需重新部署后端；回撤分位不参与配对判定。是否对某个模拟盘启用峰值口径由用户决定。',
+    conclusion:
+      '两项都不改变现有交易行为：峰值口径需在策略里显式设为 peak 才启用，并需重新部署后端；回撤分位不参与配对判定。是否对某个模拟盘启用峰值口径由用户决定。',
     source: 'docs/research/2026-11-09-quantbot-math-assessment.md',
   },
   {
@@ -58,7 +78,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '方向与直觉相反：47 次月度拟合中 ln D 的系数在三个载体上全部为负。也就是说，已知历史波动后，相关性越高，之后波动反而越低（暴跌后相关性升高、波动回落）。按 ρ̄ 五分位看，之后 7 日回撤和波动都不单调；2025-10-10 跌 −22.8% 的前一天 ρ̄ 为 0.50，接近中位数。',
       '描述：ρ̄ 均值 0.44，5 个同向山寨币仓位约等于 1.8 个独立仓位（N_eff 中位数），组合波动约为相关性为 1 时的 74%，所以现行按相关性为 1 计算的上限并不过度保守。HAR 缩放 ES 比不缩放低 0.7%–1.7%，与 DVOL 仓位 S1 一致。',
     ],
-    conclusion: '币种间相关性确实很高，但现行风控已按最坏情况计算，相关性状态也不能提前预示风险，风险层没有增量；收益层此前的 BTC 对冲 S1 和风格中性化 S1 也已失败。按预注册不接入，不调参重跑。本次未改任何交易配置。',
+    conclusion:
+      '币种间相关性确实很高，但现行风控已按最坏情况计算，相关性状态也不能提前预示风险，风险层没有增量；收益层此前的 BTC 对冲 S1 和风格中性化 S1 也已失败。按预注册不接入，不调参重跑。本次未改任何交易配置。',
     source: 'docs/research/2026-11-10-corr-state-scaler-s1-study.md',
   },
   {
@@ -74,7 +95,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '对照 nofx：LLM 交易员是分钟级周期，factor_quant 为日频，与论文差 4–6 个数量级；系统只在点差门里取前 5 档 REST 快照，不存盘口历史；美股 LLM 交易员走币安的股票代币和永续，不是 Nasdaq 簿。订单流/VWAP 研究（PR #59）已显示主动成交量在分钟和小时级没有增量。',
       '唯一可借鉴：限价入场的执行层（Balanced、Aggressive、做空三个策略启用了 limit_entry）。H1：下单时和成交时只记录盘口不平衡，攒满 200 笔成交后检验它能否预测成交后 1、5、15 分钟的逆向选择。需要改实盘进程，先验偏低，由用户决定是否做。',
     ],
-    conclusion: '论文的机制结论可信，但时间尺度、数据和成本都与 nofx 不匹配，没有可直接接入的内容（美股、加密都一样）。不建议把盘口不平衡作为方向信号写进 LLM 提示词。本次只读资料并只读查询配置，未改任何交易配置。',
+    conclusion:
+      '论文的机制结论可信，但时间尺度、数据和成本都与 nofx 不匹配，没有可直接接入的内容（美股、加密都一样）。不建议把盘口不平衡作为方向信号写进 LLM 提示词。本次只读资料并只读查询配置，未改任何交易配置。',
     source: 'docs/research/2026-11-10-lob-imbalance-assessment.md',
   },
   {
@@ -90,7 +112,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '风险结果反向：周超额风险损失配对 t（正为 C 更好）BTC −1.67、ETH −1.84、ALT4 −2.61；最差 2.5% 交易日 ES，C 都高于 B（BTC 0.0820 vs 0.0812、ETH 0.1143 vs 0.1101、ALT4 0.1063 vs 0.1046），判 fail。',
       '原因：DVOL 平滑、反应慢，C 触发减仓的天数少（BTC 6% vs B 17%），BTC 最大 5 次单日跌幅前有 4 次 C 是满仓。描述：只看历史波动的 HAR 缩放 B 比不缩放 ES 低约 3%–6%，非检验假设；LLM 近期交易期间 k 全为 1，叠加无效果。',
     ],
-    conclusion: '预测更准不等于缩放更好：含 DVOL 的波动预测不接入仓位层，按预注册记录在案，不调参重跑。HAR 缩放的轻微改善只是描述，接入需另行预注册且优先级低。本次未改任何交易配置。',
+    conclusion:
+      '预测更准不等于缩放更好：含 DVOL 的波动预测不接入仓位层，按预注册记录在案，不调参重跑。HAR 缩放的轻微改善只是描述，接入需另行预注册且优先级低。本次未改任何交易配置。',
     source: 'docs/research/2026-11-10-dvol-sizing-s1-study.md',
   },
   {
@@ -106,13 +129,15 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '反向信号：按方差水平计算的 QLIKE 加入 DVOL 后变差（BTC +0.034、ETH +0.007）。对数模型未做偏差修正会低估方差水平，所以不能直接用于仓位缩放，必须先校准。',
       '描述：隐含方差高于之后 7 日实际方差的时间 BTC 74%、ETH 69%（波动率风险溢价为正）；能事先算出的 DVOL − RV30 五分位与未来 7 日回撤、收益都没有单调关系，没有择时信号。',
     ],
-    conclusion: 'DVOL 能改善永续未来波动的预测（风险层增量筛选通过），但水平校准变差。接入前需另做预注册：用校准后、含 DVOL 的波动预测给永续仓位做缩放（LLM 的 vol_target 或 factor_quant 的 1/σ），与现行做法配对比较。本次未改任何交易配置。',
+    conclusion:
+      'DVOL 能改善永续未来波动的预测（风险层增量筛选通过），但水平校准变差。接入前需另做预注册：用校准后、含 DVOL 的波动预测给永续仓位做缩放（LLM 的 vol_target 或 factor_quant 的 1/σ），与现行做法配对比较。本次未改任何交易配置。',
     source: 'docs/research/2026-11-10-dvol-vol-forecast-s1-study.md',
   },
   {
     id: 'vol-trading-book',
     date: '2026-11-10',
-    title: '《A Practical Guide to Quantitative Volatility Trading》评估（Bloch 2016，327 页）',
+    title:
+      '《A Practical Guide to Quantitative Volatility Trading》评估（Bloch 2016，327 页）',
     domain: '加密 + 美股 · 外部资料 · 期权与波动率',
     verdict: 'none',
     verdictText: '证据不足 · 期权教材，无可直接接入的策略',
@@ -122,8 +147,10 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '可迁移到永续的两条：期权市场的前瞻信息（隐含波动率、波动率风险溢价）用于风险与仓位，即 H1，已预注册；截面平均相关性作为组合风险状态，即 H2，先验偏低，暂不做。',
       '已覆盖或无效：波动聚集与厚尾（regime-statistics 中波动特征有小幅增量），局部 Hurst / 多重分形择时（regime-statistics 无效）。',
     ],
-    conclusion: '期权教材，没有可直接接入的策略；可借鉴的是把期权市场信息用在永续的风控与仓位上，先检验 DVOL 能否改进波动预测。',
-    source: 'docs/research/2026-11-10-quant-volatility-trading-book-assessment.md',
+    conclusion:
+      '期权教材，没有可直接接入的策略；可借鉴的是把期权市场信息用在永续的风控与仓位上，先检验 DVOL 能否改进波动预测。',
+    source:
+      'docs/research/2026-11-10-quant-volatility-trading-book-assessment.md',
   },
   {
     id: 'crypto-funding-carry',
@@ -139,7 +166,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '收益集中在牛市：2021 年约 +25%、2024 年约 +8%；2022 年以来除 2024 外接近 0。近一年接近 0 是因为资金费长期低于门槛、多数时间空仓。始终持有、零成本、门槛敏感性及 XRP、DOGE、BNB 单币版本的近一年也都接近 0。',
       '数据：Binance fundingRate 把 startTime=0 当作未传，只返回最近 500 条；已改为从 2019-09-01 分页并加回归测试，正式运行用完整历史。',
     ],
-    conclusion: '资金费 carry 的机制真实，牛市阶段有可观收益，但近两年资金费被压缩，扣成本后接近 0，不值得为它给加密模拟盘补现货腿。等资金费重新长期处于高位时，再用新的样本外数据另行预注册。方法教训：涉及强平的回测应使用标记价格。',
+    conclusion:
+      '资金费 carry 的机制真实，牛市阶段有可观收益，但近两年资金费被压缩，扣成本后接近 0，不值得为它给加密模拟盘补现货腿。等资金费重新长期处于高位时，再用新的样本外数据另行预注册。方法教训：涉及强平的回测应使用标记价格。',
     source: 'docs/research/2026-11-09-crypto-funding-carry-s1-study.md',
   },
   {
@@ -156,7 +184,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '假设：H1 资金费 carry（现货多 + 永续空，按资金费门槛持有）作为独立市场中性策略做 S1，数据已在因子面板 alt_daily；H2 LLM 交易员账户熔断改为按峰值计算（现按初始资金）；H3 模拟盘报告加蒙特卡洛回撤分位。',
       '不提：贝叶斯胜率替换 POOR_HISTORY 闸门方向合理，但影子样本只有 27 笔，无法检验；盘口不平衡、微观价格缺 L2 历史。',
     ],
-    conclusion: '入门速查表，没有可直接接入的策略。唯一的新收益来源是资金费 carry，值得预注册离线 S1；峰值熔断和蒙特卡洛回撤是低成本的风险与报告改进。均需用户同意后再做，本次未改任何配置。',
+    conclusion:
+      '入门速查表，没有可直接接入的策略。唯一的新收益来源是资金费 carry，值得预注册离线 S1；峰值熔断和蒙特卡洛回撤是低成本的风险与报告改进。均需用户同意后再做，本次未改任何配置。',
     source: 'docs/research/2026-11-09-quantbot-math-assessment.md',
   },
   {
@@ -173,7 +202,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '校验：439 笔全部有完整 1m K 线，入场价匹配 99.8%；用模型预测触发与 4 个模拟盘的 tp_trim_done 对比，一致率 93.5%。触及即成交、10bp 滑点两个敏感性版本 Δ 也都约为 0。',
       '描述项（未预注册、不作结论）：1.2R 减仓相对完全不减仓 +0.014R，z 2.66。',
     ],
-    conclusion: '0.8R 和 1.2R 两个减仓档位的差别可以忽略，线上配对继续跑也给不出更多信息。建议提前结束 early-trim-0p8r 配对（需用户同意，尚未执行）；线上配置不变，仍为 1.2R。',
+    conclusion:
+      '0.8R 和 1.2R 两个减仓档位的差别可以忽略，线上配对继续跑也给不出更多信息。建议提前结束 early-trim-0p8r 配对（需用户同意，尚未执行）；线上配置不变，仍为 1.2R。',
     source: 'docs/research/2026-11-09-early-trim-offline-s1-study.md',
   },
   {
@@ -190,7 +220,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '小时线校验：11935 个被持有的（币, 日）全部有完整小时线，与日线收盘价 100% 吻合。固定 20% 止损按小时路径与按日线路径结果逐日相同，所以 PR #61 关于固定止损的结论不受日线口径影响。',
       '基线本身 forward −5.7%（Sharpe −0.47）：模拟盘回吐的根源仍是入场没有优势加空头凸性，不是出场规则。fq_crypto 累计 8 个 S1，全部 fail。',
     ],
-    conclusion: '两条空头腿改动都没有通过 S1，线上不做任何改动。在 val、forward 两段上，止盈类出场（含 11-01 的日线研究）和按资金费率筛空头都没有增益，不再沿这个方向调参。',
+    conclusion:
+      '两条空头腿改动都没有通过 S1，线上不做任何改动。在 val、forward 两段上，止盈类出场（含 11-01 的日线研究）和按资金费率筛空头都没有增益，不再沿这个方向调参。',
     source: 'docs/research/2026-11-08-fq-crypto-shortexit-funding-study.md',
   },
   {
@@ -206,7 +237,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '干跑（旧口径重现原状态 100%）：加密 h=7 accepted 12→0，美股 1→0、候选 11084→200；加密 h=3 accepted 2→1（f_eda12cac 训练 z 4.64，门槛 4.65），h=1 4→3（f_a241597b 4.57）。',
       '模拟盘影响：加密因子量化 h=3 入选因子会从 {f_0ce8b2ee, f_eda12cac} 变成只剩 f_0ce8b2ee；夜间任务会把多出的 rejected 裁出 zoo，所以部署前要备份。',
     ],
-    conclusion: '评估口径修正已实现并通过校准，旧口径确实放进了一批证据被高估的慢因子。用户确认后于 2026-11-08 合并（PR #104）并部署到夜间运行副本，部署前已备份 data/factor_mining/backup-pre-ic-overlap-h1-20261108-200839；从 11-09 02:30 那次夜间任务起按新口径重分类，加密因子量化模拟盘的 h=3 组合随之只剩 f_0ce8b2ee。交易配置、提示词和实盘未改。',
+    conclusion:
+      '评估口径修正已实现并通过校准，旧口径确实放进了一批证据被高估的慢因子。用户确认后于 2026-11-08 合并（PR #104）并部署到夜间运行副本，部署前已备份 data/factor_mining/backup-pre-ic-overlap-h1-20261108-200839；从 11-09 02:30 那次夜间任务起按新口径重分类，加密因子量化模拟盘的 h=3 组合随之只剩 f_0ce8b2ee。交易配置、提示词和实盘未改。',
     source: 'docs/research/2026-11-08-ic-overlap-h1-study.md',
   },
   {
@@ -223,7 +255,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '准入因子：加密 h=7 的 12 个 accepted 换成不重叠 t 后训练 t 为 2.79–4.15，全部低于 4.65（验证段仍 ≥2.3）；美股唯一的 h=20 accepted 训练 2.53、验证 1.16，两道门槛都不过。加密 h=1 的 4 个、h=3 的 2 个仍然通过。',
       '影响面：实盘因子量化（加密）用 h=3 的目标文件，美股用动量规则，都不受影响；历史 S1 中失败的结论方向不变，判“通过”的动量与波动缩放 S1 本来就用不重叠 20 日周期；cycleic 已有不重叠 t；全部使用 RankIC，帖子里 Pearson 被极端值拽偏的问题已规避。',
     ],
-    conclusion: '现行评估器偏松但不是普通 t 那种量级；建议（需用户同意，因为是冻结文件）把 zoo 准入 t 改为不重叠或 Hansen-Hodrick 口径并重分类，预计清空加密 h=7 与美股的 accepted，h=3 实盘不变。本轮未改评估器、zoo、交易配置、提示词与模拟盘。',
+    conclusion:
+      '现行评估器偏松但不是普通 t 那种量级；建议（需用户同意，因为是冻结文件）把 zoo 准入 t 改为不重叠或 Hansen-Hodrick 口径并重分类，预计清空加密 h=7 与美股的 accepted，h=3 实盘不变。本轮未改评估器、zoo、交易配置、提示词与模拟盘。',
     source: 'docs/research/2026-11-08-ic-overlap-audit.md',
   },
   {
@@ -241,7 +274,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       'S1 潜在样本（只计笔数）：加密已平仓 759 笔中只有 16 笔（2.1%）在事件前 0–6 小时入场，主交易员 436 笔中 7 笔（1.6%）。',
       '偏离披露：ZCode 触发速率限制无产出、ALFRED 超时，事件时刻改由主 agent 直接核对官方原文（文件名日期与禁发行一致）；定义和判定未改。',
     ],
-    conclusion: '机制真实而稳健，但只说明止损更易被触及，不等于亏损；nofx 实盘在窗口内入场极少，按登记设计做 crypto_llm B 类过滤 S1 几乎必然证据不足，建议现在不做 S1，作为风险常识记录。交易配置、提示词与模拟盘未改。',
+    conclusion:
+      '机制真实而稳健，但只说明止损更易被触及，不等于亏损；nofx 实盘在窗口内入场极少，按登记设计做 crypto_llm B 类过滤 S1 几乎必然证据不足，建议现在不做 S1，作为风险常识记录。交易配置、提示词与模拟盘未改。',
     source: 'docs/research/2026-11-08-macro-event-window-s0-study.md',
   },
   {
@@ -312,13 +346,13 @@ export const RESEARCH_LOG: ResearchEntry[] = [
     ],
     conclusion:
       '证据不足，没有可直接接入的内容。H1 针对已知动量崩溃风险但统计效力弱，H2 先验低，二者都需另写预注册并经用户同意后做 S1（fq_us K 8/9）；H3 已完成（fq-crypto-shortleg-convexity）：空头腿亏损确实来自凸性，对数意义下排序正确。交易配置未改。',
-    source:
-      'docs/research/2026-11-07-quant-theory-sheet-assessment.md',
+    source: 'docs/research/2026-11-07-quant-theory-sheet-assessment.md',
   },
   {
     id: 'fq-us-ml-multifeature',
     date: '2026-11-07',
-    title: 'fq_us 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 12-1 动量',
+    title:
+      'fq_us 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 12-1 动量',
     domain: '美股 · 因子量化 · 增量评估',
     verdict: 'none',
     verdictText: 'S1 fail · 显著输给动量',
@@ -336,7 +370,8 @@ export const RESEARCH_LOG: ResearchEntry[] = [
   {
     id: 'fq-crypto-ml-multifeature',
     date: '2026-11-07',
-    title: 'fq_crypto 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 等权因子合成',
+    title:
+      'fq_crypto 信号层：多特征机器学习打分（线性岭 / 随机特征岭）vs 等权因子合成',
     domain: '加密 · 因子量化 · 增量评估',
     verdict: 'none',
     verdictText: 'S1 fail · IC 很高但多空更亏',
