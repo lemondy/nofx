@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_PATH = 'data/evolution/ledger.jsonl'
-TRACKS = ('crypto_llm', 'us_llm', 'fq_crypto', 'fq_us')
+TRACKS = ('crypto_llm', 'us_llm', 'fq_crypto', 'fq_us', 'crypto_carry')
 CHANGE_TYPES = ('A', 'B', 'C', 'D', 'E')
 STAGES = ('S1', 'S2', 'S3')
 REQUIRED = ('track', 'baseline_version', 'change_type', 'stage', 'idea_id', 'verdict')
