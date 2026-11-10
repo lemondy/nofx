@@ -2219,6 +2219,9 @@ func (at *AutoTrader) accountOpenHaltReason(equity float64) string {
 	if halt := at.dailyLossHaltBlocks(rc, equity); halt != "" {
 		return "daily loss halt (" + halt + ")"
 	}
+	if rc.AccountDrawdownBasis == "peak" && rc.AccountMaxDrawdownPct > 0 {
+		return at.peakDrawdownHaltReason(rc, equity)
+	}
 	if rc.AccountMaxDrawdownPct > 0 && at.initialBalance > 0 {
 		drawdownPct := (at.initialBalance - equity) / at.initialBalance * 100
 		if drawdownPct >= rc.AccountMaxDrawdownPct {
@@ -2911,7 +2914,17 @@ func (at *AutoTrader) applyHardRiskGates(decisions []kernel.Decision, ctx *kerne
 		// promises this as CODE ENFORCED; this branch is that enforcement
 		// (it was prompt-only until now). Closes/SL/TP are never blocked —
 		// the account must be able to de-risk.
-		if strings.HasPrefix(d.Action, "open_") && rc.AccountMaxDrawdownPct > 0 && at.initialBalance > 0 {
+		if strings.HasPrefix(d.Action, "open_") && rc.AccountDrawdownBasis == "peak" && rc.AccountMaxDrawdownPct > 0 {
+			if reason := at.peakDrawdownHaltReason(rc, ctx.Account.TotalEquity); reason != "" {
+				streak, push := at.gateNotifyRecord("acctdd:"+d.Symbol, time.Now())
+				logger.Warnf("🛑 [%s] GATE BLOCKED %s %s: %s (streak %d)", at.name, d.Action, d.Symbol, reason, streak)
+				if push {
+					notify.Notify("ALERT", at.name, "<b>🛑 账户级熔断 — 只减仓模式</b>\n"+notify.Escape(reason)+"\n\n<i>"+notify.Escape(d.Reasoning)+"</i>")
+				}
+				at.setFilterReason(d, reason)
+				continue
+			}
+		} else if strings.HasPrefix(d.Action, "open_") && rc.AccountMaxDrawdownPct > 0 && at.initialBalance > 0 {
 			equity := ctx.Account.TotalEquity
 			if equity > 0 {
 				drawdownPct := (at.initialBalance - equity) / at.initialBalance * 100

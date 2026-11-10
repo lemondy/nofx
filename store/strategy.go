@@ -889,11 +889,17 @@ type RiskControlConfig struct {
 	PeakDrawdownMinProfitPct float64 `json:"peak_drawdown_min_profit_pct"`
 	PeakDrawdownMaxDDPct     float64 `json:"peak_drawdown_max_dd_pct"`
 	// Account-level circuit breaker: when account equity sits
-	// AccountMaxDrawdownPct% below the initial balance, ALL new opens are
-	// blocked (closes/reduces still allowed) — the per-symbol loss-streak
+	// AccountMaxDrawdownPct% below the selected basis (initial by default),
+	// ALL new opens are blocked (closes/reduces still allowed) — the per-symbol loss-streak
 	// breaker cannot catch a negative-edge strategy bleeding across many
 	// symbols. 0 disables. (CODE ENFORCED)
 	AccountMaxDrawdownPct float64 `json:"account_max_drawdown_pct"`
+	// AccountDrawdownBasis selects the LLM account breaker baseline. Empty or
+	// "initial" preserves the initial-balance calculation; "peak" uses the
+	// durable account high-water mark. Manual trades and cash flows are not
+	// adjusted: withdrawals can trigger peak drawdown. Leave off by default;
+	// peak is recommended only for paper trading or a dedicated account.
+	AccountDrawdownBasis string `json:"account_drawdown_basis,omitempty"`
 	// MaxAccountRiskPct caps TOTAL open stop-risk: Σ over positions of
 	// qty×|entry−SL| (unprotected positions worst-cased at the 8% stop-band
 	// cap) plus the new trade's risk ≤ pct×equity. Position COUNT caps say

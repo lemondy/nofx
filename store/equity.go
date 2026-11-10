@@ -71,6 +71,20 @@ func (s *EquityStore) MaxEquity(traderID string) (float64, error) {
 	return peak, err
 }
 
+// MaxAccountEquity includes historical snapshots of inactive same-account
+// peers. Always include traderID, even before its traders row is persisted.
+func (s *EquityStore) MaxAccountEquity(traderID, userID, exchangeID string) (float64, error) {
+	if exchangeID == "" {
+		return s.MaxEquity(traderID)
+	}
+	peers := s.db.Model(&Trader{}).Select("id").Where("user_id = ? AND exchange_id = ?", userID, exchangeID)
+	var peak float64
+	err := s.db.Model(&EquitySnapshot{}).
+		Where("trader_id = ? OR trader_id IN (?)", traderID, peers).
+		Select("COALESCE(MAX(total_equity), 0)").Scan(&peak).Error
+	return peak, err
+}
+
 // FactorQuantPeakEquity excludes snapshots before the first factor_quant
 // decision. All fq record builders use these fixed summary prefixes and no
 // system prompt, including empty rebalances that have no execution log. The

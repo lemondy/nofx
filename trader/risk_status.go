@@ -27,11 +27,13 @@ type RiskStatus struct {
 	DailyHaltUnknown bool `json:"daily_halt_unknown"`
 
 	// Account drawdown breaker (vs initial balance unless a basis is given).
-	InitialBalance       float64 `json:"initial_balance"`
-	AccountDrawdownPct   float64 `json:"account_drawdown_pct"`
-	AccountDrawdownCap   float64 `json:"account_drawdown_cap_pct"` // 0 = disabled
-	AccountDrawdownBasis string  `json:"account_drawdown_basis,omitempty"`
-	AccountBreakerActive bool    `json:"account_breaker_active"`
+	InitialBalance         float64 `json:"initial_balance"`
+	AccountDrawdownPct     float64 `json:"account_drawdown_pct"`
+	AccountDrawdownCap     float64 `json:"account_drawdown_cap_pct"` // 0 = disabled
+	AccountDrawdownBasis   string  `json:"account_drawdown_basis,omitempty"`
+	AccountPeakEquity      float64 `json:"account_peak_equity,omitempty"`
+	AccountDrawdownUnknown bool    `json:"account_drawdown_unknown,omitempty"`
+	AccountBreakerActive   bool    `json:"account_breaker_active"`
 
 	ReduceOnly      bool   `json:"reduce_only"`
 	ProtectionFault string `json:"protection_fault,omitempty"`
@@ -114,6 +116,10 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 		rc := at.config.StrategyConfig.RiskControl
 		out.DailyLossCapPct = rc.EffectiveDailyMaxLossPct()
 		out.AccountDrawdownCap = math.Max(0, rc.AccountMaxDrawdownPct)
+		out.AccountDrawdownBasis = "initial"
+		if rc.AccountDrawdownBasis == "peak" {
+			out.AccountDrawdownBasis = "peak"
+		}
 		out.LossStreakEnabled = rc.LossStreakBanEnabled
 		out.LossStreakMax = rc.LossStreakMaxLosses
 		if out.LossStreakMax <= 0 {
@@ -158,7 +164,15 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	}
 	// review 2026-10-28 #12: show an exceeded cap even before execution latches it.
 	out.DailyHalted = out.DailyHalted || (out.DailyLossCapPct > 0 && out.DailyLossPct >= out.DailyLossCapPct)
-	if out.InitialBalance > 0 && out.Equity > 0 {
+	if out.AccountDrawdownBasis == "peak" {
+		peak, err := at.accountPeakEquity(out.Equity, false)
+		out.AccountDrawdownUnknown = err != nil
+		if err == nil {
+			out.AccountPeakEquity = peak
+			out.AccountDrawdownPct = (peak - out.Equity) / peak * 100
+		}
+		out.AccountBreakerActive = out.AccountDrawdownCap > 0 && (out.AccountDrawdownUnknown || out.AccountDrawdownPct >= out.AccountDrawdownCap)
+	} else if out.InitialBalance > 0 && out.Equity > 0 {
 		out.AccountDrawdownPct = (out.InitialBalance - out.Equity) / out.InitialBalance * 100
 		out.AccountBreakerActive = out.AccountDrawdownCap > 0 && out.AccountDrawdownPct >= out.AccountDrawdownCap
 	}

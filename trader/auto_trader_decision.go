@@ -13,6 +13,12 @@ import (
 
 // saveEquitySnapshot saves equity snapshot independently (for drawing profit curve, decoupled from AI decision)
 func (at *AutoTrader) saveEquitySnapshot(ctx *kernel.Context) {
+	// Observe even hold/close-only cycles and while the drawdown cap is off.
+	if ctx != nil && at.config.StrategyConfig != nil && at.config.StrategyConfig.RiskControl.AccountDrawdownBasis == "peak" {
+		if _, err := at.accountPeakEquity(ctx.Account.TotalEquity, true); err != nil {
+			logger.Warnf("⚠️ [%s] account drawdown peak unavailable: %v", at.name, err)
+		}
+	}
 	if at.store == nil || ctx == nil {
 		return
 	}
