@@ -35,7 +35,11 @@ func (at *AutoTrader) pendingAccountHaltReason() string {
 		if reason := peer.dailyLossHaltBlocks(rc, equity); reason != "" {
 			return reason
 		}
-		if rc.AccountMaxDrawdownPct > 0 && peer.initialBalance > 0 && (peer.initialBalance-equity)/peer.initialBalance*100 >= rc.AccountMaxDrawdownPct {
+		if rc.AccountDrawdownBasis == "peak" && rc.AccountMaxDrawdownPct > 0 {
+			if reason := peer.peakDrawdownHaltReason(rc, equity); reason != "" {
+				return reason
+			}
+		} else if rc.AccountMaxDrawdownPct > 0 && peer.initialBalance > 0 && (peer.initialBalance-equity)/peer.initialBalance*100 >= rc.AccountMaxDrawdownPct {
 			return "account drawdown breaker active"
 		}
 		peer.runtimeMu.RLock()

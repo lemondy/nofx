@@ -367,6 +367,8 @@ export interface ExternalDataSource {
 }
 
 export interface RiskControlConfig {
+  // 账户熔断口径，省略时沿用初始资金。峰值仅建议模拟盘或独立账户使用。
+  account_drawdown_basis?: 'initial' | 'peak'
   // Max number of coins held simultaneously (CODE ENFORCED)
   max_positions: number
 

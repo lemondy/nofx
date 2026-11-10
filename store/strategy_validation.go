@@ -19,6 +19,9 @@ func (c *StrategyConfig) Validate() error {
 		return fmt.Errorf("invalid strategy_type")
 	}
 	r := c.RiskControl
+	if r.AccountDrawdownBasis != "" && r.AccountDrawdownBasis != "initial" && r.AccountDrawdownBasis != "peak" {
+		return fmt.Errorf("account_drawdown_basis must be empty, initial or peak")
+	}
 	if r.MaxPositions < 0 || r.MaxPositions > MaxPositions {
 		return fmt.Errorf("max_positions must be between 0 and %d", MaxPositions)
 	}
