@@ -126,6 +126,80 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(stats["last_equity_usdt"], 90)
         self.assertIsNone(stats["daily_equity"][1]["return"])
 
+    def test_monte_carlo_drawdown_same_seed_is_reproducible(self):
+        returns = [0.03, -0.01, 0.05, -0.02, 0.04, 0.01]
+        first = promotion.monte_carlo_drawdown(returns)
+        self.assertEqual(first, promotion.monte_carlo_drawdown(returns))
+        self.assertEqual(first["method"], "permutation")
+        self.assertEqual((first["n_paths"], first["n_days"], first["seed"]), (1000, 6, 20261110))
+        self.assertNotIn("note", first)
+        # Hand-derived actual: equity peaks at 1.03*0.99*1.05 = 1.070685, the
+        # -2% day lands exactly 2% below that peak, and both later days make new highs.
+        self.assertAlmostEqual(first["actual"], 1 - 0.98, places=12)
+        self.assertTrue(0 <= first["actual_percentile"] <= 1)
+        self.assertGreaterEqual(first["p99"], first["p95"])
+        self.assertGreaterEqual(first["p95"], first["p50"])
+
+    def test_monte_carlo_drawdown_monotonic_gains_quantiles_are_zero(self):
+        # Every permutation of all-positive returns only compounds upward, so no
+        # path can ever fall below its running peak (which includes the start).
+        result = promotion.monte_carlo_drawdown([0.01, 0.02, 0.03, 0.04, 0.05, 0.06])
+        for key in ("p50", "p95", "p99", "actual"):
+            self.assertEqual(result[key], 0.0)
+        self.assertEqual(result["actual_percentile"], 1.0)
+        self.assertEqual(result["n_days"], 6)
+
+    def test_monte_carlo_drawdown_hand_computed_actual_and_quantile_interpolation(self):
+        # Scripted shuffles replace the seeded RNG; the three path MaxDDs are
+        # hand-computed: identity order 0.5, reversed order 0.5 (1→1.2→0.6→0.891),
+        # and [0.50, 0.20, 0.10, -0.50, -0.10] rising to 1.98 then 0.891 → 0.55.
+        orders = ([0, 1, 2, 3, 4], [4, 3, 2, 1, 0], [2, 4, 0, 3, 1])
+
+        class ScriptedShuffler:
+            def __init__(self, seed):
+                self.pending = iter(orders)
+
+            def shuffle(self, values):
+                values[:] = [values[index] for index in next(self.pending)]
+
+        with patch.object(promotion.random, "Random", ScriptedShuffler):
+            result = promotion.monte_carlo_drawdown([0.10, -0.10, 0.50, -0.50, 0.20], n_paths=3)
+        self.assertAlmostEqual(result["actual"], 0.5, places=12)
+        self.assertAlmostEqual(result["p50"], 0.5, places=12)  # position 0.5*(3-1)=1 hits the middle sample.
+        self.assertAlmostEqual(result["p95"], 0.5 + 0.9 * 0.05, places=12)  # position 1.9 between 0.5 and 0.55.
+        self.assertAlmostEqual(result["p99"], 0.5 + 0.98 * 0.05, places=12)  # position 1.98.
+        self.assertAlmostEqual(result["actual_percentile"], 2 / 3, places=12)
+        self.assertEqual((result["n_paths"], result["n_days"], result["seed"]), (3, 5, 20261110))
+
+    def test_monte_carlo_drawdown_fewer_than_five_valid_days_is_all_none(self):
+        # Of the six raw samples only four are finite; None and non-finite
+        # returns are dropped before the 5-day floor is applied.
+        short = promotion.monte_carlo_drawdown([0.1, None, float("nan"), float("inf"), -0.1, 0.2])
+        expected_keys = ("method", "n_paths", "n_days", "seed",
+                         "p50", "p95", "p99", "actual", "actual_percentile", "note")
+        self.assertEqual(tuple(short.keys()), expected_keys)
+        self.assertEqual(short["note"], "insufficient_days")
+        for key in expected_keys[:-1]:
+            self.assertIsNone(short[key])
+        exact = promotion.monte_carlo_drawdown([0.01, -0.02, 0.03, -0.04, 0.05])
+        self.assertEqual(exact["n_days"], 5)
+        self.assertNotIn("note", exact)
+
+    def test_equity_statistics_adds_only_max_drawdown_mc(self):
+        stats = promotion.equity_statistics(snapshots([100, 110, 99, 105, 102, 108, 107]), START, NOW)
+        self.assertEqual(tuple(stats.keys()), (
+            "snapshot_count", "snapshot_invalid", "first_snapshot_at", "last_snapshot_at",
+            "first_equity_usdt", "last_equity_usdt", "period_return", "max_drawdown",
+            "max_drawdown_mc", "forward_filled_days", "daily_equity"))
+        returns = [row["return"] for row in stats["daily_equity"]]
+        self.assertEqual(stats["max_drawdown_mc"], promotion.monte_carlo_drawdown(returns))
+        self.assertEqual(stats["max_drawdown_mc"]["n_days"], 6)  # First day has no return.
+        self.assertAlmostEqual(stats["max_drawdown"], stats["max_drawdown_mc"]["actual"], places=12)
+        self.assertAlmostEqual(stats["period_return"], 0.07, places=12)
+        empty = promotion.equity_statistics([], START, NOW)
+        self.assertEqual(empty["max_drawdown_mc"]["note"], "insufficient_days")
+        self.assertIsNone(empty["max_drawdown_mc"]["p95"])
+
     def test_daily_paired_difference_cluster_se_and_normal_ci(self):
         # Candidate returns increase from 1% to 10%; control is flat.
         equities = [100.0]

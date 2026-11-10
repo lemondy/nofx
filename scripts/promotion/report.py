@@ -14,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import sqlite3
 import sys
 import tempfile
@@ -144,6 +145,57 @@ def trade_statistics(trades: list[dict], *, gross_r: bool = False) -> tuple[dict
     }, r_samples
 
 
+def _linear_quantile(sorted_values: list[float], q: float) -> float:
+    """Linear interpolation between order statistics, matching numpy's default."""
+    position = q * (len(sorted_values) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return sorted_values[lower]
+    return sorted_values[lower] + (position - lower) * (sorted_values[upper] - sorted_values[lower])
+
+
+def monte_carlo_drawdown(daily_returns: list, n_paths: int = 1000, seed: int = 20261110) -> dict:
+    """Descriptive MaxDD quantiles from permuted daily returns; never a verdict input.
+
+    Each path shuffles the observed daily returns, compounds them from an
+    equity of 1, and records 1 - equity/peak (the peak includes the start).
+    Quantiles interpolate linearly as in numpy's default; ``actual`` is the
+    MaxDD of the original order and ``actual_percentile`` the share of paths
+    at or below it. With fewer than 5 valid returns every standard key is None
+    plus note='insufficient_days'.
+    """
+    keys = ("method", "n_paths", "n_days", "seed", "p50", "p95", "p99", "actual", "actual_percentile")
+    returns = [value for value in map(finite, daily_returns) if value is not None]
+    if len(returns) < 5:
+        return {**{key: None for key in keys}, "note": "insufficient_days"}
+
+    def max_drawdown(order):
+        equity = peak = 1.0
+        worst = 0.0
+        for value in order:
+            equity *= 1.0 + value
+            if equity > peak:
+                peak = equity
+            worst = max(worst, 1.0 - equity / peak)
+        return finite(worst)
+
+    rng = random.Random(seed)
+    paths = []
+    for _ in range(n_paths):
+        shuffled = returns[:]
+        rng.shuffle(shuffled)
+        paths.append(max_drawdown(shuffled))
+    paths.sort()
+    actual = max_drawdown(returns)
+    return {"method": "permutation", "n_paths": n_paths, "n_days": len(returns), "seed": seed,
+            "p50": finite(_linear_quantile(paths, 0.50)),
+            "p95": finite(_linear_quantile(paths, 0.95)),
+            "p99": finite(_linear_quantile(paths, 0.99)),
+            "actual": actual,
+            "actual_percentile": finite(sum(value <= actual for value in paths) / n_paths)}
+
+
 def equity_statistics(snapshots: list[dict], started_at: datetime, as_of: datetime) -> dict:
     """Last snapshot per UTC day; forward-fill only between observed endpoints.
 
@@ -193,6 +245,7 @@ def equity_statistics(snapshots: list[dict], started_at: datetime, as_of: dateti
         "last_equity_usdt": last[2] if last else None,
         "period_return": finite(last[2] / first[2] - 1) if first and first[2] > 0 else None,
         "max_drawdown": max((d for d in drawdowns if d is not None), default=None),
+        "max_drawdown_mc": monte_carlo_drawdown([row["return"] for row in curve]),
         "forward_filled_days": filled, "daily_equity": curve,
     }
 
@@ -675,6 +728,7 @@ def build_report(pairs: list[dict], db_path: Path | str, as_of: datetime) -> dic
                   "r": "净盈亏 / (abs(entry_price - initial_stop_loss) * quantity)；|R|>15 保留并提示",
                   "rates": "胜率、收益率、MaxDD 均为小数比例，非百分数",
                   "equity": "UTC 日末最后快照，观测区间内缺日向前填充；MaxDD 基于日末权益；期间收益率以首个实际快照为基准",
+                  "max_drawdown_mc": "日收益随机重排 1000 次的 MaxDD 分位，仅作描述，不参与判定",
                   "daily_comparison": "完整 UTC 日收益取交集，不含当天；日为聚类，SE=sqrt(G/(G-1)*sum(influence^2))；G<10 不给 SE/CI",
                   "noninferiority": f"相同配对日的日末权益增量差（USDT/日）CI95 下界 > {-NONINFERIORITY_MARGIN:g}；"
                                     f"配对日 >= {MIN_PAIRED_DAYS}，两侧平仓各 >= max(min_trades, {MIN_CLOSED_TRADES})；"
