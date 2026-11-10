@@ -73,6 +73,18 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-10</div>
 
+<article data-v="part" data-id="quantbot-h2-h3-risk-report">
+<h2>峰值回撤熔断选项与蒙特卡洛回撤分位（quantbot H2、H3 落地） <span class="tag t-part">工程落地 · 默认关闭 / 仅描述，不计 K</span><span class="dom">加密 + 美股 · 风险层 · 熔断与报告口径</span></h2>
+<p class="k">思路：quantbot 评估留下的两项低成本改动。H2：LLM 交易员的账户熔断只按初始资金计算，账户先盈利后回吐时很晚才触发；新增可选口径 account_drawdown_basis=peak（账户级持久化高水位，默认关闭）。H3：配对报告只给单条路径的最大回撤，新增日收益重排 1000 次的 MaxDD 分位，只作描述。</p>
+<ul>
+<li>历史权益描述性重放（只读）：因子 ensemble 候选初始口径最大回撤 15.6%、峰值口径 20.5%，阈值 20% 时峰值口径会在 11-08 停止开仓，初始口径不触发；对照为 11.0% 与 18.5%。</li>
+<li>实盘账户的峰值回撤被入金和手动交易放大（us-stock 初始口径 0.08%、峰值口径 12.5%），所以峰值口径默认关闭，只建议用于模拟盘或独立账户。</li>
+<li>重排分位示例：因子 ensemble 候选实际 MaxDD 17.3%，重排中位数 21.8%、第 95 百分位 29.2%，实际路径只排在第 15 百分位，说明单条路径回撤偏乐观。</li>
+</ul>
+<p><b>结论：</b>两项都不改变现有交易行为：峰值口径需在策略里显式设为 peak 才启用，并需重新部署后端；回撤分位不参与配对判定。是否对某个模拟盘启用峰值口径由用户决定。</p>
+<p class="src">来源：<code>docs/research/2026-11-09-quantbot-math-assessment.md</code> · <code>scripts/backtest/peak_drawdown_replay.py</code> · <code>data/peak_drawdown_replay/</code> · <code>scripts/promotion/report.py</code>（monte_carlo_drawdown）</p>
+</article>
+
 <article data-v="no" data-id="corr-state-scaler-s1">
 <h2>币种间相关性状态用于山寨币组合仓位缩放 S1 <span class="tag t-no">S1 fail · 相关性不能提前预示风险，不接入</span><span class="dom">加密 · 风险与仓位层 · 仓位缩放</span></h2>
 <p class="k">思路：用户问题：很多币和 BTC、ETH 走势趋同，相关性是否有价值？现行止损风险上限已按相关性为 1 相加，所以只检验"相关性高时提前减仓"。每天按 20 日成交额取前 20 个山寨币（时点口径，含下架币）组成等权组合，比较 HAR（B）与 HAR + ln 分散化因子 D（C，D 由平均两两相关 ρ̄ 算出）驱动的只减不加缩放；TOP10、TOP50 为稳健性载体。训练 2021–2022，评估 2023-01 至 2026-10（1395 天）。crypto_llm K=4。</p>

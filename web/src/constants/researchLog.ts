@@ -30,6 +30,22 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'quantbot-h2-h3-risk-report',
+    date: '2026-11-10',
+    title: '峰值回撤熔断选项与蒙特卡洛回撤分位（quantbot H2、H3 落地）',
+    domain: '加密 + 美股 · 风险层 · 熔断与报告口径',
+    verdict: 'partial',
+    verdictText: '工程落地 · 默认关闭 / 仅描述，不计 K',
+    idea: 'quantbot 评估留下的两项低成本改动。H2：LLM 交易员的账户熔断只按初始资金计算，账户先盈利后回吐时很晚才触发；新增可选口径 account_drawdown_basis=peak（账户级持久化高水位，默认关闭）。H3：配对报告只给单条路径的最大回撤，新增日收益重排 1000 次的 MaxDD 分位，只作描述。',
+    bullets: [
+      '历史权益描述性重放（只读）：因子 ensemble 候选初始口径最大回撤 15.6%、峰值口径 20.5%，阈值 20% 时峰值口径会在 11-08 停止开仓，初始口径不触发；对照为 11.0% 与 18.5%。',
+      '实盘账户的峰值回撤被入金和手动交易放大（us-stock 初始口径 0.08%、峰值口径 12.5%），所以峰值口径默认关闭，只建议用于模拟盘或独立账户。',
+      '重排分位示例：因子 ensemble 候选实际 MaxDD 17.3%，重排中位数 21.8%、第 95 百分位 29.2%，实际路径只排在第 15 百分位，说明单条路径回撤偏乐观。',
+    ],
+    conclusion: '两项都不改变现有交易行为：峰值口径需在策略里显式设为 peak 才启用，并需重新部署后端；回撤分位不参与配对判定。是否对某个模拟盘启用峰值口径由用户决定。',
+    source: 'docs/research/2026-11-09-quantbot-math-assessment.md',
+  },
+  {
     id: 'corr-state-scaler-s1',
     date: '2026-11-10',
     title: '币种间相关性状态用于山寨币组合仓位缩放 S1',
