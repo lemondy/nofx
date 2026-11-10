@@ -414,3 +414,29 @@ python -m unittest scripts.backtest.tests.test_crypto_carry_study -v
 `fetch` 通过默认代理增量补齐六个币的结算历史及两腿日线，保留旧行并写 manifest，日线只收录完整 UTC 日。`run` 离线校验预注册 SHA、manifest、覆盖率、4h/8h 分段结算周期和面板收盘价，使用 Backtrader 双数据源撮合，逐日核对独立算术参考及收益拆分。输出 `results.json` 和中文 `report.md`，校验失败也输出报告并返回 1。强平时刻、现货强平价格、容许缺日的处理等补充约定写入报告。
 
 `run --write-ledger [PATH]` 可追加 `crypto_carry` 的 S1/E 记录，省略 PATH 时使用 `data/evolution/ledger.jsonl`。有效记录要求实际 K=1，invalid 不计 K。主检验、日期、门槛和判定固定，描述项单独列出，正式研究按预注册只执行一次。
+
+## DVOL 波动预测离线 S1
+
+`dvol_vol_forecast_study` 执行 `docs/research/2026-11-10-dvol-vol-forecast-s1-prereg.md`，分别比较 BTC、ETH 的 HAR 与 HAR 加 DVOL 方差预测。
+
+```bash
+python -m scripts.backtest.dvol_vol_forecast_study fetch --data-dir data/dvol --sleep 0.5
+python -m scripts.backtest.dvol_vol_forecast_study run \
+  --dvol-dir data/dvol --carry-dir data/carry --out data/dvol_results
+python -m unittest scripts.backtest.tests.test_dvol_vol_forecast_study -v
+```
+
+`fetch` 通过默认代理按最多 900 日时间窗增量补齐完整 UTC 日线，保留旧行并记录 manifest。出现 continuation 时细分时间窗。`run` 离线校验预注册 SHA、两类输入的 manifest、覆盖率和 DVOL 范围，使用 NumPy OLS。每月 1 日 m 仅用 t+7<m 的训练样本，整月共用系数。输出 `results.json` 和中文 `report.md`，包含逐日变量、剔除计数、训练截止、预测与描述项。数据无效时仍输出报告并返回 1。补充口径见报告，正式研究按预注册只执行一次。
+
+## DVOL 仓位缩放离线 S1
+
+`dvol_sizing_study` 按 `docs/research/2026-11-10-dvol-sizing-s1-prereg.md` 运行，仅提供离线 `run`。
+
+```bash
+python -m scripts.backtest.dvol_sizing_study run \
+  --dvol-dir data/dvol --carry-dir data/carry \
+  --trades data/llm_trim_offline/export_v1/trades.jsonl --out data/dvol_sizing_results
+python -m unittest scripts.backtest.tests.test_dvol_sizing_study -v
+```
+
+脚本核对九个冻结输入 SHA256、两个 manifest、覆盖率和取值，校准 B/C 的月度残差方差，比较 U/T/B/C 的同敞口风险。输出逐日缩放、月度系数与 s²、中文报告及描述性 LLM 交易叠加。哈希不符拒绝运行，数据校验失败输出 `invalid` 并返回 1。`--write-ledger [PATH]` 可选追加 `crypto_llm` S1/C，省略 PATH 使用 `data/evolution/ledger.jsonl`，有效结果要求实际 K=3。正式研究按预注册只运行一次，补充口径见报告。
