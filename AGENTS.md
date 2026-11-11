@@ -46,6 +46,13 @@
 ### 3. 提出可检验的假设
 
 - **数量与排序：** 最多提出三个值得验证的假设，并排出优先级。
+- **先写收益来源声明**（2026-11-11 起；依据见 `docs/research/2026-11-11-edge-sources-assessment.md`）：
+  - 付钱方：风险溢价、行为偏差、结构性约束（被迫交易）、信息与速度四类之一；说不出就写“说不出”；
+  - 他们为什么会一直付钱；
+  - 什么会侵蚀它，以及该现象已经公开了多久；
+  - 容量与成本上限的粗估（换手、流动性、冲击）。
+  - 写“说不出”的假设仍可以做，但要说明为什么值得花这次 K，并排在有付钱方的假设之后。纯风险层改动（仓位、熔断、止损）的付钱方写“不适用”，说明它改善的是哪一种风险。
+  - 有付钱方只是必要条件，不放宽也不收紧任何统计门槛。
 - **每个假设写明：**
   - 收益或风险改善的机制；
   - 具体改动；
@@ -107,7 +114,7 @@
 - **增量评估框架：** 见 `docs/architecture/INCREMENTAL_EVAL_DESIGN_2026-11-03.md`。
   - 三个阶段：S1 离线筛选、S2 预注册的在线配对、S3 留出检验。
   - 账本用 `scripts/backtest/evolution_ledger.append_event` 写入 `data/evolution/ledger.jsonl`。K 按 track 累计（`fq_us`、`fq_crypto`、`crypto_llm`、`us_llm` 等）。
-- **先预注册再看结果：** 预注册文档放在 `docs/research/YYYY-MM-DD-<topic>-prereg.md`，必须在计算任何收益或 IC 之前提交。跑完之后不得修改其中的参数。
+- **先预注册再看结果：** 预注册文档放在 `docs/research/YYYY-MM-DD-<topic>-prereg.md`，必须在计算任何收益或 IC 之前提交。跑完之后不得修改其中的参数。文档开头先写“收益来源声明”一节（四项内容见第 3 步）。
 - **回测工具：** 涉及订单或盈亏的回测一律走 `scripts/backtest`（Backtrader），不要另写模拟器。
 - **研究记录：** 每项研究都要记录到 `web/src/constants/researchLog.ts` 和 `docs/research/quant-research-log.html`，失败的也要记。
 - **数据：** 下载的数据放在 `data/` 下，保留不删，也不提交到 git。

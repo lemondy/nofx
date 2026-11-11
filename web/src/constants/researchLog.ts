@@ -36,7 +36,7 @@ export const RESEARCH_LOG: ResearchEntry[] = [
     domain: '美股 + 加密 · 外部资料 · 研究方法（收益来源）',
     verdict: 'none',
     verdictText:
-      '证据不足 · 知识笔记，无可接入策略；P1 流程改动待定，H2 强平级联 S0 未启动',
+      '证据不足 · 知识笔记，无可接入策略；P1 收益来源声明已采纳，H2 强平级联 S0 未启动',
     idea: '用户粘贴文章节选：持久收益只有四个来源——风险溢价、行为偏差、结构性约束（被迫交易）、信息与速度；说不出付钱方的模式大概率是噪声；edge 发表后衰减（McLean–Pontiff 约 58%），并有容量上限。与 10-31 QuantJourney 研究引用的《How to Become a Quant》应属同一系列。本次把该分类套到 nofx 已做的约 70 项研究上。',
     bullets: [
       '说不出付钱方的 20 余项（ICT、Fib/FVG/BOS、威科夫、三推、Brooks、Kell、规则库移植、Alpha101、自动挖掘、ML 多特征、Kronos、meta-labeling、订单流）0 项通过。',
@@ -46,7 +46,7 @@ export const RESEARCH_LOG: ResearchEntry[] = [
       '四类来源中，结构性（被迫交易的对手方）在 nofx 从未检验过；爆仓流因 allForceOrders 下线未接入，OI 只有 30 天。',
     ],
     conclusion:
-      '无可接入内容，未计算任何收益或 IC，不计 K。建议：P1 在预注册中增加“收益来源声明”（付钱方、为何持续、侵蚀因素、容量），需用户同意；H2 强平级联（价格急跌 + OI 骤降）S0 描述，并检查 LLM 做空是否追在级联之后，是否启动由用户决定。未改交易配置，未下单。',
+      '无可接入内容，未计算任何收益或 IC，不计 K。建议：P1 在预注册中增加“收益来源声明”（付钱方、为何持续、侵蚀因素、容量），用户已同意，已写入 AGENTS.md；H2 强平级联（价格急跌 + OI 骤降）S0 描述，并检查 LLM 做空是否追在级联之后，是否启动由用户决定。未改交易配置，未下单。',
     source: 'docs/research/2026-11-11-edge-sources-assessment.md',
   },
   {
