@@ -71,10 +71,26 @@ th{color:var(--mut);font-weight:600}
 
 <div id="log">
 
+<div class="day">2026-11-12</div>
+
+<article data-v="part" data-id="liquidation-cascade-s0">
+<h2>强平级联 S0：价格急跌 + OI 骤降之后的回补 <span class="tag t-part">机制成立（t 3.44）· 但 LLM 做空 0/309 落在级联后，不进入 S1</span><span class="dom">加密 · 结构性收益来源 · 机制描述</span></h2>
+<p class="k">思路：在价格急跌 ≥3σ 且 OI 1 小时降幅 ≥5%（C 类，代理被迫平仓）之后，4 小时是否比“急跌但 OI 未降”（D 类）回补更多（A，2023-01 至 2026-04，时点 top 60，data.binance.vision 5m OI + 5m K 线）；以及 LLM 做空有多少落在级联后 4 小时内（B，439 笔冻结交易，只计数不读 R）。收益来源声明：付钱方为被迫平仓的高杠杆多头（结构性）。</p>
+<ul>
+<li>A 四条判定全过：C 4h 平均 +0.85%，D −0.04%，Δ +0.89pp，按日聚类 t 3.44（N_C 1603 / N_D 6045）；两半 Δ +0.76pp / +1.03pp（t 2.74 / 1.81）。</li>
+<li>描述：敏感性 9 格 Δ 全为正（t 3.0–3.8），扣 BTC 后 Δ +0.66pp（t 3.17）；12h 回补最多（+1.55pp）；效应主要在山寨币；全部急跌不分 OI 仅 +0.12%，回补集中在去杠杆的那部分。</li>
+<li>后半段 C 事件只有前半的三分之一（398 对 1205），可能是 edge 衰减，S0 无法区分。</li>
+<li>B：B 段 115 币共 92 次级联，LLM 309 笔做空中 0 笔在级联后 4 小时内入场（做多 1/130），s1_eligible=false。</li>
+<li>运行前更正：首次 run 因 4 个 metrics 原始文件时间戳异常（整日偏 5 分钟、带秒偏移）在数据检查阶段结构失败、未算收益；改为丢弃网格外/跨日行再按 <280 行整日缺失，提交后只跑一次。</li>
+</ul>
+<p><b>结论：</b>H2 在 S0 结束：机制成立，但现有 LLM 交易并不追在级联后做空，没有可修正的行为，不做 S1。若要利用，需新写预注册（H2b：级联后做多，fq_crypto 事件策略或 LLM 参考字段），计入 K 并计入级联期间点差滑点。不计 K，未改交易配置，未下单。</p>
+<p class="src">来源：<code>docs/research/2026-11-12-liquidation-cascade-s0-study.md</code> · <code>scripts/backtest/liquidation_cascade_s0.py</code> · <code>data/liquidation_cascade/s0_v1_corrected/</code></p>
+</article>
+
 <div class="day">2026-11-11</div>
 
 <article data-v="no" data-id="edge-sources-assessment">
-<h2>《Where Edge Actually Comes From》评估：按“谁在付钱”给已做研究归类 <span class="tag t-no">证据不足 · 知识笔记，无可接入策略；P1 收益来源声明已采纳，H2 强平级联 S0 未启动</span><span class="dom">美股 + 加密 · 外部资料 · 研究方法（收益来源）</span></h2>
+<h2>《Where Edge Actually Comes From》评估：按“谁在付钱”给已做研究归类 <span class="tag t-no">证据不足 · 知识笔记，无可接入策略；P1 收益来源声明已采纳；H2 强平级联 S0 机制成立但不进入 S1</span><span class="dom">美股 + 加密 · 外部资料 · 研究方法（收益来源）</span></h2>
 <p class="k">思路：用户粘贴文章节选：持久收益只有四个来源——风险溢价、行为偏差、结构性约束（被迫交易）、信息与速度；说不出付钱方的模式大概率是噪声；edge 发表后衰减（McLean–Pontiff 约 58%），并有容量上限。与 10-31 QuantJourney 研究引用的《How to Become a Quant》应属同一系列。本次把该分类套到 nofx 已做的约 70 项研究上。</p>
 <ul>
 <li>说不出付钱方的 20 余项（ICT、Fib/FVG/BOS、威科夫、三推、Brooks、Kell、规则库移植、Alpha101、自动挖掘、ML 多特征、Kronos、meta-labeling、订单流）0 项通过。</li>
