@@ -73,6 +73,32 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-10</div>
 
+<article data-v="no" data-id="kronos-entry-veto-s1">
+<h2>Kronos 零样本开仓否决 S1（H1） <span class="tag t-no">S1 fewer_trades · z −2.66，方向相反，不进入 S2，不接入（crypto_llm K=5）</span><span class="dom">加密 · LLM 交易员 · 开仓过滤（K 线预测）</span></h2>
+<p class="k">思路：开仓前用 Kronos-small 零样本从入场前 512 根 5m K 线生成 16 条 5 小时路径；16 条中至少 12 条对持仓不利就否决开仓。在 439 笔冻结的 LLM 交易（做空 309 / 做多 130，2026-09-29 至 11-08）上做 B 类 S1，对照同剔除笔数的窗口 z 分数代理。CPU 只运行一次。</p>
+<ul>
+<li>S0 闸门全过：复现 10/10 一致；无预测 0/439；50 条无漂移 GBM 平均 p_up 0.509；剔除 292 笔。</li>
+<li>剔除 292/439（66.5%），超过 0.5 上限，判 fewer_trades。方向也相反：被剔除的平均 +0.025R，保留的平均 −0.158R，ΔavgR −0.122，z −2.66，安慰剂分位 0.003；前后两半都为负（−0.062 / −0.187）。</li>
+<li>零成本代理（按 side·窗口 z 分数剔除同样 292 笔，与 Kronos 重合 266 笔）ΔavgR −0.205，同样为负；s2_eligible=false。</li>
+<li>描述：p_adverse 两端占 63%（16/16 有 220 笔，0/16 有 55 笔）；方向命中率 0.476；side·z_last 与 p_adverse 的 ρ 为 0.75。真实交易上 Kronos 的读数也是“区间位置反转”，而顺延伸方向的交易事后更好，与动量延续的旧结论一致。阈值 11/16、13/16 和 baseline.r 口径都同向。</li>
+<li>反向规则未经预注册，不能当作发现；如要检验需另写预注册，并作为新的 K 计入。</li>
+</ul>
+<p><b>结论：</b>H1 关闭，Kronos 不接入 nofx。账本写入 1 行（kronos-entry-veto-v1，verdict fewer_trades，K=5）。H2/H3 备选不建议启动。未改交易配置，未下单。</p>
+<p class="src">来源：<code>docs/research/2026-11-11-kronos-entry-veto-s1-study.md</code> · <code>scripts/backtest/kronos_entry_veto_study.py</code> · <code>data/kronos_veto/</code></p>
+</article>
+<article data-v="no" data-id="kronos-kit-assessment">
+<h2>Kronos 与 KiT（K 线基础模型）评估 <span class="tag t-no">证据不足 · 不接入；H1 开仓否决 S1 已运行：fewer_trades（见下一条）</span><span class="dom">美股 + 加密 · 外部资料 · 信号层（K 线预测）</span></h2>
+<p class="k">思路：用户要求深入分析两个开源 K 线基础模型：Kronos（arXiv 2508.02739，AAAI 2026；分层离散 token + 自回归 Transformer，45 个交易所的 120 亿根 K 线，预训练截止 2024-06，MIT 许可，safetensors 权重）和 KiT（arXiv 2609.34507；flow matching 扩散 Transformer，五维对数比 K 线编码，A 股 3914 只 / 美股 888 只 / 加密 28 个，AGPL 许可）。核对宣称指标、切分、偏差和成本，判断能否接入 nofx 的两个市场和两条路径。</p>
+<ul>
+<li>Kronos：时间切分干净（测试从 2024-07 开始），推理代码无前视。收益 RankIC 主要来自 A 股（XSHG 0.064、XNAS 0.060、加密 0.033），线性模型 DLinear 已接近 Kronos。A 股回测超额 0.21 中，很多非预训练模型也为正，有规模暴露混入。</li>
+<li>KiT：论文回测 2025.05–2026.04 年化 +65%，但其中 8 个月落在验证期，按发布权重口径甚至在训练期；训练截止日在论文、权重说明、配置三处不一致。标的看起来只含当前仍在交易的，测试窗只有 3.3 个月（日线 3–5 个锚点），没有标准误。美股 RankIC 约为 0，加密只有 28 个币。波动率基线 GARCH 未拟合。权重需 torch.load(weights_only=False) 加载 pickle，有安全风险，未下载。</li>
+<li>对照 nofx：两者评价的都是截面排序，LLM 交易员需要的是单币方向和路径风险；fq 截面打分已有 ML 多特征失败的教训（RankIC 高而 P&amp;L 差）；DVOL 研究已表明预测更准不等于决策更好。美股不提假设。</li>
+<li>唯一的低成本检验 H1：开仓前用 Kronos-small 零样本从 512 根 5m K 线生成 16 条 5 小时路径，不利路径 ≥ 12 条时否决开仓（B 类，crypto_llm K=5，439 笔冻结交易）。先验偏低，预注册 <code>docs/research/2026-11-11-kronos-entry-veto-s1-prereg.md</code>；2026-11-11 已运行，S1 fewer_trades。</li>
+<li>合成数据冒烟测试（不计 K）：CPU 每次预测约 30 秒，同种子可复现。但在 50 条无漂移随机游走上，82% 的序列 16 条路径几乎同向，预测偏移中位 2.5σ（应约为 0），与窗口 z 分数相关 −0.78，12% 的 K 线不合法。模型读数近似“区间位置反转”，所以预注册加了同剔除笔数的窗口 z 分数代理对照，Kronos 必须胜过代理才进入 S2。</li>
+</ul>
+<p><b>结论：</b>两个模型都不能直接接入 nofx（美股、加密，LLM 与 factor_quant 均是）。KiT 的收益宣称不可信，不推荐接入；Kronos 只值得做一次 H1 S1，是否运行由用户决定。本次未改任何交易配置，未用真实价格计算任何收益或 IC。</p>
+<p class="src">来源：<code>docs/research/2026-11-10-kronos-kit-assessment.md</code> · github.com/shiyu-coder/Kronos、github.com/Luciferbobo/KiT</p>
+</article>
 <article data-v="part" data-id="quantbot-h2-h3-risk-report">
 <h2>峰值回撤熔断选项与蒙特卡洛回撤分位（quantbot H2、H3 落地） <span class="tag t-part">工程落地 · 默认关闭 / 仅描述，不计 K</span><span class="dom">加密 + 美股 · 风险层 · 熔断与报告口径</span></h2>
 <p class="k">思路：quantbot 评估留下的两项低成本改动。H2：LLM 交易员的账户熔断只按初始资金计算，账户先盈利后回吐时很晚才触发；新增可选口径 account_drawdown_basis=peak（账户级持久化高水位，默认关闭）。H3：配对报告只给单条路径的最大回撤，新增日收益重排 1000 次的 MaxDD 分位，只作描述。</p>
