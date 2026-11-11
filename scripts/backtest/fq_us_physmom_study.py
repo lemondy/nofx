@@ -51,6 +51,7 @@ NOTES = [
     '歧义口径：安慰剂按代码升序，使用同一个 RNG 连续抽取 20 次；只平移 close 非缺失行上的成交量，其他行原样保留。N<127 时偏移为 0、记录该股且不消耗随机数。',
     '歧义口径：安慰剂保留逐期 Δ、统计、每股偏移与短历史记录，不保留全部原生路径，以免 20 份持仓审计占用过多内存；B 只计算一次。严格大于才计入分位。',
     '歧义口径：D3 B 相对误差使用冻结预期收益的绝对值作分母，绝对容差为零；失败只记 invalid，不抛出异常。D2 B 对照值只作描述，不参与判定。',
+    '实现修正（2026-11-12，首跑崩溃后、未见 C 结果前）：30 日波动率缺失或非正的股票-日期无法按波动率倒数定权，统一从 B、C 与安慰剂的可用池剔除。D3 只有 1 个调仓股票-日期受影响（HUBB 2021-06-09，30 日内缺 1 根收盘），首跑在安慰剂第 14 次选中它时报错，未写报告和账本。B 的入选与权重需与未剔除时逐期相同，否则记录并由复现门槛判 invalid。',
     '哈希不一致直接停止，不允许输入漂移；固定同时运行 D3、D2，不运行 D1、不搜索参数。',
     '歧义口径：CLI 必须显式选择 --ledger 或 --no-ledger；invalid 返回退出码 1，写账本但不计 K。',
     '组合夏普、最大回撤和累计收益复用 volscale.describe_path；组合换手按原后处理口径不提供，另列两腿原生换手和独立双腿合计换手作描述。',
@@ -77,6 +78,17 @@ def physical_momentum(close, volume):
     equal_mean = returns.rolling(WINDOW, min_periods=1).mean().shift(SKIP)
     signal = (weighted_sum / mass_sum.where(mass_sum.gt(0))).mask(fallback, equal_mean)
     return dict(signal=signal, fallback=fallback)
+
+
+def investable_features(features):
+    """Drop stock-dates whose inverse-volatility weight is undefined (all arms alike)."""
+    vol = features['volatility']
+    defined = np.isfinite(vol) & vol.gt(0)
+    return dict(features, eligible=features['eligible'] & defined), features['eligible'] & ~defined
+
+
+def _selection(decisions):
+    return [(d['date'], d['long'], d['short'], d['L']) for d in decisions]
 
 
 def candidate_features(features, volume):
@@ -254,15 +266,28 @@ def run_study():
                               d3_b_expected_total=D3_B_EXPECTED_TOTAL, d3_b_rel_tol=D3_B_REL_TOL),
                   input_hashes=hashes, expected_input_hashes=EXPECTED_HASHES,
                   input_daily_files=files, input_drift=mismatches, notes=list(NOTES),
-                  deviations=[n for n in NOTES if n.startswith('歧义口径')], datasets={})
+                  deviations=[n for n in NOTES if n.startswith(('歧义口径', '实现修正'))], datasets={})
     for name in DATASETS:
         print(f'{name}: loading frozen inputs', flush=True)
         loaded = volscale.load_dataset(name)
         frames, calendar = loaded.pop('frames'), loaded.pop('calendar')
         universe = sorted(set(loaded['requested']) & set(frames))
-        features = s1.build_features(frames, universe, calendar)
+        raw_features = s1.build_features(frames, universe, calendar)
+        features, undefined_vol = investable_features(raw_features)
         volume = pd.DataFrame({s: frames[s].volume for s in universe}).reindex(calendar)
         sessions, decisions_b = s1.rebalance_schedule(features, calendar)
+        raw_sessions, raw_decisions_b = s1.rebalance_schedule(raw_features, calendar)
+        decision_index = pd.DatetimeIndex([d['date'] for d in decisions_b])
+        vol_filter = dict(
+            excluded_decision_stock_dates=[
+                dict(date=str(d.date()), symbol=s) for d, row in undefined_vol.loc[decision_index].iterrows()
+                for s in row.index[row]],
+            baseline_selection_unchanged=bool(raw_sessions.equals(sessions)
+                                              and _selection(raw_decisions_b) == _selection(decisions_b)))
+        print(f"{name}: undefined-vol exclusions on rebalance dates="
+              f"{len(vol_filter['excluded_decision_stock_dates'])}, "
+              f"B selection unchanged={vol_filter['baseline_selection_unchanged']}", flush=True)
+        del raw_features, raw_decisions_b
         features_c, sessions_c, decisions_c = candidate_schedule(features, volume, calendar, decisions_b)
         assert sessions.equals(sessions_c), 'candidate and baseline sessions must align'
         fallback = fallback_usage(features['eligible'],
@@ -282,6 +307,7 @@ def run_study():
                        rebalance_dates=[d['date'] for d in decisions_b],
                        decisions=dict(B=decisions_b, C=decisions_c), arms=arms,
                        comparison=comparison, fallback=fallback, baseline_reproduction=reproduction,
+                       vol_filter=vol_filter,
                        selection=selection_diagnostics(features, features_c, decisions_b, decisions_c))
         report['datasets'][name] = dataset
         report['engine_version'] = arms['B']['legs']['long']['engine_version']

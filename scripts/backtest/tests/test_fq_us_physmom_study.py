@@ -460,3 +460,17 @@ def test_markdown_and_strict_json_on_synthetic_results(native_synthetic_result):
     safe = evolution_ledger.json_safe(report)
     decoded = json.loads(json.dumps(safe, ensure_ascii=False, allow_nan=False))
     assert decoded['datasets']['D3']['arms']['B']['signal_rebalances'][0]['sigma_hat'] is None
+
+
+def test_investable_features_drop_undefined_volatility_for_all_arms():
+    dates = pd.bdate_range('2024-01-01', periods=3)
+    eligible = pd.DataFrame(True, index=dates, columns=['A', 'B', 'C'])
+    vol = pd.DataFrame([[0.1, np.nan, 0.2], [0.1, 0.0, 0.2], [0.1, 0.3, -1.0]],
+                       index=dates, columns=eligible.columns)
+    features = dict(eligible=eligible, volatility=vol, signal=vol)
+    out, dropped = study.investable_features(features)
+    expected = pd.DataFrame([[True, False, True], [True, False, True], [True, True, False]],
+                            index=dates, columns=eligible.columns)
+    pd.testing.assert_frame_equal(out['eligible'], expected)
+    pd.testing.assert_frame_equal(dropped, ~expected)
+    assert out['signal'] is features['signal'] and features['eligible'].all().all()
