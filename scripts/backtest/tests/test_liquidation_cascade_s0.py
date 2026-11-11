@@ -381,6 +381,27 @@ class ArchiveAndCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'metrics'):
                 study.read_metrics(paths, 'TESTUSDT', [])
 
+    def test_metrics_drops_offgrid_and_next_day_rows_then_applies_280_rule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Shifted day: 00:05 .. next-day 00:00 (288 rows, last one out of day).
+            shifted = metrics_csv('2023-01-01').splitlines()
+            shifted = [shifted[0]] + [
+                f'{pd.Timestamp(BASE + (i + 1) * STEP, unit="ms").strftime("%Y-%m-%d %H:%M:%S")},TESTUSDT,100,10000'
+                for i in range(288)]
+            a = root / 'TESTUSDT-metrics-2023-01-01.zip'
+            write_zip(a, '\n'.join(shifted) + '\n')
+            # Whole day off-grid by 46 seconds -> no usable rows.
+            b = root / 'TESTUSDT-metrics-2023-01-02.zip'
+            write_zip(b, metrics_csv('2023-01-02').replace(':00,TESTUSDT', ':46,TESTUSDT'))
+            oi, meta = study.read_metrics([a, b], 'TESTUSDT', ['2023-01-01', '2023-01-02'])
+            self.assertEqual(meta['dropped_rows'], {'2023-01-01': 1, '2023-01-02': 288})
+            self.assertEqual(meta['day_row_counts'], {'2023-01-01': 287, '2023-01-02': 0})
+            self.assertEqual(meta['days_below_280'], ['2023-01-02'])
+            self.assertNotIn(BASE, oi.index)
+            self.assertNotIn(BASE + DAY, oi.index)
+            self.assertEqual(oi.loc[BASE + HOUR], 100)
+
     def test_daily_check_excludes_incomplete_days_and_reports_mismatch(self):
         raw = bars(hours=72)
         daily = pd.DataFrame(dict(close=[100., 99., 100.]),

@@ -50,7 +50,7 @@ CHOICES = [
     '全部急跌忽略OI，仍按同币24h取首个；无条件基准不要求OI或σ、不去重，只要求4h前向完整。',
     'B 不去重，也不检查或计算前向收益；事件时间仅限登记B段，σ只使用已有价格历史中此前168h的整点收益。',
     'B 缺OI交易：入场前4h内任一可能事件整点的OI端点缺失即计数，即使已匹配其他C也计数；比例分母仍为全部同side交易。',
-    'metrics少于280行的整个UTC日OI缺失；重复时间、错币、错日、非5m网格等结构错误拒绝解释。',
+    '【运行前更正，未看收益】metrics中不在5m网格（如00:05:46）或不属于本文件UTC日（如次日00:00）的行丢弃并计数（dropped_rows），再按少于280行整日OI缺失；重复时间、错币、超288行仍拒绝解释。',
     '日收盘比对只使用完整288根5m的UTC日与面板的交集；不完整日单独报告，不用盘中末价当日收盘。无可比日也视为数据检查失败。',
     'CR1=G/(G-1)×(N-1)/(N-2)×聚类夹心方差；少于2日、缺类别、或零SE时t为null，不能通过显著性条件。',
     'σ为零时仍严格按r≤-kσ分类，不另加未登记的最小波动门槛。',
@@ -404,17 +404,22 @@ def read_klines(paths):
 
 
 def read_metrics(paths, symbol, expected_days):
-    parts, bad_days, counts = [], [], {}
+    parts, bad_days, counts, dropped = [], [], {}, {}
     for path in paths:
         day = Path(path).stem[-10:]
         frame = csv_member(path, usecols=['create_time', 'symbol', 'sum_open_interest'])
         stamp = pd.to_datetime(frame['create_time'], utc=True, errors='raise')
         times = stamp.astype('int64').to_numpy() // 1_000_000
         if (stamp.isna().any() or stamp.duplicated().any()
-                or not (frame['symbol'] == symbol).all()
-                or (times % STEP != 0).any()
-                or (stamp.dt.strftime('%Y-%m-%d') != day).any() or len(frame) > 288):
+                or not (frame['symbol'] == symbol).all() or len(frame) > 288):
             raise ValueError(f'{path}: metrics时间/币名/行数/重复非法')
+        # Correction disclosed in the study report (decided before any return was
+        # computed): rows off the 5m grid (e.g. 00:05:46) or outside the file's
+        # UTC day (e.g. next-day 00:00) are dropped, then the <280-row rule applies.
+        keep = (times % STEP == 0) & (stamp.dt.strftime('%Y-%m-%d') == day).to_numpy()
+        if not keep.all():
+            dropped[day] = int((~keep).sum())
+        frame, times = frame.loc[keep], times[keep]
         counts[day] = len(frame)
         if len(frame) < 280:
             bad_days.append(day)
@@ -428,7 +433,7 @@ def read_metrics(paths, symbol, expected_days):
     valid_hours = sum((series.index.to_numpy() % HOUR == 0) & series.notna().to_numpy())
     return series, dict(expected_days=len(expected_days), present_days=len(counts),
                         absent_days=sorted(set(expected_days) - counts.keys()),
-                        day_row_counts=counts, days_below_280=bad_days,
+                        day_row_counts=counts, days_below_280=bad_days, dropped_rows=dropped,
                         non_288_days={d: n for d, n in counts.items() if n != 288},
                         valid_hourly_oi=int(valid_hours),
                         hourly_coverage=valid_hours / (24 * len(expected_days)) if expected_days else None)
