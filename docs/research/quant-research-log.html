@@ -71,6 +71,22 @@ th{color:var(--mut);font-weight:600}
 
 <div id="log">
 
+<div class="day">2026-11-11</div>
+
+<article data-v="no" data-id="physics-trading-assessment">
+<h2>物理类交易方法评估（动量、冷却定律、波浪、econophysics） <span class="tag t-no">证据不足 · 无可接入内容；H1 物理动量 S1 已预注册，等待批准（fq_us K=8）</span><span class="dom">美股 + 加密 · 外部说法 · 信号层 / 风险层</span></h2>
+<p class="k">思路：用户转述好友的说法：用物理学方法（动量、牛顿冷却定律、波浪理论等）交易，“获利很多”，但没有规则、代码或成交记录。按 AGENTS.md 外部资料流程，把每个隐喻翻译成可证伪规则（动量 p=m·v、冷却 = OU 指数回归、Elliott/谐波、傅里叶/Hilbert 周期、Hurst/分形、熵、临界减速、LPPL），检索公开证据，并对照 nofx 已结束的研究。</p>
+<ul>
+<li>公开证据（约 40 个来源）：没有一篇同时满足“物理方法 + 样本外 + 扣成本 + 加密 1h–7d 或美股日线”。证据扎实的只有价格动量（MOP 2012，期货月频，毛 Sharpe &gt; 1）。Choi 2014 的“物理动量”用于周度反转，不扣成本、无样本外；直接用冷却方程的 Chiang-Lin 2022 输给随机游走；加密 15 分钟反转存在，但毛边际约 1.3bp，不够 5bp 成本（Kitron 2026）。</li>
+<li>波浪与周期：斐波那契比例不超过偶然（Batchelor-Ramyar）；Elliott 没有严格检验；FFT 周期“基本失败”（Stádník 2016）；Ehlers/Hilbert 没有同行评审。Econophysics：Hurst/熵只是描述性研究，或只用于风险预测；百年股指里没有发现临界减速（Guttal 2016）；LPPL 的支持证据多为 Sornette 组自评，tc 参数松弛（Brée 等）。技术规则整体扣成本、做样本外后失效（STW 1999、B&amp;S 2012）。</li>
+<li>nofx 已覆盖：美股 12-1 动量（S2 在跑；宽池 2012–26 累计 −3.4%）、反转排序 fail（PR #79）、加密 4–24h 反转被成本吃掉（PR #59）、stretch/acceleration/convexity/Hurst/VR/ρ1 无效（regime-statistics、概率研究 222 个 VR 检验 0 显著）、三推/Fib+FVG+BOS/Wyckoff/Kell 全部无效。Kronos 研究中“顺延伸方向的交易事后更好”是事后观察，样本已污染。</li>
+<li>真正没测过的：熵、LPPL、傅里叶/Hilbert 周期、成交量加权“物理动量”。前三项证据弱，或者是已测特征的近亲，不提出 S1；LPPL 只作为 H2 记录，不预注册。</li>
+<li>H1：p2_vol = Σ volume·r / Σ volume（12-1 窗口，日对数收益），替换 mom_ls_invvol_v1 的信号，其余不变。D3 标普 500 宽池为主检验，D2 bStock 做方向一致性检查，配 20 次成交量时间平移安慰剂。screen_pass 需同时满足 z ≥ 1、两半为正、安慰剂分位 ≥ 0.9、D2 均值 ≥ 0。先验偏低：基线在宽池上约为 0，原论文是反转，不是动量。</li>
+</ul>
+<p><b>结论：</b>没有可接入的物理类方法。“物理”只是名称，规则落在趋势、反转、形态、周期和风险预警五个族里，nofx 都测过且无增量。好友的说法无法评估，需要他的成交记录。H1 已预注册，未运行，由用户决定；未改交易配置、提示词，未下单。</p>
+<p class="src">来源：<code>docs/research/2026-11-11-physics-trading-assessment.md</code> · <code>docs/research/2026-11-11-physical-momentum-s1-prereg.md</code></p>
+</article>
+
 <div class="day">2026-11-10</div>
 
 <article data-v="no" data-id="kronos-entry-veto-s1">
