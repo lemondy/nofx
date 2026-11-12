@@ -455,3 +455,16 @@ python -m unittest scripts.backtest.tests.test_corr_state_scaler_study -v
 脚本校验 manifest、validation、按文件名拼接的 685 个日线文件及交易 JSONL 的冻结哈希，分别构建 TOP10、TOP20、TOP50 时点组合。比较 HAR 与加入相关性状态的月度校准预测和只减不加的仓位缩放，输出 `results.json` 与中文 `report.md`，包括无目标尾端预测及 TOP20 的 LLM 交易叠加。数据校验失败保留诊断并返回 1。`--write-ledger [PATH]` 可选追加 `crypto_llm` S1/C，默认账本为 `data/evolution/ledger.jsonl`，非 invalid 结果要求实际 K=4。
 
 预注册同时要求 TOP10 与至少 15 个可用相关性成员，故 TOP10 无有效特征，R3 必定不通过。脚本严格保留该约束并报告空样本。正式研究只运行一次，补充约定见报告。
+
+## 强平级联 S0
+
+`liquidation_cascade_s0` 按冻结的 `docs/research/2026-11-11-liquidation-cascade-s0-prereg.md` 做机制描述与 LLM 入场重合计数，不执行订单、不读取交易 R/价格/盈亏、不写账本。
+
+```bash
+python -m scripts.backtest.liquidation_cascade_s0 plan
+python -m scripts.backtest.liquidation_cascade_s0 fetch --workers 8 --proxy http://127.0.0.1:7890
+python -m scripts.backtest.liquidation_cascade_s0 run
+python -m unittest scripts.backtest.tests.test_liquidation_cascade_s0 -v
+```
+
+默认数据目录为 `/Users/zhangyun/workspace/nofx/data/liquidation_cascade`，三个子命令均可用 `--data-dir`、`--trades` 覆盖路径；`plan/run --daily-dir` 指定 crypto_full 日线目录。启动时校验冻结预注册及交易 SHA256。`plan` 离线生成时点 top60 与下载清单；仅 `fetch` 联网，按 manifest 哈希续传，404 保留为缺失，其余错误最多重试三次。`run` 按币逐个离线检查和计算，输出 `s0_v1/{results.json,report.md,events.jsonl}`；已有目录拒绝覆盖，可用 `--out` 指定新目录。日收盘比对失败时停止并返回非零；`--allow-data-check-fail` 仅供调试，结果仍为 `invalid`，不能获得 S1 资格。所有测试仅用合成数据。
