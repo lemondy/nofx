@@ -468,3 +468,18 @@ python -m unittest scripts.backtest.tests.test_liquidation_cascade_s0 -v
 ```
 
 默认数据目录为 `/Users/zhangyun/workspace/nofx/data/liquidation_cascade`，三个子命令均可用 `--data-dir`、`--trades` 覆盖路径；`plan/run --daily-dir` 指定 crypto_full 日线目录。启动时校验冻结预注册及交易 SHA256。`plan` 离线生成时点 top60 与下载清单；仅 `fetch` 联网，按 manifest 哈希续传，404 保留为缺失，其余错误最多重试三次。`run` 按币逐个离线检查和计算，输出 `s0_v1/{results.json,report.md,events.jsonl}`；已有目录拒绝覆盖，可用 `--out` 指定新目录。日收盘比对失败时停止并返回非零；`--allow-data-check-fail` 仅供调试，结果仍为 `invalid`，不能获得 S1 资格。所有测试仅用合成数据。
+
+## 强平级联后做多 S1（H2b）
+
+`liquidation_cascade_long_s1` 实现冻结的 `2026-11-12-liquidation-cascade-long-s1-prereg.md`。三个入口先核对 H2b 预注册和 S0 模块 SHA256。
+
+```bash
+python -m scripts.backtest.liquidation_cascade_long_s1 plan
+# 唯一联网步骤；本轮代码验收不执行
+python -m scripts.backtest.liquidation_cascade_long_s1 fetch --workers 8 --proxy http://127.0.0.1:7890
+# 真正研究时才执行；本轮代码验收不对真实数据执行
+python -m scripts.backtest.liquidation_cascade_long_s1 run
+python -m unittest scripts.backtest.tests.test_liquidation_cascade_long_s1 -v
+```
+
+`--s0-dir` 默认 `/Users/zhangyun/workspace/nofx/data/liquidation_cascade`，S0 的 plan、manifest 和 `s0_v1_corrected/events.jsonl` 只读。P 段使用独立 `--p-dir`（默认同根下 `p2022`）；`plan/run --daily-dir` 默认 `data/factor_mining/crypto_full/daily` 的主仓库绝对路径。`plan` 拒绝覆盖已有 P plan/manifest。`run --out` 默认同根下 `s1_long_v1`，已有目录拒绝覆盖，输出 `results.json`、中文 `report.md` 和 `trades.jsonl`。主/压力逐笔收益与稀疏多币组合均用 Backtrader 并核对独立算术参考；数据、对账或实现校验失败返回非零并标记 invalid。`--allow-data-check-fail` 仅供诊断，不能把失败结果变成有效。`--write-ledger [PATH]` 才追加 fq_crypto S1/E 账本，省略 PATH 时用主仓库 `data/evolution/ledger.jsonl`；非 invalid 要求实际 K=9。默认不写账本、不触发 S3 或交易。
