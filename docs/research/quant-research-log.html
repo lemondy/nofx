@@ -73,8 +73,21 @@ th{color:var(--mut);font-weight:600}
 
 <div class="day">2026-11-13</div>
 
+<article data-v="part" data-id="limit-band-entry-s1">
+<h2>LLM 加密限价入场按带宽方程定挂单深度 S1（C1） <span class="tag t-part">S1 strong · Δ +0.0215R/笔，z 4.96，两半为正（crypto_llm K=6）；收益只来自空头，且对成交假设敏感，S2 待用户决定</span><span class="dom">加密 · LLM 交易员 · 执行层（入场）</span></h2>
+<p class="k">思路：微观结构带宽论文评估的 C1，由用户要求启动。取 2026-10-13 至 11-12 的 400 笔市价入场 LLM 交易（实盘 + 4 个模拟盘），反事实为：在入场价外侧 θ*=½(φ+√(φ²+4s_G²)) 处挂限价（φ=8bp，s_G 用入场前 24h 的 1m Roll 估计），按 1m K 线严格穿价成交，挂单费 2bp；30 分钟未成交转市价（加 3bp 滑点）；若出场早于窗口结束则不入场。两臂都按实际出场价平仓，经 Backtrader 撮合，与算术参考逐笔核对。</p>
+<ul>
+<li>主检验：Δ +0.0215R（95% CI +0.013 至 +0.030），周聚类 z 4.96（5 周），按日 z 3.89；前后两半 +0.024 / +0.019；missed 2.75%。基线 −0.0045R，候选 +0.0170R。</li>
+<li>机制：86% 限价成交，Δ +0.044R；11% 转市价，Δ −0.156R；逆向选择明显，成交组基线 −0.017R、未成交组 +0.072R。θ* 中位 8.4bp，几乎等于 φ，带宽方程没有带来额外信息；s_G 中位 1.8bp，γ 中位 4.4。</li>
+<li>敏感性：挂单费按 5bp 计 +0.012（z 3.0）；固定 4bp +0.015（z 3.6）；15bp 时 z 2.05、30bp 时 z 1.30，挂单越深越弱，与 10-15“ATR 尺度挂单约持平”一致。按方向：多头 −0.0004、空头 +0.028。</li>
+<li>事后检查（未预注册）：要求穿价 ≥ 2bp 才算成交，Δ +0.017（z 4.4）；≥ 5bp 时 Δ +0.005（z 1.1），后半段约为 0。</li>
+</ul>
+<p><b>结论：</b>按预注册判 strong，但收益很脆弱：只来自空头、只有一个月样本、对排队成交假设敏感。进入 S2 前需要新增“30 分钟未成交转市价”的代码，并核对现行限价路径的额外闸门，再建一对只差入场执行方式的模拟盘。是否进行由用户决定。本次未改交易配置和代码，未下单。</p>
+<p class="src">来源：<code>docs/research/2026-11-13-limit-band-entry-s1-prereg.md</code> · <code>docs/research/2026-11-13-limit-band-entry-s1-study.md</code> · <code>scripts/backtest/limit_band_entry_study.py</code> · <code>data/limit_band_c1/s1_v1/</code></p>
+</article>
+
 <article data-v="no" data-id="microstructure-ou-band-assessment">
-<h2>微观结构均值回归的最优交易带（arXiv 2608.00885）评估 <span class="tag t-no">证据不足 · 无可接入内容；公式在替代模型层面复核正确，三个候选均不建议启动</span><span class="dom">加密 + 美股 · 外部论文 · 执行层 / 调仓阈值</span></h2>
+<h2>微观结构均值回归的最优交易带（arXiv 2608.00885）评估 <span class="tag t-no">证据不足 · 无可接入内容；公式在替代模型层面复核正确；C1 应用户要求已运行 S1，结果 strong（见上一条）</span><span class="dom">加密 + 美股 · 外部论文 · 执行层 / 调仓阈值</span></h2>
 <p class="k">思路：Amaral 2026 预印本（单一作者，纯理论）：大 tick 资产中，中间价相对布朗有效价格的 gap G 在秒级精确均值回归（条件均值等同于 OU）。一个只吃单的小交易者，在 gap 达到 ±θ 时翻转持仓；最优带宽满足 θ*(θ*−φ)=s_G²，收益率 R*=α s_G √(2/π) e^{−u*²/2}。gap 一覆盖价差就交易的“急躁规则”收益为零，全部利润来自等待的期权价值。按 AGENTS.md 外部资料流程评估，本轮只做理解与方案。</p>
 <ul>
 <li>证据：全文没有真实数据或校准（图 2、图 5 写明 nothing is calibrated），只有模型内的蒙特卡洛。翻转带在跳跃过程上的最优性是猜想，替代模型的时间误差是启发式结论；gap 被假设为可观测。</li>
