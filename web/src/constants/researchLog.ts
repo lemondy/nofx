@@ -30,6 +30,26 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'microstructure-ou-band-assessment',
+    date: '2026-11-13',
+    title: '微观结构均值回归的最优交易带（arXiv 2608.00885）评估',
+    domain: '加密 + 美股 · 外部论文 · 执行层 / 调仓阈值',
+    verdict: 'none',
+    verdictText:
+      '证据不足 · 无可接入内容；公式在替代模型层面复核正确，三个候选均不建议启动',
+    idea: 'Amaral 2026 预印本（单一作者，纯理论）：大 tick 资产中，中间价相对布朗有效价格的 gap G 在秒级精确均值回归（条件均值等同于 OU）。一个只吃单的小交易者，在 gap 达到 ±θ 时翻转持仓；最优带宽满足 θ*(θ*−φ)=s_G²，收益率 R*=α s_G √(2/π) e^{−u*²/2}。gap 一覆盖价差就交易的“急躁规则”收益为零，全部利润来自等待的期权价值。按 AGENTS.md 外部资料流程评估，本轮只做理解与方案。',
+    bullets: [
+      '证据：全文没有真实数据或校准（图 2、图 5 写明 nothing is calibrated），只有模型内的蒙特卡洛。翻转带在跳跃过程上的最优性是猜想，替代模型的时间误差是启发式结论；gap 被假设为可观测。',
+      '公式复核（scripts/backtest/ou_band_formula_check.py，只用公式、不用市场数据）：γ≥0.4 时阈值差最大 5.8%，收益损失最大 2.30%（γ≈1.66）；R(u_D)=√(2/π)e^{−u_D²/2} 精确成立；急躁规则收益为 0；替代模型蒙特卡洛 0.3608，公式值 0.3587。与论文声称一致。',
+      '对 nofx 的推算：手续费并入 φ 后，币安永续每边约 5bp，而 s_G 约为 1–20 tick（0.1–2bp，假设），γ≈2.5–50，R*/(αs_G) 在 0.014 到 10⁻²³ 之间，而且 α 是秒级的。LLM 路径（分钟级）和 factor_quant（日频）都用不上。与 lob-imbalance（PR #112）、物理类评估中“冷却 = OU”（PR #117）、orderflow（PR #59）的结论一致。',
+      '候选（均不建议启动）：C1 限价入场按带宽方程决定挂单深度：分钟级 gap 不可观测，存在逆向选择，盘口执行层 H1 已被否决。C2 fq 调仓无交易带：没有付钱方，只省成本；msrr 研究显示手续费只占亏损约 1/10，Kelly-Xiu 的 H2 已判为先验很低。C3 资金费率带宽择时：carry 已判 weak，近一年约为 0，论文没有提供新证据。',
+    ],
+    conclusion:
+      '没有值得接入的内容。只作为知识保留两点：“达到盈亏平衡就交易，收益为零”为现有的 RR 闸门和 10% 调仓阈值提供了理论依据；1m 收盘价含有买卖价反弹噪声，今后做 1m 级反转研究要用中间价或聚合到 ≥5m。没有 S1，不写账本，K 不变；没有改交易配置，没有下单。',
+    source:
+      'docs/research/2026-11-13-microstructure-ou-band-assessment.md · scripts/backtest/ou_band_formula_check.py · ~/Downloads/2608.00885v1.pdf',
+  },
+  {
     id: 'physical-momentum-s1',
     date: '2026-11-12',
     title: 'fq_us 成交量加权“物理动量” S1（H1）',
