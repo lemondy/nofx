@@ -72,6 +72,7 @@ type BitgetContract struct {
 	MaxTradeNum    float64 // Maximum trade amount
 	SizeMultiplier float64 // Contract size multiplier
 	PricePlace     int     // Price decimal places
+	PriceEndStep   float64 // Tick multiplier in units of 10^-PricePlace
 	VolumePlace    int     // Volume decimal places
 }
 
@@ -250,6 +251,7 @@ func (t *BitgetTrader) getContract(symbol string) (*BitgetContract, error) {
 		MaxTradeNum    string `json:"maxTradeNum"`
 		SizeMultiplier string `json:"sizeMultiplier"`
 		PricePlace     string `json:"pricePlace"`
+		PriceEndStep   string `json:"priceEndStep"`
 		VolumePlace    string `json:"volumePlace"`
 	}
 
@@ -264,6 +266,7 @@ func (t *BitgetTrader) getContract(symbol string) (*BitgetContract, error) {
 			maxTrade, _ := strconv.ParseFloat(c.MaxTradeNum, 64)
 			sizeMult, _ := strconv.ParseFloat(c.SizeMultiplier, 64)
 			pricePlace, _ := strconv.Atoi(c.PricePlace)
+			priceEndStep, _ := strconv.ParseFloat(c.PriceEndStep, 64)
 			volumePlace, _ := strconv.Atoi(c.VolumePlace)
 
 			contract := &BitgetContract{
@@ -274,6 +277,7 @@ func (t *BitgetTrader) getContract(symbol string) (*BitgetContract, error) {
 				MaxTradeNum:    maxTrade,
 				SizeMultiplier: sizeMult,
 				PricePlace:     pricePlace,
+				PriceEndStep:   priceEndStep,
 				VolumePlace:    volumePlace,
 			}
 

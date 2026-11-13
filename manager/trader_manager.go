@@ -795,7 +795,8 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 			return err
 		}
 		traderConfig.PaperConfig = &paper.Config{ExchangeID: exchangeCfg.ID, InitialBalance: cfg.InitialBalance,
-			TakerFeeBps: cfg.TakerFeeBps, MakerFeeBps: cfg.MakerFeeBps, SlippageBps: cfg.SlippageBps, DefaultLeverage: cfg.DefaultLeverage}
+			LimitTradeThroughBps: cfg.LimitTradeThroughBps,
+			TakerFeeBps:          cfg.TakerFeeBps, MakerFeeBps: cfg.MakerFeeBps, SlippageBps: cfg.SlippageBps, DefaultLeverage: cfg.DefaultLeverage}
 		traderConfig.InitialBalance = cfg.InitialBalance
 	case "binance":
 		traderConfig.BinanceAPIKey = string(exchangeCfg.APIKey)

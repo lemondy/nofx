@@ -27,23 +27,27 @@ import (
 // ExecutedQty/ProtectedQty watermark) happen only under the account
 // execution mutex (cycle, protection monitor, Stop sweep, reconcile).
 type pendingEntry struct {
-	State          string
-	ClientOrderID  string
-	OriginalR      float64 // immutable planned entry-to-stop distance
-	RecoveryReason string  // durable abort state; cleared only after terminal order and flat position
-	Symbol         string
-	Side           string // "long" / "short"
-	Price          float64
-	Quantity       float64
-	StopLoss       float64
-	TakeProfit     float64
-	Leverage       int
-	OrderID        string
-	PlacedAt       time.Time
-	Cycles         int
-	ExecutedQty    float64 // cumulative observed fill, independent of verified coverage
-	ProtectedQty   float64 // executed size already carrying SL/TP (partial-fill watermark)
-	ExitMode       string  // exit template carried to the position on fill (trend|range|quick; '' = trend)
+	Mode, ThetaReason      string
+	RefPrice, ThetaBps, SG float64
+	Deadline               time.Time
+	bandReceipt            map[string]interface{} // last exchange receipt, attribution only
+	State                  string
+	ClientOrderID          string
+	OriginalR              float64 // immutable planned entry-to-stop distance
+	RecoveryReason         string  // durable abort state; cleared only after terminal order and flat position
+	Symbol                 string
+	Side                   string // "long" / "short"
+	Price                  float64
+	Quantity               float64
+	StopLoss               float64
+	TakeProfit             float64
+	Leverage               int
+	OrderID                string
+	PlacedAt               time.Time
+	Cycles                 int
+	ExecutedQty            float64 // cumulative observed fill, independent of verified coverage
+	ProtectedQty           float64 // executed size already carrying SL/TP (partial-fill watermark)
+	ExitMode               string  // exit template carried to the position on fill (trend|range|quick; '' = trend)
 
 	// UNKNOWN-submit risk retention (2026-10-21, area2 #1 residual). Memory-only
 	// (a restart falls back to the computed pending risk from the shadow row).
@@ -99,6 +103,8 @@ func (at *AutoTrader) persistPendingEntry(pe *pendingEntry) error {
 		return nil
 	}
 	err := at.store.PendingEntry().Upsert(&store.PendingEntryDB{
+		Mode: pe.Mode, RefPrice: pe.RefPrice, ThetaBps: pe.ThetaBps, SG: pe.SG,
+		ThetaReason: pe.ThetaReason, Deadline: pe.Deadline,
 		State:          pe.State,
 		ClientOrderID:  pe.ClientOrderID,
 		OriginalR:      pe.OriginalR,
@@ -230,10 +236,7 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 	}
 	logger.Infof("  📌 Open %s (LIMIT): %s @ %.6g", side, decision.Symbol, decision.Price)
 
-	grid, ok := at.trader.(interface {
-		PlaceLimitOrder(req *types.LimitOrderRequest) (*types.LimitOrderResult, error)
-		CancelOrder(symbol, orderID string) error
-	})
+	_, ok := at.trader.(limitEntryExchange)
 	if !ok {
 		return fmt.Errorf("exchange %s does not support limit entries", at.exchange)
 	}
@@ -409,17 +412,34 @@ func (at *AutoTrader) executeOpenLimit(decision *kernel.Decision, actionRecord *
 		logger.Infof("  🔄 Replaced pending limit entry for %s (@ %.6g)", old.Symbol, old.Price)
 	}
 
+	return at.placePendingLimit(decision, actionRecord, side, quantity, nil)
+}
+
+type limitEntryExchange interface {
+	PlaceLimitOrder(req *types.LimitOrderRequest) (*types.LimitOrderResult, error)
+	CancelOrder(symbol, orderID string) error
+}
+
+// Shared submission/persistence only: callers own all gates and sizing.
+func (at *AutoTrader) placePendingLimit(decision *kernel.Decision, actionRecord *store.DecisionAction, side string, quantity float64, plan *pendingEntry) error {
+	grid, ok := at.trader.(limitEntryExchange)
+	if !ok {
+		return fmt.Errorf("exchange %s does not support limit entries", at.exchange)
+	}
+
 	sideStr := "BUY"
 	posSideStr := "LONG"
 	if side == "short" {
 		sideStr, posSideStr = "SELL", "SHORT"
 	}
 	clientTag := at.entryClientID()
-	plan := &pendingEntry{
-		State: "pending", OriginalR: math.Abs(decision.Price - decision.StopLoss),
-		Symbol: decision.Symbol, Side: side, Price: decision.Price, Quantity: quantity,
-		StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit, Leverage: decision.Leverage,
-		PlacedAt: time.Now(), ExitMode: decision.ExitMode,
+	if plan == nil {
+		plan = &pendingEntry{
+			State: "pending", OriginalR: math.Abs(decision.Price - decision.StopLoss),
+			Symbol: decision.Symbol, Side: side, Price: decision.Price, Quantity: quantity,
+			StopLoss: decision.StopLoss, TakeProfit: decision.TakeProfit, Leverage: decision.Leverage,
+			PlacedAt: time.Now(), ExitMode: decision.ExitMode,
+		}
 	}
 	// Write-ahead intent (review 2026-10-28 vf): persist the complete plan under
 	// a stable client order ID BEFORE the POST, so a crash after the exchange
@@ -516,7 +536,9 @@ func (at *AutoTrader) trackUnknownSubmit(err error, side string, plan pendingEnt
 	plan.Side = side
 	plan.ClientOrderID = unknown.ClientOrderID
 	plan.OrderID = binance.ClientOrderRefPrefix + unknown.ClientOrderID
-	plan.PlacedAt = time.Now()
+	if plan.Mode != "band" || plan.PlacedAt.IsZero() {
+		plan.PlacedAt = time.Now()
+	}
 	at.setPendingEntry(&plan)
 	logger.Warnf("⚠️ [%s] %s %s entry submit state UNKNOWN (clientOrderId=%s) — tracked as pending, re-queried by client ID each pass; same-side entries blocked",
 		at.name, plan.Symbol, side, unknown.ClientOrderID)
@@ -549,6 +571,7 @@ func (at *AutoTrader) resolveUnknownEntry(pe *pendingEntry) bool {
 		if errors.As(err, &apiErr) && apiErr.Code == -2013 {
 			pe.Cycles++
 			if pe.Cycles >= 2 && time.Since(pe.PlacedAt) >= 2*time.Minute {
+				at.recordBandOutcome(pe, "invalidated", nil, "", fmt.Errorf("entry submit never landed: %w", err))
 				at.dropPendingEntry(pe.Symbol, pe.Side)
 				logger.Warnf("📌 [%s] UNKNOWN entry %s %s (%s): exchange reports no such order after %d passes — submit never landed, tracking dropped",
 					at.name, pe.Symbol, pe.Side, pe.OrderID, pe.Cycles)
@@ -686,12 +709,13 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 		}
 		if pe.RecoveryReason != "" {
 			if at.recoverRejectedPendingFill(pe, status) {
+				at.recordBandOutcome(pe, "invalidated", status, "", fmt.Errorf("%s", pe.RecoveryReason))
 				at.dropPendingEntry(pe.Symbol, pe.Side)
 			}
 			continue
 		}
 		st, _ := status["status"].(string)
-		if directionRecheck && (strings.EqualFold(st, "NEW") || strings.EqualFold(st, "PARTIALLY_FILLED")) {
+		if pe.Mode != "band" && directionRecheck && (strings.EqualFold(st, "NEW") || strings.EqualFold(st, "PARTIALLY_FILLED")) {
 			if reason := at.pendingDirectionBlocked(pe); reason != "" {
 				// Incident 2026-10-07: successful cancels used to be silent —
 				// only the FAILURE path logged. Without this line the 29
@@ -722,6 +746,7 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 					notify.Escape(pe.Symbol), pe.Side, executed, pe.ProtectedQty))
 				continue
 			}
+			at.recordBandOutcome(pe, "filled", status, "", nil)
 			at.dropPendingEntry(pe.Symbol, pe.Side)
 			logger.Infof("✅ [%s] Limit entry FILLED: %s %s @ %.6g — protective orders anchored", at.name, pe.Symbol, pe.Side, pe.Price)
 			notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场成交 %s</b>\n<i>%s @ %.6g,保护单已挂</i>", notify.Escape(pe.Symbol), pe.Side, pe.Price))
@@ -732,6 +757,11 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 			if !pendingProtectionComplete(pe, status) {
 				continue
 			}
+			outcome := "invalidated"
+			if statusFloat(status, "executedQty") > 0 {
+				outcome = "partial"
+			}
+			at.recordBandOutcome(pe, outcome, status, "", fmt.Errorf("exchange status %s", st))
 			at.dropPendingEntry(pe.Symbol, pe.Side)
 			logger.Infof("📌 [%s] Limit entry %s %s externally (%s) — state dropped (executed slice protected if any)", at.name, pe.Symbol, st, st)
 		case "PARTIALLY_FILLED":
@@ -758,6 +788,12 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 					continue
 				}
 			}
+			if pe.Mode == "band" {
+				if !time.Now().Before(pe.Deadline) {
+					at.expireBandPending(pe, true)
+				}
+				continue
+			}
 			if age := time.Since(pe.PlacedAt); age >= lifetime {
 				if cerr := at.cancelPending(pe); cerr != nil {
 					logger.Infof("⚠️ [%s] Limit entry %s expiry cancel FAILED (%v) — kept pending, retried next cycle", at.name, pe.Symbol, cerr)
@@ -780,6 +816,12 @@ func (at *AutoTrader) processPendingEntries(directionRecheck bool) {
 					logger.Infof("📌 [%s] Limit entry %s invalidated: price crossed SL before entry", at.name, pe.Symbol)
 					continue
 				}
+			}
+			if pe.Mode == "band" {
+				if strings.EqualFold(st, "NEW") && !time.Now().Before(pe.Deadline) {
+					at.expireBandPending(pe, false)
+				}
+				continue
 			}
 			if age := time.Since(pe.PlacedAt); age >= lifetime {
 				if cerr := at.cancelPending(pe); cerr != nil {
@@ -833,6 +875,9 @@ func (at *AutoTrader) reportFilledRR(pe *pendingEntry, fillPrice float64) {
 // cancelPending cancels the exchange order and drops the pending state.
 func (at *AutoTrader) cancelPending(pe *pendingEntry) error {
 	_, err := at.cancelPendingWithExecuted(pe)
+	if err == nil {
+		at.recordBandOutcome(pe, "invalidated", nil, "", fmt.Errorf("pending entry cancelled by risk control"))
+	}
 	return err
 }
 
@@ -939,6 +984,9 @@ func statusFloat(status map[string]interface{}, key string) float64 {
 // protected-qty watermark in the pending entry. Returns the structural stop
 // that was recorded (0 = nothing placed).
 func (at *AutoTrader) protectExecutedSlice(pe *pendingEntry, status map[string]interface{}) float64 {
+	if pe.Mode == "band" {
+		pe.bandReceipt = map[string]interface{}{"executedQty": status["executedQty"], "avgPrice": status["avgPrice"], "updateTime": status["updateTime"]}
+	}
 	executed, avg, valid := fillReceipt(status)
 	if !valid || executed <= 0 || avg <= 0 || executed+1e-9 < pe.ExecutedQty {
 		return 0

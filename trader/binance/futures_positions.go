@@ -396,6 +396,15 @@ func (t *FuturesTrader) formatAlgoTriggerPrice(symbol string, price float64) (st
 	return formatTriggerPrice(price, prec)
 }
 
+// GetSymbolTickSize exposes the same cached PRICE_FILTER used by protection.
+func (t *FuturesTrader) GetSymbolTickSize(symbol string) (float64, error) {
+	raw, err := t.symbolTickSize(symbol)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseFloat(raw, 64)
+}
+
 // FormatPrice formats price to correct precision
 func (t *FuturesTrader) FormatPrice(symbol string, price float64) (string, error) {
 	precision, err := t.GetSymbolPricePrecision(symbol)

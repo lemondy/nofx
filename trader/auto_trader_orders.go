@@ -51,6 +51,9 @@ func (at *AutoTrader) forceMarketEntries(ds []kernel.Decision, originalActions .
 
 // executeDecisionWithRecord executes AI decision and records detailed information
 func (at *AutoTrader) executeDecisionWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+	if handled, err := at.dispatchBandPending(decision, actionRecord); handled {
+		return err
+	}
 	switch decision.Action {
 	case "open_long":
 		decision, err := at.marketExceptionGate(decision, actionRecord, true)
@@ -209,7 +212,7 @@ func (at *AutoTrader) marketExceptionGate(d *kernel.Decision, record *store.Deci
 }
 
 // executeOpenLongWithRecord executes open long position and records detailed information
-func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction, bandFallback ...bool) error {
 	if err := at.entryExecutionBlocked(decision.Symbol, "long"); err != nil {
 		return err
 	}
@@ -333,6 +336,10 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *kernel.Decision, actio
 	// Set margin mode
 	if err := at.trader.SetMarginMode(decision.Symbol, at.entryUsesCrossMargin()); err != nil {
 		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: margin mode not verified: %w", decision.Action, decision.Symbol, err)
+	}
+
+	if handled, err := at.tryEntryBand(decision, actionRecord, "long", marketData.CurrentPrice, quantity, len(bandFallback) > 0 && bandFallback[0]); handled {
+		return err
 	}
 
 	// Open position
@@ -502,7 +509,7 @@ func (at *AutoTrader) enforceEntrySlippageCap(decision *kernel.Decision, side st
 }
 
 // executeOpenShortWithRecord executes open short position and records detailed information
-func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction) error {
+func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, actionRecord *store.DecisionAction, bandFallback ...bool) error {
 	if err := at.entryExecutionBlocked(decision.Symbol, "short"); err != nil {
 		return err
 	}
@@ -627,6 +634,10 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *kernel.Decision, acti
 	if err := at.trader.SetMarginMode(decision.Symbol, at.entryUsesCrossMargin()); err != nil {
 		return fmt.Errorf("❌ [RISK CONTROL] %s %s rejected: margin mode not verified: %w", decision.Action, decision.Symbol, err)
 		// Continue execution, doesn't affect trading
+	}
+
+	if handled, err := at.tryEntryBand(decision, actionRecord, "short", marketData.CurrentPrice, quantity, len(bandFallback) > 0 && bandFallback[0]); handled {
+		return err
 	}
 
 	// Open position

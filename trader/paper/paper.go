@@ -5,6 +5,8 @@
 //   - Market buys/sells execute at quote +/- adverse slippage; taker fees apply.
 //   - Resting limits fill at their limit when a later 1m low/high touches it;
 //     maker fees apply. There are no partial fills, queue or volume simulation.
+//     LimitTradeThroughBps (default 0) requires lows/highs to pass the limit
+//     by that many bps; execution still occurs at the limit price.
 //   - SL closes the whole hedge side at the executable price +/- adverse
 //     slippage (taker). The executable price is the trigger, unless the market
 //     gapped through it: then the current quote (or, in replay, the candle open
@@ -67,6 +69,7 @@ import (
 )
 
 type Config struct {
+	LimitTradeThroughBps                  float64
 	ExchangeID                            string
 	InitialBalance                        float64
 	TakerFeeBps, MakerFeeBps, SlippageBps float64
@@ -206,13 +209,13 @@ func New(cfg Config, st *store.Store, price PriceSource) *PaperFuturesTrader {
 			return p
 		}
 	}
-	for _, v := range []float64{cfg.TakerFeeBps, cfg.MakerFeeBps, cfg.SlippageBps} {
+	for _, v := range []float64{cfg.TakerFeeBps, cfg.MakerFeeBps, cfg.SlippageBps, cfg.LimitTradeThroughBps} {
 		if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 			p.initErr = fmt.Errorf("paper fees and slippage must be finite and non-negative")
 			return p
 		}
 	}
-	if cfg.DefaultLeverage < 1 || cfg.SlippageBps >= 10000 || cfg.MaintenanceMarginPct >= 100 {
+	if cfg.DefaultLeverage < 1 || cfg.SlippageBps >= 10000 || cfg.LimitTradeThroughBps >= 10000 || cfg.MaintenanceMarginPct >= 100 {
 		p.initErr = fmt.Errorf("invalid paper leverage/slippage/maintenance configuration")
 		return p
 	}
@@ -636,7 +639,8 @@ func (p *PaperFuturesTrader) match(symbol string, open, low, high float64, barSt
 		case "LIMIT":
 			// Quotes are not evidence of a later candle touching a limit.
 			if !quote {
-				hit = o.Side == "BUY" && low <= o.Price || o.Side == "SELL" && high >= o.Price
+				x := p.cfg.LimitTradeThroughBps / 10000
+				hit = o.Side == "BUY" && low <= o.Price*(1-x) || o.Side == "SELL" && high >= o.Price*(1+x)
 			}
 			if !opening(o) || o.ReduceOnly {
 				reason = "manual"

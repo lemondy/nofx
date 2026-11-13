@@ -100,6 +100,8 @@ type PositionSnapshot struct {
 
 // DecisionAction decision action
 type DecisionAction struct {
+	// EntryMode attributes execution-only band placement/fallback.
+	EntryMode  string  `json:"entry_mode,omitempty"`
 	Action     string  `json:"action"`
 	Symbol     string  `json:"symbol"`
 	Quantity   float64 `json:"quantity"`

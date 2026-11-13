@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -281,6 +282,7 @@ func (at *AutoTrader) finalizeRealtimeFill(u binance.OrderUpdate) bool {
 	status := map[string]interface{}{"status": u.Status, "executedQty": u.FilledQuantity, "avgPrice": u.AveragePrice}
 	if pe.RecoveryReason != "" {
 		if at.recoverRejectedPendingFill(pe, status) {
+			at.recordBandOutcome(pe, "invalidated", status, "", fmt.Errorf("%s", pe.RecoveryReason))
 			at.dropPendingEntry(pe.Symbol, pe.Side)
 		}
 		return true
@@ -289,6 +291,7 @@ func (at *AutoTrader) finalizeRealtimeFill(u binance.OrderUpdate) bool {
 	if u.Status == "FILLED" {
 		at.reportFilledRR(pe, u.AveragePrice)
 		if pendingProtectionComplete(pe, status) {
+			at.recordBandOutcome(pe, "filled", status, "", nil)
 			at.dropPendingEntry(pe.Symbol, pe.Side)
 			logger.Infof("✅ [%s] Realtime limit fill protected: %s %s", at.name, pe.Symbol, pe.Side)
 		}
