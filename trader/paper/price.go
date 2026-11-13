@@ -27,6 +27,7 @@ type PriceSource interface {
 }
 
 type QuantityRule struct {
+	TickSize                    string // PRICE_FILTER; used only by execution-layer entry bands
 	StepSize                    string
 	MinQty, MaxQty, MinNotional float64
 }
@@ -131,6 +132,8 @@ func (s *marketPriceSource) QuantityRules(symbol string) (QuantityRule, error) {
 		r := QuantityRule{MinNotional: 10}
 		for _, f := range sym.Filters {
 			switch f["filterType"] {
+			case "PRICE_FILTER":
+				r.TickSize, _ = f["tickSize"].(string)
 			case "LOT_SIZE":
 				r.StepSize, _ = f["stepSize"].(string)
 				min, _ := f["minQty"].(string)

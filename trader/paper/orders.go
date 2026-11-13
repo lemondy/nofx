@@ -10,6 +10,14 @@ import (
 	"nofx/trader/types"
 )
 
+func (p *PaperFuturesTrader) GetSymbolTickSize(symbol string) (float64, error) {
+	r, err := p.rules.QuantityRules(symbolName(symbol))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseFloat(r.TickSize, 64)
+}
+
 func (p *PaperFuturesTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	_, text, _, err := p.quantity(symbolName(symbol), quantity)
 	return text, err

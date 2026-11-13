@@ -820,6 +820,13 @@ type RiskControlConfig struct {
 	// interval. (CODE ENFORCED)
 	LimitEntryEnabled   bool `json:"limit_entry_enabled"`
 	LimitEntryMaxCycles int  `json:"limit_entry_max_cycles"`
+	// EntryBand changes execution of LLM crypto market opens only. It must
+	// never participate in prompt construction or signal gates.
+	EntryBandEnabled    bool    `json:"entry_band_enabled"`
+	EntryBandMode       string  `json:"entry_band_mode,omitempty"` // empty/roll or fixed
+	EntryBandPhiBps     float64 `json:"entry_band_phi_bps"`        // zero = 8
+	EntryBandFixedBps   float64 `json:"entry_band_fixed_bps"`
+	EntryBandTimeoutMin int     `json:"entry_band_timeout_min"` // zero = 30
 	// LimitEntryOffsetPct is the pre-computed limit-entry anchor offset from
 	// the snapshot live price, in percent: buy limit below / sell limit above.
 	// Default 0.5 when unset; used as the fixed-mode value AND as the

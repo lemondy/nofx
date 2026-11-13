@@ -193,6 +193,11 @@ func (at *AutoTrader) ReconcilePendingEntries() {
 			if !pendingProtectionComplete(&pe, status) {
 				continue
 			}
+			outcome := "invalidated"
+			if statusFloat(status, "executedQty") > 0 {
+				outcome = "partial"
+			}
+			at.recordBandOutcome(&pe, outcome, status, "", fmt.Errorf("offline exchange status %s", st))
 			at.dropPendingEntry(pe.Symbol, pe.Side)
 			if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 				logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
@@ -280,6 +285,8 @@ func (at *AutoTrader) settleOrphanCancel(o types.OpenOrder) {
 // pendingEntryFromRow rebuilds the in-memory plan from a durable shadow row.
 func pendingEntryFromRow(row *store.PendingEntryDB) pendingEntry {
 	return pendingEntry{
+		Mode: row.Mode, RefPrice: row.RefPrice, ThetaBps: row.ThetaBps, SG: row.SG,
+		ThetaReason: row.ThetaReason, Deadline: row.Deadline,
 		State: row.State, ClientOrderID: row.ClientOrderID, OriginalR: row.OriginalR,
 		RecoveryReason: row.RecoveryReason,
 		Symbol:         row.Symbol, Side: row.Side, Price: row.Price,
@@ -354,6 +361,7 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB, status map[
 		}
 	}
 	if !found {
+		at.recordBandOutcome(&pe, "filled", status, "", nil)
 		if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 			logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 		}
@@ -383,6 +391,7 @@ func (at *AutoTrader) finalizePendingFill(row *store.PendingEntryDB, status map[
 	if err := at.store.PendingEntry().Delete(at.id, row.Symbol, row.Side); err != nil {
 		logger.Infof("⚠️ [%s] Pending-entry %s: shadow row delete failed: %v", at.name, row.Symbol, err)
 	}
+	at.recordBandOutcome(&pe, "filled", status, "", nil)
 	logger.Infof("✅ [%s] Pending-entry %s FILLED while offline: protective orders placed at actual fill (plan SL %.6g / TP %.6g, protected %.6g)",
 		at.name, row.Symbol, row.StopLoss, row.TakeProfit, pe.ProtectedQty)
 	notify.Notify("ORDER", at.name, fmt.Sprintf("<b>📌 限价入场离线成交 %s</b>\n<i>%s,保护单已按实际成交价补挂</i>", notify.Escape(row.Symbol), row.Side))

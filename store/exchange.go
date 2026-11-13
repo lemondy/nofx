@@ -350,11 +350,12 @@ func (s *ExchangeStore) CreateLegacy(userID, id, name, typ string, enabled bool,
 // PaperConfig is the public, persistable configuration for one virtual account.
 // Execution-only dependencies and the account UUID are never supplied by clients.
 type PaperConfig struct {
-	InitialBalance  float64 `json:"initial_balance"`
-	TakerFeeBps     float64 `json:"taker_fee_bps"`
-	MakerFeeBps     float64 `json:"maker_fee_bps"`
-	SlippageBps     float64 `json:"slippage_bps"`
-	DefaultLeverage int     `json:"default_leverage"`
+	LimitTradeThroughBps float64 `json:"limit_trade_through_bps"`
+	InitialBalance       float64 `json:"initial_balance"`
+	TakerFeeBps          float64 `json:"taker_fee_bps"`
+	MakerFeeBps          float64 `json:"maker_fee_bps"`
+	SlippageBps          float64 `json:"slippage_bps"`
+	DefaultLeverage      int     `json:"default_leverage"`
 }
 
 func DefaultPaperConfig() PaperConfig {
@@ -362,6 +363,9 @@ func DefaultPaperConfig() PaperConfig {
 }
 
 func (c PaperConfig) Validate() error {
+	if math.IsNaN(c.LimitTradeThroughBps) || math.IsInf(c.LimitTradeThroughBps, 0) || c.LimitTradeThroughBps < 0 || c.LimitTradeThroughBps >= 10000 {
+		return fmt.Errorf("limit_trade_through_bps must be in [0, 10000)")
+	}
 	if math.IsNaN(c.InitialBalance) || math.IsInf(c.InitialBalance, 0) || c.InitialBalance <= 0 {
 		return fmt.Errorf("模拟盘初始资金必须大于 0")
 	}

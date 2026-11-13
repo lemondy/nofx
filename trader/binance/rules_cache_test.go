@@ -56,6 +56,9 @@ func TestFuturesExchangeInfoCacheConcurrentAndTTL(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("concurrent requests=%d", calls.Load())
 	}
+	if tick, err := tr.GetSymbolTickSize("XUSDT"); err != nil || tick != .025 {
+		t.Fatalf("band tick=%v err=%v", tick, err)
+	}
 	if p, err := tr.GetSymbolPricePrecision("XUSDT"); err != nil || p != 3 {
 		t.Fatalf("price precision=%d err=%v", p, err)
 	}

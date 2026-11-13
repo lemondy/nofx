@@ -19,6 +19,18 @@ func (c *StrategyConfig) Validate() error {
 		return fmt.Errorf("invalid strategy_type")
 	}
 	r := c.RiskControl
+	if r.EntryBandEnabled && (r.LimitEntryEnabled || (c.StrategyType != "" && c.StrategyType != "ai_trading")) {
+		return fmt.Errorf("entry_band_enabled requires ai_trading crypto and limit_entry_enabled=false")
+	}
+	if r.EntryBandMode != "" && r.EntryBandMode != "roll" && r.EntryBandMode != "fixed" {
+		return fmt.Errorf("entry_band_mode must be roll or fixed")
+	}
+	if r.EntryBandPhiBps < 0 || r.EntryBandFixedBps < 0 || r.EntryBandTimeoutMin < 0 {
+		return fmt.Errorf("entry band values must be nonnegative")
+	}
+	if r.EntryBandMode == "fixed" && r.EntryBandFixedBps <= 0 {
+		return fmt.Errorf("entry_band_fixed_bps must be positive in fixed mode")
+	}
 	if r.AccountDrawdownBasis != "" && r.AccountDrawdownBasis != "initial" && r.AccountDrawdownBasis != "peak" {
 		return fmt.Errorf("account_drawdown_basis must be empty, initial or peak")
 	}

@@ -21,6 +21,12 @@ import (
 // Rows are written on every set/drop; startup reconciliation restores
 // ownership from them. One resting entry per trader+symbol+side.
 type PendingEntryDB struct {
+	Mode        string    `gorm:"column:mode;not null;default:''" json:"mode"`
+	RefPrice    float64   `gorm:"column:ref_price;not null;default:0" json:"ref_price"`
+	ThetaBps    float64   `gorm:"column:theta_bps;not null;default:0" json:"theta_bps"`
+	SG          float64   `gorm:"column:s_g;not null;default:0" json:"s_g"`
+	ThetaReason string    `gorm:"column:theta_reason;not null;default:''" json:"theta_reason,omitempty"`
+	Deadline    time.Time `gorm:"column:deadline" json:"deadline"`
 	// Additive columns: legacy rows have empty State/ClientOrderID and continue
 	// to recover by exchange order ID. New intents exist BEFORE the entry POST.
 	State          string    `gorm:"column:state" json:"state"` // submitting / pending
@@ -63,7 +69,36 @@ func (s *PendingEntryStore) initTables() error {
 			return err
 		}
 	}
-	return s.db.AutoMigrate(&PendingEntryDB{}, &GridCheckpoint{})
+	return s.db.AutoMigrate(&PendingEntryDB{}, &GridCheckpoint{}, &EntryBandEvent{})
+}
+
+// EntryBandEvent is execution attribution, never a prerequisite for trading.
+// Extremes is nullable JSON; no market request is made just to populate it.
+type EntryBandEvent struct {
+	ID              uint   `gorm:"primaryKey;autoIncrement"`
+	TraderID        string `gorm:"index"`
+	Symbol          string
+	Side            string
+	OrderID         string `gorm:"index"`
+	PlacedAt        time.Time
+	RefPrice        float64
+	LimitPrice      float64
+	ThetaBps        float64
+	SG              float64 `gorm:"column:s_g"`
+	ThetaReason     string  `gorm:"column:theta_reason;not null;default:''"`
+	Outcome         string
+	FillPrice       float64
+	FillTime        *time.Time
+	FallbackOrderID string
+	Error           string
+	Extremes        *string `gorm:"type:text"`
+	CreatedAt       time.Time
+}
+
+func (EntryBandEvent) TableName() string { return "entry_band_events" }
+
+func (s *PendingEntryStore) RecordBandEvent(event *EntryBandEvent) error {
+	return s.db.Create(event).Error
 }
 
 // Upsert writes/refreshes the shadow row for one trader+symbol+side.

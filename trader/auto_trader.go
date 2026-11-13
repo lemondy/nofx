@@ -161,6 +161,7 @@ type AutoTrader struct {
 	marketContextFn func(ctx *kernel.Context)
 	// marketDataFn, when set (tests), replaces the generic execution-quote
 	// fetch (getMarketData); nil = live GetMarketPrice + GetWithExchange.
+	entryBandKlinesFn          func(symbol string, start, end time.Time) ([]market.Kline, error) // tests; nil uses cached market history
 	marketDataFn               func(symbol string) (*market.Data, error)
 	computedProtectionDataFn   func(symbol string) (*market.Data, error) // tests: replaces the watchdog's 1h fetch
 	mcpClient                  mcp.AIClient
@@ -393,7 +394,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		}
 		cfg := *config.PaperConfig
 		cfg.ExchangeID = config.ExchangeID
-		publicCfg := store.PaperConfig{InitialBalance: cfg.InitialBalance, TakerFeeBps: cfg.TakerFeeBps, MakerFeeBps: cfg.MakerFeeBps, SlippageBps: cfg.SlippageBps, DefaultLeverage: cfg.DefaultLeverage}
+		publicCfg := store.PaperConfig{LimitTradeThroughBps: cfg.LimitTradeThroughBps, InitialBalance: cfg.InitialBalance, TakerFeeBps: cfg.TakerFeeBps, MakerFeeBps: cfg.MakerFeeBps, SlippageBps: cfg.SlippageBps, DefaultLeverage: cfg.DefaultLeverage}
 		if err := publicCfg.Validate(); err != nil {
 			return nil, err
 		}
