@@ -580,6 +580,10 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	hasPerpMap := false
 	if market == store.FactorQuantMarketUS {
 		perps, hasPerpMap = fqLoadPerpMap(perpMapPath)
+		if !hasPerpMap {
+			info.Reason = "缺少美股可交易映射（usstock_symbols.json），沿用基础目标权重"
+			return t, info
+		}
 	}
 
 	vols := make(map[string]float64, len(longCands)+len(shortCands))
@@ -638,12 +642,21 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 
 	total := float64(len(longs) + len(shorts))
 	var longGross, shortGross float64
+	var favoredCap, counterDesired float64
 	if info.State == fqRegimeBull {
 		longGross = math.Max(float64(len(longs))/total, 0.5)
 		shortGross = 1.0 - longGross
+		favoredCap = float64(len(longs)) * fqRegimeMaxNameWeight
+		counterDesired = shortGross
 	} else {
 		shortGross = math.Max(float64(len(shorts))/total, 0.5)
 		longGross = 1.0 - shortGross
+		favoredCap = float64(len(shorts)) * fqRegimeMaxNameWeight
+		counterDesired = longGross
+	}
+	if favoredCap+1e-9 < counterDesired {
+		info.Reason = fmt.Sprintf("趋势筛选后优势方上限不足（%.1f%% < %.1f%%），沿用基础目标权重", favoredCap*100, counterDesired*100)
+		return t, info
 	}
 
 	longW := fqCappedInvVol(vols, longs, longGross, fqRegimeMaxNameWeight)
@@ -665,6 +678,14 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	}
 	if len(merged) == 0 {
 		info.Reason = "趋势倾斜后权重为空，沿用基础目标权重"
+		return t, info
+	}
+	var checkInfo fqRegimeInfo
+	fqStampWeightStats(&checkInfo, merged)
+	if checkInfo.LongCount == 0 || checkInfo.ShortCount == 0 ||
+		(info.State == fqRegimeBull && checkInfo.LongGross+1e-6 < checkInfo.ShortGross) ||
+		(info.State == fqRegimeBear && checkInfo.ShortGross+1e-6 < checkInfo.LongGross) {
+		info.Reason = fmt.Sprintf("趋势倾斜后实际敞口无法保持优势方向（多 %.1f%% / 空 %.1f%%），沿用基础目标权重", checkInfo.LongGross*100, checkInfo.ShortGross*100)
 		return t, info
 	}
 

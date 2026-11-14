@@ -402,3 +402,85 @@ func TestFQRegimeEndToEndRebalanceAndRiskStatus(t *testing.T) {
 		t.Fatalf("ExecutionLog missing regime summary:\n%s", joinedLog)
 	}
 }
+
+func TestFQRegimeUSMissingPerpMapFallsBack(t *testing.T) {
+	root := t.TempDir()
+	usDir := filepath.Join(root, "factor_mining", "us")
+	dailyDir := filepath.Join(usDir, "daily")
+	start := fqDay("2026-06-01")
+	nDays := 120
+	asOf := start.AddDate(0, 0, nDays-1).Format(factorDateFmt)
+
+	fqWriteDailyJSON(t, dailyDir, "SPY.json", start, fqSeriesLinear(nDays, 500, -1.5))
+
+	const nSyms = 30
+	pct := make(map[string]float64, nSyms)
+	for i := 1; i <= nSyms; i++ {
+		under := fmt.Sprintf("U%02d", i)
+		sym := under + "BUSDT"
+		pct[sym] = float64(i) / float64(nSyms)
+		closes := make([]float64, nDays)
+		for d := 0; d < nDays; d++ {
+			closes[d] = 100.0 + float64((d%4)-1)*0.5
+		}
+		fqWriteDailyJSON(t, dailyDir, under+".json", start, closes)
+	}
+
+	baseWeights := map[string]float64{"U30BUSDT": 0.5, "U02BUSDT": -0.5}
+	path := fqWriteTargetsMap(t, usDir, "us", asOf, 5, baseWeights, pct, nil)
+	loaded, err := loadQuantTargets(path, "us")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &store.FactorQuantConfig{Market: "us", Horizon: 0, TargetsPath: path, USShortMode: "paper"}
+	eff, info := fqResolveRegimeTargets(loaded, cfg, path)
+	if info.Applied {
+		t.Fatalf("expected Applied=false when usstock_symbols.json is missing, got %+v", info)
+	}
+	if len(eff.Weights) != len(baseWeights) || eff.Weights["U30BUSDT"] != 0.5 || eff.Weights["U02BUSDT"] != -0.5 {
+		t.Fatalf("base weights altered despite missing perp map: %+v", eff.Weights)
+	}
+}
+
+func TestFQRegimeFavoredSleeveCapacityFallback(t *testing.T) {
+	root := t.TempDir()
+	dailyDir := filepath.Join(root, "daily")
+	start := fqDay("2026-06-01")
+	nDays := 120
+	asOf := start.AddDate(0, 0, nDays-1).Format(factorDateFmt)
+
+	// Bear market: 20 short candidates, 10 long candidates.
+	fqWriteDailyJSON(t, dailyDir, "BTCUSDT.json", start, fqSeriesLinear(nDays, 150, -0.8))
+
+	const nSyms = 30
+	pct := make(map[string]float64, nSyms)
+	for i := 1; i <= nSyms; i++ {
+		sym := fmt.Sprintf("S%02dUSDT", i)
+		pct[sym] = float64(i) / float64(nSyms)
+		// Exclude 18 of the 20 short candidates (<90 listing days), leaving only 2 eligible shorts (cap 0.2) vs 10 longs (0.5).
+		if i <= 18 {
+			fqWriteDailyJSON(t, dailyDir, sym+".json", start.AddDate(0, 0, nDays-40), fqSeriesLinear(40, 100, 0.1))
+			continue
+		}
+		closes := make([]float64, nDays)
+		for d := 0; d < nDays; d++ {
+			closes[d] = 100.0 + float64(d)*0.002*float64(i) + float64((d%4)-1)*0.5
+		}
+		fqWriteDailyJSON(t, dailyDir, sym+".json", start, closes)
+	}
+
+	baseWeights := map[string]float64{"S30USDT": 0.5, "S19USDT": -0.25, "S20USDT": -0.25}
+	path := fqWriteTargetsMap(t, root, "crypto", asOf, 3, baseWeights, pct, nil)
+	loaded, err := loadQuantTargets(path, "crypto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &store.FactorQuantConfig{Market: "crypto", Horizon: 3, TargetsPath: path}
+	eff, info := fqResolveRegimeTargets(loaded, cfg, path)
+	if info.Applied {
+		t.Fatalf("expected Applied=false when favored sleeve cap (0.2) < counter sleeve (0.5), got %+v", info)
+	}
+	if len(eff.Weights) != len(baseWeights) || eff.Weights["S30USDT"] != 0.5 {
+		t.Fatalf("expected fallback to base weights, got %+v", eff.Weights)
+	}
+}
