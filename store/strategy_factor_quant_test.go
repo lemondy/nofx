@@ -232,3 +232,35 @@ func TestFactorQuantRetryStateUpsertsAndClears(t *testing.T) {
 		t.Fatalf("retry column defaults: %+v %v", got, err)
 	}
 }
+
+func TestFactorQuantRegimeTiltDefaultAndRoundTrip(t *testing.T) {
+	var nilCfg *FactorQuantConfig
+	if !nilCfg.EffectiveRegimeTilt() {
+		t.Fatal("nil FactorQuantConfig should default EffectiveRegimeTilt() to true")
+	}
+	def := &FactorQuantConfig{Market: FactorQuantMarketCrypto}
+	if !def.EffectiveRegimeTilt() {
+		t.Fatal("omitted RegimeTilt should default to true")
+	}
+	off := false
+	on := true
+	disabledCfg := &FactorQuantConfig{Market: FactorQuantMarketUS, RegimeTilt: &off}
+	if disabledCfg.EffectiveRegimeTilt() {
+		t.Fatal("explicit false RegimeTilt was ignored")
+	}
+	raw, err := json.Marshal(disabledCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded FactorQuantConfig
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.RegimeTilt == nil || decoded.EffectiveRegimeTilt() {
+		t.Fatalf("JSON round-trip lost false RegimeTilt: %s", raw)
+	}
+	enabledCfg := &FactorQuantConfig{Market: FactorQuantMarketCrypto, RegimeTilt: &on}
+	if !enabledCfg.EffectiveRegimeTilt() {
+		t.Fatal("explicit true RegimeTilt should return true")
+	}
+}

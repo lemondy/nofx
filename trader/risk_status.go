@@ -53,19 +53,36 @@ type FactorQuantTick struct {
 	Equity  float64   `json:"equity,omitempty"`
 }
 
+type FactorQuantRegimeStatus struct {
+	State       string  `json:"state"`
+	Benchmark   string  `json:"benchmark"`
+	AsOf        string  `json:"as_of,omitempty"`
+	Close       float64 `json:"close,omitempty"`
+	EMA20       float64 `json:"ema20,omitempty"`
+	EMA50       float64 `json:"ema50,omitempty"`
+	LongCount   int     `json:"long_count"`
+	ShortCount  int     `json:"short_count"`
+	LongGross   float64 `json:"long_gross"`
+	ShortGross  float64 `json:"short_gross"`
+	TiltEnabled bool    `json:"tilt_enabled"`
+	Applied     bool    `json:"applied"`
+	Reason      string  `json:"reason,omitempty"`
+}
+
 type FactorQuantRunStatus struct {
-	TickIntervalSec   int               `json:"tick_interval_sec"`
-	LastTick          *FactorQuantTick  `json:"last_tick,omitempty"`
-	RecentTicks       []FactorQuantTick `json:"recent_ticks"`
-	TargetsAsOf       string            `json:"targets_as_of,omitempty"`
-	TargetsStatus     string            `json:"targets_status,omitempty"`
-	TargetsRule       string            `json:"targets_rule,omitempty"`
-	Horizon           int               `json:"horizon"`
-	LastRebalanceAsOf string            `json:"last_rebalance_as_of,omitempty"`
-	LastRebalanceAt   *time.Time        `json:"last_rebalance_at,omitempty"`
-	NextEligibleAsOf  string            `json:"next_eligible_as_of,omitempty"`
-	RetryAsOf         string            `json:"retry_as_of,omitempty"`
-	RetryAttempts     int               `json:"retry_attempts,omitempty"`
+	TickIntervalSec   int                      `json:"tick_interval_sec"`
+	LastTick          *FactorQuantTick         `json:"last_tick,omitempty"`
+	RecentTicks       []FactorQuantTick        `json:"recent_ticks"`
+	TargetsAsOf       string                   `json:"targets_as_of,omitempty"`
+	TargetsStatus     string                   `json:"targets_status,omitempty"`
+	TargetsRule       string                   `json:"targets_rule,omitempty"`
+	Horizon           int                      `json:"horizon"`
+	LastRebalanceAsOf string                   `json:"last_rebalance_as_of,omitempty"`
+	LastRebalanceAt   *time.Time               `json:"last_rebalance_at,omitempty"`
+	NextEligibleAsOf  string                   `json:"next_eligible_as_of,omitempty"`
+	RetryAsOf         string                   `json:"retry_as_of,omitempty"`
+	RetryAttempts     int                      `json:"retry_attempts,omitempty"`
+	Regime            *FactorQuantRegimeStatus `json:"regime,omitempty"`
 }
 
 type LossStreakBan struct {

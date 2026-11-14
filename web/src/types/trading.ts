@@ -302,6 +302,22 @@ export interface FactorQuantTick {
   equity?: number
 }
 
+export interface FactorQuantRegimeStatus {
+  state: 'bull' | 'bear' | 'chop' | 'unknown' | string
+  benchmark: string
+  as_of?: string
+  close?: number
+  ema20?: number
+  ema50?: number
+  long_count: number
+  short_count: number
+  long_gross: number
+  short_gross: number
+  tilt_enabled: boolean
+  applied: boolean
+  reason?: string
+}
+
 export interface FactorQuantRunStatus {
   tick_interval_sec: number
   last_tick?: FactorQuantTick
@@ -315,6 +331,7 @@ export interface FactorQuantRunStatus {
   next_eligible_as_of?: string
   retry_as_of?: string
   retry_attempts?: number
+  regime?: FactorQuantRegimeStatus
 }
 
 export interface RiskStatus {

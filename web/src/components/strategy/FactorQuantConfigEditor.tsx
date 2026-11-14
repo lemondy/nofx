@@ -121,6 +121,14 @@ const fq = {
     en: 'Flatten when the last rebalance as_of is older than this and rebalancing is unavailable; 0=default (horizon+max_stale_days), -1=disabled',
   },
   advanced: { zh: '高级', en: 'Advanced' },
+  regimeTilt: {
+    zh: '市场趋势方向倾斜（牛 20多/10空 · 熊 20空/10多）',
+    en: 'Market regime directional tilt (bull 20L/10S · bear 20S/10L)',
+  },
+  regimeTiltDesc: {
+    zh: '默认开启：按基准日线 EMA20/EMA50 判定趋势（加密看 BTCUSDT，美股看 SPY）。牛市最多做多 20 只 / 做空 10 只，熊市最多做空 20 只 / 做多 10 只，名义仓位按比例倾斜；震荡保持对称。关闭则保持原始对称权重。',
+    en: 'Enabled by default: classifies daily EMA20/EMA50 regime on BTCUSDT (crypto) or SPY (US). Bull tilts to up to 20 longs / max 10 shorts; bear tilts to up to 20 shorts / max 10 longs; chop stays symmetric. Disable for symmetric weights.',
+  },
   targetsPath: {
     zh: 'quant_targets.json 路径覆盖',
     en: 'quant_targets.json path override',
@@ -348,6 +356,24 @@ export function FactorQuantConfigEditor({
             </label>
           ))}
         </div>
+        <label className="mt-4 flex items-start gap-3 p-3 rounded-lg bg-surface-2 border border-line cursor-pointer">
+          <input
+            type="checkbox"
+            data-testid="factor-regime_tilt"
+            checked={config.regime_tilt ?? true}
+            disabled={disabled}
+            onChange={(e) => updateField('regime_tilt', e.target.checked)}
+            className="mt-0.5 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
+          />
+          <div>
+            <span className="block text-sm font-medium text-fg">
+              {ts(fq.regimeTilt, language)}
+            </span>
+            <p className="text-xs mt-1 text-fg-3">
+              {ts(fq.regimeTiltDesc, language)}
+            </p>
+          </div>
+        </label>
       </div>
 
       {/* Execution parameters */}
