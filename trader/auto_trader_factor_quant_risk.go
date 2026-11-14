@@ -145,6 +145,10 @@ func (at *AutoTrader) factorQuantRiskCheck(broker fqBroker, now time.Time) (read
 	}
 
 	dd, dayLoss := fqEquityLoss(acct.Equity, peak), fqEquityLoss(acct.Equity, state.DayStartEquity)
+	ddScale := fqDrawdownScale(dd, fq)
+	at.fq.mu.Lock()
+	at.fq.ddScale = ddScale
+	at.fq.mu.Unlock()
 	newHalt := false
 	if cap := fq.EffectiveMaxDrawdownPct(); cap > 0 && dd >= cap && state.HaltKind != fqHaltDrawdown {
 		state.HaltKind, state.HaltDay = fqHaltDrawdown, ""
@@ -186,6 +190,28 @@ func (at *AutoTrader) factorQuantRiskCheck(broker fqBroker, now time.Time) (read
 		return true, true
 	}
 	return true, false
+}
+
+// fqDrawdownScale computes the tiered portfolio drawdown multiplier applied to
+// CapitalFraction before the hard drawdown breaker triggers:
+//   - dd < 10%: 1.00
+//   - 10% <= dd < 15%: 0.70
+//   - 15% <= dd < 20%: 0.40
+//   - dd >= 20%: 0.25
+func fqDrawdownScale(dd float64, fq *store.FactorQuantConfig) float64 {
+	if fq == nil || !fq.EffectiveDrawdownScale() || fq.EffectiveMaxDrawdownPct() <= 0 {
+		return 1.0
+	}
+	switch {
+	case dd >= 0.20:
+		return 0.25
+	case dd >= 0.15:
+		return 0.40
+	case dd >= 0.10:
+		return 0.70
+	default:
+		return 1.0
+	}
 }
 
 func (at *AutoTrader) fqRiskRecord(acct *fqAccount, reason string, now time.Time) {

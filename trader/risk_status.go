@@ -80,6 +80,8 @@ type FactorQuantRunStatus struct {
 	LastRebalanceAsOf string                   `json:"last_rebalance_as_of,omitempty"`
 	LastRebalanceAt   *time.Time               `json:"last_rebalance_at,omitempty"`
 	NextEligibleAsOf  string                   `json:"next_eligible_as_of,omitempty"`
+	LastRollingAsOf   string                   `json:"last_rolling_as_of,omitempty"`
+	DrawdownScale     float64                  `json:"drawdown_scale,omitempty"`
 	RetryAsOf         string                   `json:"retry_as_of,omitempty"`
 	RetryAttempts     int                      `json:"retry_attempts,omitempty"`
 	Regime            *FactorQuantRegimeStatus `json:"regime,omitempty"`

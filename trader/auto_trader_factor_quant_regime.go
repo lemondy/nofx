@@ -102,6 +102,9 @@ func (info fqRegimeInfo) summaryText() string {
 
 type fqDailyBar struct {
 	Date  string
+	Open  float64
+	High  float64
+	Low   float64
 	Close float64
 }
 
@@ -189,7 +192,7 @@ func fqLoadDailyBars(path, maxDate string) ([]fqDailyBar, error) {
 		if h < hiBound || l > loBound {
 			continue
 		}
-		bars = append(bars, fqDailyBar{Date: dateStr, Close: c})
+		bars = append(bars, fqDailyBar{Date: dateStr, Open: o, High: h, Low: l, Close: c})
 	}
 	sort.Slice(bars, func(i, j int) bool { return bars[i].Date < bars[j].Date })
 	return bars, nil
@@ -659,8 +662,14 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 		return t, info
 	}
 
+	// Long leg uses 1/sigma inverse-volatility; short leg uses 1/sigma^2 inverse-variance
+	// to suppress high-volatility short squeeze convexity tail risk.
+	shortVars := make(map[string]float64, len(shorts))
+	for _, s := range shorts {
+		shortVars[s] = vols[s] * vols[s]
+	}
 	longW := fqCappedInvVol(vols, longs, longGross, fqRegimeMaxNameWeight)
-	shortW := fqCappedInvVol(vols, shorts, shortGross, fqRegimeMaxNameWeight)
+	shortW := fqCappedInvVol(shortVars, shorts, shortGross, fqRegimeMaxNameWeight)
 	scale := 1.0
 	if t.K != nil {
 		scale = *t.K
@@ -695,4 +704,133 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	info.Applied = true
 	info.Reason = fmt.Sprintf("%s（最多%d多/%d空）", fqRegimeLabelZH(info.State), longN, shortN)
 	return &out, info
+}
+
+// fqCalcATR14 computes the 14-day Average True Range from daily OHLC bars.
+func fqCalcATR14(bars []fqDailyBar) (float64, bool) {
+	const window = 14
+	if len(bars) < window+1 {
+		return 0, false
+	}
+	tail := bars[len(bars)-(window+1):]
+	sumTR := 0.0
+	for i := 1; i <= window; i++ {
+		prevC := tail[i-1].Close
+		cur := tail[i]
+		if prevC <= 0 || cur.High <= 0 || cur.Low <= 0 {
+			return 0, false
+		}
+		tr := math.Max(cur.High-cur.Low, math.Max(math.Abs(cur.High-prevC), math.Abs(cur.Low-prevC)))
+		sumTR += tr
+	}
+	atr := sumTR / float64(window)
+	if math.IsNaN(atr) || math.IsInf(atr, 0) || atr <= 0 {
+		return 0, false
+	}
+	return atr, true
+}
+
+// fqComputeAdaptiveStopPrice resolves a position's protective stop price.
+// When VolAdaptiveStop is active:
+//  1. Initial stop distance adapts to 30-day realized volatility (2.5 * sigma30 * sqrt(H)),
+//     clamped to [8%, 28%] for crypto ([6%, 18%] for US), scaled proportionally to basePct/0.20,
+//     falling back to basePct when daily bars are unavailable.
+//  2. Once peak favorable excursion reaches >= max(stopPct, 15%), a Chandelier trailing stop
+//     ratchets from peakMark by 2.0 * ATR14 (or 50% of unrealized profit when ATR14 is unavailable),
+//     locking in profit without ever loosening the stop.
+func fqComputeAdaptiveStopPrice(sym, side string, entry, mark, peakMark, basePct float64, fq *store.FactorQuantConfig, asOf string) (stopPrice float64, trailing bool) {
+	if basePct <= 0 || entry <= 0 {
+		return 0, false
+	}
+	stopPct := basePct
+	var atr14 float64
+	hasATR := false
+
+	adaptive := fq != nil && fq.EffectiveVolAdaptiveStop()
+	if adaptive {
+		dailyDir, _ := fqResolveDailyAndPerpPaths(factorQuantTargetsPath(fq), fq)
+		market := fq.Market
+		if market == "" {
+			market = store.FactorQuantMarketCrypto
+		}
+		h := fq.EffectiveHorizon()
+		if h <= 0 {
+			h = 3
+			if market == store.FactorQuantMarketUS {
+				h = 5
+			}
+		}
+		if dailyDir != "" {
+			if bars, err := fqLoadDailyBars(filepath.Join(dailyDir, fqDailySymbolFile(sym, market)), asOf); err == nil && len(bars) > 0 {
+				if vol30, ok := fqCalcVol30(bars); ok {
+					scale := basePct / 0.20
+					if scale <= 0 {
+						scale = 1.0
+					}
+					rawPct := 2.5 * vol30 * math.Sqrt(float64(h)) * scale
+					minPct, maxPct := 0.08*scale, 0.28*scale
+					if market == store.FactorQuantMarketUS {
+						minPct, maxPct = 0.06*scale, 0.18*scale
+					}
+					if maxPct >= 0.95 {
+						maxPct = 0.95
+					}
+					stopPct = math.Max(minPct, math.Min(maxPct, rawPct))
+				}
+				atr14, hasATR = fqCalcATR14(bars)
+			}
+		}
+	}
+
+	initStop := entry * (1 + stopPct)
+	if side == fqSideLong {
+		initStop = entry * (1 - stopPct)
+	}
+	if !adaptive {
+		return initStop, false
+	}
+
+	triggerPct := math.Max(stopPct, 0.15)
+	if side == fqSideLong {
+		if peakMark < entry {
+			peakMark = entry
+		}
+		if mark > peakMark {
+			peakMark = mark
+		}
+		favorableRet := (peakMark - entry) / entry
+		if favorableRet >= triggerPct {
+			gain := peakMark - entry
+			trailDist := 0.50 * gain
+			if hasATR && atr14 > 0 {
+				atrDist := 2.0 * atr14
+				trailDist = math.Max(0.25*gain, math.Min(0.60*gain, atrDist))
+			}
+			trailStop := peakMark - trailDist
+			if trailStop > initStop {
+				return trailStop, true
+			}
+		}
+	} else if side == fqSideShort {
+		if peakMark <= 0 || peakMark > entry {
+			peakMark = entry
+		}
+		if mark > 0 && mark < peakMark {
+			peakMark = mark
+		}
+		favorableRet := (entry - peakMark) / entry
+		if favorableRet >= triggerPct {
+			gain := entry - peakMark
+			trailDist := 0.50 * gain
+			if hasATR && atr14 > 0 {
+				atrDist := 2.0 * atr14
+				trailDist = math.Max(0.25*gain, math.Min(0.60*gain, atrDist))
+			}
+			trailStop := peakMark + trailDist
+			if trailStop < initStop {
+				return trailStop, true
+			}
+		}
+	}
+	return initStop, false
 }

@@ -2,6 +2,7 @@ package trader
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -28,26 +29,82 @@ const (
 // factorQuantRuntime is the loop's in-memory state, guarded by mu.
 type factorQuantRuntime struct {
 	// Shared by loop and API brokers; do not hold mu during funding I/O.
-	fundingMu      sync.Mutex
-	fundingAt      map[int64]time.Time
-	mu             sync.Mutex
-	memAsOf        string // as_of of the last attempt in this process (covers a failing state store)
-	memRule        string
-	retrySet       bool // in-process retry state supersedes a failed store write
-	retryAsOf      string
-	retryAttempts  int
-	lastLog        string // last tick log line (suppresses 5-minute repeats)
-	skipKey        string // last skip/failure reason already written to a decision record
-	skipKeyLoad    bool
-	riskSet        bool // risk snapshot supersedes failed durable writes
-	riskState      store.FactorQuantState
-	currentTick    FactorQuantTick
-	recentTicks    []FactorQuantTick // newest first, capped at fqRecentTickLimit
-	targetsAsOf    string
-	targetsStatus  string
-	targetsRule    string
-	targetsHorizon int
-	regime         *fqRegimeInfo
+	fundingMu       sync.Mutex
+	fundingAt       map[int64]time.Time
+	mu              sync.Mutex
+	memAsOf         string // as_of of the last attempt in this process (covers a failing state store)
+	memRule         string
+	retrySet        bool // in-process retry state supersedes a failed store write
+	retryAsOf       string
+	retryAttempts   int
+	lastLog         string // last tick log line (suppresses 5-minute repeats)
+	skipKey         string // last skip/failure reason already written to a decision record
+	skipKeyLoad     bool
+	riskSet         bool // risk snapshot supersedes failed durable writes
+	riskState       store.FactorQuantState
+	currentTick     FactorQuantTick
+	recentTicks     []FactorQuantTick // newest first, capped at fqRecentTickLimit
+	targetsAsOf     string
+	targetsStatus   string
+	targetsRule     string
+	targetsHorizon  int
+	regime          *fqRegimeInfo
+	peaks           map[string]float64 // sym:side -> favorable peak mark price
+	entries         map[string]float64 // sym:side -> entry price at peak anchor
+	ddScale         float64            // tiered drawdown capital multiplier (0 = unset -> 1.0)
+	lastRollingAsOf string             // last intermediate as_of evaluated for rolling exit
+}
+
+func fqTrackPeakMap(peaks, entries map[string]float64, sym, side string, entry, mark float64) float64 {
+	key := sym + ":" + side
+	if prevEntry, ok := entries[key]; !ok || math.Abs(prevEntry-entry)/math.Max(entry, 1e-9) > 0.05 {
+		peaks[key] = entry
+	}
+	entries[key] = entry
+	peak := peaks[key]
+	if side == fqSideLong {
+		if peak < entry {
+			peak = entry
+		}
+		if mark > peak {
+			peak = mark
+		}
+	} else {
+		if peak <= 0 || peak > entry {
+			peak = entry
+		}
+		if mark > 0 && mark < peak {
+			peak = mark
+		}
+	}
+	peaks[key] = peak
+	return peak
+}
+
+func (at *AutoTrader) fqUpdatePeakMark(sym, side string, entry, mark float64) float64 {
+	at.fq.mu.Lock()
+	defer at.fq.mu.Unlock()
+	if at.fq.peaks == nil {
+		at.fq.peaks = map[string]float64{}
+		at.fq.entries = map[string]float64{}
+	}
+	return fqTrackPeakMap(at.fq.peaks, at.fq.entries, sym, side, entry, mark)
+}
+
+func (at *AutoTrader) fqClearPeakMark(sym, side string) {
+	at.fq.mu.Lock()
+	defer at.fq.mu.Unlock()
+	if at.fq.peaks != nil {
+		key := sym + ":" + side
+		delete(at.fq.peaks, key)
+		delete(at.fq.entries, key)
+	}
+}
+
+func (at *AutoTrader) fqTargetsAsOf() string {
+	at.fq.mu.Lock()
+	defer at.fq.mu.Unlock()
+	return at.fq.targetsAsOf
 }
 
 // IsFactorQuantStrategy reports whether this trader runs the factor_quant strategy.
@@ -124,7 +181,9 @@ func (at *AutoTrader) newFactorQuantBroker() (fqBroker, error) {
 	if !ok {
 		return nil, fmt.Errorf("因子量化加密策略需要模拟合约执行器，实际为 %T", at.trader)
 	}
-	return newFQFuturesBroker(pt, fq.EffectiveLeverage(), fq.EffectiveLongStopPct(), fq.EffectiveShortStopPct()), nil
+	fb := newFQFuturesBroker(pt, fq.EffectiveLeverage(), fq.EffectiveLongStopPct(), fq.EffectiveShortStopPct())
+	fb.at = at
+	return fb, nil
 }
 
 // runFactorQuantLoop is the factor_quant run loop (dispatched from run()).
@@ -198,12 +257,36 @@ func (at *AutoTrader) factorQuantInitStops(broker fqBroker) {
 }
 
 func (at *AutoTrader) factorQuantEnsureStops(broker fqBroker) []fqStopResult {
-	if at.config.StrategyConfig.FactorQuantConfig.IsCrypto() {
-		if protector, ok := broker.(interface{ ensureStops() []fqStopResult }); ok {
-			return protector.ensureStops()
-		}
+	if fb, ok := broker.(*fqFuturesBroker); ok && fb.at == nil {
+		fb.at = at
+	}
+	if protector, ok := broker.(interface{ ensureStops() []fqStopResult }); ok {
+		return protector.ensureStops()
 	}
 	return nil
+}
+
+// factorQuantTickStops evaluates Chandelier trailing stops (crypto) and paper
+// stop-losses (US) on non-rebalance ticks without re-placing unchanged stops.
+func (at *AutoTrader) factorQuantTickStops(broker fqBroker) {
+	if fb, ok := broker.(*fqFuturesBroker); ok {
+		if fb.at == nil {
+			fb.at = at
+		}
+		for _, res := range fb.ratchetTrailingStops() {
+			if res.Exited {
+				logger.Infof("📐 [%s] factor_quant 移动止损平仓（%s）%s @ %.8g：%s", at.name, fqStopSideLabel(res.Side), res.Symbol, res.Price, res.Note)
+			}
+		}
+		return
+	}
+	if sb, ok := broker.(*fqStockBroker); ok {
+		for _, res := range sb.ensureStops() {
+			if res.Exited {
+				logger.Infof("📐 [%s] factor_quant 美股模拟止损平仓（%s）%s @ %.8g：%s", at.name, fqStopSideLabel(res.Side), res.Symbol, res.Price, res.Note)
+			}
+		}
+	}
 }
 
 func (at *AutoTrader) factorQuantProtectReport(broker fqBroker, rep *fqRebalanceReport) {
@@ -351,6 +434,9 @@ func (at *AutoTrader) fqSkipSeen(key string) bool {
 }
 
 func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) {
+	if fb, ok := broker.(*fqFuturesBroker); ok && fb.at == nil {
+		fb.at = at
+	}
 	fq := at.config.StrategyConfig.FactorQuantConfig
 	path := factorQuantTargetsPath(fq)
 	targets, loadErr := loadQuantTargets(path, fq.Market)
@@ -377,6 +463,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 		state.RetryAsOf, state.RetryAttempts = "", 0
 	}
 	if loadErr != nil {
+		at.factorQuantTickStops(broker)
 		at.fqNote("targets_error", fmt.Sprintf("本轮跳过：%v", loadErr))
 		at.fqLogOnce(fmt.Sprintf("本轮跳过：%v", loadErr))
 		at.factorQuantFlattenCheck(broker, targets, state, now)
@@ -399,6 +486,10 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 			at.factorQuantRetry(broker, targets, state, dec, now, regimeInfo)
 			return
 		}
+		at.factorQuantTickStops(broker)
+		if dec.Code == fqCodeTooSoon && at.factorQuantRollingCheck(broker, targets, state, dec, regimeInfo, now) {
+			return
+		}
 		if dec.Code != fqCodeShortDisabled && at.factorQuantFlattenCheck(broker, targets, state, now) {
 			return
 		}
@@ -415,7 +506,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	}
 
 	logger.Infof("📐 [%s] factor_quant 开始调仓 as_of=%s rule=%s %s：%s", at.name, targets.AsOf, targets.Rule.Name, regimeInfo.summaryText(), dec.Reason)
-	rep := fqRunRebalance(broker, targets, fqResolvedPlanConfig(fq))
+	rep := fqRunRebalance(broker, targets, at.fqPlanConfig(fq))
 	rep.Regime = regimeInfo
 	if rep.Err != nil {
 		if at.factorQuantFlattenCheck(broker, targets, state, now) {
@@ -458,6 +549,124 @@ func fqResolvedPlanConfig(fq *store.FactorQuantConfig) fqPlanConfig {
 	}
 }
 
+func (at *AutoTrader) fqPlanConfig(fq *store.FactorQuantConfig) fqPlanConfig {
+	cfg := fqResolvedPlanConfig(fq)
+	at.fq.mu.Lock()
+	scale := at.fq.ddScale
+	at.fq.mu.Unlock()
+	if scale > 0 && scale < 1.0 && fq.EffectiveDrawdownScale() {
+		cfg.CapitalFraction *= scale
+	}
+	return cfg
+}
+
+// factorQuantRollingCheck runs on intermediate (too_soon) days when a newer
+// quant_targets.json with cross-sectional rank percentiles (pct) is available.
+// If any held position's factor score has decayed below the median (or flipped
+// direction / been excluded), it closes the decayed position(s) immediately and
+// rolls a 1/H tranche toward the new top target weights without advancing LastAsOf.
+func (at *AutoTrader) factorQuantRollingCheck(broker fqBroker, targets *quantTargets, state *store.FactorQuantState, dec fqDecision, regimeInfo fqRegimeInfo, now time.Time) bool {
+	fq := at.config.StrategyConfig.FactorQuantConfig
+	if !fq.EffectiveRollingExit() || targets == nil || targets.Status != quantStatusOK || state.LastAsOf == "" || targets.AsOf <= state.LastAsOf || len(targets.Pct) == 0 {
+		return false
+	}
+	age := fqDaysBetween(targets.asOfDate, now)
+	if age < 0 || age > fq.EffectiveMaxStaleDays(targets.Horizon) {
+		return false
+	}
+	at.fq.mu.Lock()
+	already := at.fq.lastRollingAsOf == targets.AsOf
+	at.fq.mu.Unlock()
+	if already {
+		return false
+	}
+	acct, err := broker.Account()
+	if err != nil || acct == nil || len(acct.Positions) == 0 || acct.Equity <= 0 {
+		return false
+	}
+
+	decayedMap := map[string]bool{}
+	var decayedList []string
+	for _, p := range acct.Positions {
+		pct, hasPct := targets.Pct[p.Symbol]
+		tw := targets.Weights[p.Symbol]
+		excl := targets.Excluded[p.Symbol]
+		decayed := false
+		if p.Side == fqSideLong {
+			decayed = excl != "" || tw < 0 || (!hasPct && tw <= 0) || (hasPct && pct < 0.50)
+		} else if p.Side == fqSideShort {
+			decayed = excl != "" || tw > 0 || (!hasPct && tw >= 0) || (hasPct && pct > 0.50)
+		}
+		if decayed && !decayedMap[p.Symbol] {
+			decayedMap[p.Symbol] = true
+			decayedList = append(decayedList, p.Symbol)
+		}
+	}
+	at.fq.mu.Lock()
+	at.fq.lastRollingAsOf = targets.AsOf
+	at.fq.mu.Unlock()
+	if len(decayedList) == 0 || at.fqSkipSeen("rolling|"+targets.AsOf) {
+		return false
+	}
+
+	sort.Strings(decayedList)
+	h := dec.Horizon
+	if h < 2 {
+		h = 3
+	}
+	alpha := 1.0 / float64(h)
+	planCfg := at.fqPlanConfig(fq)
+	budget := acct.Equity * planCfg.CapitalFraction
+	if planCfg.CostRate > 0 {
+		budget /= 1 + planCfg.CostRate
+	}
+	if budget <= 0 {
+		return false
+	}
+
+	rollingWeights := make(map[string]float64, len(acct.Positions)+len(targets.Weights))
+	surviving := map[string]bool{}
+	for _, p := range acct.Positions {
+		if decayedMap[p.Symbol] || p.Mark <= 0 {
+			continue
+		}
+		surviving[p.Symbol] = true
+		curW := (p.Qty * p.Mark) / budget
+		if p.Side == fqSideShort {
+			curW = -curW
+		}
+		rollingWeights[p.Symbol] = fqRound6(curW)
+	}
+	for sym, tw := range targets.Weights {
+		if tw == 0 || surviving[sym] {
+			continue
+		}
+		if rw := fqRound6(alpha * tw); rw != 0 {
+			rollingWeights[sym] = rw
+		}
+	}
+
+	rollingTargets := *targets
+	rollingTargets.Weights = rollingWeights
+	rep := fqRunRebalance(broker, &rollingTargets, planCfg)
+	rep.Regime = regimeInfo
+	if rep.Err != nil {
+		return false
+	}
+	at.factorQuantProtectReport(broker, rep)
+	rollDec := fqDecision{
+		Rebalance: true,
+		Code:      "rolling_rebalance",
+		Horizon:   dec.Horizon,
+		Reason:    fmt.Sprintf("持仓信号衰减滚动调仓（as_of=%s，提前平仓 %d 只衰减标的 [%s]，按 1/%d 滚动换仓）", targets.AsOf, len(decayedList), strings.Join(decayedList, ","), h),
+	}
+	rec := fqBuildRecord(rep, rollDec, fq, at.initialBalance, now)
+	at.saveFactorQuantRecord(rec)
+	at.fqNote("rolling_rebalance", rep.withWarnings(fmt.Sprintf("滚动调仓完成 as_of=%s（提前平仓 %d 只）：%d 笔下单，%d 笔失败，%d 个跳过", targets.AsOf, len(decayedList), len(rep.Results), rep.failedCount(), len(rep.Plan.Skips))))
+	logger.Infof("📐 [%s] factor_quant 滚动调仓完成 as_of=%s（提前平仓 %d 只）：%d 笔下单，%d 笔失败，%d 个跳过", at.name, targets.AsOf, len(decayedList), len(rep.Results), rep.failedCount(), len(rep.Plan.Skips))
+	return true
+}
+
 // factorQuantRetry is reached only through too_soon: the gate has already
 // checked status, freshness and horizon, and the caller matched both as_ofs.
 func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, state *store.FactorQuantState, dec fqDecision, now time.Time, regimeInfo fqRegimeInfo) {
@@ -478,7 +687,7 @@ func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, s
 	}
 	attempt := state.RetryAttempts + 1
 	dec.Reason = fmt.Sprintf("重试第 %d 次（as_of=%s，上次调仓有订单或止损失败）", attempt, targets.AsOf)
-	planCfg := fqResolvedPlanConfig(fq)
+	planCfg := at.fqPlanConfig(fq)
 	planCfg.Retry = true
 	rep := fqRunRebalance(broker, targets, planCfg)
 	rep.Regime = regimeInfo
@@ -919,7 +1128,9 @@ func (at *AutoTrader) fqRunStatus(state *store.FactorQuantState) *FactorQuantRun
 		TickIntervalSec: int(factorQuantTickInterval / time.Second),
 		RecentTicks:     append([]FactorQuantTick{}, at.fq.recentTicks...),
 		TargetsAsOf:     at.fq.targetsAsOf, TargetsStatus: at.fq.targetsStatus, TargetsRule: at.fq.targetsRule,
-		Horizon: at.config.StrategyConfig.FactorQuantConfig.EffectiveHorizon(),
+		Horizon:         at.config.StrategyConfig.FactorQuantConfig.EffectiveHorizon(),
+		LastRollingAsOf: at.fq.lastRollingAsOf,
+		DrawdownScale:   at.fq.ddScale,
 	}
 	if out.Horizon == 0 {
 		out.Horizon = at.fq.targetsHorizon

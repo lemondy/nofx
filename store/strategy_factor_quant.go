@@ -67,6 +67,18 @@ type FactorQuantConfig struct {
 	// bull => up to 20 longs / max 10 shorts (~2:1 gross), bear => up to 20 shorts /
 	// max 10 longs (~2:1 gross), chop => symmetric. nil = default true.
 	RegimeTilt *bool `json:"regime_tilt,omitempty"`
+	// RollingExit enables intra-horizon alpha-decay early exit and 1/H rolling
+	// rebalance on intermediate days when a newer quant_targets.json includes
+	// cross-sectional rank percentiles (pct). nil = default true.
+	RollingExit *bool `json:"rolling_exit,omitempty"`
+	// VolAdaptiveStop enables volatility-adaptive initial stop distance
+	// (2.5*sigma30*sqrt(H)) and high-profit Chandelier trailing stop lock-in
+	// (plus paper stop checks for US stock positions). nil = default true.
+	VolAdaptiveStop *bool `json:"vol_adaptive_stop,omitempty"`
+	// DrawdownScale enables tiered portfolio drawdown position scaling
+	// (10%->0.70x, 15%->0.40x, 20%->0.25x) before the hard drawdown breaker.
+	// nil = default true.
+	DrawdownScale *bool `json:"drawdown_scale,omitempty"`
 	// USFeeBps / USSlippageBps: US only, trading costs of the bStock paper
 	// ledger, in basis points per fill. Buys fill at quote*(1+slippage), sells
 	// at quote*(1-slippage); the fee is a fraction of the notional deducted from
@@ -252,6 +264,33 @@ func (f *FactorQuantConfig) EffectiveRegimeTilt() bool {
 		return true
 	}
 	return *f.RegimeTilt
+}
+
+// EffectiveRollingExit reports whether intra-horizon alpha-decay early exit and
+// 1/H rolling replacement is active. nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveRollingExit() bool {
+	if f == nil || f.RollingExit == nil {
+		return true
+	}
+	return *f.RollingExit
+}
+
+// EffectiveVolAdaptiveStop reports whether volatility-adaptive initial stops and
+// high-profit Chandelier trailing stops are active. nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveVolAdaptiveStop() bool {
+	if f == nil || f.VolAdaptiveStop == nil {
+		return true
+	}
+	return *f.VolAdaptiveStop
+}
+
+// EffectiveDrawdownScale reports whether tiered drawdown de-risking scales down
+// CapitalFraction as drawdown approaches the breaker. nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveDrawdownScale() bool {
+	if f == nil || f.DrawdownScale == nil {
+		return true
+	}
+	return *f.DrawdownScale
 }
 
 // Validate rejects unusable input; zero retains the documented defaults.

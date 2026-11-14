@@ -78,6 +78,14 @@ func TestFactorQuantDefaults(t *testing.T) {
 		c2.EffectiveMinOrderUSDT() != 25 || c2.EffectiveShortStopPct() != 0 || c2.EffectiveLongStopPct() != 0 || c2.EffectiveMaxStaleDays(7) != 9 {
 		t.Fatalf("explicit values not honoured: %+v", c2)
 	}
+	if !c.EffectiveRegimeTilt() || !c.EffectiveRollingExit() || !c.EffectiveVolAdaptiveStop() || !c.EffectiveDrawdownScale() {
+		t.Fatalf("boolean feature defaults should be true: %+v", c)
+	}
+	off := false
+	c3 := &FactorQuantConfig{Market: "crypto", RegimeTilt: &off, RollingExit: &off, VolAdaptiveStop: &off, DrawdownScale: &off}
+	if c3.EffectiveRegimeTilt() || c3.EffectiveRollingExit() || c3.EffectiveVolAdaptiveStop() || c3.EffectiveDrawdownScale() {
+		t.Fatalf("explicit false boolean toggles not honoured: %+v", c3)
+	}
 }
 
 func TestFactorQuantStrategyConfigValidation(t *testing.T) {
