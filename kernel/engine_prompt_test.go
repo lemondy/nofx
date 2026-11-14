@@ -689,3 +689,81 @@ func TestEstimateTokensMirrorPromptKlineBars(t *testing.T) {
 		}
 	}
 }
+
+func TestPureShortScanHardGateBlocksLongInPromptAndGateStates(t *testing.T) {
+	cfg := &store.StrategyConfig{}
+	cfg.CoinSource.SourceType = "mixed"
+	cfg.CoinSource.UseAI500 = true
+	cfg.CoinSource.UseShortScan = true
+	btcOff := false
+	cfg.RiskControl.BTCFilterLong = &btcOff
+	cfg.RiskControl.CounterMaxEMA20_1hPct = -1
+	cfg.RiskControl.ChaseMaxEMA20_1hPct = -1
+	cfg.RiskControl.EntryRSI1hMax = -1
+	cfg.RiskControl.ChaseMaxMove4hPct = -1
+	engine := NewStrategyEngine(cfg)
+
+	now := time.Now()
+	mkData := func(sym string) *market.Data {
+		tfs := map[string]*market.TimeframeSeriesData{
+			"15m": buildTF("15m", now, 80, 1.0, false),
+			"1h":  buildTF("1h", now, 80, 1.0, false),
+			"4h":  buildTF("4h", now, 80, 1.0, false),
+		}
+		lastClose := tfs["1h"].Klines[len(tfs["1h"].Klines)-1].Close
+		return withVendor(&market.Data{Symbol: sym, CurrentPrice: lastClose, TimeframeData: tfs}, 0.05)
+	}
+
+	// Case 1: pure short_scan candidate vs mixed (short_scan + ai500) candidate.
+	ctx := &Context{
+		Account: AccountInfo{TotalEquity: 1000},
+		MarketDataMap: map[string]*market.Data{
+			"DODOXUSDT": mkData("DODOXUSDT"),
+			"SOLUSDT":   mkData("SOLUSDT"),
+		},
+		CandidateCoins: []CandidateCoin{
+			{Symbol: "DODOXUSDT", Sources: []string{"short_scan"}, ShortScore: 70, ShortConfirmed: false},
+			{Symbol: "SOLUSDT", Sources: []string{"short_scan", "ai500"}, ShortScore: 70, ShortConfirmed: false},
+		},
+	}
+	_ = engine.BuildUserPrompt(ctx)
+
+	dodoxGS := ctx.GateStates["DODOXUSDT"]
+	if dodoxGS == nil || dodoxGS.LongAllowed {
+		t.Fatalf("pure short_scan candidate must block long: %+v", dodoxGS)
+	}
+	hasNoLong := false
+	for _, code := range dodoxGS.LongFailed {
+		if code == "SHORT_SCAN_ONLY_NO_LONG" {
+			hasNoLong = true
+			break
+		}
+	}
+	if !hasNoLong {
+		t.Fatalf("expected SHORT_SCAN_ONLY_NO_LONG in LongFailed, got %v", dodoxGS.LongFailed)
+	}
+	// Because ShortConfirmed=false also blocks short (SHORT_TOP_CONFIRM_MISSING),
+	// pure short_scan candidate must be double-blocked (HardBlocked=true).
+	if !dodoxGS.HardBlocked {
+		t.Fatalf("expected HardBlocked=true when pure short_scan cannot long or short: %+v", dodoxGS)
+	}
+
+	solGS := ctx.GateStates["SOLUSDT"]
+	if solGS == nil {
+		t.Fatal("missing GateState for SOLUSDT")
+	}
+	for _, code := range solGS.LongFailed {
+		if code == "SHORT_SCAN_ONLY_NO_LONG" {
+			t.Fatalf("short_scan+ai500 mixed candidate must not receive SHORT_SCAN_ONLY_NO_LONG, got %v", solGS.LongFailed)
+		}
+	}
+
+	// Case 2: system prompt carries schema/legend explanation and source guidance.
+	sys := engine.BuildSystemPrompt(1000, "")
+	if !strings.Contains(sys, "SHORT_SCAN_ONLY_NO_LONG") {
+		t.Fatal("system prompt must document SHORT_SCAN_ONLY_NO_LONG")
+	}
+	if !strings.Contains(sys, "做多数据源") || !strings.Contains(sys, "做空数据源") {
+		t.Fatal("system prompt must state long/short data source direction guidance")
+	}
+}

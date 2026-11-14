@@ -783,6 +783,7 @@ func TestOIDeltasSignConsistency(t *testing.T) {
 // scanner_hint JSON carries the bias/score/patterns, the section frames it as
 // auxiliary, and no "不做多"-style instruction leaks into the prompt.
 func TestDirectionHintRendering(t *testing.T) {
+	stubLiveMarket(t, neutralBTC4h())
 	cfg := &store.StrategyConfig{}
 	// Keep the monotone scanner-hint fixture renderable under anti-chase caps.
 	cfg.RiskControl.CounterMaxEMA20_1hPct = -1
@@ -796,23 +797,36 @@ func TestDirectionHintRendering(t *testing.T) {
 		CandidateCoins: []CandidateCoin{
 			{Symbol: "DASHUSDT", Sources: []string{"short_scan"},
 				ShortScore: 68, ShortGrade: "medium", ShortFundingAnn: 10.9,
-				ShortReasons:  []string{"假突破"},
-				ShortScanAtMs: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC).UnixMilli()},
+				ShortReasons:   []string{"假突破"},
+				ShortConfirmed: true,
+				ShortScanAtMs:  time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC).UnixMilli()},
 			{Symbol: "PROMUSDT", Sources: []string{"ai500"}},
 		},
 	}
+	now := time.Now()
 	for _, c := range ctx.CandidateCoins {
 		// Real bars across all three role TFs: a fully data-less candidate is
 		// double-blocked by the hard gate (DATA_INSUFFICIENT) and compresses
 		// to one line — the scanner_hint contract only applies to renderable
-		// candidates.
-		now := time.Now()
-		tfs := map[string]*market.TimeframeSeriesData{
-			"15m": buildTF("15m", now, 80, 1.0, false),
-			"1h":  buildTF("1h", now, 80, 1.0, false),
-			"4h":  buildTF("4h", now, 80, 1.0, false),
+		// candidates. Pure short_scan candidates require a valid short setup
+		// because long is hard-blocked by SHORT_SCAN_ONLY_NO_LONG.
+		var tfs map[string]*market.TimeframeSeriesData
+		curPrice := 1.0
+		if c.Symbol == "DASHUSDT" {
+			tfs = map[string]*market.TimeframeSeriesData{
+				"15m": buildTrendTF("15m", now, 80, 1.0, false),
+				"1h":  buildTrendTF("1h", now, 80, 1.0, false),
+				"4h":  buildTrendTF("4h", now, 80, 1.0, false),
+			}
+			curPrice = tfs["15m"].Klines[len(tfs["15m"].Klines)-1].Close
+		} else {
+			tfs = map[string]*market.TimeframeSeriesData{
+				"15m": buildTF("15m", now, 80, 1.0, false),
+				"1h":  buildTF("1h", now, 80, 1.0, false),
+				"4h":  buildTF("4h", now, 80, 1.0, false),
+			}
 		}
-		ctx.MarketDataMap[c.Symbol] = withVendor(&market.Data{Symbol: c.Symbol, CurrentPrice: 1, TimeframeData: tfs}, 0.05)
+		ctx.MarketDataMap[c.Symbol] = withVendor(&market.Data{Symbol: c.Symbol, CurrentPrice: curPrice, TimeframeData: tfs}, 0.05)
 	}
 	prompt := engine.BuildUserPrompt(ctx)
 	sys := engine.BuildSystemPrompt(100, "")

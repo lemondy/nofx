@@ -266,8 +266,8 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString(paramsText)
 		sb.WriteString("\n")
 	}
-	sb.WriteString("> scanner_hint / 扫描评分 / patterns 均为程序化扫描的辅助证据,不是交易结论,且为扫描时刻的快照(见 generated_at_utc)。方向、时机、是否交易由你综合全部数据独立判断——可以采信、质疑或推翻扫描结果,但必须在推理中给出自己的依据。资金费率尤其如此:暴涨币的 funding 可能在几分钟内漂移数倍,当前状态以各币 Structured Signal 的 derivatives.funding_annualized_pct 为准(程序已按该币真实结算间隔 funding_settle_hours 年化,无需自行换算;与 hint 数字冲突时以 Structured Signal 为准)。\n")
-	sb.WriteString("> **short_scan 候选的默认姿态(稳定规则,勿逐次重判)**: short_scan 按涨幅大入选,候选的 1h/4h 结构天然还是多头——scanner 说可空、结构说多头不是偶发冲突,是该引擎的常态。默认姿态: 顶部确认信号(顶背离/假突破/费率回落——后者只认 derivatives.funding_rollover.detected;破 1h EMA20 不算确认,2026-10-07 复盘:仅破 EMA20 的信号胜率 47%、均值为负)之外,**还必须 execution_filter.short_allowed=true(15m 微趋势已转)才允许做空**;仅凭确认信号而 15m 仍 up → 输出 wait + wait_bias=short(wait_state 由程序按 wait_bias 派生,勿输出),触发事件写\"15m 微趋势转 down + RECHECK_ALL_HARD_GATES\"(转 down 只是重评条件,届时 RR/锚点/资金费率等一切硬门重新全过)。entry_timing_gate 开启时这同时是硬规则(15m 逆势 open_short 会被程序拒单);顶部确认部分同样已被程序强制——short_scan 候选缺确认时 hard_entry_gate.failed 给出 SHORT_TOP_CONFIRM_MISSING,直接引用,不要试图用 hint 里的确认字样推翻(2026-10-04)\n\n")
+	sb.WriteString("> scanner_hint / 扫描评分 / patterns 均为程序化扫描的辅助证据,不是交易结论(快照见 generated_at_utc)。数据源分工:做多数据源(oi_top、piggy_dash 突破)优先考虑做多,做空数据源(short_scan、oi_low、piggy_dash 跌破)优先考虑做空;**纯 short_scan 候选已被硬门禁做多(hard_entry_gate.long.failed=SHORT_SCAN_ONLY_NO_LONG,无例外)**。未禁方向、时机与是否交易由你综合全部数据独立判断(依据写入推理);暴涨币 funding 变化快,以 Structured Signal 为准(derivatives.funding_annualized_pct 已按 funding_settle_hours 年化)。\n")
+	sb.WriteString("> **short_scan 默认姿态**: 入选币 1h/4h 结构多头是常态。做空除顶部确认(顶背离/假突破/derivatives.funding_rollover.detected;破 1h EMA20 不算)外,还须 execution_filter.short_allowed=true(15m 转 down);15m 仍 up 时 wait + wait_bias=short(勿输出 wait_state),触发写\"15m 转 down + RECHECK_ALL_HARD_GATES\"。entry_timing_gate 开启时 15m 逆势拒单;缺确认时 hard_entry_gate.failed=SHORT_TOP_CONFIRM_MISSING,直接引用,勿用 hint 推翻。\n\n")
 
 	// 8. Custom Prompt
 	if e.config.CustomPrompt != "" {
@@ -1328,7 +1328,7 @@ func (e *StrategyEngine) formatCoinSourceTag(sources []string) string {
 		if hasHyperAll || hasHyperMain {
 			return " (Hyperliquid)"
 		}
-		return " (Multiple sources)"
+		return " (" + strings.Join(sources, "+") + ")"
 	} else if len(sources) == 1 {
 		switch sources[0] {
 		case "ai500":
@@ -1339,6 +1339,8 @@ func (e *StrategyEngine) formatCoinSourceTag(sources []string) string {
 			return " (OI_Low OI decrease)"
 		case "piggy_dash":
 			return " (Piggy Dash breakout engine)"
+		case "short_scan":
+			return " (Short Scan)"
 		case "static":
 			return " (Manual selection)"
 		case "hyper_all":
@@ -1753,24 +1755,49 @@ func (e *StrategyEngine) computeCoinSignalForSide(data *market.Data, quantData *
 	}
 	// Per-symbol enrichment (all programmatic, no AI judgment):
 	if coin != nil {
+		opt.ShortScanOnlyNoLong = IsPureShortScanCandidate(coin)
+		var hasShortScan, hasOITop, hasOILow, hasPiggy bool
 		for _, src := range coin.Sources {
-			if src == "short_scan" && coin.ShortScore > 0 {
-				opt.ScannerBias = "short"
-				// The top-confirmation gate consumes the scanner's own
-				// confirmation verdict (2026-10-04 batch-2).
-				// universe=breakdown is a CONTINUATION short (sell the failed
-				// bounce in a downtrend): it can never print a topping
-				// confirmation, so it is exempt from the top-confirm gate
-				// (the 15m MICRO_TREND gate still applies).
-				if ShortScanNeedsTopConfirmation(coin.ShortUniverse) {
-					conf := coin.ShortConfirmed
-					opt.ShortScanConfirmed = &conf
+			switch src {
+			case "short_scan":
+				hasShortScan = true
+				if coin.ShortScore > 0 {
+					opt.ScannerBias = "short"
+					// The top-confirmation gate consumes the scanner's own
+					// confirmation verdict (2026-10-04 batch-2).
+					// universe=breakdown is a CONTINUATION short (sell the failed
+					// bounce in a downtrend): it can never print a topping
+					// confirmation, so it is exempt from the top-confirm gate
+					// (the 15m MICRO_TREND gate still applies).
+					if ShortScanNeedsTopConfirmation(coin.ShortUniverse) {
+						conf := coin.ShortConfirmed
+						opt.ShortScanConfirmed = &conf
+					}
 				}
-				break
+			case "oi_top":
+				hasOITop = true
+			case "oi_low":
+				hasOILow = true
+			case "piggy_dash":
+				hasPiggy = true
 			}
 		}
 		if coin.ScannerConflict {
 			opt.ScannerConflict = true
+		}
+		if opt.ScannerBias == "" && !coin.ScannerConflict {
+			switch {
+			case hasShortScan:
+				opt.ScannerBias = "short"
+			case hasPiggy && coin.ScannerDirection == breakout.DirUp:
+				opt.ScannerBias = "long"
+			case hasPiggy && coin.ScannerDirection == breakout.DirDown:
+				opt.ScannerBias = "short"
+			case hasOITop && !hasOILow:
+				opt.ScannerBias = "long"
+			case hasOILow && !hasOITop:
+				opt.ScannerBias = "short"
+			}
 		}
 	}
 	opt.QuoteVolume24hUsd = binanceQuoteVolume24h(data.Symbol)

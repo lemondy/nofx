@@ -207,6 +207,7 @@ func (at *AutoTrader) pendingDirectionBlocked(pe *pendingEntry) string {
 			OISurge15mPct:             rc.EffectiveOISurge15mPct(), OISurge1hPct: rc.EffectiveOISurge1hPct(),
 			OI15mPct: oi15m, OI1hPct: oi1h,
 			ConfiguredTimeframes: at.recheckConfiguredTimeframes(pe.Symbol),
+			ShortScanOnlyNoLong:  at.config.StrategyConfig.CoinSource.SourceType == "short_scan",
 		})
 		if err != nil || sig == nil || sig.HardGate == nil {
 			return "pending fresh gate unavailable"

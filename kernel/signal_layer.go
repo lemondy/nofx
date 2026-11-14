@@ -489,7 +489,7 @@ type DirectionGate struct {
 	// buffer (step-out, 09-19). A plan is never clamped into no-man's-land.
 	StopPlanSource string   `json:"stop_plan_source,omitempty"`
 	RR             *RRScan  `json:"rr_scan,omitempty"` // nil when no noise floor is configured (best-case RR undefined)
-	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, REGIME_LINE_BROKEN, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU, WIDE_STOP_x_GT_y, BTC_4H_DOWNTREND, BTC_WEAK_LONG_x_VS_y, EMA20_STRETCH_x_GT_y, CHASE_EMA20_1H_x_GT_y, COUNTER_EMA20_1H_x_GT_y, RSI1H_EXHAUSTED_x, CHASE_MOVE4H_x_GT_y, BTC_4H_STRONGBULL, SHORT_TOP_CONFIRM_MISSING
+	Failed         []string `json:"failed"`            // machine codes, ALWAYS present ([] when clean): MICRO_TREND_NOT_LONG/SHORT, EXTENDED_PUMP_UNCONFIRMED, REGIME_LINE_BROKEN, LIMIT_ANCHOR_SUPPRESSED, RR_MAX_x.xx, STOP_PLAN_NO_STRUCTURE, STOP_PLAN_OUT_OF_BAND, BSTOCK_DAILY_DATA_UNAVAILABLE, DATA_INSUFFICIENT, MIN_SIZE_DEAD_ZONE, LOSS_STREAK_BANNED, STOCK_WEEKEND, VENDOR_DIVERGENCE_x.xx/UNKNOWN, POOR_HISTORY, CONSENSUS_OPPOSED_±score, NEG_EDGE_SCORE_±s_LT_t / NEG_EDGE_TREND_MISALIGNED / NEG_EDGE_RR_x.xx_LT_t / NEG_EDGE_LOSING_SYMBOL_x.xxU, WIDE_STOP_x_GT_y, BTC_4H_DOWNTREND, BTC_WEAK_LONG_x_VS_y, EMA20_STRETCH_x_GT_y, CHASE_EMA20_1H_x_GT_y, COUNTER_EMA20_1H_x_GT_y, RSI1H_EXHAUSTED_x, CHASE_MOVE4H_x_GT_y, BTC_4H_STRONGBULL, SHORT_TOP_CONFIRM_MISSING, SHORT_SCAN_ONLY_NO_LONG
 }
 
 // HardEntryGate holds both direction verdicts.
@@ -717,6 +717,11 @@ type SignalOptions struct {
 	// ShortScanConfirmed carries the short_scan candidate's topping
 	// confirmation (nil = this candidate has no short_scan evidence).
 	ShortScanConfirmed *bool
+	// ShortScanOnlyNoLong marks a candidate sourced exclusively from
+	// short-side pool(s) (pure short_scan without ai500 / oi_top /
+	// piggy_dash breakout / static backing). Hard-blocks open_long with
+	// SHORT_SCAN_ONLY_NO_LONG.
+	ShortScanOnlyNoLong bool
 	// SentimentLongDeweightPts / SentimentLongDeweightArmed: while ARMED
 	// (engine-side: crypto FNG ≥ threshold), a LONG's directional score loses
 	// this many points at the gate reads (CONSENSUS_OPPOSED / NEG_EDGE_SCORE
@@ -2076,6 +2081,12 @@ func computeHardEntryGate(sig *SymbolSignal, opt SignalOptions) *HardEntryGate {
 			if !liveRollover {
 				add("SHORT_TOP_CONFIRM_MISSING")
 			}
+		}
+		// Pure short_scan source discipline: short-scanner-only candidates
+		// (without ai500 / oi_top / piggy_dash breakout / static backing)
+		// must not open long — short data sources only consider shorts.
+		if isLong && opt.ShortScanOnlyNoLong {
+			add("SHORT_SCAN_ONLY_NO_LONG")
 		}
 		if g.RR != nil && opt.MinRR > 0 && !g.RR.Usable {
 			add(fmt.Sprintf("RR_MAX_%.2f", g.RR.BestRR))

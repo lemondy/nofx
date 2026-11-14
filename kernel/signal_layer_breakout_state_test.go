@@ -375,3 +375,49 @@ func TestShortTopConfirmGate(t *testing.T) {
 		t.Fatal("the confirmation gate must not touch the long side")
 	}
 }
+
+func TestIsPureShortScanCandidate(t *testing.T) {
+	cases := []struct {
+		name string
+		coin *CandidateCoin
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty_sources", &CandidateCoin{Symbol: "XUSDT"}, false},
+		{"pure_short_scan", &CandidateCoin{Symbol: "DODOXUSDT", Sources: []string{"short_scan"}}, true},
+		{"short_scan_plus_oi_low", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "oi_low"}}, true},
+		{"short_scan_plus_piggy_breakdown", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "piggy_dash"}, ScannerDirection: "breakdown"}, true},
+		{"short_scan_plus_piggy_breakout", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "piggy_dash"}, ScannerDirection: "breakout"}, false},
+		{"short_scan_plus_piggy_unknown_dir", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "piggy_dash"}}, false},
+		{"short_scan_plus_ai500", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "ai500"}}, false},
+		{"short_scan_plus_oi_top", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "oi_top"}}, false},
+		{"short_scan_plus_static", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "static"}}, false},
+		{"short_scan_plus_hyper_all", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "hyper_all"}}, false},
+		{"short_scan_plus_hyper_main", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"short_scan", "hyper_main"}}, false},
+		{"ai500_only", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"ai500"}}, false},
+		{"oi_low_only", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"oi_low"}}, false},
+		{"piggy_only", &CandidateCoin{Symbol: "XUSDT", Sources: []string{"piggy_dash"}, ScannerDirection: "breakdown"}, false},
+	}
+	for _, tc := range cases {
+		if got := IsPureShortScanCandidate(tc.coin); got != tc.want {
+			t.Errorf("%s: IsPureShortScanCandidate = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestShortScanOnlyNoLongGate(t *testing.T) {
+	sig := lpSig(100, 101, 95)
+	opt := lpOpt()
+	if g := computeHardEntryGate(sig, opt); hasCode(g.Long, "SHORT_SCAN_ONLY_NO_LONG") {
+		t.Fatalf("zero-value ShortScanOnlyNoLong must not fire, failed=%v", g.Long.Failed)
+	}
+	opt.ShortScanOnlyNoLong = true
+	g := computeHardEntryGate(sig, opt)
+	if g.Long.Allowed || !hasCode(g.Long, "SHORT_SCAN_ONLY_NO_LONG") {
+		t.Fatalf("pure short_scan must block long with SHORT_SCAN_ONLY_NO_LONG, allowed=%v failed=%v", g.Long.Allowed, g.Long.Failed)
+	}
+	// Short gate must never read ShortScanOnlyNoLong.
+	if gS := computeHardEntryGate(lpSig(100, 99, 105), opt).Short; hasCode(gS, "SHORT_SCAN_ONLY_NO_LONG") {
+		t.Fatalf("SHORT_SCAN_ONLY_NO_LONG must not touch short gate, failed=%v", gS.Failed)
+	}
+}

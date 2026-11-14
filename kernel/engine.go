@@ -958,6 +958,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 				//主力 source) and ShortScanAtMs (generated_at_utc vanished).
 				c.NearHighAlso = meta.NearHighAlso
 				c.ShortScanAtMs = meta.ShortScanAtMs
+				c.ScannerDirection = "short"
 			}
 			if meta, ok := piggyMeta[symbol]; ok && meta.ScannerDirection != "" {
 				c.ScannerDirection = meta.ScannerDirection
@@ -1008,6 +1009,34 @@ func hasScannerConflict(sources []string, piggyDirection string) bool {
 		}
 	}
 	return shortScan && piggy
+}
+
+// IsPureShortScanCandidate reports whether a candidate was sourced solely
+// from short-side pool(s) with short_scan present (no long or general coin pool
+// such as ai500, oi_top, static, hyper_all, hyper_main, or non-breakdown
+// piggy_dash). Pure short_scan candidates are hard-blocked from opening longs
+// so short-scanner picks only consider shorts.
+func IsPureShortScanCandidate(coin *CandidateCoin) bool {
+	if coin == nil || len(coin.Sources) == 0 {
+		return false
+	}
+	hasShortScan := false
+	for _, raw := range coin.Sources {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "short_scan":
+			hasShortScan = true
+		case "oi_low":
+			// OI decrease is also a short-side source; keep pure short status.
+		case "piggy_dash":
+			if coin.ScannerDirection != breakout.DirDown {
+				return false
+			}
+		default:
+			// ai500, oi_top, static, hyper_all, hyper_main, or unknown → general/long backing.
+			return false
+		}
+	}
+	return hasShortScan
 }
 
 // filterExcludedCoins removes excluded coins from the candidates list

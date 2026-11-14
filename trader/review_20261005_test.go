@@ -35,6 +35,47 @@ func TestAudit05ShortBansMustReachMarketExecution(t *testing.T) {
 	}
 }
 
+func TestPureShortScanLongBanMustBlockMarketLimitAndExecution(t *testing.T) {
+	if !absoluteBanCode("SHORT_SCAN_ONLY_NO_LONG") {
+		t.Fatal("SHORT_SCAN_ONLY_NO_LONG must be registered in absoluteBanCode")
+	}
+	for _, action := range []string{"open_long", "open_long_limit"} {
+		at := riskTestTrader(store.RiskControlConfig{LimitEntryEnabled: action == "open_long_limit"})
+		at.cycleGateStates = map[string]*kernel.GateState{
+			"DODOXUSDT": {
+				LongAllowed:         false,
+				LongFailed:          []string{"SHORT_SCAN_ONLY_NO_LONG"},
+				LongMarketException: true, // even with market exception flag, absolute ban blocks
+				ShortAllowed:        true,
+			},
+		}
+		ctx := &kernel.Context{
+			Account:        kernel.AccountInfo{TotalEquity: 1000},
+			CandidateCoins: []kernel.CandidateCoin{{Symbol: "DODOXUSDT", Sources: []string{"short_scan"}}},
+			MarketDataMap:  map[string]*market.Data{"DODOXUSDT": {CurrentPrice: 100}},
+		}
+		d := kernel.Decision{Symbol: "DODOXUSDT", Action: action, Price: 100, StopLoss: 95, TakeProfit: 110, PositionSizeUSD: 100, Confidence: 95}
+		if got := at.applyHardRiskGates([]kernel.Decision{d}, ctx); len(got) != 0 {
+			t.Errorf("%s passed SHORT_SCAN_ONLY_NO_LONG hard gate", action)
+		}
+	}
+	// Execution-layer guard must also block long while allowing short.
+	at := riskTestTrader(store.RiskControlConfig{})
+	at.cycleGateStates = map[string]*kernel.GateState{
+		"DODOXUSDT": {
+			LongAllowed:  false,
+			LongFailed:   []string{"SHORT_SCAN_ONLY_NO_LONG"},
+			ShortAllowed: true,
+		},
+	}
+	if err := at.entryExecutionBlocked("DODOXUSDT", "long"); err == nil {
+		t.Fatal("entryExecutionBlocked must refuse long on SHORT_SCAN_ONLY_NO_LONG")
+	}
+	if err := at.entryExecutionBlocked("DODOXUSDT", "short"); err != nil {
+		t.Fatalf("entryExecutionBlocked must allow short, got %v", err)
+	}
+}
+
 func TestAudit05DailyUptrendBanMustCoverLimitShort(t *testing.T) {
 	at := riskTestTrader(store.RiskControlConfig{BlockShort1dUptrend: true})
 	at.cycleGateStates = map[string]*kernel.GateState{"XUSDT": {ShortAllowed: true}}
