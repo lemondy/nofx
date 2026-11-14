@@ -57,6 +57,7 @@ type quantTargets struct {
 	Weights      map[string]float64 `json:"weights"`
 	Excluded     map[string]string  `json:"excluded"`
 	Pct          map[string]float64 `json:"pct"`
+	K            *float64           `json:"k,omitempty"`
 
 	asOfDate time.Time // parsed AsOf (UTC midnight); zero when status != ok and as_of is unusable
 }

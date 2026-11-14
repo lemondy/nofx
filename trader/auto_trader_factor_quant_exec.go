@@ -563,6 +563,7 @@ func (b *fqStockBroker) placeShort(o fqOrder) fqResult {
 // fqRebalanceReport is everything one rebalance attempt produced.
 type fqRebalanceReport struct {
 	Targets *quantTargets
+	Regime  fqRegimeInfo
 	Before  *fqAccount
 	After   *fqAccount
 	Plan    fqPlan
