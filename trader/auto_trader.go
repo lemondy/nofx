@@ -769,11 +769,11 @@ func (at *AutoTrader) run() (err error) {
 	// Execute immediately on first run
 	if isGridStrategy {
 		if err := at.RunGridCycle(); err != nil {
-			logger.Infof("❌ Grid execution failed: %v", err)
+			logger.Errorf("❌ [%s] Grid execution failed: %v", at.name, err)
 		}
 	} else {
 		if err := at.runCycle(); err != nil {
-			logger.Infof("❌ Execution failed: %v", err)
+			logger.Errorf("❌ [%s] Execution failed: %v", at.name, err)
 		}
 	}
 
@@ -790,11 +790,11 @@ func (at *AutoTrader) run() (err error) {
 		case <-timer.C:
 			if isGridStrategy {
 				if err := at.RunGridCycle(); err != nil {
-					logger.Infof("❌ Grid execution failed: %v", err)
+					logger.Errorf("❌ [%s] Grid execution failed: %v", at.name, err)
 				}
 			} else {
 				if err := at.runCycle(); err != nil {
-					logger.Infof("❌ Execution failed: %v", err)
+					logger.Errorf("❌ [%s] Execution failed: %v", at.name, err)
 				}
 			}
 			// Re-arm on the next wall-clock boundary — a cycle that overshoots

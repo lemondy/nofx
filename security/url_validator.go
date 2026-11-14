@@ -18,20 +18,18 @@ import (
 var privateIPBlocks []*net.IPNet
 
 func init() {
-	// Initialize private IP blocks
-	// These ranges should not be accessible via user-controlled URLs
+	// Initialize restricted IP blocks
+	// Loopback, link-local / cloud metadata, and reserved ranges are blocked;
+	// RFC1918 / RFC4193 LAN ranges (10/8, 172.16/12, 192.168/16, fc00::/7) are
+	// allowed so self-hosted deployments can reach LAN AI/model servers.
 	privateRanges := []string{
 		"127.0.0.0/8",    // IPv4 loopback
-		"10.0.0.0/8",     // RFC1918 private
-		"172.16.0.0/12",  // RFC1918 private
-		"192.168.0.0/16", // RFC1918 private
 		"169.254.0.0/16", // Link-local / Cloud metadata
 		"0.0.0.0/8",      // Current network
 		"224.0.0.0/4",    // Multicast
 		"240.0.0.0/4",    // Reserved
 		"::1/128",        // IPv6 loopback
 		"fe80::/10",      // IPv6 link-local
-		"fc00::/7",       // IPv6 unique local
 	}
 
 	for _, cidr := range privateRanges {
@@ -68,12 +66,7 @@ func isPrivateIP(ip net.IP) bool {
 		return true
 	}
 
-	// Check if it's a private address
-	if ip.IsPrivate() {
-		return true
-	}
-
-	// Check against our explicit private ranges
+	// Check against our explicit restricted ranges
 	for _, block := range privateIPBlocks {
 		if block.Contains(ip) {
 			return true
@@ -225,6 +218,10 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		Proxy: func(req *http.Request) (*url.URL, error) {
 			if err := ValidateURL(req.URL.String()); err != nil {
 				return nil, err
+			}
+			// Bypass external proxy for direct LAN private IP targets
+			if ip := net.ParseIP(req.URL.Hostname()); ip != nil && ip.IsPrivate() {
+				return nil, nil
 			}
 			return http.ProxyFromEnvironment(req)
 		},

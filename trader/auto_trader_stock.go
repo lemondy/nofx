@@ -448,7 +448,7 @@ func (at *AutoTrader) runStockCycleSafe(ctx context.Context) {
 		}
 	}()
 	if err := at.runStockCycle(ctx); err != nil {
-		logger.Infof("❌ [%s] us_stock cycle failed: %v", at.name, err)
+		logger.Errorf("❌ [%s] us_stock cycle failed: %v", at.name, err)
 	}
 }
 

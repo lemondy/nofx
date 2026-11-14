@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { PaperBadge } from './PaperBadge'
 import {
   Bot,
@@ -9,6 +10,8 @@ import {
   EyeOff,
   Copy,
   Check,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 import type { TraderInfo, Exchange } from '../../types'
 import type { Language } from '../../i18n/translations'
@@ -65,6 +68,53 @@ export function TradersList({
   onToggleTraderAddress,
   onCopyAddress,
 }: TradersListProps) {
+  const [expandedGroups, setExpandedGroups] = useState<{
+    running: boolean
+    stopped: boolean
+  }>({
+    running: false,
+    stopped: false,
+  })
+
+  const toggleGroup = (group: 'running' | 'stopped') => {
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [group]: !prev[group],
+    }))
+  }
+
+  const runningTraders = (traders ?? []).filter((trader) =>
+    Boolean(trader.is_running)
+  )
+  const stoppedTraders = (traders ?? []).filter((trader) => !trader.is_running)
+
+  const traderGroups = [
+    {
+      key: 'running' as const,
+      label: t('running', language),
+      badgeVariant: 'up' as const,
+      items: runningTraders,
+      emptyText:
+        language === 'zh'
+          ? '暂无运行中的交易员'
+          : language === 'id'
+            ? 'Tidak ada trader yang berjalan'
+            : 'No running traders',
+    },
+    {
+      key: 'stopped' as const,
+      label: t('stopped', language),
+      badgeVariant: 'down' as const,
+      items: stoppedTraders,
+      emptyText:
+        language === 'zh'
+          ? '暂无已停止的交易员'
+          : language === 'id'
+            ? 'Tidak ada trader yang berhenti'
+            : 'No stopped traders',
+    },
+  ]
+
   return (
     <div className="binance-card p-4 md:p-6">
       <div className="flex items-center justify-between mb-4 md:mb-5">
@@ -95,25 +145,88 @@ export function TradersList({
           </div>
         </div>
       ) : traders && traders.length > 0 ? (
-        <div className="space-y-3 md:space-y-4">
-          {traders.map((trader) => (
-            <TraderRow
-              key={trader.trader_id}
-              trader={trader}
-              allExchanges={allExchanges}
-              visibleTraderAddresses={visibleTraderAddresses}
-              copiedId={copiedId}
-              language={language}
-              onTraderSelect={onTraderSelect}
-              onNavigate={onNavigate}
-              onEditTrader={onEditTrader}
-              onToggleTrader={onToggleTrader}
-              onToggleCompetition={onToggleCompetition}
-              onDeleteTrader={onDeleteTrader}
-              onToggleTraderAddress={onToggleTraderAddress}
-              onCopyAddress={onCopyAddress}
-            />
-          ))}
+        <div className="space-y-4">
+          {traderGroups.map((group) => {
+            const isExpanded = expandedGroups[group.key]
+            return (
+              <div
+                key={group.key}
+                className="rounded-lg overflow-hidden"
+                style={{
+                  border: '1px solid var(--line)',
+                  background:
+                    'color-mix(in srgb, var(--surface-2) 45%, transparent)',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  aria-expanded={isExpanded}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 md:px-4 md:py-3 transition-colors hover:bg-surface-hover text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+                >
+                  <div className="flex items-center gap-2.5">
+                    {isExpanded ? (
+                      <ChevronDown
+                        className="w-4 h-4 shrink-0"
+                        style={{ color: 'var(--fg-3)' }}
+                      />
+                    ) : (
+                      <ChevronRight
+                        className="w-4 h-4 shrink-0"
+                        style={{ color: 'var(--fg-3)' }}
+                      />
+                    )}
+                    <Badge variant={group.badgeVariant}>{group.label}</Badge>
+                    <span
+                      className="num text-xs font-medium px-2 py-0.5 rounded-full"
+                      style={{
+                        background: 'var(--surface-2)',
+                        color: 'var(--fg-3)',
+                        border: '1px solid var(--line)',
+                      }}
+                    >
+                      {group.items.length}
+                    </span>
+                  </div>
+                </button>
+
+                {isExpanded && (
+                  <div
+                    className="p-3 md:p-4 space-y-3 md:space-y-4"
+                    style={{ borderTop: '1px solid var(--line)' }}
+                  >
+                    {group.items.length > 0 ? (
+                      group.items.map((trader) => (
+                        <TraderRow
+                          key={trader.trader_id}
+                          trader={trader}
+                          allExchanges={allExchanges}
+                          visibleTraderAddresses={visibleTraderAddresses}
+                          copiedId={copiedId}
+                          language={language}
+                          onTraderSelect={onTraderSelect}
+                          onNavigate={onNavigate}
+                          onEditTrader={onEditTrader}
+                          onToggleTrader={onToggleTrader}
+                          onToggleCompetition={onToggleCompetition}
+                          onDeleteTrader={onDeleteTrader}
+                          onToggleTraderAddress={onToggleTraderAddress}
+                          onCopyAddress={onCopyAddress}
+                        />
+                      ))
+                    ) : (
+                      <div
+                        className="py-4 text-center text-xs md:text-sm"
+                        style={{ color: 'var(--fg-3)' }}
+                      >
+                        {group.emptyText}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       ) : (
         <TradersEmptyState

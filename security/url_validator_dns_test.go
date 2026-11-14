@@ -50,12 +50,18 @@ func TestValidateURLRetriesTransientDNSMiss(t *testing.T) {
 		if n == 1 {
 			return nil, errors.New("temporary failure")
 		}
-		return []net.IPAddr{{IP: net.ParseIP("10.0.0.5")}}, nil
+		return []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, nil
 	})
 	if err := ValidateURL("https://custom.example/v1"); err == nil {
-		t.Fatal("retried lookup resolving to a private IP must be blocked")
+		t.Fatal("retried lookup resolving to link-local metadata IP must be blocked")
 	}
 	if *calls != 2 {
 		t.Fatalf("lookups=%d, want 2", *calls)
+	}
+}
+
+func TestValidateURLAllowsLANPrivateIP(t *testing.T) {
+	if err := ValidateURL("http://192.168.50.165:3425/v1"); err != nil {
+		t.Fatalf("expected LAN private IP to be allowed, got: %v", err)
 	}
 }

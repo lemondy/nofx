@@ -170,7 +170,9 @@ func (client *Client) SetTimeout(timeout time.Duration) {
 // CallWithMessages template method - fixed retry flow (cannot be overridden)
 func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string, error) {
 	if client.APIKey == "" {
-		return "", fmt.Errorf("AI API key not set, please call SetAPIKey first")
+		err := fmt.Errorf("AI API key not set, please call SetAPIKey first")
+		client.Log.Errorf("❌ [%s] %v", client.String(), err)
+		return "", err
 	}
 
 	// Fixed retry flow
@@ -201,6 +203,7 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 		attempts = attempt
 		// Check if error is retryable via hooks (supports custom retry strategy)
 		if !client.Hooks.IsRetryableError(err) {
+			client.Log.Errorf("❌ [%s] AI API call failed (non-retryable): %v", client.String(), err)
 			return "", err
 		}
 		// review 2026-10-28 #14: HTTP status errors (429/5xx) fail within
@@ -216,11 +219,14 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 			break
 		}
 		if err := client.retryAfterError(err, attempt, limit); err != nil {
+			client.Log.Errorf("❌ [%s] AI API call aborted during retry wait (attempt %d/%d): %v", client.String(), attempt, limit, err)
 			return "", err
 		}
 	}
 
-	return "", fmt.Errorf("still failed after %d retries: %w", attempts, lastErr)
+	finalErr := fmt.Errorf("still failed after %d retries: %w", attempts, lastErr)
+	client.Log.Errorf("❌ [%s] AI API call failed: %v", client.String(), finalErr)
+	return "", finalErr
 }
 
 func (client *Client) SetAuthHeader(reqHeader http.Header) {

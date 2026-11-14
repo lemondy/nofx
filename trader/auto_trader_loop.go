@@ -237,6 +237,8 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 		at.consecutiveAIFailures++
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("Failed to get AI decision: %v", err)
+		logger.Errorf("❌ [%s] AI decision failed (model=%s, consecutive=%d): %v",
+			at.name, at.aiModel, at.consecutiveAIFailures, err)
 
 		// Activate safe mode after 3 consecutive failures
 		if at.consecutiveAIFailures >= 3 && !at.safeMode {

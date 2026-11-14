@@ -547,7 +547,9 @@ func (at *AutoTrader) runStockCycle(ctx context.Context) error {
 	fail := func(err error) error {
 		rec.Success = false
 		rec.ErrorMessage = pfx + err.Error()
-		logf("cycle failed: %v", err)
+		line := pfx + fmt.Sprintf("cycle failed: %v", err)
+		rec.ExecutionLog = append(rec.ExecutionLog, line)
+		logger.Errorf("❌ 🇺🇸 [%s] %s", at.name, line)
 		at.saveStockRecord(rec)
 		return err
 	}

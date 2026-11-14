@@ -529,6 +529,7 @@ func (at *AutoTrader) RunGridCycle() error {
 		return kernel.GetGridDecisions(gridCtx, at.mcpClient, gridConfig, lang)
 	})
 	if err != nil {
+		logger.Errorf("❌ [%s] Grid AI decision failed: %v", at.name, err)
 		return fmt.Errorf("failed to get grid decisions: %w", err)
 	}
 
