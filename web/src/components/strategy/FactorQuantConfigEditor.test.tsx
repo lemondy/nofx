@@ -398,3 +398,36 @@ test('portfolio risk fields show English defaults and respect disabled', () => {
   fireEvent.click(reset)
   expect(onChange).not.toHaveBeenCalled()
 })
+
+test('regime_tilt toggle defaults to checked, updates config, and respects disabled', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  const toggle = screen.getByTestId('factor-regime_tilt')
+  expect(toggle).toBeChecked()
+  fireEvent.click(toggle)
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ regime_tilt: false })
+  )
+  expect(toggle).not.toBeChecked()
+  fireEvent.click(toggle)
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ regime_tilt: true })
+  )
+  expect(toggle).toBeChecked()
+
+  cleanup()
+  const onChangeDisabled = vi.fn()
+  render(
+    <FactorQuantConfigEditor
+      config={{ market: 'us', regime_tilt: false }}
+      language="en"
+      disabled
+      onChange={onChangeDisabled}
+    />
+  )
+  const disabledToggle = screen.getByTestId('factor-regime_tilt')
+  expect(disabledToggle).toBeDisabled()
+  expect(disabledToggle).not.toBeChecked()
+  fireEvent.click(disabledToggle)
+  expect(onChangeDisabled).not.toHaveBeenCalled()
+})

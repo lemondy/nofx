@@ -114,6 +114,25 @@ function FactorQuantRunSection({
         days: status.horizon,
       }),
     },
+    ...(status.regime
+      ? [
+          {
+            label: 'regime',
+            value: (() => {
+              const r = status.regime
+              const stateKey = `riskStatus.factorQuantRegime.${r.state}`
+              const stateLabel = t(stateKey, language)
+              const label = stateLabel === stateKey ? r.state : stateLabel
+              const bench =
+                r.close && r.ema20 && r.ema50
+                  ? `${r.benchmark} ${r.close.toFixed(2)} / EMA20 ${r.ema20.toFixed(2)} / EMA50 ${r.ema50.toFixed(2)}`
+                  : r.benchmark || '--'
+              const counts = `${r.long_count}L (+${(r.long_gross * 100).toFixed(1)}%) / ${r.short_count}S (-${(r.short_gross * 100).toFixed(1)}%)`
+              return [label, bench, counts, r.reason].filter(Boolean).join(' · ')
+            })(),
+          },
+        ]
+      : []),
     ...((status.retry_attempts ?? 0) > 0
       ? [
           {

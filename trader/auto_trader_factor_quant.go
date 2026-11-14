@@ -47,6 +47,7 @@ type factorQuantRuntime struct {
 	targetsStatus  string
 	targetsRule    string
 	targetsHorizon int
+	regime         *fqRegimeInfo
 }
 
 // IsFactorQuantStrategy reports whether this trader runs the factor_quant strategy.
@@ -353,12 +354,16 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	fq := at.config.StrategyConfig.FactorQuantConfig
 	path := factorQuantTargetsPath(fq)
 	targets, loadErr := loadQuantTargets(path, fq.Market)
+	effectiveTargets, regimeInfo := fqResolveRegimeTargets(targets, fq, path)
+	targets = effectiveTargets
+	at.fq.mu.Lock()
 	if targets != nil {
-		at.fq.mu.Lock()
 		at.fq.targetsAsOf, at.fq.targetsStatus = targets.AsOf, targets.Status
 		at.fq.targetsRule, at.fq.targetsHorizon = targets.Rule.Name, targets.Horizon
-		at.fq.mu.Unlock()
 	}
+	regimeCopy := regimeInfo
+	at.fq.regime = &regimeCopy
+	at.fq.mu.Unlock()
 	state, err := at.fqState()
 	if err != nil {
 		// Fail safe: without the durable marker a restart could double-rebalance.
@@ -391,7 +396,7 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 	dec := fqShouldRebalance(targets, fq, lastAsOf, hasPositions, now)
 	if !dec.Rebalance {
 		if dec.Code == fqCodeTooSoon && state.RetryAsOf != "" && state.RetryAsOf == lastAsOf && targets.AsOf == state.RetryAsOf {
-			at.factorQuantRetry(broker, targets, state, dec, now)
+			at.factorQuantRetry(broker, targets, state, dec, now, regimeInfo)
 			return
 		}
 		if dec.Code != fqCodeShortDisabled && at.factorQuantFlattenCheck(broker, targets, state, now) {
@@ -409,8 +414,9 @@ func (at *AutoTrader) factorQuantRebalanceCheck(broker fqBroker, now time.Time) 
 		return
 	}
 
-	logger.Infof("📐 [%s] factor_quant 开始调仓 as_of=%s rule=%s：%s", at.name, targets.AsOf, targets.Rule.Name, dec.Reason)
+	logger.Infof("📐 [%s] factor_quant 开始调仓 as_of=%s rule=%s %s：%s", at.name, targets.AsOf, targets.Rule.Name, regimeInfo.summaryText(), dec.Reason)
 	rep := fqRunRebalance(broker, targets, fqResolvedPlanConfig(fq))
+	rep.Regime = regimeInfo
 	if rep.Err != nil {
 		if at.factorQuantFlattenCheck(broker, targets, state, now) {
 			return
@@ -454,7 +460,7 @@ func fqResolvedPlanConfig(fq *store.FactorQuantConfig) fqPlanConfig {
 
 // factorQuantRetry is reached only through too_soon: the gate has already
 // checked status, freshness and horizon, and the caller matched both as_ofs.
-func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, state *store.FactorQuantState, dec fqDecision, now time.Time) {
+func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, state *store.FactorQuantState, dec fqDecision, now time.Time, regimeInfo fqRegimeInfo) {
 	fq := at.config.StrategyConfig.FactorQuantConfig
 	if state.RetryAttempts >= fqMaxRetryAttempts {
 		// Recover a crash after the final attempt was persisted but before clear.
@@ -475,6 +481,7 @@ func (at *AutoTrader) factorQuantRetry(broker fqBroker, targets *quantTargets, s
 	planCfg := fqResolvedPlanConfig(fq)
 	planCfg.Retry = true
 	rep := fqRunRebalance(broker, targets, planCfg)
+	rep.Regime = regimeInfo
 	at.factorQuantProtectReport(broker, rep)
 	at.fqSetRetry(targets.AsOf, attempt)
 	failed := rep.Err != nil || rep.failedCount() > 0
@@ -660,6 +667,11 @@ func fqBuildRecord(rep *fqRebalanceReport, dec fqDecision, fq *store.FactorQuant
 	fmt.Fprintf(&sb, "因子量化调仓（%s，仅模拟盘，未调用大模型）\n", fqModeLabel(fq))
 	fmt.Fprintf(&sb, "as_of=%s 规则=%s horizon=%d 天 run_id=%s\n", t.AsOf, fqRuleName(t), dec.Horizon, t.RunID)
 	fmt.Fprintf(&sb, "触发：%s\n", dec.Reason)
+	if rep.Regime.Benchmark != "" {
+		line := rep.Regime.summaryText()
+		sb.WriteString(line + "\n")
+		rec.ExecutionLog = append(rec.ExecutionLog, "[factor_quant] "+line)
+	}
 	for _, warning := range rep.Warnings {
 		sb.WriteString("警告：" + warning + "\n")
 		rec.ExecutionLog = append(rec.ExecutionLog, "[factor_quant] 警告："+warning)
@@ -911,6 +923,9 @@ func (at *AutoTrader) fqRunStatus(state *store.FactorQuantState) *FactorQuantRun
 	}
 	if out.Horizon == 0 {
 		out.Horizon = at.fq.targetsHorizon
+	}
+	if at.fq.regime != nil {
+		out.Regime = at.fq.regime.toStatus()
 	}
 	if state == nil {
 		state = &store.FactorQuantState{LastAsOf: at.fq.memAsOf, RetryAsOf: at.fq.retryAsOf, RetryAttempts: at.fq.retryAttempts}

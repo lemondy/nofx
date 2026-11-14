@@ -63,6 +63,10 @@ type FactorQuantConfig struct {
 	// FlattenAfterDays: flatten owned positions when no rebalance is possible
 	// and last_as_of is older than this; 0 = horizon+max_stale_days, -1 = off.
 	FlattenAfterDays int `json:"flatten_after_days,omitempty"`
+	// RegimeTilt enables pre-rebalance bull/bear market trend detection:
+	// bull => up to 20 longs / max 10 shorts (~2:1 gross), bear => up to 20 shorts /
+	// max 10 longs (~2:1 gross), chop => symmetric. nil = default true.
+	RegimeTilt *bool `json:"regime_tilt,omitempty"`
 	// USFeeBps / USSlippageBps: US only, trading costs of the bStock paper
 	// ledger, in basis points per fill. Buys fill at quote*(1+slippage), sells
 	// at quote*(1-slippage); the fee is a fraction of the notional deducted from
@@ -238,6 +242,16 @@ func (f *FactorQuantConfig) EffectiveFlattenAfterDays(fileHorizon int) int {
 		h = defaultFactorQuantCryptoHorizon
 	}
 	return h + f.EffectiveMaxStaleDays(fileHorizon)
+}
+
+// EffectiveRegimeTilt reports whether bull/bear market trend asymmetric sizing
+// (favored leg up to 20, counter leg max 10, ~2:1 gross tilt) is active.
+// nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveRegimeTilt() bool {
+	if f == nil || f.RegimeTilt == nil {
+		return true
+	}
+	return *f.RegimeTilt
 }
 
 // Validate rejects unusable input; zero retains the documented defaults.
