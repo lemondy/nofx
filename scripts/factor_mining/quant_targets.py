@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import panel, store
+from . import panel, store, tiers
 from .data_fetch import ROOT
 
 
@@ -217,8 +217,62 @@ def _build_us_volscale_targets(features, perps, *, now=None):
     return result
 
 
+def _causal_daily_adv20(root, market, symbol, as_of_str=None):
+    path = Path(root) / market / 'daily' / f'{symbol}.json'
+    try:
+        rows = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    records = {}
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 6 or not isinstance(row[0], str):
+            continue
+        date_str = row[0]
+        if as_of_str is not None and date_str > as_of_str:
+            continue
+        try:
+            o, h, l, c, v = (float(x) for x in row[1:6])
+            vwap = float(row[6]) if len(row) >= 7 and row[6] is not None else c
+        except (TypeError, ValueError):
+            continue
+        if not (np.isfinite([o, h, l, c, v, vwap]).all() and min(o, l, c) > 0 and v >= 0):
+            continue
+        price = vwap if vwap > 0 else c
+        records[pd.Timestamp(date_str)] = v * price
+    if not records:
+        return None
+    return pd.Series(records, dtype=float).sort_index().rolling(20, min_periods=1).mean()
+
+
+def _filter_us_features_by_tier(features, root, tier):
+    tiers.validate_tier(tier)
+    if tier == 'all' or features is None or features['eligible'].empty:
+        return features
+    calendar = features['eligible'].index
+    as_of_str = str(calendar[-1].date())
+    filtered = dict(features)
+    eligible = features['eligible'].copy()
+    thr = tiers.US_MEGA_LARGE_ADV20
+    for col in eligible.columns:
+        if str(col) in tiers.US_ETFS:
+            eligible[col] = False
+            continue
+        adv = _causal_daily_adv20(root, 'us', str(col), as_of_str=as_of_str)
+        if adv is None:
+            eligible[col] = False
+            continue
+        adv_reindexed = adv.reindex(calendar)
+        has_adv = adv_reindexed.notna()
+        is_mega = adv_reindexed.ge(thr).fillna(False)
+        eligible[col] = eligible[col] & has_adv & (is_mega if tier == 'mega_large' else ~is_mega)
+    filtered['eligible'] = eligible
+    return filtered
+
+
 def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, now=None,
-                  root=ROOT, perp_map=None, rule='base') -> dict:
+                  root=ROOT, perp_map=None, rule='base', tier='all') -> dict:
     """Build schema v1 from local US rows or supplied crypto snapshot/panels.
 
     ``horizon`` is an optional consistency assertion, not a rule override.
@@ -228,6 +282,7 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
     US ignores live_scores_doc and miner panels: its S1 features come directly
     from <root>/us/daily and the repository's frozen universe.
     """
+    tiers.validate_tier(tier)
     if rule not in ('base', 'volscale'):
         raise ValueError('rule must be base or volscale')
     if rule == 'volscale' and market != 'us':
@@ -236,7 +291,13 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
         if horizon is not None and horizon != US_HORIZON:
             raise ValueError(f'horizon must match the fixed live selection ({US_HORIZON})')
         builder = _build_us_volscale_targets if rule == 'volscale' else _build_us_targets
-        return builder(_load_us_features(root), _load_perp_map(perp_map), now=now)
+        features = _load_us_features(root)
+        if tier != 'all':
+            features = _filter_us_features_by_tier(features, root, tier)
+        result = builder(features, _load_perp_map(perp_map), now=now)
+        if tier != 'all':
+            result['tier'] = tier
+        return result
     rule = _rule(market)
     generated = _utc(now)
     doc = live_scores_doc or {}
@@ -248,6 +309,8 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
                   as_of=doc.get('as_of'), run_id=doc.get('run_id'), horizon=h,
                   rule=rule, factor_ids=list(entry.get('factor_ids') or []),
                   universe_size=0, weights={}, excluded={}, pct={})
+    if tier != 'all':
+        result['tier'] = tier
     if not entry:
         return result
     as_of = pd.Timestamp(doc.get('as_of'))
@@ -270,6 +333,14 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
     scores = pd.Series({s: v.get('z', np.nan) for s, v in entry['scores'].items()}, dtype=float)
     scores = scores.reindex(close.columns)
     eligible = panels.mask.loc[date].fillna(False) & np.isfinite(scores) & np.isfinite(vol) & vol.gt(0)
+    if tier != 'all':
+        sub_panels = panel.Panels(
+            {name: frame.loc[:date] for name, frame in panels.fields.items()},
+            panels.mask.loc[:date],
+            meta=panels.meta,
+            windows=panels.windows,
+        )
+        eligible = eligible & tiers.tier_mask(sub_panels, market, tier).loc[date].fillna(False)
     scores = scores[eligible]
     result['universe_size'] = len(scores)
     key = (lambda symbol: str(symbol) + 'BUSDT') if market == 'us' else str
@@ -310,20 +381,32 @@ def build_targets(market, live_scores_doc=None, panels=None, *, horizon=None, no
     return result
 
 
-def _load_targets(market, root, *, panels=None, now=None, perp_map=None, rule='base'):
+def _load_targets(market, root, *, panels=None, now=None, perp_map=None, rule='base', tier='all'):
+    tiers.validate_tier(tier)
     if market == 'us':
-        return build_targets(market, root=root, perp_map=perp_map, now=now, rule=rule)
-    doc = store.read_json(Path(root) / market / 'live_scores.json')
+        if tier == 'all':
+            return build_targets(market, root=root, perp_map=perp_map, now=now, rule=rule)
+        return build_targets(market, root=root, perp_map=perp_map, now=now, rule=rule, tier=tier)
+    doc = None
+    if tier != 'all':
+        tier_doc = store.read_json(Path(root) / market / 'tiers' / tier / 'live_scores.json')
+        if _scores_entry(market, tier_doc)[1]:
+            doc = tier_doc
+    if doc is None:
+        doc = store.read_json(Path(root) / market / 'live_scores.json')
     if panels is None and _scores_entry(market, doc)[1]:
         panels = panel.load_panels(market, root)
-    return build_targets(market, doc, panels, now=now, rule=rule)
+    if tier == 'all':
+        return build_targets(market, doc, panels, now=now, rule=rule)
+    return build_targets(market, doc, panels, now=now, rule=rule, tier=tier)
 
 
-def write_targets(market, root, *, panels=None, now=None, perp_map=None, rule='base') -> Path:
+def write_targets(market, root, *, panels=None, now=None, perp_map=None, rule='base', tier='all') -> Path:
     """Read local inputs and atomically replace the selected rule's target file."""
-    result = _load_targets(market, root, panels=panels, now=now, perp_map=perp_map, rule=rule)
+    tiers.validate_tier(tier)
+    result = _load_targets(market, root, panels=panels, now=now, perp_map=perp_map, rule=rule, tier=tier)
     filename = 'quant_targets_volscale.json' if rule == 'volscale' else 'quant_targets.json'
-    path = Path(root) / market / filename
+    path = (Path(root) / market / filename) if tier == 'all' else (Path(root) / market / 'tiers' / tier / filename)
     # store uses a same-directory mkstemp, fsync, os.replace and finally cleanup.
     store.write_json(path, result)
     return path
@@ -476,12 +559,82 @@ def _report(result):
     return '\n'.join(lines) + '\n'
 
 
+def summarize_target_tiers(result, root=ROOT, panels=None) -> dict:
+    """Summarize target weights across mega_large, mid_small, etf, and unknown tiers causally."""
+    market = result.get('market')
+    if market not in ('us', 'crypto'):
+        raise ValueError(f'market must be us or crypto, got {market!r}')
+    as_of = result.get('as_of')
+    as_of_str = str(pd.Timestamp(as_of).date()) if as_of is not None else None
+    threshold = tiers.default_threshold(market)
+
+    panel_adv20 = None
+    if panels is not None and not panels.mask.empty:
+        idx = panels.mask.index
+        if as_of is not None:
+            ts = pd.Timestamp(as_of)
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert('UTC').tz_localize(None)
+            ts = ts.normalize()
+            prior = idx[idx <= ts]
+            row_ts = prior[-1] if not prior.empty else None
+        else:
+            row_ts = idx[-1]
+        if row_ts is not None:
+            sub_panels = panel.Panels(
+                {k: v.loc[:row_ts] for k, v in panels.fields.items()},
+                panels.mask.loc[:row_ts],
+                meta=panels.meta,
+                windows=panels.windows,
+            )
+            panel_adv20 = tiers.compute_adv20(sub_panels).loc[row_ts]
+
+    buckets = {
+        name: {'count': 0, 'long_gross': 0.0, 'short_gross': 0.0, 'symbols': []}
+        for name in ('mega_large', 'mid_small', 'etf', 'unknown')
+    }
+    for weight_key, raw_w in (result.get('weights') or {}).items():
+        w = float(raw_w)
+        sym = weight_key[:-5] if (market == 'us' and weight_key.endswith('BUSDT')) else weight_key
+        if market == 'us' and sym in tiers.US_ETFS:
+            tier_name = 'etf'
+        else:
+            adv_val = None
+            if panel_adv20 is not None and sym in panel_adv20.index and np.isfinite(panel_adv20[sym]):
+                adv_val = float(panel_adv20[sym])
+            else:
+                adv_series = _causal_daily_adv20(root, market, sym, as_of_str=as_of_str)
+                if adv_series is not None and len(adv_series) and np.isfinite(adv_series.iloc[-1]):
+                    adv_val = float(adv_series.iloc[-1])
+            if adv_val is None:
+                tier_name = 'unknown'
+            elif adv_val >= threshold:
+                tier_name = 'mega_large'
+            else:
+                tier_name = 'mid_small'
+
+        bucket = buckets[tier_name]
+        bucket['count'] += 1
+        if w > 0:
+            bucket['long_gross'] += w
+        elif w < 0:
+            bucket['short_gross'] += -w
+        bucket['symbols'].append(weight_key)
+
+    for bucket in buckets.values():
+        bucket['long_gross'] = round(bucket['long_gross'], 6)
+        bucket['short_gross'] = round(bucket['short_gross'], 6)
+    return buckets
+
+
 def _summary(doc):
     result = {k: doc[k] for k in ('market', 'status', 'reason', 'as_of', 'horizon', 'run_id',
                                   'universe_size', 'factor_ids', 'weights', 'excluded')}
     result.update(rule=doc['rule']['name'],
                   long_gross=round(sum(w for w in doc['weights'].values() if w > 0), 6),
                   short_gross=round(-sum(w for w in doc['weights'].values() if w < 0), 6))
+    if 'tier' in doc:
+        result['tier'] = doc['tier']
     if doc['rule']['name'] == 'mom_ls_invvol_volscale_v1':
         result.update({key: doc[key] for key in US_VOLSCALE_FIELDS})
     return result
@@ -490,6 +643,8 @@ def _summary(doc):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--market', choices=('crypto', 'us'), default='crypto')
+    parser.add_argument('--tier', choices=tiers.VALID_TIERS, default='all')
+    parser.add_argument('--tier-summary', action='store_true')
     parser.add_argument('--rule', choices=('base', 'volscale'), default='base',
                         help='volscale is the US momentum volatility-scaling variant')
     parser.add_argument('--root', type=Path, default=ROOT)
@@ -512,15 +667,27 @@ def main(argv=None):
         args.out.write_text(_report(result), encoding='utf-8')
         print(f'Backtest reports: {args.out}, {args.json_path}')
     elif args.write:
-        path = write_targets(args.market, args.root, perp_map=args.perp_map, rule=args.rule)
-        if args.print_summary:
-            print(json.dumps(_summary(store.read_json(path)), ensure_ascii=False, indent=2))
+        if args.tier == 'all':
+            path = write_targets(args.market, args.root, perp_map=args.perp_map, rule=args.rule)
+        else:
+            path = write_targets(args.market, args.root, perp_map=args.perp_map, rule=args.rule, tier=args.tier)
+        if args.print_summary or args.tier_summary:
+            doc = store.read_json(path)
+            out = _summary(doc)
+            if args.tier_summary:
+                out['tier_summary'] = summarize_target_tiers(doc, root=args.root)
+            print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
             print(path)
     else:
-        print(json.dumps(_summary(_load_targets(args.market, args.root, perp_map=args.perp_map,
-                                              rule=args.rule)),
-                         ensure_ascii=False, indent=2))
+        if args.tier == 'all':
+            doc = _load_targets(args.market, args.root, perp_map=args.perp_map, rule=args.rule)
+        else:
+            doc = _load_targets(args.market, args.root, perp_map=args.perp_map, rule=args.rule, tier=args.tier)
+        out = _summary(doc)
+        if args.tier_summary:
+            out['tier_summary'] = summarize_target_tiers(doc, root=args.root)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

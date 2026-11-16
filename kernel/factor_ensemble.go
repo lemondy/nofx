@@ -321,7 +321,7 @@ func computeFactorEnsemble(data *market.Data, now time.Time) *FactorEnsembleRef 
 		ref.Scope = "core"
 		if !core {
 			ref.Scope = "extended"
-			ref.ScopeNote = "该币不在因子验证宇宙(流动性前60)内，因子未在此档位验证，分数仅相对核心宇宙外推，参考权重应低于 core"
+			ref.ScopeNote = "该币不在因子验证宇宙(流动性前60)内，因子未在此档位验证，分数仅相对核心宇宙外推，参考权重应低于 core；小市值/低流动性山寨币存在高维噪声与过拟合风险，避免放大仓位或作为独立入场理由"
 		}
 	}
 	for horizon, h := range freshHorizons {

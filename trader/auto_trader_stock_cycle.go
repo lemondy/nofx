@@ -253,6 +253,7 @@ func (at *AutoTrader) stockCycleSelection(ctx context.Context, sc *store.StockCo
 			logf("scan data %s source=%s data_through=%s usable=%t", r.Symbol, r.Source, r.DataThrough, report.AgeOK(now, stockScanCandidateMaxAge) && r.DataFresh(now))
 		}
 		usable := &stockengine.ScanReport{Results: report.FreshResults(now, stockScanCandidateMaxAge)}
+		usable = usable.FilterBySizeTier(sc.EffectiveScanSizeTier())
 		want := sc.EffectiveScanTopN()
 		ranked := usable.TopLong(len(usable.Results), exclude)
 		if rank == store.StockScanRankMomentum {
@@ -420,12 +421,29 @@ func (at *AutoTrader) buildStockSnapshots(ctx context.Context, sc *store.StockCo
 		if r, ok := report.Lookup(sym); ok && r.DataFresh(now) {
 			c, m := r.Cycle, r.Momentum
 			snap.Cycle, snap.Momentum = &c, &m
+			snap.Tier = r.Universe.Tier
+			if snap.Tier == "" {
+				snap.Tier = stockengine.ClassifySizeTier(r.Universe.Class, r.Universe.AvgDollarVol20)
+			}
 		} else if s := daily[sym]; s != nil && len(s.Bars) > 0 {
 			c, m := stockengine.ClassifyCycle(s.Bars, spyBars), stockengine.MomentumAssessment{}
 			if s.Source != usstock.SourceBStock || usstock.RegularDailyBars(s.Bars) {
 				m = stockengine.ClassifyMomentum(s.Bars)
 			}
 			snap.Cycle, snap.Momentum = &c, &m
+		}
+		if snap.Tier == "" {
+			if s := daily[sym]; s != nil && len(s.Bars) > 0 {
+				if row, ok := stockengine.BuildUniverseRow(sym, snap.Underlying, s.Bars); ok {
+					snap.Tier = row.Tier
+				} else if len(s.Bars) >= 20 {
+					adv := 0.0
+					for _, b := range s.Bars[len(s.Bars)-20:] {
+						adv += b.Close * b.Volume
+					}
+					snap.Tier = stockengine.ClassifySizeTier("", adv/20)
+				}
+			}
 		}
 	}
 	return all, market, prices

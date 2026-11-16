@@ -172,6 +172,10 @@ type StockConfig struct {
 	// ScanRank: scan/hybrid ranking — "kell" (default; Kell cycle long setups
 	// by score) or "momentum" (names above SMA200 ranked by 12-1 momentum).
 	ScanRank string `json:"scan_rank,omitempty"`
+	// ScanSizeTier restricts scan/hybrid picks by liquidity/market-cap tier:
+	// "" / "all" (default; no filter), "mega_large" (ADV20 >= $500M or ETF),
+	// or "mid_small" (0 < ADV20 < $500M non-ETF).
+	ScanSizeTier string `json:"scan_size_tier,omitempty"`
 	// Preset: "swing" (default; days–weeks, 1d trend / 1h entry, decisions
 	// hourly at 09:45, 10:30 … 15:30 ET) or "position" (weeks–months, 1w trend
 	// / 1d entry, one decision at 15:30 ET).

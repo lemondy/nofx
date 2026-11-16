@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import time
 
-from . import data_fetch, ext_universe, store
+from . import data_fetch, ext_universe, store, tiers
 from .config import MARKETS
 from .miner import Miner, frozen_hashes
 
@@ -51,6 +51,7 @@ def fetch_only(markets, root):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--market', choices=(*MARKETS, 'all'), required=True)
+    parser.add_argument('--tier', choices=tiers.VALID_TIERS, default='all')
     parser.add_argument('--mutations', type=int, default=300)
     parser.add_argument('--llm', type=int, default=20)
     parser.add_argument('--no-llm', action='store_true')
@@ -91,10 +92,15 @@ def main(argv=None):
                             miner.fetch_error = f'fetch: {type(exc).__name__}: {exc}'
                     entered_miner = True
                     miner.fetch_seconds = time.monotonic() - clock
-                    miner.run_market(market, n_mutations=args.mutations, n_llm=args.llm,
-                                     budget_s=args.budget_min * 60, seed=args.seed, use_llm=not args.no_llm,
-                                     now=started_dt)
-                    if market == 'crypto' and os.environ.get('FM_EXT_UNIVERSE', '1') != '0':
+                    if args.tier == 'all':
+                        miner.run_market(market, n_mutations=args.mutations, n_llm=args.llm,
+                                         budget_s=args.budget_min * 60, seed=args.seed, use_llm=not args.no_llm,
+                                         now=started_dt)
+                    else:
+                        miner.run_market(market, n_mutations=args.mutations, n_llm=args.llm,
+                                         budget_s=args.budget_min * 60, seed=args.seed, use_llm=not args.no_llm,
+                                         now=started_dt, tier=args.tier)
+                    if args.tier == 'all' and market == 'crypto' and os.environ.get('FM_EXT_UNIVERSE', '1') != '0':
                         # Scoring-only post-processing: never part of Miner, its
                         # panel/cache, forward validation or recorded run results.
                         try:

@@ -51,6 +51,10 @@ func BuildSystemPrompt(cfg *store.StockConfig, preset Preset, lang string) strin
 		enScan += "Scan ranking: candidates were ranked by 12-1 momentum among names above their 200-day SMA (a statistically validated ranking). The Kell cycle phase is entry-timing context, not a filter: prefer entries on pullbacks toward EMA10/EMA20 (ema_crossback, base_forming/base_n_break, uptrend pullbacks); at exhaustion_extension do not chase — prefer a limit entry on a pullback or wait; wedge_drop / downtrend → wait.\n"
 		zhScan += "扫描排序：候选标的按「站上 200 日均线的标的中 12-1 动量从高到低」排序（经统计验证的排序）。Kell 周期阶段是入场时机的参考而非过滤条件：优先在回踩 EMA10/EMA20 时入场（ema_crossback、base_forming/base_n_break、上升趋势回踩）；exhaustion_extension 不追高，宁可挂限价等回踩或等待；wedge_drop / downtrend 则等待。\n"
 	}
+	if cfg.IsScanMode() || cfg.EffectiveScanSizeTier() != store.StockScanSizeTierAll {
+		enScan += "Size/Liquidity Tier Discipline (universe tier): mega_large and etf names are efficiently priced — trade trend continuation and pullback entries only (wedge_pop, ema_crossback, base_n_break), never mean-reversion bottom-picking or complex indicator overfitting; for mid_small names, verify adv20$ liquidity and earnings/event gap risk (earn_days), and avoid thin-volume chasing.\n"
+		zhScan += "市值/流动性分层纪律（universe tier）：mega_large 与 etf 定价高度有效，仅做顺势延续与回踩入场（wedge_pop、ema_crossback、base_n_break），严禁均值回归抄底或堆砌复杂指标过拟合；mid_small 必须核查 adv20$ 流动性与财报/事件跳空风险（earn_days），避免在低成交量下追高。\n"
+	}
 	if strings.EqualFold(lang, "zh") || strings.HasPrefix(strings.ToLower(lang), "zh-") {
 		return fmt.Sprintf(`你是美股中长线交易员，在 Binance bStock 现货交易，只做多、无杠杆。预设 %s，持仓周期：%s。趋势周期 %s，入场周期 %s；每个交易日美东时间 %s 决策，避免追逐日内噪声。
 程序强制规则：新开仓/加仓允许时段 %s，休市禁止新增敞口；平仓任何时段允许。必需周期数据充分（1d 至少 200 根，EMA200 不足也阻止入场），入场参考报价必须新鲜，%s。止损必须 >0 且低于入场价，距离在 [%.2f, %.2f]×ATR(1d)；限价 >0 且不高于现价 1.01 倍；止盈如设置必须高于入场价。单票上限 %.2f%%，总敞口上限 %.2f%%，最多 %d 只，单笔风险 %.2f%% 权益。程序计算数量和最小名义金额（5 USDT），模型绝不输出 quantity。加仓必须盈利且现价高于初始止损；减仓比例在 (0,1)；止损只能上移收紧。
@@ -394,13 +398,13 @@ func writeUniverse(b *strings.Builder, ctx *Context, zh bool) {
 		} else {
 			fmt.Fprintf(b, "Universe (%d long/short candidates and holdings; %d omitted; open/add only authorized candidates):\n", len(rows), omitted)
 		}
-		fmt.Fprintln(b, "symbol|class|sector|candidate|price|r1d%|r10d%|r30d%|vol30%|rsi14|from30dHigh%|adv20$|earn_days|mom12_1%|>sma200|phase|shortable|short_setup")
+		fmt.Fprintln(b, "symbol|class|sector|candidate|price|r1d%|r10d%|r30d%|vol30%|rsi14|from30dHigh%|adv20$|earn_days|mom12_1%|>sma200|phase|shortable|short_setup|tier")
 	} else if zh {
 		fmt.Fprintf(b, "全市场概览（bStock 中站上 200 日线或有 Kell 多头信号的 %d 只，另含本周期候选与持仓；已省略 %d 只跌破 200 日线且无多头信号或已排除的；仅供参考——只能对上面的候选标的开仓/加仓）:\n", len(rows), omitted)
-		fmt.Fprintln(b, "列：symbol|class|sector|candidate(Y=本周期候选, x=已排除)|price|r1d%|r10d%|r30d%|vol30%(年化)|rsi14(日线)|from30dHigh%|adv20$(20日均成交额)|earn_days(距财报天数,空=未知)|mom12_1%|>sma200(Y/N)|phase(Kell)")
+		fmt.Fprintln(b, "列：symbol|class|sector|candidate(Y=本周期候选, x=已排除)|price|r1d%|r10d%|r30d%|vol30%(年化)|rsi14(日线)|from30dHigh%|adv20$(20日均成交额)|earn_days(距财报天数,空=未知)|mom12_1%|>sma200(Y/N)|phase(Kell)|tier")
 	} else {
 		fmt.Fprintf(b, "Universe (%d bStock pairs above their SMA200 or with a Kell long setup, plus this cycle's candidates and holdings; %d below SMA200 without a long setup or scan-excluded omitted; reference only — open/add only symbols in the candidate list above):\n", len(rows), omitted)
-		fmt.Fprintln(b, "columns: symbol|class|sector|candidate(Y=in this cycle's list, x=scan-excluded)|price|r1d%|r10d%|r30d%|vol30%(annualized)|rsi14(daily)|from30dHigh%|adv20$(20d avg dollar volume)|earn_days(to next earnings, blank=unknown)|mom12_1%|>sma200(Y/N)|phase(Kell)")
+		fmt.Fprintln(b, "columns: symbol|class|sector|candidate(Y=in this cycle's list, x=scan-excluded)|price|r1d%|r10d%|r30d%|vol30%(annualized)|rsi14(daily)|from30dHigh%|adv20$(20d avg dollar volume)|earn_days(to next earnings, blank=unknown)|mom12_1%|>sma200(Y/N)|phase(Kell)|tier")
 	}
 	for _, r := range rows {
 		u := r.Universe
@@ -426,8 +430,15 @@ func writeUniverse(b *strings.Builder, ctx *Context, zh bool) {
 		if ctx.Config.ShortEnabled() {
 			shortFields = fmt.Sprintf("|%t|%t", r.Shortable, r.Cycle.ShortSetup)
 		}
-		fmt.Fprintf(b, "%s|%s|%s|%s|%s|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|$%s|%s|%s|%s|%s%s\n", r.Symbol, u.Class, strings.ReplaceAll(u.Sector, "|", "/"), mark,
-			fmtPx(u.Price), u.Ret1dPct, u.Ret10dPct, u.Ret30dPct, u.Vol30Pct, u.RSI14, u.DistFrom30dHighPct, fmtVol(u.AvgDollarVol20), earn, mom, above, r.Cycle.Phase, shortFields)
+		tier := u.Tier
+		if tier == "" {
+			tier = ClassifySizeTier(u.Class, u.AvgDollarVol20)
+		}
+		if tier == "" {
+			tier = "unknown"
+		}
+		fmt.Fprintf(b, "%s|%s|%s|%s|%s|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|$%s|%s|%s|%s|%s%s|%s\n", r.Symbol, u.Class, strings.ReplaceAll(u.Sector, "|", "/"), mark,
+			fmtPx(u.Price), u.Ret1dPct, u.Ret10dPct, u.Ret30dPct, u.Vol30Pct, u.RSI14, u.DistFrom30dHighPct, fmtVol(u.AvgDollarVol20), earn, mom, above, r.Cycle.Phase, shortFields, tier)
 	}
 }
 

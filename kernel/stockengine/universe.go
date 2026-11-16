@@ -20,6 +20,48 @@ var universeETFs = map[string]bool{
 	"UVXY": true, "SMH": true, "EWY": true, "KORU": true, "MUU": true,
 }
 
+// Liquidity/market-cap tiers grounded in bStock ADV20 distribution.
+const (
+	TierETF       = "etf"
+	TierMegaLarge = "mega_large"
+	TierMidSmall  = "mid_small"
+
+	megaLargeADV20Threshold = 500_000_000.0
+)
+
+// ClassifySizeTier classifies a pair into TierETF, TierMegaLarge, TierMidSmall,
+// or "" when ADV20 is non-positive/unknown for a non-ETF.
+func ClassifySizeTier(class string, avgDollarVol20 float64) string {
+	if strings.EqualFold(strings.TrimSpace(class), "ETF") {
+		return TierETF
+	}
+	if math.IsNaN(avgDollarVol20) || math.IsInf(avgDollarVol20, 0) || avgDollarVol20 <= 0 {
+		return ""
+	}
+	if avgDollarVol20 >= megaLargeADV20Threshold {
+		return TierMegaLarge
+	}
+	return TierMidSmall
+}
+
+// MatchesSizeTier reports whether rowTier/class passes the configured size-tier filter.
+func MatchesSizeTier(filter, rowTier, class string) bool {
+	f := strings.ToLower(strings.TrimSpace(filter))
+	if f == "" || f == "all" {
+		return true
+	}
+	t := strings.ToLower(strings.TrimSpace(rowTier))
+	isETF := t == TierETF || strings.EqualFold(strings.TrimSpace(class), "ETF")
+	switch f {
+	case TierMegaLarge:
+		return t == TierMegaLarge || isETF
+	case TierMidSmall:
+		return t == TierMidSmall && !isETF
+	default:
+		return false
+	}
+}
+
 // BuildUniverseRow computes the cross-sectional row of one pair from its daily
 // bars (ascending, closed). It returns false with fewer than 31 bars or a
 // non-positive close in the windows used. Class falls back to the static ETF
@@ -76,6 +118,7 @@ func BuildUniverseRow(symbol, underlying string, bars []usstock.Bar) (UniverseRo
 		adv += b.Close * b.Volume
 	}
 	row.AvgDollarVol20 = adv / 20
+	row.Tier = ClassifySizeTier(row.Class, row.AvgDollarVol20)
 	return row, true
 }
 
@@ -93,6 +136,7 @@ func ApplyFundamentals(row *UniverseRow, f usstock.Fundamentals, now time.Time) 
 		row.Sector = f.Sector
 	}
 	row.DaysToEarnings = daysUntil(f.NextEarnings, now)
+	row.Tier = ClassifySizeTier(row.Class, row.AvgDollarVol20)
 }
 
 // daysUntil is the ET calendar-day distance from now to date (≥ 0), or −1

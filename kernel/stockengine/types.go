@@ -62,6 +62,7 @@ type Preset struct {
 type SymbolSnapshot struct {
 	Symbol     string            `json:"symbol"`     // AAPLBUSDT
 	Underlying string            `json:"underlying"` // AAPL
+	Tier       string            `json:"tier,omitempty"`
 	Price      float64           `json:"price"`      // bStock last
 	Sources    map[string]string `json:"sources"`    // timeframe → usstock.SourceBStock | SourceYahoo
 	// Timeframes with insufficient bars or stale daily/weekly dates.
@@ -106,6 +107,7 @@ type SymbolSnapshot struct {
 type UniverseRow struct {
 	Symbol, Underlying string
 	Class              string // "ETF" | "stock" | "" unknown
+	Tier               string // "etf" | "mega_large" | "mid_small" | "" unknown
 	Sector             string // "" unknown
 	Price              float64
 	Ret1dPct           float64

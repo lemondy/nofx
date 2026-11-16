@@ -36,22 +36,29 @@ const (
 	fqRegimeMaxNameWeight = 0.1
 	fqRegimeMinListing    = 90
 	fqRegimeRet7Quantile  = 0.9
+
+	fqADV20Window          = 20
+	fqUSMegaLargeADV20     = 500_000_000.0
+	fqCryptoMegaLargeADV20 = 100_000_000.0
 )
 
 type fqRegimeInfo struct {
-	State       string  `json:"state"`       // bull | bear | chop | unknown
-	Benchmark   string  `json:"benchmark"`   // BTCUSDT | SPY
-	AsOf        string  `json:"as_of"`       // benchmark last bar date used
-	Close       float64 `json:"close"`       // benchmark close
-	EMA20       float64 `json:"ema20"`       // benchmark daily EMA20
-	EMA50       float64 `json:"ema50"`       // benchmark daily EMA50
-	LongCount   int     `json:"long_count"`  // active target longs
-	ShortCount  int     `json:"short_count"` // active target shorts
-	LongGross   float64 `json:"long_gross"`  // sum of positive target weights
-	ShortGross  float64 `json:"short_gross"` // sum of |negative| target weights
-	TiltEnabled bool    `json:"tilt_enabled"`
-	Applied     bool    `json:"applied"`
-	Reason      string  `json:"reason,omitempty"`
+	State          string  `json:"state"`       // bull | bear | chop | unknown
+	Benchmark      string  `json:"benchmark"`   // BTCUSDT | SPY
+	AsOf           string  `json:"as_of"`       // benchmark last bar date used
+	Close          float64 `json:"close"`       // benchmark close
+	EMA20          float64 `json:"ema20"`       // benchmark daily EMA20
+	EMA50          float64 `json:"ema50"`       // benchmark daily EMA50
+	LongCount      int     `json:"long_count"`  // active target longs
+	ShortCount     int     `json:"short_count"` // active target shorts
+	LongGross      float64 `json:"long_gross"`  // sum of positive target weights
+	ShortGross     float64 `json:"short_gross"` // sum of |negative| target weights
+	MegaLargeGross float64 `json:"mega_large_gross,omitempty"`
+	MidSmallGross  float64 `json:"mid_small_gross,omitempty"`
+	SizeTierFilter string  `json:"size_tier_filter,omitempty"`
+	TiltEnabled    bool    `json:"tilt_enabled"`
+	Applied        bool    `json:"applied"`
+	Reason         string  `json:"reason,omitempty"`
 }
 
 func fqRegimeLabelZH(state string) string {
@@ -69,43 +76,54 @@ func fqRegimeLabelZH(state string) string {
 
 func (info fqRegimeInfo) toStatus() *FactorQuantRegimeStatus {
 	return &FactorQuantRegimeStatus{
-		State:       info.State,
-		Benchmark:   info.Benchmark,
-		AsOf:        info.AsOf,
-		Close:       info.Close,
-		EMA20:       info.EMA20,
-		EMA50:       info.EMA50,
-		LongCount:   info.LongCount,
-		ShortCount:  info.ShortCount,
-		LongGross:   info.LongGross,
-		ShortGross:  info.ShortGross,
-		TiltEnabled: info.TiltEnabled,
-		Applied:     info.Applied,
-		Reason:      info.Reason,
+		State:          info.State,
+		Benchmark:      info.Benchmark,
+		AsOf:           info.AsOf,
+		Close:          info.Close,
+		EMA20:          info.EMA20,
+		EMA50:          info.EMA50,
+		LongCount:      info.LongCount,
+		ShortCount:     info.ShortCount,
+		LongGross:      info.LongGross,
+		ShortGross:     info.ShortGross,
+		MegaLargeGross: info.MegaLargeGross,
+		MidSmallGross:  info.MidSmallGross,
+		SizeTierFilter: info.SizeTierFilter,
+		TiltEnabled:    info.TiltEnabled,
+		Applied:        info.Applied,
+		Reason:         info.Reason,
 	}
 }
 
 func (info fqRegimeInfo) summaryText() string {
 	label := fqRegimeLabelZH(info.State)
+	tierSuffix := ""
+	if info.MegaLargeGross > 0 || info.MidSmallGross > 0 {
+		tierSuffix = fmt.Sprintf("；分层敞口 大盘 %.1f%% / 中小盘 %.1f%%", info.MegaLargeGross*100, info.MidSmallGross*100)
+	}
+	if info.SizeTierFilter != "" && info.SizeTierFilter != store.FactorQuantSizeTierAll {
+		tierSuffix += fmt.Sprintf("[tier=%s]", info.SizeTierFilter)
+	}
 	if info.Close > 0 && info.EMA20 > 0 && info.EMA50 > 0 {
-		return fmt.Sprintf("市场趋势=%s（%s %.2f / EMA20 %.2f / EMA50 %.2f @ %s），多 %d 只(+%.1f%%) / 空 %d 只(-%.1f%%)",
+		return fmt.Sprintf("市场趋势=%s（%s %.2f / EMA20 %.2f / EMA50 %.2f @ %s），多 %d 只(+%.1f%%) / 空 %d 只(-%.1f%%)%s",
 			label, info.Benchmark, info.Close, info.EMA20, info.EMA50, info.AsOf,
-			info.LongCount, info.LongGross*100, info.ShortCount, info.ShortGross*100)
+			info.LongCount, info.LongGross*100, info.ShortCount, info.ShortGross*100, tierSuffix)
 	}
 	if info.Reason != "" {
-		return fmt.Sprintf("市场趋势=%s（%s），多 %d 只(+%.1f%%) / 空 %d 只(-%.1f%%)：%s",
-			label, info.Benchmark, info.LongCount, info.LongGross*100, info.ShortCount, info.ShortGross*100, info.Reason)
+		return fmt.Sprintf("市场趋势=%s（%s），多 %d 只(+%.1f%%) / 空 %d 只(-%.1f%%)%s：%s",
+			label, info.Benchmark, info.LongCount, info.LongGross*100, info.ShortCount, info.ShortGross*100, tierSuffix, info.Reason)
 	}
-	return fmt.Sprintf("市场趋势=%s（%s），多 %d 只(+%.1f%%) / 空 %d 只(-%.1f%%)",
-		label, info.Benchmark, info.LongCount, info.LongGross*100, info.ShortCount, info.ShortGross*100)
+	return fmt.Sprintf("市场趋势=%s（%s），多 %d 只(+%.1f%%) / 空 %d 只(-%.1f%%)%s",
+		label, info.Benchmark, info.LongCount, info.LongGross*100, info.ShortCount, info.ShortGross*100, tierSuffix)
 }
 
 type fqDailyBar struct {
-	Date  string
-	Open  float64
-	High  float64
-	Low   float64
-	Close float64
+	Date   string
+	Open   float64
+	High   float64
+	Low    float64
+	Close  float64
+	Volume float64
 }
 
 func fqEMA(xs []float64, period int) []float64 {
@@ -192,7 +210,7 @@ func fqLoadDailyBars(path, maxDate string) ([]fqDailyBar, error) {
 		if h < hiBound || l > loBound {
 			continue
 		}
-		bars = append(bars, fqDailyBar{Date: dateStr, Open: o, High: h, Low: l, Close: c})
+		bars = append(bars, fqDailyBar{Date: dateStr, Open: o, High: h, Low: l, Close: c, Volume: v})
 	}
 	sort.Slice(bars, func(i, j int) bool { return bars[i].Date < bars[j].Date })
 	return bars, nil
@@ -431,11 +449,159 @@ func fqRound6(v float64) float64 {
 	return math.Round(v*1e6) / 1e6
 }
 
+func fqTrunc6(v float64) float64 {
+	return math.Trunc(v*1e6) / 1e6
+}
+
+func fqCalcADV20(bars []fqDailyBar) (float64, bool) {
+	n := len(bars)
+	if n < fqADV20Window {
+		return 0, false
+	}
+	sum := 0.0
+	for _, b := range bars[n-fqADV20Window:] {
+		if b.Close <= 0 || b.Volume < 0 || math.IsNaN(b.Close) || math.IsNaN(b.Volume) || math.IsInf(b.Close, 0) || math.IsInf(b.Volume, 0) {
+			return 0, false
+		}
+		sum += b.Close * b.Volume
+	}
+	adv := sum / float64(fqADV20Window)
+	if adv <= 0 || math.IsNaN(adv) || math.IsInf(adv, 0) {
+		return 0, false
+	}
+	return adv, true
+}
+
+func fqClassifyTier(market string, adv20 float64) string {
+	if math.IsNaN(adv20) || math.IsInf(adv20, 0) || adv20 <= 0 {
+		return ""
+	}
+	threshold := fqCryptoMegaLargeADV20
+	if market == store.FactorQuantMarketUS {
+		threshold = fqUSMegaLargeADV20
+	}
+	if adv20 >= threshold {
+		return store.FactorQuantSizeTierMegaLarge
+	}
+	return store.FactorQuantSizeTierMidSmall
+}
+
+// fqApplySizeTierGuardrails computes MegaLargeGross / MidSmallGross diagnostics
+// and, when SizeTier or MaxMidSmallExposurePct is configured, filters or
+// proportionally scales mid/small weights without lookahead (using bars <= t.AsOf).
+// When defaults are active ("all" and 0), it returns t untouched.
+func fqApplySizeTierGuardrails(t *quantTargets, fq *store.FactorQuantConfig, market, dailyDir string, info *fqRegimeInfo) *quantTargets {
+	tierFilter := fq.EffectiveSizeTier()
+	maxMidSmallPct := 0.0
+	if fq != nil && fq.MaxMidSmallExposurePct > 0 {
+		maxMidSmallPct = fq.MaxMidSmallExposurePct
+	}
+	if info != nil {
+		info.SizeTierFilter = tierFilter
+	}
+	if t == nil || t.Status != quantStatusOK {
+		return t
+	}
+	if market == "" {
+		market = store.FactorQuantMarketCrypto
+	}
+
+	tierBySym := make(map[string]string, len(t.Weights))
+	if dailyDir != "" {
+		for sym := range t.Weights {
+			bars, err := fqLoadDailyBars(filepath.Join(dailyDir, fqDailySymbolFile(sym, market)), t.AsOf)
+			if err != nil {
+				continue
+			}
+			if adv, ok := fqCalcADV20(bars); ok {
+				if tier := fqClassifyTier(market, adv); tier != "" {
+					tierBySym[sym] = tier
+				}
+			}
+		}
+	}
+
+	stampTiers := func(weights map[string]float64) {
+		if info == nil {
+			return
+		}
+		var mega, mid float64
+		for sym, w := range weights {
+			switch tierBySym[sym] {
+			case store.FactorQuantSizeTierMegaLarge:
+				mega += math.Abs(w)
+			case store.FactorQuantSizeTierMidSmall:
+				mid += math.Abs(w)
+			}
+		}
+		info.MegaLargeGross = fqRound6(mega)
+		info.MidSmallGross = fqRound6(mid)
+		fqStampWeightStats(info, weights)
+	}
+
+	// Default configuration: zero mutation parity, diagnostics only.
+	if tierFilter == store.FactorQuantSizeTierAll && maxMidSmallPct <= 0 {
+		stampTiers(t.Weights)
+		return t
+	}
+	if dailyDir == "" {
+		stampTiers(t.Weights)
+		return t
+	}
+
+	weights := make(map[string]float64, len(t.Weights))
+	for sym, w := range t.Weights {
+		weights[sym] = w
+	}
+
+	changed := false
+	if tierFilter == store.FactorQuantSizeTierMegaLarge || tierFilter == store.FactorQuantSizeTierMidSmall {
+		for sym := range weights {
+			if tierBySym[sym] != tierFilter {
+				delete(weights, sym)
+				changed = true
+			}
+		}
+	}
+
+	if maxMidSmallPct > 0 {
+		midGross := 0.0
+		for sym, w := range weights {
+			if tierBySym[sym] == store.FactorQuantSizeTierMidSmall {
+				midGross += math.Abs(w)
+			}
+		}
+		capGross := maxMidSmallPct / 100.0
+		if midGross > capGross+1e-12 && midGross > 0 {
+			scale := capGross / midGross
+			for sym, w := range weights {
+				if tierBySym[sym] == store.FactorQuantSizeTierMidSmall {
+					nw := fqTrunc6(w * scale)
+					if nw == 0 {
+						delete(weights, sym)
+					} else {
+						weights[sym] = nw
+					}
+					changed = true
+				}
+			}
+		}
+	}
+
+	stampTiers(weights)
+	if !changed {
+		return t
+	}
+	out := *t
+	out.Weights = weights
+	return &out
+}
+
 // fqResolveRegimeTargets inspects the benchmark's daily trend and, when RegimeTilt
 // is enabled and the market is in a clear bull or bear regime, builds tilted
 // target weights (up to 20 favored / max 10 counter, ~2:1 gross allocation).
 // Otherwise it returns the original targets unchanged alongside the observed
-// regime metadata.
+// regime metadata, then applies any configured size-tier guardrails.
 func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, targetsPath string) (*quantTargets, fqRegimeInfo) {
 	market := store.FactorQuantMarketCrypto
 	if fq != nil && fq.Market != "" {
@@ -480,26 +646,32 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	if t != nil {
 		fqStampWeightStats(&info, t.Weights)
 	}
+	res := fqApplyRegimeTilt(t, market, dailyDir, perpMapPath, enabled, &info)
+	res = fqApplySizeTierGuardrails(res, fq, market, dailyDir, &info)
+	return res, info
+}
+
+func fqApplyRegimeTilt(t *quantTargets, market, dailyDir, perpMapPath string, enabled bool, info *fqRegimeInfo) *quantTargets {
 	if !enabled {
 		if info.Reason == "" {
 			info.Reason = "策略已关闭趋势倾斜开关，保持对称权重"
 		}
-		return t, info
+		return t
 	}
 	if t == nil || t.Status != quantStatusOK {
-		return t, info
+		return t
 	}
 	if info.State != fqRegimeBull && info.State != fqRegimeBear {
 		if info.State == fqRegimeChop && info.Reason == "" {
 			info.Reason = "震荡行情，保持对称权重"
 		}
-		return t, info
+		return t
 	}
 	if len(t.Pct) < 15 || dailyDir == "" {
 		if len(t.Pct) < 15 && info.Reason == "" {
 			info.Reason = fmt.Sprintf("候选分位数量不足（%d < 15），沿用基础目标权重", len(t.Pct))
 		}
-		return t, info
+		return t
 	}
 
 	type pctPair struct {
@@ -514,7 +686,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	}
 	if len(ordered) < 15 {
 		info.Reason = fmt.Sprintf("有效分位数量不足（%d < 15），沿用基础目标权重", len(ordered))
-		return t, info
+		return t
 	}
 	sort.Slice(ordered, func(i, j int) bool {
 		if ordered[i].pct != ordered[j].pct {
@@ -556,7 +728,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 		if b, ok := barsBySym[sym]; ok {
 			return b
 		}
-		b, err := fqLoadDailyBars(filepath.Join(dailyDir, fqDailySymbolFile(sym, market)), asOf)
+		b, err := fqLoadDailyBars(filepath.Join(dailyDir, fqDailySymbolFile(sym, market)), t.AsOf)
 		if err != nil {
 			barsBySym[sym] = nil
 			return nil
@@ -570,7 +742,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	if market == store.FactorQuantMarketCrypto {
 		ret7Vals := make([]float64, 0, len(ordered))
 		for _, item := range ordered {
-			if r7, ok := fqRet7OnDate(loadBars(item.sym), asOf); ok {
+			if r7, ok := fqRet7OnDate(loadBars(item.sym), t.AsOf); ok {
 				ret7Vals = append(ret7Vals, r7)
 			}
 		}
@@ -585,7 +757,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 		perps, hasPerpMap = fqLoadPerpMap(perpMapPath)
 		if !hasPerpMap {
 			info.Reason = "缺少美股可交易映射（usstock_symbols.json），沿用基础目标权重"
-			return t, info
+			return t
 		}
 	}
 
@@ -620,7 +792,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 				continue
 			}
 			if hasRet7Threshold {
-				if r7, ok := fqRet7OnDate(bars, asOf); ok && r7 >= ret7Threshold {
+				if r7, ok := fqRet7OnDate(bars, t.AsOf); ok && r7 >= ret7Threshold {
 					continue
 				}
 			}
@@ -640,7 +812,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 
 	if len(longs) == 0 || len(shorts) == 0 {
 		info.Reason = fmt.Sprintf("趋势筛选后有效多(%d)/空(%d)不足，沿用基础目标权重", len(longs), len(shorts))
-		return t, info
+		return t
 	}
 
 	total := float64(len(longs) + len(shorts))
@@ -659,7 +831,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	}
 	if favoredCap+1e-9 < counterDesired {
 		info.Reason = fmt.Sprintf("趋势筛选后优势方上限不足（%.1f%% < %.1f%%），沿用基础目标权重", favoredCap*100, counterDesired*100)
-		return t, info
+		return t
 	}
 
 	// Long leg uses 1/sigma inverse-volatility; short leg uses 1/sigma^2 inverse-variance
@@ -687,7 +859,7 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 	}
 	if len(merged) == 0 {
 		info.Reason = "趋势倾斜后权重为空，沿用基础目标权重"
-		return t, info
+		return t
 	}
 	var checkInfo fqRegimeInfo
 	fqStampWeightStats(&checkInfo, merged)
@@ -695,15 +867,15 @@ func fqResolveRegimeTargets(t *quantTargets, fq *store.FactorQuantConfig, target
 		(info.State == fqRegimeBull && checkInfo.LongGross+1e-6 < checkInfo.ShortGross) ||
 		(info.State == fqRegimeBear && checkInfo.ShortGross+1e-6 < checkInfo.LongGross) {
 		info.Reason = fmt.Sprintf("趋势倾斜后实际敞口无法保持优势方向（多 %.1f%% / 空 %.1f%%），沿用基础目标权重", checkInfo.LongGross*100, checkInfo.ShortGross*100)
-		return t, info
+		return t
 	}
 
 	out := *t
 	out.Weights = merged
-	fqStampWeightStats(&info, merged)
+	fqStampWeightStats(info, merged)
 	info.Applied = true
 	info.Reason = fmt.Sprintf("%s（最多%d多/%d空）", fqRegimeLabelZH(info.State), longN, shortN)
-	return &out, info
+	return &out
 }
 
 // fqCalcATR14 computes the 14-day Average True Range from daily OHLC bars.

@@ -93,7 +93,19 @@ type FactorQuantConfig struct {
 	USShortFeeBps *float64 `json:"us_short_fee_bps,omitempty"`
 	// TargetsPath overrides $FACTOR_MINING_DIR/{market}/quant_targets.json.
 	TargetsPath string `json:"targets_path,omitempty"`
+	// SizeTier restricts factor_quant targets by liquidity/size tier:
+	// "" / "all" (default), "mega_large", or "mid_small".
+	SizeTier string `json:"size_tier,omitempty"`
+	// MaxMidSmallExposurePct caps total |weight| of mid_small symbols as a
+	// percentage of equity (0 = disabled; valid (0, 100]).
+	MaxMidSmallExposurePct float64 `json:"max_mid_small_exposure_pct,omitempty"`
 }
+
+const (
+	FactorQuantSizeTierAll       = "all"
+	FactorQuantSizeTierMegaLarge = "mega_large"
+	FactorQuantSizeTierMidSmall  = "mid_small"
+)
 
 const (
 	defaultFactorQuantCryptoHorizon = 3
@@ -293,6 +305,19 @@ func (f *FactorQuantConfig) EffectiveDrawdownScale() bool {
 	return *f.DrawdownScale
 }
 
+// EffectiveSizeTier resolves the liquidity/size-tier filter: nil and "" mean
+// "all", otherwise returns normalized lowercase.
+func (f *FactorQuantConfig) EffectiveSizeTier() string {
+	if f == nil {
+		return FactorQuantSizeTierAll
+	}
+	v := strings.ToLower(strings.TrimSpace(f.SizeTier))
+	if v == "" {
+		return FactorQuantSizeTierAll
+	}
+	return v
+}
+
 // Validate rejects unusable input; zero retains the documented defaults.
 func (f *FactorQuantConfig) Validate() error {
 	if f == nil {
@@ -356,6 +381,14 @@ func (f *FactorQuantConfig) Validate() error {
 	}
 	if strings.ContainsRune(f.TargetsPath, 0) {
 		return fmt.Errorf("factor_quant targets_path is invalid")
+	}
+	switch f.EffectiveSizeTier() {
+	case FactorQuantSizeTierAll, FactorQuantSizeTierMegaLarge, FactorQuantSizeTierMidSmall:
+	default:
+		return fmt.Errorf("factor_quant size_tier must be %q, %q, or %q, got %q", FactorQuantSizeTierAll, FactorQuantSizeTierMegaLarge, FactorQuantSizeTierMidSmall, f.SizeTier)
+	}
+	if fqBadFloat(f.MaxMidSmallExposurePct) || f.MaxMidSmallExposurePct < 0 || f.MaxMidSmallExposurePct > 100 {
+		return fmt.Errorf("factor_quant max_mid_small_exposure_pct must be 0 or in (0,100]")
 	}
 	return nil
 }

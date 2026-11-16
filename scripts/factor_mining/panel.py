@@ -86,7 +86,9 @@ def _read_alt(path):
     return pd.Series(valid, dtype=float).sort_index()
 
 
-def load_panels(market, root=ROOT) -> Panels:
+def load_panels(market, root=ROOT, *, tier: str = 'all') -> Panels:
+    from . import tiers
+    tiers.validate_tier(tier)
     cfg = MARKETS[market]
     base = Path(root) / market
     symbols = {p.stem: _read_symbol(p) for p in sorted((base / 'daily').glob('*.json'))}
@@ -123,10 +125,16 @@ def load_panels(market, root=ROOT) -> Panels:
                 end=calendar[-1].strftime('%Y-%m-%d'), bars=int(observed.to_numpy().sum()),
                 universe=cfg['universe_n'] or len(symbols),
                 data_updated_at=data_meta.get('updated_at'))
-    return Panels(fields, mask.astype(bool),
-                  benchmark['close'].reindex(calendar) if benchmark is not None else None,
-                  benchmark['open'].reindex(calendar) if benchmark is not None else None, meta,
-                  dict(cfg['windows']))
+    panels = Panels(fields, mask.astype(bool),
+                    benchmark['close'].reindex(calendar) if benchmark is not None else None,
+                    benchmark['open'].reindex(calendar) if benchmark is not None else None, meta,
+                    dict(cfg['windows']))
+    if tier != 'all':
+        filtered = tiers.tier_mask(panels, market, tier)
+        panels.mask = filtered
+        panels.meta['tier'] = tier
+        panels.meta['universe'] = int(filtered.iloc[-1].sum())
+    return panels
 
 
 def make_splits(index, h, windows=None) -> dict:
