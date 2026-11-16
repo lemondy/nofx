@@ -14,7 +14,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from . import store
+from . import store, tiers
 from .config import MARKETS
 from .data_fetch import ROOT
 from .ensemble import ensemble_scores, select_ensemble_factors
@@ -22,7 +22,8 @@ from .expr import evaluate_expr
 from .panel import ALT_FIELD_MARKETS, FIELD_NAMES, Panels, _read_alt, _read_symbol
 
 
-def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None, now=None, selected_ids=None):
+def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None, now=None,
+                       selected_ids=None, output_market=None):
     """Atomically write a snapshot, or remove a stale file if no horizon is usable.
 
     Use the latest panel date strictly before today in UTC, without falling back
@@ -35,7 +36,7 @@ def export_live_scores(market, factors, panels, *, root=ROOT, values_cache=None,
     generated = pd.Timestamp(now if now is not None else dt.datetime.now(dt.timezone.utc))
     generated = (generated.tz_localize('UTC') if generated.tzinfo is None
                  else generated.tz_convert('UTC'))
-    path = Path(root) / market / 'live_scores.json'
+    path = Path(root) / (output_market or market) / 'live_scores.json'
     dates = panels.mask.index[pd.to_datetime(panels.mask.index, utc=True) < generated.normalize()]
     if not len(dates):
         path.unlink(missing_ok=True)
@@ -246,3 +247,97 @@ def extend_live_scores(factors, core, symbols, *, root=ROOT, selected_ids=None,
     except Exception as exc:
         log(f'live score extension skipped: {type(exc).__name__}: {exc}')
         return None
+
+
+def _z_stats(values: list[float]) -> dict:
+    if not values:
+        return {'count': 0, 'mean_z': None, 'std_z': None, 'min_z': None, 'max_z': None}
+    arr = np.asarray(values, dtype=float)
+    return {
+        'count': int(len(arr)),
+        'mean_z': round(float(np.mean(arr)), 4),
+        'std_z': round(float(np.std(arr, ddof=1)), 4) if len(arr) > 1 else 0.0,
+        'min_z': round(float(np.min(arr)), 4),
+        'max_z': round(float(np.max(arr)), 4),
+    }
+
+
+def summarize_live_score_tiers(market: str, panels: Panels, root=ROOT, as_of=None) -> dict:
+    """Summarize core vs extended and mega_large vs mid_small score coverage and dispersion."""
+    snapshot = store.read_json(Path(root) / market / 'live_scores.json')
+    if not snapshot or not snapshot.get('horizons'):
+        return {
+            'market': market,
+            'status': 'no_live_scores',
+            'as_of': None,
+            'tiers': {},
+            'horizons': {},
+        }
+    snap_as_of = as_of or snapshot.get('as_of')
+    classified = tiers.classify_symbols_as_of(panels, market, snap_as_of)
+    tier_counts = Counter(info['tier'] for info in classified.values())
+
+    # Causal ADV20 fallback for unmasked panel columns if any appear in scores.
+    adv20_row = None
+    if snap_as_of is not None and not panels.mask.empty:
+        ts = pd.Timestamp(snap_as_of)
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert('UTC').tz_localize(None)
+        ts = ts.normalize()
+        prior = panels.mask.index[panels.mask.index <= ts]
+        if not prior.empty:
+            row_ts = prior[-1]
+            sub_panels = Panels(
+                {k: v.loc[:row_ts] for k, v in panels.fields.items()},
+                panels.mask.loc[:row_ts],
+                meta=panels.meta,
+                windows=panels.windows,
+            )
+            adv20_row = tiers.compute_adv20(sub_panels).loc[row_ts]
+    threshold = tiers.default_threshold(market)
+
+    def sym_tier(symbol: str) -> str:
+        if symbol in classified:
+            return classified[symbol]['tier']
+        if market == 'us' and symbol in tiers.US_ETFS:
+            return 'etf'
+        if adv20_row is not None and symbol in adv20_row.index:
+            val = adv20_row[symbol]
+            if np.isfinite(val):
+                return 'mega_large' if float(val) >= threshold else 'mid_small'
+        return 'unknown'
+
+    horizons_summary: dict[str, dict] = {}
+    for h_key, entry in snapshot.get('horizons', {}).items():
+        core_scores = entry.get('scores') or {}
+        ext_scores = entry.get('ext_scores') or {}
+        by_tier: dict[str, list[float]] = {k: [] for k in ('mega_large', 'mid_small', 'etf', 'unknown')}
+        core_zs: list[float] = []
+        ext_zs: list[float] = []
+        for sym, item in core_scores.items():
+            z = item.get('z')
+            if z is None or not np.isfinite(z):
+                continue
+            zf = float(z)
+            core_zs.append(zf)
+            by_tier[sym_tier(sym)].append(zf)
+        for sym, item in ext_scores.items():
+            z = item.get('z')
+            if z is None or not np.isfinite(z):
+                continue
+            zf = float(z)
+            ext_zs.append(zf)
+            by_tier[sym_tier(sym)].append(zf)
+        horizons_summary[str(h_key)] = {
+            'core': _z_stats(core_zs),
+            'extended': _z_stats(ext_zs),
+            'by_tier': {t: _z_stats(vals) for t, vals in by_tier.items()},
+        }
+
+    return {
+        'market': market,
+        'status': 'ok',
+        'as_of': pd.Timestamp(snap_as_of).strftime('%Y-%m-%d') if snap_as_of is not None else None,
+        'tiers': {k: int(tier_counts.get(k, 0)) for k in ('mega_large', 'mid_small', 'etf')},
+        'horizons': horizons_summary,
+    }

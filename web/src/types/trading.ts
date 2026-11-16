@@ -328,9 +328,11 @@ export interface FactorQuantRunStatus {
   horizon: number
   last_rebalance_as_of?: string
   last_rebalance_at?: string
+  last_rolling_as_of?: string
   next_eligible_as_of?: string
   retry_as_of?: string
   retry_attempts?: number
+  drawdown_scale?: number
   regime?: FactorQuantRegimeStatus
 }
 

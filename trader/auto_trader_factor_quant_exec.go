@@ -75,14 +75,59 @@ type fqFuturesTrader interface {
 
 type fqFuturesBroker struct {
 	t            fqFuturesTrader
+	at           *AutoTrader // optional: supplies FactorQuantConfig & shared peak watermarks
 	leverage     int
 	longStopPct  float64 // 0 = no stop
 	shortStopPct float64 // 0 = no stop
 	levSet       map[string]bool
+	peaks        map[string]float64 // sym:side -> favorable peak mark
+	entries      map[string]float64 // sym:side -> last seen entry price
 }
 
 func newFQFuturesBroker(t fqFuturesTrader, leverage int, longStopPct, shortStopPct float64) *fqFuturesBroker {
-	return &fqFuturesBroker{t: t, leverage: leverage, longStopPct: longStopPct, shortStopPct: shortStopPct, levSet: map[string]bool{}}
+	return &fqFuturesBroker{
+		t:            t,
+		leverage:     leverage,
+		longStopPct:  longStopPct,
+		shortStopPct: shortStopPct,
+		levSet:       map[string]bool{},
+		peaks:        map[string]float64{},
+		entries:      map[string]float64{},
+	}
+}
+
+func (b *fqFuturesBroker) updatePeak(sym, side string, entry, mark float64) float64 {
+	if b.at != nil {
+		return b.at.fqUpdatePeakMark(sym, side, entry, mark)
+	}
+	if b.peaks == nil {
+		b.peaks = map[string]float64{}
+		b.entries = map[string]float64{}
+	}
+	return fqTrackPeakMap(b.peaks, b.entries, sym, side, entry, mark)
+}
+
+func (b *fqFuturesBroker) clearPeak(sym, side string) {
+	if b.at != nil {
+		b.at.fqClearPeakMark(sym, side)
+		return
+	}
+	key := sym + ":" + side
+	delete(b.peaks, key)
+	delete(b.entries, key)
+}
+
+func (b *fqFuturesBroker) resolveStop(sym, side string, entry, mark, pct float64) (stop float64, trailing bool) {
+	peak := b.updatePeak(sym, side, entry, mark)
+	var fq *store.FactorQuantConfig
+	var asOf string
+	if b.at != nil && b.at.IsFactorQuantStrategy() {
+		fq = b.at.config.StrategyConfig.FactorQuantConfig
+		asOf = b.at.fqTargetsAsOf()
+	} else {
+		fq = &store.FactorQuantConfig{Market: store.FactorQuantMarketCrypto}
+	}
+	return fqComputeAdaptiveStopPrice(sym, side, entry, mark, peak, pct, fq, asOf)
 }
 
 func fqFloat(m map[string]interface{}, keys ...string) float64 {
@@ -195,6 +240,9 @@ func (b *fqFuturesBroker) Place(o fqOrder) fqResult {
 	if id, ok := raw["orderId"]; ok && id != nil {
 		res.OrderID = fmt.Sprint(id)
 	}
+	if o.CloseAll {
+		b.clearPeak(o.Symbol, o.Side)
+	}
 	// Paper opens/increases cancel protection; reductions retain it. Refresh
 	// both sides from the remaining full quantity and average entry after any
 	// fill. A full close already cancels that side's protection in paper.execute.
@@ -256,10 +304,6 @@ func (b *fqFuturesBroker) placeStop(sym, side string) fqStopResult {
 			res.Err = fmt.Sprintf("%s持仓均价无效：%v", label, entry)
 			return res
 		}
-		stop := entry * (1 + pct)
-		if side == fqSideLong {
-			stop = entry * (1 - pct)
-		}
 		mark := fqFloat(row, "markPrice")
 		if mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
 			mark, err = b.t.GetMarketPrice(sym)
@@ -268,6 +312,7 @@ func (b *fqFuturesBroker) placeStop(sym, side string) fqStopResult {
 				return res
 			}
 		}
+		stop, _ := b.resolveStop(sym, side, entry, mark, pct)
 		res.Price = stop
 		if (side == fqSideLong && mark <= stop) || (side == fqSideShort && mark >= stop) {
 			if side == fqSideLong {
@@ -275,6 +320,7 @@ func (b *fqFuturesBroker) placeStop(sym, side string) fqStopResult {
 			} else {
 				_, err = b.t.CloseShort(sym, 0)
 			}
+			b.clearPeak(sym, side)
 			if err != nil {
 				res.Err = fmt.Sprintf("%s止损价已越过，市价平仓失败：%v", label, err)
 			} else {
@@ -288,6 +334,7 @@ func (b *fqFuturesBroker) placeStop(sym, side string) fqStopResult {
 		}
 		return res
 	}
+	b.clearPeak(sym, side)
 	// A filled close or a simulator-triggered exit can leave no position.
 	return res
 }
@@ -301,6 +348,34 @@ func (b *fqFuturesBroker) ensureStops() []fqStopResult {
 	}
 	var out []fqStopResult
 	for _, p := range acct.Positions {
+		res := b.placeStop(p.Symbol, p.Side)
+		if res.Price > 0 || res.Err != "" || res.Exited {
+			out = append(out, res)
+		}
+	}
+	return out
+}
+
+// ratchetTrailingStops updates stops on non-rebalance ticks only for positions
+// whose unrealized high-water mark has entered the Chandelier trailing zone.
+func (b *fqFuturesBroker) ratchetTrailingStops() []fqStopResult {
+	acct, err := b.Account()
+	if err != nil || len(acct.Positions) == 0 {
+		return nil
+	}
+	var out []fqStopResult
+	for _, p := range acct.Positions {
+		pct := b.shortStopPct
+		if p.Side == fqSideLong {
+			pct = b.longStopPct
+		}
+		if pct <= 0 || p.Entry <= 0 || p.Mark <= 0 {
+			continue
+		}
+		_, trailing := b.resolveStop(p.Symbol, p.Side, p.Entry, p.Mark, pct)
+		if !trailing {
+			continue
+		}
 		res := b.placeStop(p.Symbol, p.Side)
 		if res.Price > 0 || res.Err != "" || res.Exited {
 			out = append(out, res)
@@ -512,6 +587,9 @@ func (b *fqStockBroker) Place(o fqOrder) fqResult {
 		res.Err = err.Error()
 		return res
 	}
+	if o.CloseAll {
+		at.fqClearPeakMark(o.Symbol, fqSideLong)
+	}
 	res.OK, res.FillQty, res.FillPrice, res.Fee, res.Note = true, o.Qty, fill, fee, note
 	return res
 }
@@ -548,6 +626,9 @@ func (b *fqStockBroker) placeShort(o fqOrder) fqResult {
 		}
 		fill = price * (1 + b.slipBps/10000)
 		_, _, fee, err = led.ReduceSideWithFee(at.id, o.Symbol, store.StockPaperShort, qty, fill, b.shortFeeBps, now, "factor_quant_rebalance")
+		if err == nil && o.CloseAll {
+			at.fqClearPeakMark(o.Symbol, fqSideShort)
+		}
 	}
 	if err != nil {
 		res.Err = err.Error()
@@ -556,6 +637,75 @@ func (b *fqStockBroker) placeShort(o fqOrder) fqResult {
 	res.OK, res.FillQty, res.FillPrice, res.Fee = true, o.Qty, fill, fee
 	res.Note = fmt.Sprintf("模拟永续账本成交（滑点 %.4g bp，手续费 %.4g bp）", b.slipBps, b.shortFeeBps)
 	return res
+}
+
+// ensureStops evaluates initial/volatility-adaptive and Chandelier trailing stops
+// on open US paper positions, closing any breached position at market in the paper ledger.
+func (b *fqStockBroker) ensureStops() []fqStopResult {
+	at := b.at
+	if at == nil || at.store == nil || !at.IsFactorQuantStrategy() {
+		return nil
+	}
+	fq := at.config.StrategyConfig.FactorQuantConfig
+	open, err := at.store.StockPaper().ListOpen(at.id)
+	if err != nil || len(open) == 0 {
+		return nil
+	}
+	now := b.now()
+	led := at.store.StockPaper()
+	asOf := at.fqTargetsAsOf()
+	var out []fqStopResult
+	for _, p := range open {
+		if p == nil || p.Quantity <= 0 || p.AvgPrice <= 0 {
+			continue
+		}
+		side := fqSideLong
+		pct := fq.EffectiveLongStopPct()
+		if p.EffectiveSide() == store.StockPaperShort {
+			side = fqSideShort
+			pct = fq.EffectiveShortStopPct()
+		}
+		if pct <= 0 {
+			continue
+		}
+		mark, _ := b.PriceForSide(p.Symbol, side)
+		if mark <= 0 {
+			if side == fqSideShort {
+				mark = at.stock.perpPrice(p.Symbol)
+			} else {
+				mark = at.stock.price(p.Symbol)
+			}
+		}
+		if mark <= 0 || math.IsNaN(mark) || math.IsInf(mark, 0) {
+			continue
+		}
+		peak := at.fqUpdatePeakMark(p.Symbol, side, p.AvgPrice, mark)
+		stop, _ := fqComputeAdaptiveStopPrice(p.Symbol, side, p.AvgPrice, mark, peak, pct, fq, asOf)
+		if stop <= 0 {
+			continue
+		}
+		if (side == fqSideLong && mark <= stop) || (side == fqSideShort && mark >= stop) {
+			res := fqStopResult{Symbol: p.Symbol, Side: side, Price: stop}
+			var cerr error
+			if side == fqSideLong {
+				fill := mark * (1 - b.slipBps/10000)
+				_, _, _, cerr = led.ReduceWithFee(at.id, p.Symbol, 0, fill, b.feeBps, now, "factor_quant_stop")
+			} else {
+				b.applyFunding(p, mark, true)
+				fill := mark * (1 + b.slipBps/10000)
+				_, _, _, cerr = led.ReduceSideWithFee(at.id, p.Symbol, store.StockPaperShort, 0, fill, b.shortFeeBps, now, "factor_quant_stop")
+			}
+			at.fqClearPeakMark(p.Symbol, side)
+			if cerr != nil {
+				res.Err = fmt.Sprintf("止损（%s）止损价已越过，市价平仓失败：%v", fqStopSideLabel(side), cerr)
+			} else {
+				res.Exited = true
+				res.Note = "止损价已越过，已市价平仓"
+			}
+			out = append(out, res)
+		}
+	}
+	return out
 }
 
 // ------------------------------------------------------------ orchestration

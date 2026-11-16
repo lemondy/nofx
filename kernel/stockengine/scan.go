@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,6 +154,31 @@ func (r *ScanReport) Lookup(symbol string) (ScanResult, bool) {
 		}
 	}
 	return ScanResult{}, false
+}
+
+// FilterBySizeTier returns r untouched when tier is empty or "all"; otherwise
+// it returns a shallow copy of *r with Results filtered by MatchesSizeTier.
+func (r *ScanReport) FilterBySizeTier(tier string) *ScanReport {
+	if r == nil {
+		return nil
+	}
+	f := strings.ToLower(strings.TrimSpace(tier))
+	if f == "" || f == "all" {
+		return r
+	}
+	filtered := make([]ScanResult, 0, len(r.Results))
+	for _, res := range r.Results {
+		rowTier := res.Universe.Tier
+		if rowTier == "" {
+			rowTier = ClassifySizeTier(res.Universe.Class, res.Universe.AvgDollarVol20)
+		}
+		if MatchesSizeTier(f, rowTier, res.Universe.Class) {
+			filtered = append(filtered, res)
+		}
+	}
+	cp := *r
+	cp.Results = filtered
+	return &cp
 }
 
 // Scan classifies every symbol of the universe sequentially. Cancellation

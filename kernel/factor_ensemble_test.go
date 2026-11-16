@@ -734,3 +734,33 @@ func TestFactorEnsembleStaleAlerts(t *testing.T) {
 		}
 	})
 }
+
+func TestFactorEnsembleExtendedScopeNoiseWarning(t *testing.T) {
+	factorEnsembleTestFile(t, factorEnsembleExtendedFixture("2026-10-19"))
+
+	ext := computeFactorEnsemble(&market.Data{Symbol: "LDOUSDT"}, factorEnsembleTestNow)
+	if ext == nil || ext.Scope != "extended" {
+		t.Fatalf("extended = %+v", ext)
+	}
+	for _, want := range []string{"流动性前60", "高维噪声", "过拟合", "避免放大仓位或作为独立入场理由"} {
+		if !strings.Contains(ext.ScopeNote, want) {
+			t.Fatalf("extended ScopeNote missing %q: %s", want, ext.ScopeNote)
+		}
+	}
+
+	core := computeFactorEnsemble(&market.Data{Symbol: "BTCUSDT"}, factorEnsembleTestNow)
+	if core == nil || core.Scope != "core" || core.ScopeNote != "" {
+		t.Fatalf("core ScopeNote must remain empty: %+v", core)
+	}
+
+	none := computeFactorEnsemble(&market.Data{Symbol: "XRPUSDT"}, factorEnsembleTestNow)
+	if none == nil || none.Scope != "none" || none.ScopeNote != "" {
+		t.Fatalf("none ScopeNote must remain empty: %+v", none)
+	}
+
+	factorEnsembleTestFile(t, factorEnsembleFixture("2026-10-19"))
+	legacy := computeFactorEnsemble(&market.Data{Symbol: "BTCUSDT"}, factorEnsembleTestNow)
+	if legacy == nil || legacy.Scope != "" || legacy.ScopeNote != "" {
+		t.Fatalf("legacy format must keep Scope and ScopeNote empty: %+v", legacy)
+	}
+}

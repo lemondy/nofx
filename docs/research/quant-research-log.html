@@ -55,11 +55,11 @@ th{color:var(--mut);font-weight:600}
 <body>
 <div class="wrap">
 <h1>量化研究记录</h1>
-<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-10-18。</p>
+<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-11-16。</p>
 
 <div class="sum" id="sum"></div>
 
-<div class="rule"><b>阅读口径：</b>所有带订单/盈亏的回测统一走 <code>scripts/backtest</code>（Backtrader），不另写模拟器。加密货币费用 0.05%/边 + 0.03% 滑点，同币同向单仓（重叠过滤），并配时间错位的随机对照；统计推断按周聚类 SE。R = 以初始止损距离为 1 的盈亏倍数。<b>“未发现优势”≠“已证伪”</b>：多数样本只有 4–12 个月，且处于偏空行情，结论仅对该样本有效。</div>
+<div class="rule"><b>阅读口径：</b>2026-11-16 起所有新研究、组合回测与风险收益指标统一走 <code>scripts/backtest/nt_engine.py</code>（<b>NautilusTrader 1.222.0 + QuantStats 0.0.86</b>，CLI 默认 <code>--engine nautilus</code>；此前的历史冻结 <code>PREREG_SHA256</code> 研究沿用 Backtrader），不另写模拟器。加密货币费用 0.05%/边 + 0.03% 滑点，同币同向单仓（重叠过滤），并配时间错位的随机对照；统计推断按周聚类 SE。R = 以初始止损距离为 1 的盈亏倍数。<b>“未发现优势”≠“已证伪”</b>：多数样本只有 4–12 个月，且处于偏空行情，结论仅对该样本有效。</div>
 
 <div class="bar" id="bar">
   <button class="on" data-f="all">全部</button>
@@ -70,6 +70,48 @@ th{color:var(--mut);font-weight:600}
 </div>
 
 <div id="log">
+
+<div class="day">2026-11-15</div>
+
+<article data-v="no" data-id="size-tier-split-s1-audit">
+<h2>全线交易员/数据源大小盘拆分可行性审计与增量 S1 检验（crypto_llm / fq_crypto / fq_us） <span class="tag t-no">8 组 S1 全判 fail / fewer_trades（crypto_llm K=7..9 · fq_crypto K=13..14 · fq_us K=9..11）· 全部未跑赢现行线上基线，不拆分、不融合</span><span class="dom">加密 + 美股 · LLM + factor_quant · 池分层与双袖套拆分</span></h2>
+<p class="k">思路：审计当前全部 12 个运行中交易员与本地数据源拆分大盘/超大盘股（<code>mega_large</code>）vs 中小盘股（<code>mid_small</code>）的工程可行性，并严格以“相对现行线上系统增量 Δ（不设单独正收益门槛）”为判准，完成三线预注册离线 S1 检验。</p>
+<ul>
+<li>工程与数据源拆分可行性（12 个 <code>is_running=1</code> 交易员）：美股 <code>factor_quant</code>（<code>1025e717</code> / <code>490f8b28</code>）底层 D3（498 股，176/176 期双层均 ≥16 股）与 bStock90（63/63 期 <code>mega_large</code>≥27、63/63 期 <code>mid_small</code>≥10）可干净拆分，当前仅 <code>quant_targets._build_us_targets</code> 未暴露 <code>tier</code> 参数；美股 LLM（<code>us-stock</code> / <code>美股大师</code> / <code>美股做空模拟-候选/对照</code>）Go 端 <code>ScanSizeTier</code> 与 <code>stockengine.ClassifySizeTier</code> 已就绪，但仅 6 笔已平仓（5 <code>mega_large</code> + 1 <code>mid_small</code>，<code>stock_theses</code> 近 14 条 100% <code>mega_large</code>），远低于 <code>min_n=100</code> 统计门槛；加密 <code>factor_quant</code>（<code>ae795edd</code>）Python/Go 分层代码与 <code>crypto/daily</code>（60 核 = 21 <code>mega_large</code> + 39 <code>mid_small</code>）均已就绪；加密 LLM（<code>mac-nofx</code> 与两对对照/候选）当前共用 <code>CoinSourceConfig</code>（<code>ai500 + piggy_dash + short_scan, min_oi=5</code>），混入 34.5% <code>mega_large</code>、42.0% <code>mid_small</code> 与 23.5% 代币化美股/ETF/小币，且 Go 端 <code>CoinSourceConfig</code> 尚未加 <code>SizeTier</code>。</li>
+<li><code>crypto_llm</code>（C1/C2/C3，K=7..9，<code>z_K(9)=2.7729</code>，n=226 <code>mac-nofx</code> 实盘 + <code>pooled-5</code> n=508 交叉检查，2000 次随机安慰剂）：现行全池基线 <code>avgR=+0.1285R</code>；C1（剔除无 20d 日线历史币，保留 173/226）Δ=−0.1380R（z=−1.58，安慰剂 16.0%，fail）；C2（仅保留 100 币池，106/226）Δ=−0.1480R（z=−0.87，fewer_trades）；C3（仅保留 <code>mega_large</code> ADV20≥$100M，78/226）Δ=−0.0974R（z=−0.44，fewer_trades）。分层拆解中 <code>mega_large</code>（+0.0311R）vs <code>mid_small</code>（−0.0428R）差额微弱（<code>pooled-5</code> 仅差 +0.020R，SE≈0.043），主要正 R 来自代币化/高波异构组（+0.5791R）。</li>
+<li><code>fq_crypto</code>（<code>S2_mid</code> / <code>S1_split</code>，K=13..14，<code>z_K(14)=2.9137</code>，Backtrader + S20h，200 次随机拆池安慰剂）：现行 7 因子 B=all 在 val +26.51%（SR 0.962）/ forward −6.79%（SR −0.359）。拆为纯中小盘多空 <code>S2_mid</code> 后两段全面大亏（val −28.96% SR −1.450，forward −21.96% SR −1.436，Δ=−0.001398，z=−2.62，安慰剂 14.5%，fail）；50% <code>M3_mega</code> + 50% <code>S2_mid</code> 双袖套 <code>S1_split</code> 两段均劣于 B（val −9.73% / forward −6.34%，Δ=−0.000649，z=−1.69，fail）。机制证实 B 的 2025 收益依赖跨层级多空（多头部空中小盘资金费率 +47.47）。</li>
+<li><code>fq_us</code>（U1/U2/U3，K=9..11，<code>z_K(11)=2.8376</code>，Backtrader 原生双腿；D2 B 独立基准复现 +387.8078% 误差 0）：在 D3（n=175）上，U1（<code>mega_large</code>）累计 +10.53% / SR 0.1206（vs B −3.36% / SR 0.0149，期差 Δ=+0.1031%, z=+0.66，dev=−0.0659%, 安慰剂 96.0%，fail），U2（<code>mid_small</code>）亏 −12.75% / SR −0.0809（Δ=−0.0608%, z=−1.80，fail），U3（50/50 双袖套）−0.57% / SR 0.0451（Δ=+0.0212%, z=+0.31，fail）；在现行实盘池 D2（n=62）上，B（+133.72% / SR 0.8974）全面跑赢 U1（+105.81% / SR 0.7376, z=−0.45）、U2（+109.36% / SR 0.7083, z=−0.22）与 U3（+116.76% / SR 0.9022, z=−0.47）。叠加现行线上 <code>490f8b28</code> 的 Volscale 规则后，<code>V(B)</code> 在 D3（+12.43% / SR 0.1707 / MaxDD 14.62%）与 D2（+127.00% / SR 0.9756 / MaxDD 20.11%）上同时全面优于 <code>V(U1)</code>/<code>V(U2)</code>/<code>V(U3)</code>。</li>
+</ul>
+<p><b>结论：</b>在严格“对比现行线上系统有增益即可融合”的增量判准下，加密 LLM、加密 <code>factor_quant</code>（h=3）、美股 <code>factor_quant</code> 的大小盘拆分或过滤共 8 组预注册臂全部判 fail 或 fewer_trades；美股 LLM 交易样本过少（n=6）尚不具可检验性。全部保持现行线上默认（不拆分池子、不限制分层、不开启 S2、不改实盘/模拟盘配置）。若后续探索加密纯大盘趋势策略，须用独立大盘重挖的 h=7 因子单独研发并重新立项 S1，而非拆解现有 h=3 混合池系统。</p>
+<p class="src">来源：<code>docs/research/2026-11-15-crypto-llm-tier-filter-s1-study.md</code> · <code>docs/research/2026-11-15-fq-crypto-split-sleeve-s1-study.md</code> · <code>docs/research/2026-11-15-fq-us-size-tier-split-s1-study.md</code> · <code>scripts/backtest/crypto_llm_tier_split_study.py</code> · <code>scripts/backtest/fq_crypto_split_sleeve_study.py</code> · <code>scripts/backtest/fq_us_size_tier_split_study.py</code></p>
+</article>
+
+<article data-v="no" data-id="fq-crypto-size-tier-s1">
+<h2>fq_crypto 分层护栏（M1 限仓 / M2 过滤 / M3 重选）S1 与 LLM 大盘挖掘对照 <span class="tag t-no">S1 fail（M1/M2/M3，fq_crypto K=10/11/12）· 护栏牺牲 2025 资金费/离散度换取 2026 抗逼空，两段符号反转 z≈0，不开 S2、不改线上；LLM 大盘重挖 h=7 产出前向 confirmed 因子</span><span class="dom">加密 · factor_quant + 因子挖掘 · 市值/流动性分层</span></h2>
+<p class="k">思路：承接 Hidden Sharpe 分层研究：线上 <code>crypto/quant_targets</code>（h=3, 7 因子）中小盘（ADV20&lt;$100M）占 61.22% 暴露、空头占 84.9%。预注册检验在现行 7 因子规则（<code>ls_invvol_protected_v1</code> + S20h）上加入 Go/Python 分层护栏的净增量：M1（<code>max_mid_small_exposure_pct=25</code>，B 类，K=10）、M2（<code>size_tier="mega_large"</code> 执行过滤，B 类，K=11）、M3（<code>build_targets(tier="mega_large")</code> 重选，E 类，K=12），均配独立等暴露 B_x 与 200 次同数量随机安慰剂；同时在隔离沙盒对比含 LLM 的 <code>mega_large</code> vs <code>all</code> 因子挖掘（<code>seed=20261116, llm=20, mutations=100</code>）。</p>
+<ul>
+<li>Backtrader S1 主检验（<code>snapshot_20261108</code> + 小时线 11225/11225 完整，z_K(12)=2.8653）：M1/M2/M3 拼接 Δ=−0.000005 / −0.000032 / +0.000108，周聚类 z=−0.0189 / −0.0691 / +0.2375，vs B_x Δ=+0.000077 / +0.000153 / +0.000143，安慰剂分位 0.265 / 0.610 / 0.895（全 &lt;0.90），三组全判 fail。</li>
+<li>机制拆解（前后两段反向）：forward（2026-05..11 逼空期）B 亏 −6.79%（SR −0.359，MaxDD 27.21%，止损 101 次），M1/M2/M3 全部翻正为 +2.11% / +6.72% / +9.87%（SR +0.311 / +0.908 / +0.767，M2 止损降至 31 次、MaxDD 8.32%）；但 val（2025-05..2026-04）B 赚 +26.51%（SR 0.962，空头资金费收入 +47.47），M1/M2/M3 降至 +18.61% / +13.51% / +11.90%（且 M1/M2 在 val 跑输等暴露 B_x 的 +20.63% / +14.10%）。单因子 <code>f_0ce8b2ee</code> 次要对照呈完全相同反向结构（z=+0.04 / −0.39 / −0.01）。</li>
+<li>含 LLM 挖掘对照（<code>tier_ab_20261115</code>，<code>seed=20261116</code>，<code>--llm 20 --mutations 100</code>）：<code>mega_large</code> 在提示词约束下产出 13 条低换手趋势/量价 LLM 因子（0 语法失败），h=7 新增 2 条 accepted，其中 <code>Max($high,20)/$open</code> 验证 SR 1.14、前向 confirmed（fwd_ic=0.1363, fwd_sr=+0.5314）；同参数 <code>all</code> 对照虽在 h=3 接受 2 条因子但前向全部大亏（fwd_sr=−1.53 / −2.23），h=7 为 0 accepted。</li>
+<li>美股策略审计（只读 <code>data/data.db</code>）：running 美股策略 <code>scan_size_tier</code> 均为未限制（None）；<code>us-stock</code> 已平仓 6 笔中 5 笔 <code>mega_large</code> 合计 +3.51、1 笔 <code>mid_small</code>（AMC）亏 −1.50；<code>stock_theses</code> 最近 14 条记录全部位于 <code>mega_large</code>。</li>
+</ul>
+<p><b>结论：</b>对现行 h=3 混合池因子机械限仓/过滤中小盘不能无条件增厚全期收益，M1/M2/M3 全部 S1 fail（K=10/11/12 写入账本）。维持线上与模拟盘 <code>factor_quant</code> 默认配置（<code>size_tier="all"</code>, <code>max_mid_small_exposure_pct=0</code>）不变，不开 S2；若后续考虑加密大盘独立运行，应以大盘池独立挖出的 h=7 趋势因子重新设计并单独立项，而不是直接截尾 h=3 混合池因子。</p>
+<p class="src">来源：<code>docs/research/2026-11-15-fq-crypto-size-tier-s1-prereg.md</code> · <code>docs/research/2026-11-15-fq-crypto-size-tier-s1-study.md</code> · <code>scripts/backtest/fq_crypto_size_tier_study.py</code> · <code>data/factor_mining/fq_size_tier_s1/v1/</code></p>
+</article>
+
+<article data-v="no" data-id="hidden-sharpe-ratio-assessment">
+<h2>高阶去偏最大夏普比估计（The Hidden Sharpe Ratio, SSRN 7679420）评估与跨市场诊断 <span class="tag t-no">理论与诊断复核成立 · 落地 S0 去偏前沿诊断工具；不改线上交易策略（Prop 4 证明岭组合样本外上限折损，真实截面去偏 H₁ᴸ≈0）</span><span class="dom">加密 + 美股 · 外部论文 · 组合构建 / S0 前沿与过拟合诊断</span></h2>
+<p class="k">思路：Chernov, Kelly, Malamud &amp; Schwab (2026, SSRN 7679420) 提出：大特征值主成分占 50% 方差却几乎无风险溢价，大量夏普比沉淀在小特征值中；传统去偏 GRS 估计量因有效惩罚 Ẑ*(z)=z(1+ξ̂(z)) 压制小特征值而下偏。作者通过对 z 解析求导与 Bell 多项式递推恢复高阶项 B_j，给出总体最大平方夏普比无条件几何下界 H₁ᴸ 与 a-次对角上界 H₁ᵁ，同时在 Proposition 4 / Lemma 2 中证明：任何样本岭马科维茨组合权重 π̂_T(z) 的样本外平方夏普比存在不可消除的乘性上限折损 1/Ẑ*′(z)（当 c=P/T&gt;1 时 Ẑ*′(0)≥c/(c−1)&gt;1）。按 AGENTS.md 流程完成全文精读、闭式复现、nofx 真实数据诊断与组合层反事实检验。</p>
+<ul>
+<li>公式与合成 DGP 复现（<code>scripts/backtest/hidden_sharpe_check.py</code> Part A，P=300, T=180, c=1.67，真实年化 R*=2.449）：朴素插值 GRS 虚高至 3.737；0 阶去偏 Θ̂₀=0.2003（总体 B₀=0.2366），1 阶去偏 Θ̂₁=0.0987（总体 B₁=0.0949）；1 阶下界 √H₁ᴸ=2.289、上界 √H₁ᵁ=4.214 准确夹逼真值；岭组合样本外夏普 1.134 严格受限于 Prop 4 上界 2.089（Ẑ*′=1.200）；反事实 1 阶 Neumann 谱恢复组合权重 [(zI+Σ̂)⁻¹+z(zI+Σ̂)⁻²]R̄ 样本外夏普降至 1.096（放大特征向量旋转噪声）。</li>
+<li>nofx 加密数据诊断（Part B1/B2）：15 条管理腿训练段朴素夏普 2.66，去偏后 √H₁ᴸ=1.73（SE 2.35，不显著），验证段去偏 Θ̂₀=Θ̂₁=0、√H₁ᴸ=0.24（Prop 4 样本外上限仅 0.23）；45 特征扩展到 P=500 / 2000 个 ReLU 随机特征管理组合时，朴素夏普高达 8.98 / 10.57，但 Stieltjes 去偏后 Θ̂₀=Θ̂₁=0、H₁ᴸ=0.00，证实表观高夏普 100% 来自高维均值噪声 ξ̂(z)。</li>
+<li>nofx 美股数据诊断（Part B3）：bStock（90 只大盘/超大盘股）10 特征线性组合去偏 √H₁ᴸ=1.12（Θ̂₁=0，信号全在 0 阶主成分），扩展到 P=500 个 ReLU 随机特征后学习极限乘子 Ẑ*′=1.84、去偏下界归零（0.00）；标普 500 宽池（498 只）线性组合 √H₁ᴸ=1.03，RFF-500 仅微升至 1.10（Prop 4 岭上限 1.02→1.07）。完全印证论文 Section 5.4 Figure 5“超大盘股中非线性随机特征无增量 MSR”的实证结论。</li>
+<li>组合层反事实走步检验（Part C，加密 15 腿）：1 阶 Neumann 去偏恢复岭组合在 z∈{0.01, 0.1, 1.0} 下训练段 SR 1.91~2.99，但前向段全部亏损（SR −0.96 ~ −1.06，累计 −5.0% ~ −7.9%），与标准岭 MSRR 一同跑输简单等权基线（前向 SR +0.87，累计 +19.5%）。</li>
+<li>大盘 vs 中小盘分层工程落地与试点验证（<code>tier_ab_20261115</code>，<code>seed=20261115</code>，<code>--no-llm --mutations 50</code>）：加密 <code>mega_large</code>（ADV20≥$100M，21 币）去偏 θ̂₀ 与 H₁ᴸ（2.45/2.53/1.39）为混跑池与 <code>mid_small</code>（&lt;$100M，39 币）的 2–4 倍，且在 h=7 产出可转化正夏普的 accepted 因子 <code>Max($high,20)/$close</code>（val_ic=0.1218, val_ls_sharpe=1.62），而 <code>mid_small</code> 全期限 0 accepted（h=7 0 候选）、<code>all</code> 混跑 h=3 val_ls_sharpe 仅 0.10；审计线上 <code>quant_targets</code>（2026-11-13）发现加密当前中小盘总敞口达 61.22%（空头 42.44%/50%，extended 均值 z=−0.81），美股则 86.58% 集中于 <code>mega_large</code>。已在 Go 交易端与 Python 挖掘端接入默认兼容的分层过滤、中小盘敞口上限与 S0 诊断门。</li>
+</ul>
+<p><b>结论：</b>论文从理论上完整解释了此前 fq-crypto-msrr-ridge-v1 (K=4)、fq-crypto-ml-ridge/rff (K=5,6)、fq-us-ml-ridge/rff (K=6,7) 的失败机制。不把高阶 GRS 标量估计器强行改为交易策略，不发起新 S1/S2，K 不变；将闭式估计器保留为 S0 前置“有效前沿与噪声过拟合诊断门禁”（<code>scripts/backtest/hidden_sharpe_check.py</code> 与 <code>scripts/factor_mining/s0_diagnostics.py</code>），并已将大盘/超大盘 vs 中小盘分层护栏接入挖掘端与交易端（默认配置保持行为一致，未改线上配置与下单）。</p>
+<p class="src">来源：<code>docs/research/2026-11-15-hidden-sharpe-ratio-assessment.md</code> · <code>scripts/backtest/hidden_sharpe_check.py</code> · <code>scripts/factor_mining/s0_diagnostics.py</code> · <code>scripts/factor_mining/tiers.py</code> · <code>~/Downloads/ssrn-7679420.pdf</code></p>
+</article>
 
 <div class="day">2026-11-13</div>
 

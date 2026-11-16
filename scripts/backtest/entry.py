@@ -1,4 +1,4 @@
-"""入场对比适配：市价/限价都交给 Backtrader 撮合。"""
+"""入场对比适配：市价/限价都交给 Backtrader 或 NautilusTrader 撮合。"""
 from .exitsim import SLIP, TAKER, build_trade
 from .backtrader_adapter import run_trade
 from .klines import load_bars
@@ -6,7 +6,16 @@ from .params import FALLBACK
 
 
 def build_rows(signals, cache, horizons, min_bars=10, allow_overlap=False,
-               commission=TAKER, slippage=SLIP, limit_valid_min=45):
+               commission=TAKER, slippage=SLIP, limit_valid_min=45, engine="nautilus"):
+    if engine == "nautilus":
+        from .nt_engine import run_trade_nt
+
+        runner = run_trade_nt
+    elif engine == "backtrader":
+        runner = run_trade
+    else:
+        raise ValueError(f"Unsupported engine: {engine}")
+
     res = {h: [] for h in horizons}
     skipped = {"nodata": 0, "short": 0}
     busy = {h: {"mkt": {}, "lim": {}} for h in horizons}
@@ -36,7 +45,7 @@ def build_rows(signals, cache, horizons, min_bars=10, allow_overlap=False,
                 if not allow_overlap and tr["start_ms"] < busy[h][kind].get(key, 0):
                     row[kind + "_how"] = "blocked"
                     continue
-                result = run_trade(tr, p, commission, slippage)
+                result = runner(tr, p, commission, slippage)
                 row[kind + "_r"], row[kind + "_how"] = result["r"], result["how"]
                 if result["r"] is not None:
                     row[kind + "_risk"] = result["risk"] / result["entry_price"]
@@ -53,12 +62,13 @@ def stats(rs):
     return f"n={len(rs):3d} sumR={sum(rs):+7.1f} avgR={sum(rs) / len(rs):+.3f} win={w / len(rs):.0%}"
 
 
-def report(res, skipped, out=print):
+def report(res, skipped, out=print, engine="nautilus"):
+    eng_label = "NautilusTrader" if engine == "nautilus" else "Backtrader"
     out(f"skipped {skipped}")
     for h, rows in res.items():
         lim_origin = [r for r in rows if r["kind"] == "limit"]
-        out(f"\n===== horizon {h}h (Backtrader SL/TP, actual fill fees) =====")
-        out("A  limit simulated by Backtrader      : " + stats([r.get("lim_r") for r in lim_origin]))
+        out(f"\n===== horizon {h}h ({eng_label} SL/TP, actual fill fees) =====")
+        out(f"A  limit simulated by {eng_label:14s}: " + stats([r.get("lim_r") for r in lim_origin]))
         out("B  market next open, all limit signals  : " + stats([r["mkt_r"] for r in lim_origin]))
         out("B1   market, signals limit DID fill     : " + stats([r["mkt_r"] for r in lim_origin if r["outcome"] == "filled"]))
         out("B2   market, signals limit did NOT fill : " + stats([r["mkt_r"] for r in lim_origin if r["outcome"] != "filled"]))

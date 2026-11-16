@@ -129,6 +129,30 @@ const fq = {
     zh: '默认开启：按基准日线 EMA20/EMA50 判定趋势（加密看 BTCUSDT，美股看 SPY）。牛市最多做多 20 只 / 做空 10 只，熊市最多做空 20 只 / 做多 10 只，名义仓位按比例倾斜；震荡保持对称。关闭则保持原始对称权重。',
     en: 'Enabled by default: classifies daily EMA20/EMA50 regime on BTCUSDT (crypto) or SPY (US). Bull tilts to up to 20 longs / max 10 shorts; bear tilts to up to 20 shorts / max 10 longs; chop stays symmetric. Disable for symmetric weights.',
   },
+  rollingExit: {
+    zh: '因子衰减提前止盈止损 + 1/H 滚动调仓',
+    en: 'Alpha-decay early exit + 1/H rolling replacement',
+  },
+  rollingExitDesc: {
+    zh: '默认开启：在完整调仓周期内，若新日线因子的截面分位衰减越过中位数（多头 pct < 0.50、空头 pct > 0.50）则立即平仓，并按 1/H 预算滚动补入最新头部标的。',
+    en: 'Enabled by default: between full rebalances, exits held positions whose daily factor percentile decays past the median (long pct < 0.50, short pct > 0.50) and rolls freed budget (capped at 1/H) into top candidates.',
+  },
+  volAdaptiveStop: {
+    zh: '波动率自适应止损 + 吊灯移动止盈（含空头 1/σ² 配权）',
+    en: 'Volatility-adaptive stop + Chandelier trailing stop (with 1/σ² short sizing)',
+  },
+  volAdaptiveStopDesc: {
+    zh: '默认开启：初始止损按 2.5·σ30·√H 自适应缩放（加密 8%–28%，美股 6%–18%）；浮盈达标后按最高价回撤 2×ATR14 单向收紧移动止盈；空头按逆方差 1/σ² 压降妖币权重。',
+    en: 'Enabled by default: scales initial stop by 2.5·σ30·√H (crypto 8%–28%, US 6%–18%), ratchets a 2×ATR14 Chandelier trailing stop once in profit, and weights shorts by inverse variance (1/σ²).',
+  },
+  drawdownScale: {
+    zh: '组合回撤阶梯降仓（先降仓后熔断）',
+    en: 'Tiered portfolio drawdown scaling',
+  },
+  drawdownScaleDesc: {
+    zh: '默认开启：回撤达 10%/15%/20% 时将目标仓位分别缩减至 70%/40%/25%，在触发硬熔断前平滑控制回撤。',
+    en: 'Enabled by default: scales target capital to 70%/40%/25% at 10%/15%/20% portfolio drawdown before the hard kill switch.',
+  },
   targetsPath: {
     zh: 'quant_targets.json 路径覆盖',
     en: 'quant_targets.json path override',
@@ -356,24 +380,36 @@ export function FactorQuantConfigEditor({
             </label>
           ))}
         </div>
-        <label className="mt-4 flex items-start gap-3 p-3 rounded-lg bg-surface-2 border border-line cursor-pointer">
-          <input
-            type="checkbox"
-            data-testid="factor-regime_tilt"
-            checked={config.regime_tilt ?? true}
-            disabled={disabled}
-            onChange={(e) => updateField('regime_tilt', e.target.checked)}
-            className="mt-0.5 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
-          />
-          <div>
-            <span className="block text-sm font-medium text-fg">
-              {ts(fq.regimeTilt, language)}
-            </span>
-            <p className="text-xs mt-1 text-fg-3">
-              {ts(fq.regimeTiltDesc, language)}
-            </p>
-          </div>
-        </label>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          {(
+            [
+              ['regime_tilt', fq.regimeTilt, fq.regimeTiltDesc],
+              ['rolling_exit', fq.rollingExit, fq.rollingExitDesc],
+              ['vol_adaptive_stop', fq.volAdaptiveStop, fq.volAdaptiveStopDesc],
+              ['drawdown_scale', fq.drawdownScale, fq.drawdownScaleDesc],
+            ] as const
+          ).map(([key, label, desc]) => (
+            <label
+              key={key}
+              className="flex items-start gap-3 p-3 rounded-lg bg-surface-2 border border-line cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                data-testid={`factor-${key}`}
+                checked={config[key] ?? true}
+                disabled={disabled}
+                onChange={(e) => updateField(key, e.target.checked)}
+                className="mt-0.5 accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 disabled:opacity-50"
+              />
+              <div>
+                <span className="block text-sm font-medium text-fg">
+                  {ts(label, language)}
+                </span>
+                <p className="text-xs mt-1 text-fg-3">{ts(desc, language)}</p>
+              </div>
+            </label>
+          ))}
+        </div>
       </div>
 
       {/* Execution parameters */}

@@ -370,6 +370,31 @@ test('reset emits a new ISO ID and explains that saving is required', () => {
   }
 })
 
+test('optimization switches default to true and toggle boolean values', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  for (const key of [
+    'regime_tilt',
+    'rolling_exit',
+    'vol_adaptive_stop',
+    'drawdown_scale',
+  ] as const) {
+    const checkbox = screen.getByTestId(`factor-${key}`)
+    expect(checkbox).toBeChecked()
+    fireEvent.click(checkbox)
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ [key]: false })
+    )
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ [key]: true })
+    )
+    expect(checkbox).toBeChecked()
+  }
+})
+
+
 test('portfolio risk fields show English defaults and respect disabled', () => {
   const onChange = vi.fn()
   render(

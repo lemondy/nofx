@@ -54,19 +54,22 @@ type FactorQuantTick struct {
 }
 
 type FactorQuantRegimeStatus struct {
-	State       string  `json:"state"`
-	Benchmark   string  `json:"benchmark"`
-	AsOf        string  `json:"as_of,omitempty"`
-	Close       float64 `json:"close,omitempty"`
-	EMA20       float64 `json:"ema20,omitempty"`
-	EMA50       float64 `json:"ema50,omitempty"`
-	LongCount   int     `json:"long_count"`
-	ShortCount  int     `json:"short_count"`
-	LongGross   float64 `json:"long_gross"`
-	ShortGross  float64 `json:"short_gross"`
-	TiltEnabled bool    `json:"tilt_enabled"`
-	Applied     bool    `json:"applied"`
-	Reason      string  `json:"reason,omitempty"`
+	State          string  `json:"state"`
+	Benchmark      string  `json:"benchmark"`
+	AsOf           string  `json:"as_of,omitempty"`
+	Close          float64 `json:"close,omitempty"`
+	EMA20          float64 `json:"ema20,omitempty"`
+	EMA50          float64 `json:"ema50,omitempty"`
+	LongCount      int     `json:"long_count"`
+	ShortCount     int     `json:"short_count"`
+	LongGross      float64 `json:"long_gross"`
+	ShortGross     float64 `json:"short_gross"`
+	MegaLargeGross float64 `json:"mega_large_gross,omitempty"`
+	MidSmallGross  float64 `json:"mid_small_gross,omitempty"`
+	SizeTierFilter string  `json:"size_tier_filter,omitempty"`
+	TiltEnabled    bool    `json:"tilt_enabled"`
+	Applied        bool    `json:"applied"`
+	Reason         string  `json:"reason,omitempty"`
 }
 
 type FactorQuantRunStatus struct {
@@ -80,6 +83,8 @@ type FactorQuantRunStatus struct {
 	LastRebalanceAsOf string                   `json:"last_rebalance_as_of,omitempty"`
 	LastRebalanceAt   *time.Time               `json:"last_rebalance_at,omitempty"`
 	NextEligibleAsOf  string                   `json:"next_eligible_as_of,omitempty"`
+	LastRollingAsOf   string                   `json:"last_rolling_as_of,omitempty"`
+	DrawdownScale     float64                  `json:"drawdown_scale,omitempty"`
 	RetryAsOf         string                   `json:"retry_as_of,omitempty"`
 	RetryAttempts     int                      `json:"retry_attempts,omitempty"`
 	Regime            *FactorQuantRegimeStatus `json:"regime,omitempty"`

@@ -32,6 +32,11 @@ const (
 	StockScanRankKell     = "kell"
 	StockScanRankMomentum = "momentum"
 
+	// Size-tier filters of a us_stock strategy (StockConfig.ScanSizeTier).
+	StockScanSizeTierAll       = "all"
+	StockScanSizeTierMegaLarge = "mega_large"
+	StockScanSizeTierMidSmall  = "mid_small"
+
 	maxStockScanTopN = 50
 
 	// Regime scalers of a us_stock strategy (StockConfig.RegimeScaler).
@@ -137,6 +142,19 @@ func (s *StockConfig) EffectiveScanRank() string {
 		return StockScanRankMomentum
 	}
 	return StockScanRankKell
+}
+
+// EffectiveScanSizeTier resolves the scan size-tier filter: nil and "" mean "all",
+// otherwise returns normalized lowercase.
+func (s *StockConfig) EffectiveScanSizeTier() string {
+	if s == nil {
+		return StockScanSizeTierAll
+	}
+	v := strings.ToLower(strings.TrimSpace(s.ScanSizeTier))
+	if v == "" {
+		return StockScanSizeTierAll
+	}
+	return v
 }
 
 // AllowRegular reports whether opens/adds are allowed in the regular session
@@ -355,6 +373,11 @@ func (s *StockConfig) Validate() error {
 	case "", StockScanRankKell, StockScanRankMomentum:
 	default:
 		return fmt.Errorf("invalid scan_rank %q: must be %q or %q", s.ScanRank, StockScanRankKell, StockScanRankMomentum)
+	}
+	switch s.EffectiveScanSizeTier() {
+	case StockScanSizeTierAll, StockScanSizeTierMegaLarge, StockScanSizeTierMidSmall:
+	default:
+		return fmt.Errorf("invalid scan_size_tier %q: must be %q, %q or %q", s.ScanSizeTier, StockScanSizeTierAll, StockScanSizeTierMegaLarge, StockScanSizeTierMidSmall)
 	}
 	if err := validateStockSymbolList("symbols", s.Symbols); err != nil {
 		return err

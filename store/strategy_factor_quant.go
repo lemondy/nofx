@@ -67,6 +67,18 @@ type FactorQuantConfig struct {
 	// bull => up to 20 longs / max 10 shorts (~2:1 gross), bear => up to 20 shorts /
 	// max 10 longs (~2:1 gross), chop => symmetric. nil = default true.
 	RegimeTilt *bool `json:"regime_tilt,omitempty"`
+	// RollingExit enables intra-horizon alpha-decay early exit and 1/H rolling
+	// rebalance on intermediate days when a newer quant_targets.json includes
+	// cross-sectional rank percentiles (pct). nil = default true.
+	RollingExit *bool `json:"rolling_exit,omitempty"`
+	// VolAdaptiveStop enables volatility-adaptive initial stop distance
+	// (2.5*sigma30*sqrt(H)) and high-profit Chandelier trailing stop lock-in
+	// (plus paper stop checks for US stock positions). nil = default true.
+	VolAdaptiveStop *bool `json:"vol_adaptive_stop,omitempty"`
+	// DrawdownScale enables tiered portfolio drawdown position scaling
+	// (10%->0.70x, 15%->0.40x, 20%->0.25x) before the hard drawdown breaker.
+	// nil = default true.
+	DrawdownScale *bool `json:"drawdown_scale,omitempty"`
 	// USFeeBps / USSlippageBps: US only, trading costs of the bStock paper
 	// ledger, in basis points per fill. Buys fill at quote*(1+slippage), sells
 	// at quote*(1-slippage); the fee is a fraction of the notional deducted from
@@ -81,7 +93,19 @@ type FactorQuantConfig struct {
 	USShortFeeBps *float64 `json:"us_short_fee_bps,omitempty"`
 	// TargetsPath overrides $FACTOR_MINING_DIR/{market}/quant_targets.json.
 	TargetsPath string `json:"targets_path,omitempty"`
+	// SizeTier restricts factor_quant targets by liquidity/size tier:
+	// "" / "all" (default), "mega_large", or "mid_small".
+	SizeTier string `json:"size_tier,omitempty"`
+	// MaxMidSmallExposurePct caps total |weight| of mid_small symbols as a
+	// percentage of equity (0 = disabled; valid (0, 100]).
+	MaxMidSmallExposurePct float64 `json:"max_mid_small_exposure_pct,omitempty"`
 }
+
+const (
+	FactorQuantSizeTierAll       = "all"
+	FactorQuantSizeTierMegaLarge = "mega_large"
+	FactorQuantSizeTierMidSmall  = "mid_small"
+)
 
 const (
 	defaultFactorQuantCryptoHorizon = 3
@@ -254,6 +278,46 @@ func (f *FactorQuantConfig) EffectiveRegimeTilt() bool {
 	return *f.RegimeTilt
 }
 
+// EffectiveRollingExit reports whether intra-horizon alpha-decay early exit and
+// 1/H rolling replacement is active. nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveRollingExit() bool {
+	if f == nil || f.RollingExit == nil {
+		return true
+	}
+	return *f.RollingExit
+}
+
+// EffectiveVolAdaptiveStop reports whether volatility-adaptive initial stops and
+// high-profit Chandelier trailing stops are active. nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveVolAdaptiveStop() bool {
+	if f == nil || f.VolAdaptiveStop == nil {
+		return true
+	}
+	return *f.VolAdaptiveStop
+}
+
+// EffectiveDrawdownScale reports whether tiered drawdown de-risking scales down
+// CapitalFraction as drawdown approaches the breaker. nil/omitted defaults to true.
+func (f *FactorQuantConfig) EffectiveDrawdownScale() bool {
+	if f == nil || f.DrawdownScale == nil {
+		return true
+	}
+	return *f.DrawdownScale
+}
+
+// EffectiveSizeTier resolves the liquidity/size-tier filter: nil and "" mean
+// "all", otherwise returns normalized lowercase.
+func (f *FactorQuantConfig) EffectiveSizeTier() string {
+	if f == nil {
+		return FactorQuantSizeTierAll
+	}
+	v := strings.ToLower(strings.TrimSpace(f.SizeTier))
+	if v == "" {
+		return FactorQuantSizeTierAll
+	}
+	return v
+}
+
 // Validate rejects unusable input; zero retains the documented defaults.
 func (f *FactorQuantConfig) Validate() error {
 	if f == nil {
@@ -317,6 +381,14 @@ func (f *FactorQuantConfig) Validate() error {
 	}
 	if strings.ContainsRune(f.TargetsPath, 0) {
 		return fmt.Errorf("factor_quant targets_path is invalid")
+	}
+	switch f.EffectiveSizeTier() {
+	case FactorQuantSizeTierAll, FactorQuantSizeTierMegaLarge, FactorQuantSizeTierMidSmall:
+	default:
+		return fmt.Errorf("factor_quant size_tier must be %q, %q, or %q, got %q", FactorQuantSizeTierAll, FactorQuantSizeTierMegaLarge, FactorQuantSizeTierMidSmall, f.SizeTier)
+	}
+	if fqBadFloat(f.MaxMidSmallExposurePct) || f.MaxMidSmallExposurePct < 0 || f.MaxMidSmallExposurePct > 100 {
+		return fmt.Errorf("factor_quant max_mid_small_exposure_pct must be 0 or in (0,100]")
 	}
 	return nil
 }

@@ -17,7 +17,7 @@ import subprocess
 import time
 from typing import TypedDict
 
-from . import allocation, evaluate, feedback, forward, llm_memory, options, panel, zoo
+from . import allocation, evaluate, feedback, forward, llm_memory, options, panel, tiers, zoo
 from .config import CORR_REDUNDANT, MARKETS
 from .data_fetch import ROOT
 from .ensemble import build_ensemble
@@ -123,16 +123,23 @@ def model_call(workdir, prompt_path, out_path):
 
 
 def llm_propose(market, pool_text, failed_text, n, runner, workdir, avoid_text='[]', feedback_text='[]',
-                history_text=None):
+                history_text=None, tier='all'):
+    tiers.validate_tier(tier)
     stats = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     prompt_path, out_path = workdir / 'prompt.md', workdir / 'out.md'
     description = ('虚拟币日线，点时刻成交额前60，持有1/3/7日。' if market == 'crypto'
                    else '美股日线，SPY基准，持有5/10/20个交易日。')
+    if tier == 'mid_small':
+        tier_hint = '当前处于中小盘/次主流流动性分层：可探索量价流动性冲击与短中期均值反转，但需对极端波动与成交额异常进行惩罚。\n'
+    elif market == 'us' or tier == 'mega_large':
+        tier_hint = '当前处于高效率大盘/超大盘分层：优先低换手顺势动量、量价确认与结构趋势特征；禁止堆砌复杂非线性嵌套或短周期均值反转抄底结构。\n'
+    else:
+        tier_hint = ''
     history = (f'前几晚的探索记录（每晚训练集 top5 与初筛失败数，仅 train 指标；避免重复同类失败写法）：\n'
                f'{history_text}\n' if history_text else '')
-    prompt = (f'你是量化因子研究员。{description}\n{dsl_help()}\n'
+    prompt = (f'你是量化因子研究员。{description}\n{tier_hint}{dsl_help()}\n'
               f'训练集 top-10（仅 train 指标）：\n{pool_text}\n'
               f'{history}'
               f'最近10个失败表达式：\n{failed_text}\n'
@@ -178,10 +185,11 @@ LLM_MAX_BATCHES = 10
 
 
 def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_of_time=lambda: False,
-                        after_batch=None, history_text=None):
+                        after_batch=None, history_text=None, tier='all'):
     """One llm_propose call is capped at LLM_BATCH expressions, so a larger n is
     served by several calls; later calls are told what was already proposed.
     A failed batch is recorded in llm_error and the remaining ones still run."""
+    tiers.validate_tier(tier)
     total = dict(llm_proposed=0, llm_valid=0, llm_invalid=0, llm_error=None)
     exprs, seen = [], set()
     feedback = '[]'
@@ -192,7 +200,7 @@ def llm_propose_batches(market, pool_text, failed_text, n, runner, workdir, out_
         batch_dir = Path(workdir) / f'batch{i}' if i else Path(workdir)
         avoid = json.dumps(exprs[-40:], ensure_ascii=False)
         got, stats = llm_propose(market, pool_text, failed_text, min(remaining, LLM_BATCH), runner, batch_dir,
-                                 avoid, feedback, history_text)
+                                 avoid, feedback, history_text, tier=tier)
         remaining -= LLM_BATCH
         for key in ('llm_proposed', 'llm_valid', 'llm_invalid'):
             total[key] += stats[key]
@@ -282,14 +290,18 @@ class Miner:
         self.fetch_error = None
         self.fetch_seconds = 0.
 
-    def run_market(self, market, *, n_mutations, n_llm, budget_s, seed, use_llm, runner=None, now=None):
+    def run_market(self, market, *, n_mutations, n_llm, budget_s, seed, use_llm, runner=None, now=None, tier='all'):
+        tiers.validate_tier(tier)
+        store_market = market if tier == 'all' else f'{market}/tiers/{tier}'
         started = now() if callable(now) else now
         started = started or dt.datetime.now(dt.timezone.utc)
-        run_id = f'{market}-{started.strftime("%Y%m%dT%H%M%S%fZ")}-{seed}'
+        run_id = (f'{market}-{started.strftime("%Y%m%dT%H%M%S%fZ")}-{seed}'
+                  if tier == 'all'
+                  else f'{market}-{tier}-{started.strftime("%Y%m%dT%H%M%S%fZ")}-{seed}')
         stamp = started.isoformat()
         clock = time.monotonic()
         hashes = frozen_hashes()
-        row = dict(run_id=run_id, market=market, started_at=stamp, finished_at=None,
+        row = dict(run_id=run_id, market=market, tier=tier, started_at=stamp, finished_at=None,
                    seconds=0., reevaluated=0, forward_updated=0, seed_evaluated=0, mutation_evaluated=0, llm_proposed=0,
                    llm_valid=0, llm_invalid=0, llm_evaluated=0, invalid=0, new_accepted=0,
                    new_candidate=0, trials_total=0, error=self.fetch_error,
@@ -298,22 +310,22 @@ class Miner:
         if diverse_parents:
             row['diverse_parents'] = dict(per_horizon={}, llm=None)
         def stage(name):
-            store.write_status(dict(running=True, current=dict(market=market, stage=name, started_at=stamp),
+            store.write_status(dict(running=True, current=dict(market=store_market, stage=name, started_at=stamp),
                                     **hashes), self.root)
         try:
             stage('seed')
             cfg = MARKETS[market]
-            panels = load_panels(market, self.root)
-            store.write_status({'markets': {market: panels.meta}}, self.root)
+            panels = load_panels(market, self.root) if tier == 'all' else load_panels(market, self.root, tier=tier)
+            store.write_status({'markets': {store_market: panels.meta}}, self.root)
             splits = {h: make_splits(panels.mask.index, h, panels.windows) for h in cfg['horizons']}
             if diverse_parents:
                 parent_dates = panels.mask.index[splits[min(cfg['horizons'])]['train']][::5]
             targets = {h: forward_target(panels, h) for h in cfg['horizons']}
-            ledger = store.read_ledger(market, self.root)
+            ledger = store.read_ledger(store_market, self.root)
             seen = {(r['horizon'], r['id']) for r in ledger}
             K = Counter(r['horizon'] for r in ledger)
             row['trials_total'] = sum(K.values())
-            old_zoo = store.read_json(self.root / market / 'zoo.json', {'factors': []})
+            old_zoo = store.read_json(self.root / store_market / 'zoo.json', {'factors': []})
             factors = {(f['horizon'], f['id']): dict(f) for f in old_zoo['factors']}
             old_forward = {key: f['forward'] for key, f in factors.items() if 'forward' in f}
             old_status = {key: f['status'] for key, f in factors.items()}
@@ -324,7 +336,7 @@ class Miner:
             # detection: the full append-only event log plus whatever earlier
             # evidence survives the truncated zoo status_history.
             past_accepted = {(e['horizon'], e['id'])
-                             for e in store.read_status_events(market, self.root)
+                             for e in store.read_status_events(store_market, self.root)
                              if e.get('to') == 'accepted'}
             for key, factor in factors.items():
                 if factor['status'] == 'accepted' or any(
@@ -438,7 +450,7 @@ class Miner:
                     made += add(expr, 'mutation', None, mutation_batch)
                     if made >= n_mutations:
                         break
-            store.append_ledger(market, [], self.root)
+            store.append_ledger(store_market, [], self.root)
 
             def out_of_time():
                 return time.monotonic() - clock >= budget_s
@@ -487,7 +499,7 @@ class Miner:
                                      source=candidate['source'], horizon=h, train_t=metrics['train']['t'],
                                      train_ic=metrics['train']['ic'], status=state)
                         # Persist each valid trial before another horizon can fail.
-                        store.append_ledger(market, [trial], self.root)
+                        store.append_ledger(store_market, [trial], self.root)
                         ledger.append(trial)
                         row['trials_total'] = sum(K.values())
                         if not valid_candidate:
@@ -524,7 +536,7 @@ class Miner:
                     llm_batch.extend(fresh)
                     summary = summarize_outcomes(evaluate_batch(fresh))
                     if memory:
-                        llm_memory.record_batch(self.root, market, run_id, batches[0], summary)
+                        llm_memory.record_batch(self.root, store_market, run_id, batches[0], summary)
                         batches[0] += 1
                     return json.dumps(summary, ensure_ascii=False)
 
@@ -532,11 +544,11 @@ class Miner:
                 batches = [0]
                 history_text = None
                 if memory:
-                    past = llm_memory.history(self.root, market, run_id)
+                    past = llm_memory.history(self.root, store_market, run_id)
                     history_text = json.dumps(past, ensure_ascii=False) if past else None
                 _, stats = llm_propose_batches(market, pool_text, json.dumps(failures), n_llm, runner,
                                                self.root / 'llm_work' / run_id, out_of_time, after_batch,
-                                               history_text)
+                                               history_text, tier=tier)
                 row.update(stats)
             evaluate_batch(mutation_batch)
             row['trials_total'] = sum(K.values())
@@ -608,39 +620,48 @@ class Miner:
             split = {s: splits[shortest]['ranges'][s] for s in ('train', 'val')}
             split.update(rolling=splits[shortest]['rolling'], windows=panels.windows, holdout_sealed=True)
             output = dict(market=market, generated_at=stamp, split=split, horizons=horizons, factors=retained)
+            if tier != 'all':
+                output['tier'] = tier
             # The run's statuses are final. Record first admissions, transitions
             # and drops in one durable append, then bump the promotion counters
             # of the promoted zoo entries. A crash before this point (budget
             # stop or exception) leaves the log untouched for this run.
             events, promoted = build_status_events(
-                run_id, market, stamp, factors, old_factors, first_status, K,
+                run_id, store_market, stamp, factors, old_factors, first_status, K,
                 {(f['horizon'], f['id']) for f in retained}, past_accepted)
             for key in promoted:
                 factor = factors[key]
                 # For entries that predate the counter, this counts observed
                 # promotions from now on; the earlier count stays unknown.
                 factor['promotions'] = (factor.get('promotions') or 0) + 1
-            store.append_status_events(market, events, self.root)
+            store.append_status_events(store_market, events, self.root)
             # Preserve measured train/val metrics even if ensemble construction fails.
-            store.write_zoo(market, output, self.root)
+            store.write_zoo(store_market, output, self.root)
             stage('ensemble')
             ensemble = build_ensemble(market, retained, panels, targets, splits, cfg,
                                       values_cache=values_cache)
-            store.write_ensemble(market, ensemble, self.root)
+            store.write_ensemble(store_market, ensemble, self.root)
             try:
                 from .live_scores import export_live_scores
                 selected_ids = None
                 if options.enabled(options.GREEDY_ENSEMBLE):
                     # Live reference scores must use exactly the ensemble.json factors.
                     selected_ids = {int(h): v['factor_ids'] for h, v in ensemble['horizons'].items() if v}
-                export_live_scores(market, retained, panels, root=self.root, values_cache=values_cache,
-                                   selected_ids=selected_ids)
+                if tier == 'all':
+                    export_live_scores(market, retained, panels, root=self.root, values_cache=values_cache,
+                                       selected_ids=selected_ids)
+                else:
+                    export_live_scores(market, retained, panels, root=self.root, values_cache=values_cache,
+                                       selected_ids=selected_ids, output_market=store_market)
             except Exception as exc:
                 import sys
                 print(f'live_scores export failed for {market}: {type(exc).__name__}: {exc}', file=sys.stderr)
             try:
                 from .quant_targets import write_targets
-                write_targets(market, self.root, panels=panels)
+                if tier == 'all':
+                    write_targets(market, self.root, panels=panels)
+                else:
+                    write_targets(market, self.root, panels=panels, tier=tier)
             except Exception as exc:
                 import sys
                 print(f'quant_targets export failed for {market}: {type(exc).__name__}: {exc}', file=sys.stderr)

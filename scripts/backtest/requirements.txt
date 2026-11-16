@@ -1,2 +1,6 @@
-backtrader==1.9.78.123
+nautilus_trader==1.222.0
+quantstats==0.0.86
 pandas==2.2.3
+# Legacy engine preserved read-only for historical frozen PREREG_SHA256 studies:
+backtrader==1.9.78.123
+
