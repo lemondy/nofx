@@ -28,7 +28,12 @@ def _sig_path(a):
 
 
 def _add_execution(p, with_limit=False):
-    p.add_argument("--engine", choices=["backtrader"], default="backtrader", help="使用 Backtrader 原生 broker")
+    p.add_argument(
+        "--engine",
+        choices=["nautilus", "backtrader"],
+        default="nautilus",
+        help="回测引擎：nautilus (NautilusTrader+QuantStats，默认) | backtrader (仅历史冻结研究兼容)",
+    )
     p.add_argument("--commission", type=float, default=exitsim.TAKER, help="每次成交手续费率，0.0005=0.05%%")
     p.add_argument("--slippage", type=float, default=exitsim.SLIP, help="市价/止损滑点率，0.0003=0.03%%")
     p.add_argument("--limit-fill", choices=("through", "touch"), default="through",
@@ -37,15 +42,36 @@ def _add_execution(p, with_limit=False):
         p.add_argument("--limit-valid-min", type=float, default=45, help="从信号时间起算的限价有效期(分钟)")
 
 
+def _require_nautilus():
+    try:
+        import nautilus_trader  # noqa: F401
+        from . import nt_engine
+    except ImportError as exc:
+        raise BacktraderUnavailable(
+            "回测需要 NautilusTrader（nautilus_trader）+ QuantStats，不会回退到自写模拟器。请先安装并使用该环境运行：\n"
+            "  uv venv .venv\n"
+            "  uv pip install --python .venv/bin/python -r scripts/backtest/requirements.txt\n"
+            "  .venv/bin/python -m scripts.backtest <command> ..."
+        ) from exc
+    return nt_engine
+
+
 def _execution(a):
-    bt = _backtrader()
     if not all(math.isfinite(v) and v >= 0 for v in (a.commission, a.slippage)):
         raise ValueError("手续费和滑点必须是非负有限数")
     if hasattr(a, "limit_valid_min") and (not math.isfinite(a.limit_valid_min) or a.limit_valid_min <= 0):
         raise ValueError("限价有效期必须大于 0")
-    backtrader_adapter.LIMIT_FILL_DEFAULT = a.limit_fill
-    print(f"engine=backtrader version={bt.__version__} commission={a.commission} slippage={a.slippage} "
-          f"limit_fill={a.limit_fill}")
+    if a.engine == "nautilus":
+        nt_engine = _require_nautilus()
+        nt_engine.LIMIT_FILL_DEFAULT = a.limit_fill
+        ver = nt_engine.nt_version()
+        print(f"engine=nautilus_trader version={ver} commission={a.commission} slippage={a.slippage} "
+              f"limit_fill={a.limit_fill}")
+    else:
+        bt = _backtrader()
+        backtrader_adapter.LIMIT_FILL_DEFAULT = a.limit_fill
+        print(f"engine=backtrader version={bt.__version__} commission={a.commission} slippage={a.slippage} "
+              f"limit_fill={a.limit_fill}")
     print("收盘提交订单，下一根起撮合；独立信号 R 研究，非组合资金回测；open 仅盯市、不收未成交的平仓费。")
 
 
@@ -88,8 +114,9 @@ def cmd_entry(a):
     if not horizons or any(h <= 0 for h in horizons):
         raise ValueError("horizons 必须是正整数小时列表")
     res, skipped = entry.build_rows(sigs, a.cache, horizons, allow_overlap=a.allow_overlap,
-                                    commission=a.commission, slippage=a.slippage, limit_valid_min=a.limit_valid_min)
-    entry.report(res, skipped)
+                                    commission=a.commission, slippage=a.slippage,
+                                    limit_valid_min=a.limit_valid_min, engine=a.engine)
+    entry.report(res, skipped, engine=a.engine)
 
 
 def _baseline(a, meta):
@@ -129,7 +156,7 @@ def cmd_exit(a):
         with open(a.variants) as f:
             variants += json.load(f)
     exitsim.run_variants(trades, base, variants, csv_path=a.csv, allow_overlap=a.allow_overlap,
-                         commission=a.commission, slippage=a.slippage)
+                         commission=a.commission, slippage=a.slippage, engine=a.engine)
     return 0
 
 
@@ -144,7 +171,8 @@ def cmd_ml_dataset(a):
         tid = signals.resolve_trader(conn, a.trader, a.trader_id)["id"]
     else:
         tid = meta["trader_id"]
-    rows, missing = mldataset.build_rows(conn, tid, sigs, a.cache, base, a.horizon, a.commission, a.slippage)
+    rows, missing = mldataset.build_rows(conn, tid, sigs, a.cache, base, a.horizon,
+                                         a.commission, a.slippage, engine=a.engine)
     out = a.out or os.path.join(a.cache, "ml_rows.json")
     with open(out, "w") as f:
         json.dump(rows, f)
@@ -171,8 +199,8 @@ def cmd_ml_eval(a):
     path = a.rows or os.path.join(a.cache, "ml_rows.json")
     with open(path) as f:
         rows = json.load(f)
-    if any(row.get("engine") != "backtrader" for row in rows):
-        raise ValueError("ml_rows 含旧模拟器或未知来源的标签，请先用 Backtrader 重新运行 ml-dataset")
+    if any(row.get("engine") not in ("backtrader", "nautilus_trader") for row in rows):
+        raise ValueError("ml_rows 含旧模拟器或未知来源的标签，请先用 Backtrader 或 NautilusTrader 重新运行 ml-dataset")
     labels = mleval.LABELS if a.label == "both" else (a.label,)
     names = a.models.split(",") if a.models else None
     results, line = mleval.run(rows, labels, min_coverage=a.min_coverage, folds=a.folds, min_train=a.min_train,
@@ -262,6 +290,15 @@ def cmd_volrix(a):
     return 0
 
 
+def cmd_nt_parity(a):
+    from . import nt_parity
+
+    argv = ["--benchmark", a.benchmark]
+    if a.out:
+        argv += ["--out", a.out]
+    return nt_parity.main(argv)
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="python3 -m scripts.backtest", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -289,7 +326,7 @@ def build_parser():
     p.add_argument("--allow-overlap", action="store_true", help="市价/限价行不做「同币同向一次只持一仓」过滤")
     p.set_defaults(fn=cmd_entry)
 
-    p = sub.add_parser("exit", help="Backtrader 出场策略回测")
+    p = sub.add_parser("exit", help="出场策略回测（NautilusTrader / Backtrader）")
     _add_common(p, with_db=True)
     _add_execution(p, with_limit=True)
     p.add_argument("--set", choices=["mkt", "lim"], default="mkt")
@@ -378,6 +415,11 @@ def build_parser():
     p.add_argument('--out', help='中文 Markdown 报告，默认 stdout')
     p.add_argument('--json', dest='json_out', help='紧凑JSON，仅BTC/ETH含日权益、成交和原生分析器；截面仅存metrics')
     p.set_defaults(fn=cmd_volrix)
+
+    p = sub.add_parser('nt-parity', help='NautilusTrader + QuantStats vs Backtrader 冻结快照离线对照基准')
+    p.add_argument('--benchmark', choices=['all', 'us_long', 'us_ls', 'crypto'], default='all')
+    p.add_argument('--out', help='可选输出 JSON 基准报告路径')
+    p.set_defaults(fn=cmd_nt_parity)
     return ap
 
 

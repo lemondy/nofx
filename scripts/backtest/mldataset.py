@@ -40,13 +40,14 @@ def find_record(conn, trader_id, sig):
     return s, ai
 
 
-def build_rows(conn, trader_id, sigs, cache, base, horizon=72, commission=exitsim.TAKER, slippage=exitsim.SLIP):
+def build_rows(conn, trader_id, sigs, cache, base, horizon=72, commission=exitsim.TAKER,
+               slippage=exitsim.SLIP, engine="nautilus"):
     """返回 (rows, missing)。r_base/r_plain/mfe 均按信号收盘提交、下一根起市价撮合。"""
     base = dict(base, horizon_h=horizon)
     plain = plain_params(base)
     trades, _ = exitsim.load_trades(sigs, cache, "mkt")
     tmap = {(t["sym"], t["side"], t["t0"]): t for t in trades}
-    engine_version = _backtrader().__version__
+    eng_name, engine_version = exitsim._engine_meta(engine)
     rows, missing = [], 0
     for sg in sigs:
         tr = tmap.get((sg["symbol"], sg["side"], sg["t0"]))
@@ -55,14 +56,14 @@ def build_rows(conn, trader_id, sigs, cache, base, horizon=72, commission=exitsi
             missing += 1
             continue
         s, ai = found
-        rb = exitsim.simulate(tr, base, commission, slippage)[0]
-        rp, _, peak, _ = exitsim.simulate(tr, plain, commission, slippage)
+        rb = exitsim.simulate(tr, base, commission, slippage, engine=engine)[0]
+        rp, _, peak, _ = exitsim.simulate(tr, plain, commission, slippage, engine=engine)
         if rb is None or rp is None:
             missing += 1
             continue
         rows.append(dict(id=sg["id"], sym=sg["symbol"], side=sg["side"], t0=sg["t0"], t0_ms=sg["t0_ms"],
                          kind=sg["kind"], outcome=sg["outcome"], r_base=rb, r_plain=rp, mfe=peak,
-                         engine="backtrader", engine_version=engine_version,
+                         engine=eng_name, engine_version=engine_version,
                          commission=commission, slippage=slippage, label_params=base,
                          feat=mlfeatures.features(s, sg["side"], ai)))
     return rows, missing

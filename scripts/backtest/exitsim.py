@@ -64,21 +64,39 @@ def load_trades(signals, cache, kind, min_bars=10, include_market=True, limit_va
     return trades, skipped
 
 
-def simulate(tr, p, commission=TAKER, slippage=SLIP):
-    """兼容研究标签接口。实际运行 bt.Cerebro，无内置撮合后备路径。"""
-    result = run_trade(tr, p, commission, slippage)
+def _run_trade_for_engine(tr, p, commission=TAKER, slippage=SLIP, engine="nautilus"):
+    if engine == "nautilus":
+        from .nt_engine import run_trade_nt
+
+        return run_trade_nt(tr, p, commission, slippage)
+    if engine == "backtrader":
+        return run_trade(tr, p, commission, slippage)
+    raise ValueError(f"Unsupported engine: {engine}")
+
+
+def _engine_meta(engine="nautilus"):
+    if engine == "nautilus":
+        from .nt_engine import nt_version
+
+        return "nautilus_trader", nt_version()
+    return "backtrader", _backtrader().__version__
+
+
+def simulate(tr, p, commission=TAKER, slippage=SLIP, engine="nautilus"):
+    """兼容研究标签接口。按 engine 路由至 NautilusTrader（默认）或 Backtrader。"""
+    result = _run_trade_for_engine(tr, p, commission, slippage, engine=engine)
     return result["r"], result["how"], result["peak"], result["exit_ms"]
 
 
-def summarize(trades, p, allow_overlap=False, commission=TAKER, slippage=SLIP):
-    """汇总独立信号的 R，不是组合账户权益。持仓时间取 Backtrader 结果。"""
+def summarize(trades, p, allow_overlap=False, commission=TAKER, slippage=SLIP, engine="nautilus"):
+    """汇总独立信号的 R，而不是组合账户权益。持仓时间取框架执行结果。"""
     rs, hows, blocked, unfilled, busy = [], {}, 0, 0, {}
     for tr in sorted(trades, key=lambda x: (x["start_ms"], x["t0_ms"])):
         key = (tr["sym"], tr["side"])
         if not allow_overlap and tr["start_ms"] < busy.get(key, 0):
             blocked += 1
             continue
-        r, how, _, exit_t = simulate(tr, p, commission, slippage)
+        r, how, _, exit_t = simulate(tr, p, commission, slippage, engine=engine)
         if r is None:
             unfilled += 1
             continue
@@ -108,10 +126,12 @@ def format_row(name, s, width=34):
             f"blocked={s['blocked']} unfilled={s['unfilled']} open={s['open']} [{hows}]")
 
 
-def run_variants(trades, base, variants, csv_path=None, out=print, allow_overlap=False, commission=TAKER, slippage=SLIP):
+def run_variants(trades, base, variants, csv_path=None, out=print, allow_overlap=False,
+                 commission=TAKER, slippage=SLIP, engine="nautilus"):
     rows = []
     configs = {}
     width = max([len(n) for n, _ in variants] + [8])
+    eng_name, eng_ver = _engine_meta(engine)
     for name, over in variants:
         p = dict(base)
         unknown = set(over) - set(base)
@@ -119,7 +139,7 @@ def run_variants(trades, base, variants, csv_path=None, out=print, allow_overlap
             raise ValueError(f"未知变体参数: {', '.join(sorted(unknown))}")
         p.update(over)
         configs[name] = p
-        s = summarize(trades, p, allow_overlap, commission, slippage)
+        s = summarize(trades, p, allow_overlap, commission, slippage, engine=engine)
         out(format_row(name, s, width))
         rows.append((name, s))
     if csv_path:
@@ -130,5 +150,5 @@ def run_variants(trades, base, variants, csv_path=None, out=print, allow_overlap
             for name, s in rows:
                 w.writerow([name, s["n"], f"{s['sum']:.3f}", f"{s['avg']:.4f}", f"{s['win']:.4f}", f"{s['dd']:.3f}",
                             f"{s['h1']:.3f}", f"{s['h2']:.3f}", f"{s['drop5']:.4f}", s["blocked"], s["unfilled"], s["open"], json.dumps(s["hows"]),
-                            "backtrader", _backtrader().__version__, commission, slippage, json.dumps(configs[name])])
+                            eng_name, eng_ver, commission, slippage, json.dumps(configs[name])])
     return rows

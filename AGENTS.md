@@ -1,6 +1,17 @@
 # AGENTS.md
 
-本文件写给在本仓库工作的 AI 代理和协作者，包括 Claude Code、Codex、opencode 等。
+本文件写给在本仓库工作的 AI 代理和协作者，包括 Claude Code、Codex、opencode、Antigravity 等。
+
+## 默认任务处理方式：先评估难易程度，再按 `task-dispatch` 拆解分工
+
+接到任务后，**默认先分析问题的难易程度、跨模块耦合度与出错代价，评估是否拆分成多个 agent 处理**：
+
+1. **直接处理（不拆派）**：琐碎任务（直接问答、单文件几行小改、快速只读核查、需要主会话实时决策的高风险操作）由当前主 agent 直接完成。
+2. **多 Agent 拆解分工（默认启用 `task-dispatch`）**：当任务属于非平凡/复合任务，且可拆分为 **≥ 2 个可独立验收的子任务**（例如多模块开发、论文/资料调研 + 代码实现 + 独立回测/测试、或需要异构模型交叉审查）时，默认按 `task-dispatch` skill 中的配置与规则进行拆解、路由与分工（分派与监督机制遵循 `orchestration` skill）：
+   - **切分原则**：按“可独立验收”切分子任务（默认 ≤ 5 个），标明依赖（`--deps`），无依赖子任务默认并行；为每个 worker 编写自包含 spec（目标、背景、可改范围、约束、验收证据、失败定义）。
+   - **实现与审查分离**：审查子任务路由给不同于实现者的厂商/agent。
+   - **厂商路由**：遵循 `task-dispatch` 中的厂商路由表（如架构/复杂模块/交叉审查优先 `codex` 或 `antigravity` 高阶档；批量实现与重构路由 `zcode`；测试/样板/简单修复/中文总结路由 `zcode` 或 `opencode`）；改代码使用 `--worktree new-child`，只读分析使用 `--worktree current`。
+   - **汇总验收**：所有 worker settled 后，主 agent 逐项核对改动与验收证据，按“结果 / 证据摘要 / 遗留阻塞”统一汇总，不得将失败任务标为完成。
 
 ## 外部量化资料研究流程
 
@@ -108,9 +119,9 @@
   - 三个阶段：S1 离线筛选、S2 预注册的在线配对、S3 留出检验。
   - 账本用 `scripts/backtest/evolution_ledger.append_event` 写入 `data/evolution/ledger.jsonl`。K 按 track 累计（`fq_us`、`fq_crypto`、`crypto_llm`、`us_llm` 等）。
 - **先预注册再看结果：** 预注册文档放在 `docs/research/YYYY-MM-DD-<topic>-prereg.md`，必须在计算任何收益或 IC 之前提交。跑完之后不得修改其中的参数。
-- **回测工具：** 涉及订单或盈亏的回测一律走 `scripts/backtest`（Backtrader），不要另写模拟器。
+- **回测工具：** 所有新的组合与单信号回测及风险收益指标统一走 `scripts/backtest/nt_engine.py`（**NautilusTrader 1.222.0** + **QuantStats 0.0.86**，CLI 默认 `--engine nautilus`，并提供 `nt-parity` 基准对照），严禁自写模拟器、新增 `BackBroker` 私有方法 monkey-patch、双 `Cerebro` 多空拼接或重复手写 Sharpe/MaxDD 公式；既有的冻结 `PREREG_SHA256` 研究脚本及 `scripts/factor_mining/evaluate.py` 保持只读不动（历史 `backtrader` 回归测试显式传 `--engine backtrader` 兼容）。
 - **研究记录：** 每项研究都要记录到 `web/src/constants/researchLog.ts` 和 `docs/research/quant-research-log.html`，失败的也要记。
-- **数据：** 下载的数据放在 `data/` 下，保留不删，也不提交到 git。
+- **数据：** 下载的数据默认放在 `data/` 下，保留不删，也不提交到 git；本机磁盘空间紧张，较大的文件资源、批量离线数据集、历史回测产物或冷备份快照放到 NAS 目录 `/Volumes/homes/liz/nofx_data`（同一共享在仅挂 `home` 时为 `/Volumes/home/nofx_data`），若脚本固定读写 `data/<subdir>` 可用软链指向 NAS 对应目录，使用前先确认卷已挂载，且热库 `data/data.db` 与账本 `data/evolution/ledger.jsonl` 仍保留在本地盘。
 - **术语：** 不加限定说“量化”时，默认指 LLM 交易路径（kernel 的提示词和信号层）；明确说“factor_quant”时才指程序化因子交易员。
 - **不要重复已结束的方向：**
   - 美股因子挖掘 2026-11-06 暂停（`docs/research/2026-11-06-us-mining-paused.md`），2026-11-07 应用户要求恢复每晚例行：开关在 launchd plist 的 `FM_US_MINING=1`，脚本默认值仍为 0；

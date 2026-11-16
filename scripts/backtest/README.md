@@ -1,10 +1,31 @@
-# scripts/backtest — Backtrader 回测适配
+# scripts/backtest — 回测引擎（NautilusTrader + QuantStats & Backtrader 兼容层）
 
-当前系统有回测/研究能力，但此前没有引入第三方回测平台：
+自 **2026-11-16** 起，本仓库所有**新量化研究、多空组合回测与绩效指标**统一切换为经过验证的开源框架 **[NautilusTrader 1.222.0](https://nautilustrader.io/)** + **[QuantStats 0.0.86](https://github.com/ranaroussi/quantstats)**（入口模块 `scripts/backtest/nt_engine.py`）：
+
+| 组件 / 入口 | 开源原语与职责 |
+|---|---|
+| `nt_engine.run_portfolio` | 统一单账户多空保证金引擎（`AccountType.MARGIN` + `OmsType.NETTING` + `BookType.L1_MBP`），彻底替代双 `Cerebro` 拼接；支持 `execution="next_open" \| "close"`、`MakerTakerFeeModel`、`PctSlippageFillModel` 与 `CarryFundingModule`（`SimulationModule` 原生隔夜资金费/借券费/融资息） |
+| `nt_engine.run_signal_trade` / `run_trade_nt` | 单信号入场 + OCO 止损/止盈 + 动态移动止损（保本/ATR追踪/峰值回撤），使用原生 `BarDataWrangler`、`LimitOrder(GTD)`、`StopMarket`、`modify_order`、`MakerTakerFeeModel` 与 `FillModel(prob_fill_on_limit=0.0)`（严格 `through` 穿价成交，无 `BackBroker` 私有方法 monkey-patch） |
+| `nt_engine.compute_metrics` | 基于 `quantstats.stats` 与 `PortfolioAnalyzer` 的统一指标（CAGR / Sharpe / Sortino / Calmar / MaxDD / Volatility / WinRate），消除各研究脚本重复手写公式 |
+| `--engine nautilus`（默认）/ `nt-parity` | `entry` / `exit` / `ml-dataset` / `replay-score` 默认即走 `nautilus`；`.venv/bin/python -m scripts.backtest nt-parity` 可在冻结快照上横向对照 `NautilusTrader` 与旧 `Backtrader` 的收益相关性与速度 |
+| `--engine backtrader`（冻结兼容） | 仅保留只读兼容已提交 `PREREG_SHA256` 预注册研究脚本与回归测试；**不再用于新研究**，禁止继续新增 `BackBroker` 私有方法 monkey-patch 或双 `Cerebro` 拼接 |
+
+快速命令：
+
+```bash
+uv pip install --python .venv/bin/python -r scripts/backtest/requirements.txt
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m scripts.backtest nt-parity
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m scripts.backtest exit --set mkt --horizon 72
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s scripts/backtest/tests -v
+```
+
+---
+
+## 原有入口说明（兼容保留）
 
 | 入口 | 能力与定位 |
 |---|---|
-| `scripts/backtest entry / exit` | 现已使用 **Backtrader 1.9.78.123**；原生 `Cerebro`、`BackBroker`、Market/Limit/Stop、OCO、手续费、滑点和账户盈亏 |
+| `scripts/backtest entry / exit` | 默认走 **NautilusTrader 1.222.0**（传 `--engine backtrader` 可切回历史冻结口径）；Market/Limit/Stop、OCO、手续费、滑点和账户盈亏 |
 | `scripts/backtest stocks` | 离线美股多资产共享资金组合；每策略独立 Cerebro，原生 broker/订单/手续费/分析器 |
 | `scripts/backtest ml-dataset` | 两套出场策略的收益标签均通过同一个 Backtrader 适配器生成 |
 | `scripts/backtest ml-eval` | 信号特征的统计检验，不执行订单；拒绝未标记为 Backtrader 的旧标签 |

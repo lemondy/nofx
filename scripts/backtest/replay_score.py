@@ -167,7 +167,7 @@ def decision_signals(row):
 
 
 def simulate_record(row, cache, horizon=72, commission=exitsim.TAKER,
-                    slippage=exitsim.SLIP, limit_valid_min=45):
+                    slippage=exitsim.SLIP, limit_valid_min=45, engine='nautilus'):
     """Only conversion/coverage checks here; orders/PnL use existing adapters."""
     result = dict(r=0.0, trade_rs=[], excluded=False, counts=Counter())
     rules = dict(FALLBACK, be_arm=0, lock_r=0, lock_trim=False, trim_r=0,
@@ -199,7 +199,7 @@ def simulate_record(row, cache, horizon=72, commission=exitsim.TAKER,
         if tr is None:
             result['counts']['invalid_open'] += 1
             continue
-        simulated = backtrader_adapter.run_trade(tr, rules, commission, slippage)
+        simulated = exitsim._run_trade_for_engine(tr, rules, commission, slippage, engine=engine)
         if simulated['r'] is None:
             if simulated['how'] == 'unfilled':
                 result['counts']['unfilled'] += 1
@@ -291,7 +291,8 @@ def failure_mode_changes(manifest, pairs, rows, db_path=None):
 
 def score(directory, variant_id, cache, horizon=72, model=None, repeat=0,
           arms=('baseline', 'variant', 'noise'), do_fetch=False, simulator=None,
-          commission=exitsim.TAKER, slippage=exitsim.SLIP, limit_valid_min=45, db_path=None):
+          commission=exitsim.TAKER, slippage=exitsim.SLIP, limit_valid_min=45, db_path=None,
+          engine='nautilus'):
     for value in (horizon, limit_valid_min):
         if not math.isfinite(value) or value <= 0:
             raise ValueError('持仓上限和限价有效期必须大于 0 且有限')
@@ -303,7 +304,9 @@ def score(directory, variant_id, cache, horizon=72, model=None, repeat=0,
     if not rows['baseline'] or not rows['variant']:
         raise ValueError('缺少同模型的基线或变体组')
     patch_hit_rate = 1 - sum(r['status'] == 'patch_miss' for r in rows['variant'].values()) / len(manifest['records'])
-    simulator = simulator or simulate_record
+    if simulator is None:
+        simulator = lambda row, c, h, comm, slip, lvm: simulate_record(
+            row, c, h, comm, slip, lvm, engine=engine)
     if do_fetch:
         sigs = [s for arm in rows.values() for row in arm.values() if row['status'] == 'ok'
                 for s in decision_signals(row)]
@@ -355,10 +358,18 @@ def score(directory, variant_id, cache, horizon=72, model=None, repeat=0,
     warnings = [] if has_noise else ['未提供噪声组，未执行模型随机性健康检查']
     if len(pairs) != len(manifest['records']):
         warnings.append('存在缺失或排除的配对点，请检查覆盖率')
+    if engine == 'nautilus':
+        from . import nt_engine
+
+        eng_name, limit_fill = 'nautilus_trader', nt_engine.LIMIT_FILL_DEFAULT
+    elif engine == 'backtrader':
+        eng_name, limit_fill = 'backtrader', backtrader_adapter.LIMIT_FILL_DEFAULT
+    else:
+        raise ValueError(f'Unsupported engine: {engine}')
     return dict(variant_id=proposal['id'], variant_hash=proposal['hash'], hypothesis=proposal['hypothesis'],
                 source=proposal['source'], model=proposal['model'], repeat=repeat, sample=params,
-                horizon_h=horizon, engine='backtrader', commission=commission, slippage=slippage,
-                limit_valid_min=limit_valid_min, limit_fill=backtrader_adapter.LIMIT_FILL_DEFAULT,
+                horizon_h=horizon, engine=eng_name, commission=commission, slippage=slippage,
+                limit_valid_min=limit_valid_min, limit_fill=limit_fill,
                 stats=main_stats, halves=split_halves(pairs), noise=noise_stats, auxiliary=aux,
                 patch_hit_rate=patch_hit_rate,
                 parse_failure_rate=max(parse_rates.values(), default=0), parse_failure_rates=parse_rates, counts=dict(counts),
@@ -413,12 +424,19 @@ def print_summary(result):
 def cmd_replay_score(a):
     if a.repeat < 0:
         raise ValueError('repeat 必须是非负整数')
-    backtrader_adapter._backtrader()
-    backtrader_adapter.LIMIT_FILL_DEFAULT = a.limit_fill
+    engine = getattr(a, 'engine', 'nautilus')
+    if engine == 'nautilus':
+        from . import nt_engine
+
+        nt_engine.LIMIT_FILL_DEFAULT = a.limit_fill
+    else:
+        backtrader_adapter._backtrader()
+        backtrader_adapter.LIMIT_FILL_DEFAULT = a.limit_fill
     try:
         result = score(a.replay_dir, a.variant, a.cache, a.horizon, a.model, a.repeat,
                        tuple(a.arms.split(',')), a.fetch, commission=a.commission,
-                       slippage=a.slippage, limit_valid_min=a.limit_valid_min, db_path=a.db)
+                       slippage=a.slippage, limit_valid_min=a.limit_valid_min, db_path=a.db,
+                       engine=engine)
         result = append_ledger(a.ledger, result, track=a.track, baseline_version=a.baseline_version,
                                change_type=a.change_type, idea_id=a.idea_id, open_rate_limit=a.open_rate_limit)
     except OSError as exc:
