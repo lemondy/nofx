@@ -622,4 +622,65 @@ describe('FundsPage', () => {
       })
     )
   })
+
+  it('paginates the daily detail table while keeping totals across all rows', async () => {
+    const manyRows = Array.from({ length: 25 }, (_, i) => {
+      const day = String(25 - i).padStart(2, '0')
+      return {
+        date: `2026-10-${day}`,
+        open_equity: 1000,
+        close_equity: 1000 + (25 - i),
+        delta_equity: 1,
+        trading_pnl: 2,
+        fees: 0.5,
+        funding: 0,
+        other_income: 0,
+        unrealized_change: -0.5,
+        net_transfer: 0,
+        transfer_source: 'none' as const,
+        unexplained: 0,
+      }
+    })
+    apiMock.getFundsOverview.mockImplementationOnce(() =>
+      Promise.resolve({
+        ...buildOverview(),
+        daily_total: manyRows,
+      })
+    )
+    await renderPage()
+
+    const daily = screen.getByRole('table', { name: '每日明细表' })
+    expect(screen.getByTestId('daily-page-info')).toHaveTextContent('1 / 3')
+    expect(screen.getByText('显示 1-10 / 共 25 条')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-25')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-16')).toBeInTheDocument()
+    expect(within(daily).queryByText('2026-10-15')).toBeNull()
+    // 合计行依然汇总全部 25 行: delta_equity = +25.00, trading_pnl = +50.00
+    expect(within(daily).getByText('+25.00')).toBeInTheDocument()
+    expect(within(daily).getByText('+50.00')).toBeInTheDocument()
+
+    // 下一页 → 第 2 页 (11-20)
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    expect(screen.getByTestId('daily-page-info')).toHaveTextContent('2 / 3')
+    expect(screen.getByText('显示 11-20 / 共 25 条')).toBeInTheDocument()
+    expect(within(daily).queryByText('2026-10-25')).toBeNull()
+    expect(within(daily).getByText('2026-10-15')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-06')).toBeInTheDocument()
+
+    // 末页 → 第 3 页 (21-25)
+    fireEvent.click(screen.getByRole('button', { name: '末页' }))
+    expect(screen.getByTestId('daily-page-info')).toHaveTextContent('3 / 3')
+    expect(screen.getByText('显示 21-25 / 共 25 条')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-05')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-01')).toBeInTheDocument()
+
+    // 切换每页条数为 20 → 重置回第 1 页 (1 / 2)
+    fireEvent.change(screen.getByLabelText('每日明细每页条数'), {
+      target: { value: '20' },
+    })
+    expect(screen.getByTestId('daily-page-info')).toHaveTextContent('1 / 2')
+    expect(screen.getByText('显示 1-20 / 共 25 条')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-25')).toBeInTheDocument()
+    expect(within(daily).getByText('2026-10-06')).toBeInTheDocument()
+  })
 })

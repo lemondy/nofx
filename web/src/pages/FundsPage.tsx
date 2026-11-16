@@ -271,6 +271,8 @@ export default function FundsPage({ language }: { language: string }) {
   const [includePaper, setIncludePaper] = useState(false)
   const [accountFilter, setAccountFilter] = useState('all')
   const [chartTab, setChartTab] = useState<'pnl' | 'equity'>('pnl')
+  const [dailyPage, setDailyPage] = useState(1)
+  const [dailyPageSize, setDailyPageSize] = useState(10)
   const [data, setData] = useState<FundsOverview | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -316,6 +318,19 @@ export default function FundsPage({ language }: { language: string }) {
     if (effectiveFilter === 'all') return data.daily_total
     return data.daily.filter((d) => d.trader_id === effectiveFilter)
   }, [data, effectiveFilter])
+
+  useEffect(() => {
+    setDailyPage(1)
+  }, [effectiveFilter, days, includePaper, dailyPageSize])
+
+  const totalDailyRows = dailyRows.length
+  const totalDailyPages = Math.max(1, Math.ceil(totalDailyRows / dailyPageSize))
+  const effectiveDailyPage = Math.min(dailyPage, totalDailyPages)
+  const dailyStartIdx = (effectiveDailyPage - 1) * dailyPageSize
+  const paginatedDailyRows = useMemo(
+    () => dailyRows.slice(dailyStartIdx, dailyStartIdx + dailyPageSize),
+    [dailyRows, dailyStartIdx, dailyPageSize]
+  )
 
   /** 图表数据: 按日期升序, 并计算累计净转账与「剔除转账后权益」 */
   const chartRows: ChartRow[] = useMemo(() => {
@@ -844,7 +859,7 @@ export default function FundsPage({ language }: { language: string }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {dailyRows.map((r) => (
+                      {paginatedDailyRows.map((r) => (
                         <tr key={r.date} className={TR_CLS}>
                           <td className="num px-3 py-0">{r.date}</td>
                           <td className="num px-3 py-0 text-right">
@@ -938,6 +953,90 @@ export default function FundsPage({ language }: { language: string }) {
                       </tr>
                     </tfoot>
                   </table>
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-3 py-2 text-xs text-fg-3">
+                    <span>
+                      {L(
+                        `显示 ${dailyStartIdx + 1}-${dailyStartIdx + paginatedDailyRows.length} / 共 ${totalDailyRows} 条`,
+                        `Showing ${dailyStartIdx + 1}-${dailyStartIdx + paginatedDailyRows.length} of ${totalDailyRows}`,
+                        language
+                      )}
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span>{L('每页', 'Per page', language)}:</span>
+                        <select
+                          value={dailyPageSize}
+                          onChange={(e) =>
+                            setDailyPageSize(Number(e.target.value))
+                          }
+                          aria-label={L(
+                            '每日明细每页条数',
+                            'Daily detail rows per page',
+                            language
+                          )}
+                          className="h-7 rounded-md border border-line bg-surface-2 px-2 text-xs text-fg outline-none hover:border-line-strong focus:border-brand"
+                        >
+                          <option value={10}>10</option>
+                          <option value={20}>20</option>
+                          <option value={50}>50</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2"
+                          aria-label={L('首页', 'First page', language)}
+                          onClick={() => setDailyPage(1)}
+                          disabled={effectiveDailyPage === 1}
+                        >
+                          «
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2"
+                          aria-label={L('上一页', 'Previous page', language)}
+                          onClick={() =>
+                            setDailyPage(Math.max(1, effectiveDailyPage - 1))
+                          }
+                          disabled={effectiveDailyPage === 1}
+                        >
+                          ‹
+                        </Button>
+                        <span
+                          className="num px-2 text-fg"
+                          data-testid="daily-page-info"
+                        >
+                          {effectiveDailyPage} / {totalDailyPages}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2"
+                          aria-label={L('下一页', 'Next page', language)}
+                          onClick={() =>
+                            setDailyPage(
+                              Math.min(totalDailyPages, effectiveDailyPage + 1)
+                            )
+                          }
+                          disabled={effectiveDailyPage === totalDailyPages}
+                        >
+                          ›
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2"
+                          aria-label={L('末页', 'Last page', language)}
+                          onClick={() => setDailyPage(totalDailyPages)}
+                          disabled={effectiveDailyPage === totalDailyPages}
+                        >
+                          »
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </Card>
