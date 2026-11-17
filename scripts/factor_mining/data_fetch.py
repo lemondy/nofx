@@ -343,37 +343,104 @@ def us_universe(http):
     return keep
 
 
+KLINE_SOURCES = ('api', 'nas-mysql', 'hybrid')
+
+
+def _nas_bulk_rows(market, symbols, existing_by_sym, now_ms, log):
+    from scripts.backtest import nas_klines
+    today = dt.datetime.fromtimestamp(now_ms / 1000, dt.timezone.utc).strftime('%Y-%m-%d')
+    if market == 'crypto':
+        if all(existing_by_sym.get(s) for s in symbols):
+            earliest_last = min(existing_by_sym[s][-1][0] for s in symbols)
+            start_ms = int(dt.datetime.strptime(earliest_last, '%Y-%m-%d')
+                           .replace(tzinfo=dt.timezone.utc).timestamp() * 1000) - 3 * DAY_MS
+        else:
+            start_ms = int(CRYPTO_START.timestamp() * 1000)
+        raw = nas_klines.bulk_crypto_panel_rows(
+            symbols, start=start_ms, interval='1d', closed_only=True, now_ms=now_ms,
+        )
+    else:
+        cutoff = (dt.datetime.fromtimestamp(now_ms / 1000, dt.timezone.utc).date()
+                  - dt.timedelta(days=366 * 6)).isoformat()
+        raw = nas_klines.bulk_us_panel_rows(
+            symbols, start=cutoff, closed_only=True, today_utc=today,
+        )
+    return {s: [r for r in rows if _valid(r)] for s, rows in raw.items()}
+
+
 def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print,
-           alt=True, alt_http=None, accumulate=None, accum_dir=None):
+           alt=True, alt_http=None, accumulate=None, accum_dir=None, source=None):
     """Refresh daily OHLCV (and, for crypto, funding/premium side files).
+
+    ``source`` selects where OHLCV comes from (default: env ``FM_KLINE_SOURCE``
+    or ``'api'``): ``'api'`` uses Binance/Yahoo HTTP; ``'nas-mysql'`` reads
+    strictly from the LAN NAS MariaDB store; ``'hybrid'`` loads from NAS first
+    and tops up only newer bars via HTTP (falling back cleanly on either side).
 
     ``accumulate`` (default: env FM_ALT_ACCUM == '1') additionally appends the
     short-history snapshots (OI, long/short ratios, taker ratio) to ``accum_dir``
     (default ``<root>/alt``); see ``alt_accum``. Alt steps are best effort.
     """
+    source = source or os.environ.get('FM_KLINE_SOURCE') or 'api'
+    if source not in KLINE_SOURCES:
+        raise ValueError(f'Unknown kline source {source!r}; expected one of {KLINE_SOURCES}')
     alt_http = alt_http or (http if http is not None else Http(spacing=0.8))
     http = http or Http()
     now_ms = now_ms or int(time.time() * 1000)
     base = Path(root) / market / 'daily'
     if symbols is None:
-        symbols = crypto_universe() if market == 'crypto' else us_universe(http)
+        if market == 'crypto':
+            symbols = crypto_universe()
+        elif source == 'nas-mysql':
+            existing_us = sorted(p.stem for p in base.glob('*.json'))
+            symbols = existing_us or us_universe(http)
+        else:
+            symbols = us_universe(http)
+    existing_by_sym = {sym: read_symbol(base / f'{sym}.json') for sym in symbols}
+    nas_by_sym = {}
+    if source in ('nas-mysql', 'hybrid'):
+        try:
+            nas_by_sym = _nas_bulk_rows(market, symbols, existing_by_sym, now_ms, log)
+        except Exception as exc:
+            if source == 'nas-mysql':
+                raise
+            log(f'{market}: NAS MySQL unavailable ({type(exc).__name__}: {exc}); falling back to api')
+            nas_by_sym = {}
+
     ok, failed, circuit = 0, {}, None
     for sym in symbols:
+        old = existing_by_sym[sym]
+        nas_rows = nas_by_sym.get(sym, [])
+        merged_old = merge(old, nas_rows) if nas_rows else old
+        if source == 'nas-mysql':
+            if not merged_old:
+                failed[sym] = 'no data in nas-mysql'
+                continue
+            write_symbol(base / f'{sym}.json', merged_old)
+            ok += 1
+            continue
         if circuit:          # breaker open: every remaining symbol fails at once
-            failed[sym] = circuit
+            if merged_old and nas_rows:
+                write_symbol(base / f'{sym}.json', merged_old)
+                ok += 1
+            else:
+                failed[sym] = circuit
             continue
         path = base / f'{sym}.json'
-        old = read_symbol(path)
         try:
             if market == 'crypto':
-                if old:
-                    start = int(dt.datetime.strptime(old[-1][0], '%Y-%m-%d').replace(tzinfo=dt.timezone.utc).timestamp() * 1000) - 3 * DAY_MS
+                if merged_old:
+                    start = int(dt.datetime.strptime(merged_old[-1][0], '%Y-%m-%d').replace(tzinfo=dt.timezone.utc).timestamp() * 1000) - 3 * DAY_MS
                 else:
                     start = int(CRYPTO_START.timestamp() * 1000)
                 new = crypto_rows(http, sym, start, now_ms)
             else:
                 new = us_rows(http, sym)
         except RuntimeError as exc:
+            if merged_old and nas_rows:
+                write_symbol(path, merged_old)
+                ok += 1
+                continue
             failed[sym] = str(exc)[:160]
             log(f'{market} {sym}: FAIL {failed[sym]}')
             reason = getattr(http, 'open_reason', None)      # the failure that tripped it, or a later one
@@ -381,14 +448,14 @@ def update(market, root=ROOT, http=None, symbols=None, now_ms=None, log=print,
                 circuit = failed[sym] if isinstance(exc, CircuitOpen) else f'fetch circuit open: {reason}'[:160]
                 log(f'{market}: {circuit}; skipping remaining symbols')
             continue
-        if not new and not old:
+        if not new and not merged_old:
             failed[sym] = 'no data'
             continue
-        # US adjusted history changes after dividends/splits, so replace it wholesale.
-        rows = new if market == 'us' and new else merge(old, new)
+        # US adjusted history changes after dividends/splits, so replace it wholesale when HTTP succeeded.
+        rows = new if market == 'us' and new else merge(merged_old, new)
         write_symbol(path, rows)
         ok += 1
-    extra = {}
+    extra = {'kline_source': source}
     if market == 'crypto' and alt:
         alt_symbols = [s for s in symbols if s not in failed]
         try:
@@ -418,13 +485,15 @@ def main(argv=None):
     p.add_argument('--market', choices=('crypto', 'us', 'all'), default='all')
     p.add_argument('--symbols', nargs='*')
     p.add_argument('--root', default=str(ROOT))
+    p.add_argument('--source', choices=KLINE_SOURCES, default=None,
+                   help='kline source (default: env FM_KLINE_SOURCE or api)')
     p.add_argument('--no-alt', action='store_true', help='skip crypto funding/premium side files')
     p.add_argument('--accumulate', action='store_true', help='also append OI/long-short/taker daily snapshots')
     p.add_argument('--accum-dir', default=None, help='default: <root>/alt')
     a = p.parse_args(argv)
     for m in (('crypto', 'us') if a.market == 'all' else (a.market,)):
         update(m, root=a.root, symbols=a.symbols or None, alt=not a.no_alt,
-               accumulate=a.accumulate or None, accum_dir=a.accum_dir)
+               accumulate=a.accumulate or None, accum_dir=a.accum_dir, source=a.source)
     return 0
 
 

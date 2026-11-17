@@ -562,5 +562,117 @@ class NightlyScriptTests(unittest.TestCase):
         self.assertIn('promotion report', log)
 
 
+class NasKlineSourceTests(unittest.TestCase):
+    def test_nas_mysql_crypto_writes_panel_rows_without_http_and_marks_missing(self):
+        now = ms(2026, 11, 16, 1)
+        nas_rows = {
+            'BTCUSDT': [
+                ['2026-11-14', 100.0, 110.0, 95.0, 105.0, 200.0, 105.0],
+                ['2026-11-15', 105.0, 112.0, 102.0, 108.0, 250.0, 107.0],
+            ],
+            'NOPEUSDT': [],
+        }
+
+        class NoHttp(StubHttp):
+            def get(self, url, params=None):
+                raise AssertionError(f'unexpected HTTP call: {url}')
+
+        with tempfile.TemporaryDirectory() as root, \
+             patch('scripts.backtest.nas_klines.bulk_crypto_panel_rows', return_value=nas_rows) as mock_bulk:
+            out = data_fetch.update('crypto', root=root, http=NoHttp(), symbols=['BTCUSDT', 'NOPEUSDT'],
+                                    now_ms=now, log=lambda *_: None, alt=False, source='nas-mysql')
+        self.assertEqual(out['ok'], 1)
+        self.assertEqual(out['failed'], {'NOPEUSDT': 'no data in nas-mysql'})
+        mock_bulk.assert_called_once()
+        # With tempdir empty, rows were written directly from NAS.
+
+    def test_nas_mysql_us_offline_reuses_existing_symbols_and_writes_json(self):
+        now = ms(2026, 11, 16, 1)
+        nas_rows = {
+            'AAPL': [['2026-11-13', 220.0, 225.0, 218.0, 224.0, 1000.0, 222.333333]],
+            'SPY': [['2026-11-13', 590.0, 595.0, 588.0, 594.0, 2000.0, 592.333333]],
+        }
+
+        class NoHttp(StubHttp):
+            def get(self, url, params=None):
+                raise AssertionError(f'unexpected HTTP call: {url}')
+
+        with tempfile.TemporaryDirectory() as root:
+            data_fetch.write_symbol(Path(root) / 'us/daily/AAPL.json',
+                                    [['2026-11-12', 219.0, 221.0, 217.0, 220.0, 900.0, 219.333333]])
+            data_fetch.write_symbol(Path(root) / 'us/daily/SPY.json',
+                                    [['2026-11-12', 589.0, 591.0, 587.0, 590.0, 1800.0, 589.333333]])
+            with patch('scripts.backtest.nas_klines.bulk_us_panel_rows', return_value=nas_rows):
+                out = data_fetch.update('us', root=root, http=NoHttp(), symbols=None,
+                                        now_ms=now, log=lambda *_: None, alt=False, source='nas-mysql')
+            self.assertEqual(out, {'ok': 2, 'failed': {}})
+            aapl = json.loads((Path(root) / 'us/daily/AAPL.json').read_text())
+            self.assertEqual([r[0] for r in aapl], ['2026-11-12', '2026-11-13'])
+            meta = json.loads((Path(root) / 'us/data_meta.json').read_text())
+            self.assertEqual(meta['kline_source'], 'nas-mysql')
+
+    def test_hybrid_tops_up_from_nas_start_and_falls_back_cleanly(self):
+        now = ms(2026, 11, 16, 1)
+        nas_rows = {
+            'BTCUSDT': [['2026-11-14', 100.0, 106.0, 99.0, 105.0, 10.0, 103.0]],
+        }
+        kline_15 = [[ms(2026, 11, 15), '105', '110', '104', '108', '12', ms(2026, 11, 15) + DAY - 1, '1296']]
+
+        class TailHttp(StubHttp):
+            def get(self, url, params=None):
+                self.calls.append((url, dict(params or {})))
+                if url.endswith('/fapi/v1/klines'):
+                    return kline_15
+                raise RuntimeError('unexpected')
+
+        # 1. Hybrid reads NAS history then tops up only tail via HTTP (startTime >= 2026-11-11).
+        http = TailHttp()
+        with tempfile.TemporaryDirectory() as root, \
+             patch('scripts.backtest.nas_klines.bulk_crypto_panel_rows', return_value=nas_rows):
+            out = data_fetch.update('crypto', root=root, http=http, symbols=['BTCUSDT'],
+                                    now_ms=now, log=lambda *_: None, alt=False, source='hybrid')
+            self.assertEqual(out, {'ok': 1, 'failed': {}})
+            rows = json.loads((Path(root) / 'crypto/daily/BTCUSDT.json').read_text())
+            self.assertEqual([r[0] for r in rows], ['2026-11-14', '2026-11-15'])
+            self.assertEqual(http.calls[0][1]['startTime'], ms(2026, 11, 11))
+
+        # 2. Hybrid keeps NAS bars even if tail HTTP fails.
+        class DeadHttp(StubHttp):
+            def get(self, url, params=None):
+                raise RuntimeError('binance unreachable')
+
+        with tempfile.TemporaryDirectory() as root, \
+             patch('scripts.backtest.nas_klines.bulk_crypto_panel_rows', return_value=nas_rows):
+            out = data_fetch.update('crypto', root=root, http=DeadHttp(), symbols=['BTCUSDT'],
+                                    now_ms=now, log=lambda *_: None, alt=False, source='hybrid')
+            self.assertEqual(out, {'ok': 1, 'failed': {}})
+            rows = json.loads((Path(root) / 'crypto/daily/BTCUSDT.json').read_text())
+            self.assertEqual(rows, nas_rows['BTCUSDT'])
+
+        # 3. Hybrid falls back to api if NAS raises.
+        logs = []
+        http2 = TailHttp()
+        with tempfile.TemporaryDirectory() as root, \
+             patch('scripts.backtest.nas_klines.bulk_crypto_panel_rows', side_effect=OSError('nas down')):
+            out = data_fetch.update('crypto', root=root, http=http2, symbols=['BTCUSDT'],
+                                    now_ms=now, log=logs.append, alt=False, source='hybrid')
+            self.assertEqual(out, {'ok': 1, 'failed': {}})
+            self.assertTrue(any('falling back to api' in line for line in logs))
+
+    def test_source_env_and_validation_and_cli_arg(self):
+        with tempfile.TemporaryDirectory() as root, self.assertRaises(ValueError):
+            data_fetch.update('crypto', root=root, symbols=['BTCUSDT'], source='bogus')
+        with patch.dict(os.environ, {'FM_KLINE_SOURCE': 'nas-mysql'}), \
+             patch('scripts.backtest.nas_klines.bulk_crypto_panel_rows', return_value={'BTCUSDT': [['2026-11-14', 1, 2, 1, 2, 1, 2]]}), \
+             tempfile.TemporaryDirectory() as root:
+            out = data_fetch.update('crypto', root=root, http=StubHttp(), symbols=['BTCUSDT'],
+                                    now_ms=ms(2026, 11, 16), log=lambda *_: None, alt=False)
+            self.assertEqual(out['ok'], 1)
+        with patch.object(data_fetch, 'update') as mock_update:
+            self.assertEqual(data_fetch.main(['--market', 'crypto', '--symbols', 'BTCUSDT', '--no-alt', '--source', 'hybrid']), 0)
+            mock_update.assert_called_once()
+            self.assertEqual(mock_update.call_args.kwargs['source'], 'hybrid')
+
+
 if __name__ == '__main__':
     unittest.main()

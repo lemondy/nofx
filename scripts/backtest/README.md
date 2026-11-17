@@ -83,6 +83,7 @@ uv pip install --python .venv/bin/python -r scripts/backtest/requirements.txt
 | 历史成交标签 | `trader_positions` 的匹配结果，仅作实盘标签分组；不决定模拟限价单是否成交或成交价格 |
 | 基线出场参数 | `traders.strategy_id → strategies.config.risk_control`，每次运行读取当前配置；CSV 保存实际参数 |
 | K 线 | 币安 `fapi/v1/klines` → `<cache>/{kl1m,kl5m}/{SYMBOL}_{t0ms}.json`；每行 `[openMs,o,h,l,c]` |
+| NAS MySQL K 线（只读） | `scripts/backtest/nas_klines.py` 直连局域网 MariaDB（`192.168.50.244:3307`，`.env` `NAS_MYSQL_*`）；`crypto_klines`（`1h`/`4h`/`1d`）与 `us_daily`（已复权 1d）；因子管线可用 `scripts.factor_mining.data_fetch --source nas-mysql\|hybrid` |
 
 信号去重沿用原来的方法：同币同向连续限价决策间隔小于 `--dedupe-min`（默认 60 分钟），且期间无实盘成交，合并为一个信号。模拟只提交首次决策的订单，不使用 `sl_last` / `tp_last` / 实际 `fill_px` 来重建未来状态。合并后的撤单/改价过程没有重放。
 
