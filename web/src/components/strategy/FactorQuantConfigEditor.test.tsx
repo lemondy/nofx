@@ -174,7 +174,7 @@ test('numeric and text fields emit updates', () => {
   )
 
   fireEvent.change(screen.getByTestId('factor-rebalance_band_pct'), {
-    target: { value: '0.2' },
+    target: { value: '20' },
   })
   expect(onChange).toHaveBeenLastCalledWith(
     expect.objectContaining({ rebalance_band_pct: 0.2 })
@@ -394,7 +394,6 @@ test('optimization switches default to true and toggle boolean values', () => {
   }
 })
 
-
 test('portfolio risk fields show English defaults and respect disabled', () => {
   const onChange = vi.fn()
   render(
@@ -455,4 +454,46 @@ test('regime_tilt toggle defaults to checked, updates config, and respects disab
   expect(disabledToggle).not.toBeChecked()
   fireEvent.click(disabledToggle)
   expect(onChangeDisabled).not.toHaveBeenCalled()
+})
+
+test('rebalance percentages preserve zero and clear to default', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  const input = screen.getByTestId('factor-rebalance_band_pct')
+  expect(input).toHaveValue(10)
+  fireEvent.change(input, { target: { value: '0' } })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ rebalance_band_pct: 0 })
+  )
+  fireEvent.change(input, { target: { value: '' } })
+  expect(onChange.mock.lastCall?.[0].rebalance_band_pct).toBeUndefined()
+  expect(input).toHaveValue(10)
+})
+
+test('US controls persist values and crypto clears hidden short configuration', () => {
+  const onChange = vi.fn()
+  render(<Harness onChange={onChange} />)
+  fireEvent.click(screen.getByTestId('factor-market-us'))
+  fireEvent.change(screen.getByTestId('factor-us_short_mode'), {
+    target: { value: 'paper' },
+  })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ us_short_mode: 'paper' })
+  )
+  fireEvent.change(screen.getByTestId('factor-size_tier'), {
+    target: { value: 'mid_small' },
+  })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ size_tier: 'mid_small' })
+  )
+  fireEvent.change(screen.getByTestId('factor-max_mid_small_exposure_pct'), {
+    target: { value: '25' },
+  })
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ max_mid_small_exposure_pct: 25 })
+  )
+  fireEvent.click(screen.getByTestId('factor-market-crypto'))
+  expect(onChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({ us_short_mode: '', us_short_fee_bps: null })
+  )
 })

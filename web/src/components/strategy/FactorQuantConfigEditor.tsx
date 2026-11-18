@@ -47,8 +47,8 @@ const fq = {
     en: 'US stocks (bStock paper ledger)',
   },
   marketUsDesc: {
-    zh: '只做多；目前没有通过验证的因子，保持空仓直到因子出现',
-    en: 'Long only; no validated factors yet — stays flat until factors appear',
+    zh: '默认只做多；可启用模拟做空，没有通过验证的因子时保持空仓',
+    en: 'Long only by default; optional paper shorts, stays flat without validated factors',
   },
   horizon: { zh: '调仓周期 horizon（天）', en: 'Rebalance horizon (days)' },
   horizonDesc: {
@@ -67,8 +67,8 @@ const fq = {
   },
   rebalanceBand: { zh: '调仓阈值 %', en: 'Rebalance band %' },
   rebalanceBandDesc: {
-    zh: '目标名义与当前持仓之差小于目标的 N% 时不交易，减少手续费；留空 = 默认 0.1',
-    en: 'Skip a leg when |target − current| < target × N; empty = default 0.1',
+    zh: '目标名义与当前持仓之差小于目标的 N% 时不交易，减少手续费；留空 = 默认 10%',
+    en: 'Skip a leg when |target − current| < target × N%; empty = default 10%',
   },
   minOrder: { zh: '单笔最小名义 (USDT)', en: 'Min order notional (USDT)' },
   minOrderDesc: {
@@ -235,7 +235,14 @@ export function FactorQuantConfigEditor({
   // Market switch applies that market's defaults (see MARKET_DEFAULTS).
   const switchMarket = (next: 'crypto' | 'us') => {
     if (disabled || next === market) return
-    onChange({ ...config, market: next, ...MARKET_DEFAULTS[next] })
+    onChange({
+      ...config,
+      market: next,
+      ...MARKET_DEFAULTS[next],
+      ...(next === 'crypto'
+        ? { us_short_mode: '' as const, us_short_fee_bps: null }
+        : {}),
+    })
   }
 
   // Numeric input: empty restores the default; stop defaults are explicit
@@ -250,7 +257,8 @@ export function FactorQuantConfigEditor({
       | 'long_stop_pct'
       | 'short_stop_pct'
       | 'max_stale_days'
-      | 'flatten_after_days',
+      | 'flatten_after_days'
+      | 'max_mid_small_exposure_pct',
     label: string,
     defaultValue: number,
     opts: {
@@ -270,16 +278,36 @@ export function FactorQuantConfigEditor({
         <Input
           type="number"
           data-testid={`factor-${key}`}
-          value={opts.stop ? (value ?? '') : value || ''}
+          value={
+            key === 'rebalance_band_pct'
+              ? (value ?? 0.1) * 100
+              : opts.stop
+                ? (value ?? '')
+                : value || ''
+          }
           placeholder={`${ts(fq.defaultHint, language)} ${defaultValue}`}
           onChange={(e) => {
             const raw = e.target.value
             if (raw === '' || raw === '-') {
-              updateField(key, opts.stop ? defaultValue : 0)
+              updateField(
+                key,
+                key === 'rebalance_band_pct'
+                  ? undefined
+                  : opts.stop
+                    ? defaultValue
+                    : 0
+              )
               return
             }
             const n = opts.integer ? parseInt(raw, 10) : parseFloat(raw)
-            updateField(key, Number.isFinite(n) ? n : 0)
+            updateField(
+              key,
+              Number.isFinite(n)
+                ? key === 'rebalance_band_pct'
+                  ? n / 100
+                  : n
+                : 0
+            )
           }}
           disabled={disabled}
           min={opts.min}
@@ -446,10 +474,10 @@ export function FactorQuantConfigEditor({
                 desc: ts(fq.leverageDesc, language),
               }
             )}
-          {numField('rebalance_band_pct', ts(fq.rebalanceBand, language), 0.1, {
-            step: 0.01,
+          {numField('rebalance_band_pct', ts(fq.rebalanceBand, language), 10, {
+            step: 0.5,
             min: 0,
-            max: 1,
+            max: 100,
             desc: ts(fq.rebalanceBandDesc, language),
           })}
           {numField('min_order_usdt', ts(fq.minOrder, language), 10, {
@@ -478,6 +506,55 @@ export function FactorQuantConfigEditor({
                 desc: ts(fq.shortStopDesc, language),
               }
             )}
+          {market === 'us' && (
+            <>
+              <label>
+                {language === 'zh' ? '美股做空模式' : 'US short mode'}
+                <select
+                  aria-label="US short mode"
+                  data-testid="factor-us_short_mode"
+                  value={config.us_short_mode || 'off'}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    updateField(
+                      'us_short_mode',
+                      e.target.value as 'off' | 'paper'
+                    )
+                  }
+                >
+                  <option value="off">Off</option>
+                  <option value="paper">Paper</option>
+                </select>
+              </label>
+              <label>
+                {language === 'zh' ? '规模分层' : 'Size tier'}
+                <select
+                  aria-label="Size tier"
+                  data-testid="factor-size_tier"
+                  value={config.size_tier || 'all'}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    updateField(
+                      'size_tier',
+                      e.target.value as FactorQuantConfig['size_tier']
+                    )
+                  }
+                >
+                  <option value="all">All</option>
+                  <option value="mega_large">Mega / Large</option>
+                  <option value="mid_small">Mid / Small</option>
+                </select>
+              </label>
+              {numField(
+                'max_mid_small_exposure_pct',
+                language === 'zh'
+                  ? '中小盘最大敞口 %'
+                  : 'Max mid/small exposure %',
+                0,
+                { min: 0, max: 100, step: 0.5 }
+              )}
+            </>
+          )}
           {riskField('drawdown_warn_pct', ts(fq.drawdownWarn, language), 15)}
           {riskField('max_drawdown_pct', ts(fq.maxDrawdown, language), 25)}
           {riskField('daily_loss_pct', ts(fq.dailyLoss, language), 7)}

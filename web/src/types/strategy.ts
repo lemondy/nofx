@@ -66,6 +66,10 @@ export interface StrategyConfig {
 // store.FactorQuantConfig JSON tags. Numeric 0 / omitted = use the preset
 // default, except pointer percentages: 0 disables protection. Paper accounts only.
 export interface FactorQuantConfig {
+  us_short_mode?: '' | 'off' | 'paper'
+  us_short_fee_bps?: number | null
+  size_tier?: 'all' | 'mega_large' | 'mid_small'
+  max_mid_small_exposure_pct?: number
   // Required: "crypto" (paper perpetuals) or "us" (bStock paper ledger)
   market: 'crypto' | 'us'
   // Must equal the targets file's horizon; us 0 = accept whatever the file says
