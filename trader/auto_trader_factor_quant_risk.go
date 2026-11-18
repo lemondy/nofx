@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"time"
@@ -19,6 +20,7 @@ const (
 // Readers use fq.mu, never the execution mutex, to copy these fields.
 func fqCopyRiskState(dst, src *store.FactorQuantState) {
 	dst.PeakEquity = src.PeakEquity
+	dst.AppliedDDScale, dst.PendingDDScale, dst.DDTrimTargets = src.AppliedDDScale, src.PendingDDScale, src.DDTrimTargets
 	dst.DayStartDate, dst.DayStartEquity = src.DayStartDate, src.DayStartEquity
 	dst.HaltKind, dst.HaltDay = src.HaltKind, src.HaltDay
 	dst.HaltReason, dst.HaltedAt = src.HaltReason, src.HaltedAt
@@ -189,6 +191,9 @@ func (at *AutoTrader) factorQuantRiskCheck(broker fqBroker, now time.Time) (read
 		at.factorQuantHaltFlatten(broker, acct, state, now)
 		return true, true
 	}
+	if !at.fqApplyDrawdownTrim(broker, acct, state, ddScale) {
+		return false, false
+	}
 	return true, false
 }
 
@@ -252,4 +257,91 @@ func (at *AutoTrader) factorQuantHaltFlatten(broker fqBroker, acct *fqAccount, s
 		}
 		at.saveFactorQuantRecord(rec)
 	}
+}
+
+// Absolute ceilings make retries idempotent after partial fills and restarts.
+func (at *AutoTrader) fqApplyDrawdownTrim(broker fqBroker, acct *fqAccount, state *store.FactorQuantState, scale float64) bool {
+	applied := state.AppliedDDScale
+	if applied <= 0 {
+		applied = 1
+	}
+	ceilings := map[string]float64{}
+	if state.DDTrimTargets != "" {
+		if err := json.Unmarshal([]byte(state.DDTrimTargets), &ceilings); err != nil {
+			return false
+		}
+	}
+	save := func() bool {
+		at.fq.mu.Lock()
+		at.fq.riskSet = true
+		fqCopyRiskState(&at.fq.riskState, state)
+		at.fq.mu.Unlock()
+		if at.store != nil {
+			return at.store.FactorQuant().SetDrawdownTrim(at.id, state.AppliedDDScale, state.PendingDDScale, state.DDTrimTargets) == nil
+		}
+		return true
+	}
+	if scale < applied && (state.PendingDDScale == 0 || scale < state.PendingDDScale) && state.LastAsOf != "" {
+		previous := applied
+		if state.PendingDDScale > 0 {
+			previous = state.PendingDDScale
+		}
+		gross := 0.0
+		for _, p := range acct.Positions {
+			gross += p.Qty * p.Mark
+		}
+		budget := acct.Equity * at.fqPlanConfig(at.config.StrategyConfig.FactorQuantConfig).CapitalFraction
+		ratio := scale / previous
+		if gross > 0 {
+			ratio = math.Min(ratio, budget/gross)
+		}
+		for _, p := range acct.Positions {
+			key := p.Symbol + ":" + p.Side
+			target := p.Qty * ratio
+			if old, ok := ceilings[key]; ok {
+				target = math.Min(p.Qty, old) * ratio
+			}
+			ceilings[key] = target
+		}
+		data, _ := json.Marshal(ceilings)
+		state.DDTrimTargets = string(data)
+		state.PendingDDScale = scale
+		if !save() {
+			return false
+		}
+	}
+	if state.PendingDDScale > 0 {
+		if !save() {
+			return false
+		}
+		complete := true
+		for _, p := range acct.Positions {
+			target, ok := ceilings[p.Symbol+":"+p.Side]
+			if !ok || p.Qty <= target+1e-10 {
+				continue
+			}
+			qty, err := broker.FormatQty(p.Symbol, p.Qty-target, p.Mark)
+			if err != nil || qty <= 0 {
+				complete = false
+				continue
+			}
+			res := broker.Place(fqOrder{Symbol: p.Symbol, Side: p.Side, Kind: fqKindReduce, Qty: qty, Price: p.Mark, Notional: qty * p.Mark})
+			if res.failed() {
+				complete = false
+			}
+		}
+		if !complete {
+			return false
+		}
+		state.AppliedDDScale = state.PendingDDScale
+		state.PendingDDScale = 0
+		state.DDTrimTargets = ""
+		return save()
+	}
+	// Recovery raises the baseline without buying between scheduled rebalances.
+	if scale > applied || state.AppliedDDScale == 0 {
+		state.AppliedDDScale = scale
+		return save()
+	}
+	return true
 }

@@ -506,3 +506,56 @@ func TestFactorQuantRiskUnreliableEquityNeverHalts(t *testing.T) {
 		})
 	}
 }
+
+func TestFQDrawdownTrimsBetweenRebalancesAndRetries(t *testing.T) {
+	at, f, b := fqRiskTrader(t, "dd-trim")
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.DailyLossPct = fqPtr(0)
+	now := fqDay("2026-11-01")
+	at.factorQuantTick(b, now)
+	f.pos["YUSDT:long"] = &fakePos{"YUSDT", fqSideLong, 50, 100}
+	f.pos["NEWUSDT:long"] = &fakePos{"NEWUSDT", fqSideLong, 50, 100}
+	before := f.pos["NEWUSDT:long"].qty
+	f.equity = 8800
+	f.failClose["YUSDT"] = true
+	at.factorQuantTick(b, now.Add(5*time.Minute))
+	if f.pos["NEWUSDT:long"].qty >= before {
+		t.Fatal("drawdown did not reduce holding on too_soon tick")
+	}
+	trimmed := f.pos["NEWUSDT:long"].qty
+	f.failClose["YUSDT"] = false
+	at.factorQuantTick(b, now.Add(10*time.Minute))
+	fqNear(t, f.pos["NEWUSDT:long"].qty, trimmed, "already completed trim must not repeat")
+	if f.pos["YUSDT:long"].qty >= 50 {
+		t.Fatal("failed trim not retried")
+	}
+}
+
+func TestFQDrawdownTrimRestartAndLowerTier(t *testing.T) {
+	at, f, b := fqRiskTrader(t, "dd-restart")
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.DailyLossPct = fqPtr(0)
+	now := fqDay("2026-11-01")
+	at.factorQuantTick(b, now)
+	f.pos["XUSDT:long"] = &fakePos{"XUSDT", fqSideLong, 50, 100}
+	f.pos["YUSDT:short"] = &fakePos{"YUSDT", fqSideShort, 50, 100}
+	f.failClose["YUSDT"] = true
+	f.equity = 8800
+	at.factorQuantTick(b, now.Add(5*time.Minute))
+	state := fqRiskState(t, at)
+	if state.PendingDDScale != .7 || state.AppliedDDScale != 1 {
+		t.Fatalf("partial trim state: %+v", state)
+	}
+	// Simulate process loss: pending ceilings must come back from SQL.
+	at.fq = factorQuantRuntime{}
+	f.failClose["YUSDT"] = false
+	f.equity = 8400
+	at.factorQuantTick(b, now.Add(10*time.Minute))
+	state = fqRiskState(t, at)
+	if state.PendingDDScale != 0 || state.AppliedDDScale != .4 {
+		t.Fatalf("trim retry state: %+v", state)
+	}
+	if f.pos["XUSDT:long"].qty > 20 || f.pos["YUSDT:short"].qty > 20 {
+		t.Fatalf("lower tier failed: %+v", f.pos)
+	}
+}

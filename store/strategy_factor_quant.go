@@ -402,6 +402,10 @@ func fqBadFloat(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
 
 // FactorQuantState is one row per trader.
 type FactorQuantState struct {
+	AppliedDDScale float64 `gorm:"column:applied_dd_scale;not null;default:0"`
+	PendingDDScale float64 `gorm:"column:pending_dd_scale;not null;default:0"`
+	DDTrimTargets  string  `gorm:"column:dd_trim_targets;not null;default:''"`
+
 	TraderID         string  `gorm:"column:trader_id;primaryKey" json:"trader_id"`
 	LastAsOf         string  `gorm:"column:last_as_of;not null;default:''" json:"last_as_of"` // YYYY-MM-DD of the targets last rebalanced to
 	LastRunID        string  `gorm:"column:last_run_id;default:''" json:"last_run_id"`
