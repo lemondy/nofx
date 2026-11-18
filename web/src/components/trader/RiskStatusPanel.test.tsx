@@ -168,3 +168,15 @@ test('LLM traders do not show the factor quant section', () => {
     screen.queryByRole('heading', { name: '量化运行状态' })
   ).not.toBeInTheDocument()
 })
+
+test.each([
+  'daily_halt_unknown',
+  'account_drawdown_unknown',
+  'equity_unknown',
+  'positions_unknown',
+] as const)('unknown %s never shows OK', (key) => {
+  mockStatus(undefined, 7, { [key]: true })
+  render(<RiskStatusPanel traderId="ai" language="en" />)
+  expect(screen.queryByText('OK')).not.toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent('Status unknown')
+})

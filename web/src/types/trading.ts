@@ -313,6 +313,9 @@ export interface FactorQuantRegimeStatus {
   short_count: number
   long_gross: number
   short_gross: number
+  mega_large_gross?: number
+  mid_small_gross?: number
+  size_tier_filter?: string
   tilt_enabled: boolean
   applied: boolean
   reason?: string
@@ -337,6 +340,10 @@ export interface FactorQuantRunStatus {
 }
 
 export interface RiskStatus {
+  daily_halt_unknown?: boolean
+  account_drawdown_unknown?: boolean
+  equity_unknown?: boolean
+  positions_unknown?: boolean
   generated_at: string
   equity: number
   day_start_equity: number

@@ -128,7 +128,16 @@ function FactorQuantRunSection({
                   ? `${r.benchmark} ${r.close.toFixed(2)} / EMA20 ${r.ema20.toFixed(2)} / EMA50 ${r.ema50.toFixed(2)}`
                   : r.benchmark || '--'
               const counts = `${r.long_count}L (+${(r.long_gross * 100).toFixed(1)}%) / ${r.short_count}S (-${(r.short_gross * 100).toFixed(1)}%)`
-              return [label, bench, counts, r.reason].filter(Boolean).join(' · ')
+              return [
+                label,
+                bench,
+                counts,
+                `Mega/large ${((r.mega_large_gross ?? 0) * 100).toFixed(1)}% / Mid/small ${((r.mid_small_gross ?? 0) * 100).toFixed(1)}%`,
+                r.size_tier_filter,
+                r.reason,
+              ]
+                .filter(Boolean)
+                .join(' · ')
             })(),
           },
         ]
@@ -255,7 +264,18 @@ export function RiskStatusPanel({
   }
   if (!data) return null
 
+  const unknown =
+    error ||
+    data.daily_halt_unknown ||
+    data.account_drawdown_unknown ||
+    data.equity_unknown ||
+    data.positions_unknown
+  const unknownText =
+    language === 'zh'
+      ? '状态未知 / 数据读取异常'
+      : 'Status unknown / Data read error'
   const alerts: { text: string; tone: Tone }[] = []
+  if (unknown) alerts.push({ text: unknownText, tone: 'down' })
   if (data.daily_halted)
     alerts.push({
       text: `${t('riskStatus.dailyLoss', language)}: ${t('riskStatus.halted', language)}`,
@@ -276,6 +296,14 @@ export function RiskStatusPanel({
 
   return (
     <div className="space-y-3 rounded-lg border border-line bg-surface p-3">
+      {unknown && (
+        <div
+          role="alert"
+          className="rounded border border-down bg-down/10 p-3 text-sm font-semibold text-down"
+        >
+          {unknownText}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-fg">
           {t('riskStatus.title', language)}

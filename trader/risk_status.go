@@ -15,8 +15,10 @@ import (
 // none of it). Read-only: nothing here anchors baselines, places orders or
 // mutates trader state.
 type RiskStatus struct {
-	GeneratedAt time.Time `json:"generated_at"`
-	Equity      float64   `json:"equity"`
+	EquityUnknown    bool      `json:"equity_unknown,omitempty"`
+	PositionsUnknown bool      `json:"positions_unknown,omitempty"`
+	GeneratedAt      time.Time `json:"generated_at"`
+	Equity           float64   `json:"equity"`
 
 	// Daily-loss halt (UTC day, baseline = first equity seen that day).
 	DayStartEquity  float64 `json:"day_start_equity"`
@@ -133,6 +135,8 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	out := RiskStatus{GeneratedAt: time.Now().UTC(), InitialBalance: at.initialBalance}
 	if balance, err := at.trader.GetBalance(); err == nil {
 		out.Equity = gridAccountEquity(balance)
+	} else {
+		out.EquityUnknown = true
 	}
 	if at.config.StrategyConfig != nil {
 		rc := at.config.StrategyConfig.RiskControl
@@ -255,6 +259,8 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 			out.Positions = append(out.Positions, ps)
 		}
 		sort.Slice(out.Positions, func(i, j int) bool { return out.Positions[i].Symbol < out.Positions[j].Symbol })
+	} else {
+		out.PositionsUnknown = true
 	}
 	return out
 }
