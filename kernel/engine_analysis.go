@@ -223,10 +223,11 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 					NoTradeReasons:  []string{"全部候选双向硬门拦截", "下一周期快照自动重评"},
 					Stage:           "NO_SETUP",
 				}},
-				SystemPrompt: systemPrompt,
-				UserPrompt:   userPrompt,
-				RawResponse:  "program-synthesized wait (regime skip)",
-				Timestamp:    time.Now(),
+				SystemPrompt:       systemPrompt,
+				UserPrompt:         userPrompt,
+				RawResponse:        "program-synthesized wait (regime skip)",
+				Timestamp:          time.Now(),
+				ProgramSynthesized: true,
 			}
 			return fd, nil
 		}

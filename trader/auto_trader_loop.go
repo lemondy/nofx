@@ -226,8 +226,9 @@ func (at *AutoTrader) runCycleWithDecision(decide func(*kernel.Context) (*kernel
 		}
 	}
 
-	// Record AI charge (track cost regardless of decision outcome)
-	if aiDecision != nil && at.store != nil {
+	// Record AI charge only when an upstream LLM call was actually invoked
+	// (program-synthesized regime-skip decisions do not call any AI provider).
+	if aiDecision != nil && !aiDecision.ProgramSynthesized && at.store != nil {
 		if chargeErr := at.store.AICharge().Record(at.id, at.aiModel, at.config.AIModel); chargeErr != nil {
 			logger.Warnf("⚠️ Failed to record AI charge: %v", chargeErr)
 		}

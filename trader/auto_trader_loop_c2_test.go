@@ -141,3 +141,52 @@ func TestC2ManagementOnlyCycleRejectsAllOpenActions(t *testing.T) {
 		})
 	}
 }
+
+func TestProgramSynthesizedRegimeSkipDoesNotRecordAICharge(t *testing.T) {
+	m := &c2PendingMock{audit05Mock: audit05Mock{orders: c2ProtectionOrders()}}
+	at := c2Trader(m)
+	st, err := store.New(filepath.Join(t.TempDir(), "ai-charges.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	at.id, at.store = "trader-regime-skip", st
+	at.aiModel = "gpt-5.4"
+	at.config.AIModel = "openai"
+	at.markAIManaged("XUSDT", "long", "entry")
+
+	// 1. Program-synthesized regime skip -> 0 AI charges
+	if err := at.runCycleWithDecision(func(*kernel.Context) (*kernel.FullDecision, error) {
+		return &kernel.FullDecision{
+			Decisions:          []kernel.Decision{{Symbol: "ALL", Action: "wait", Reasoning: "Regime skip"}},
+			RawResponse:        "program-synthesized wait (regime skip)",
+			ProgramSynthesized: true,
+		}, nil
+	}); err != nil {
+		t.Fatalf("regime-skip cycle failed: %v", err)
+	}
+	charges, total, err := st.AICharge().GetCharges(at.id, "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(charges) != 0 || total != 0 {
+		t.Fatalf("program-synthesized regime skip billed phantom AI charge: count=%d total=%v", len(charges), total)
+	}
+
+	// 2. Real LLM decision -> 1 AI charge
+	if err := at.runCycleWithDecision(func(*kernel.Context) (*kernel.FullDecision, error) {
+		return &kernel.FullDecision{
+			Decisions:   []kernel.Decision{{Symbol: "XUSDT", Action: "hold"}},
+			RawResponse: `[{"symbol":"XUSDT","action":"hold"}]`,
+		}, nil
+	}); err != nil {
+		t.Fatalf("real LLM cycle failed: %v", err)
+	}
+	charges, total, err = st.AICharge().GetCharges(at.id, "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(charges) != 1 || total <= 0 {
+		t.Fatalf("real LLM cycle did not bill AI charge: count=%d total=%v", len(charges), total)
+	}
+}

@@ -592,6 +592,7 @@ type FullDecision struct {
 	RawResponse         string     `json:"raw_response"`
 	Timestamp           time.Time  `json:"timestamp"`
 	AIRequestDurationMs int64      `json:"ai_request_duration_ms,omitempty"`
+	ProgramSynthesized  bool       `json:"program_synthesized,omitempty"`
 }
 
 // QuantData quantitative data structure (fund flow, position changes, price changes)

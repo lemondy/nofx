@@ -129,6 +129,9 @@ func TestRegimeSkipSynthesizesWaitWithoutLLM(t *testing.T) {
 	if fd.UserPrompt == "" {
 		t.Error("decision record should still carry the prompts for the audit trail")
 	}
+	if !fd.ProgramSynthesized {
+		t.Error("regime-skip decision must mark ProgramSynthesized=true so ai_charges is not billed")
+	}
 }
 
 func TestRegimeSkipKeepsCallForAllowedDirection(t *testing.T) {
