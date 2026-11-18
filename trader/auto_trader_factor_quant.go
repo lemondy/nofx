@@ -604,10 +604,7 @@ func (at *AutoTrader) factorQuantRollingCheck(broker fqBroker, targets *quantTar
 			decayedList = append(decayedList, p.Symbol)
 		}
 	}
-	at.fq.mu.Lock()
-	at.fq.lastRollingAsOf = targets.AsOf
-	at.fq.mu.Unlock()
-	if len(decayedList) == 0 || at.fqSkipSeen("rolling|"+targets.AsOf) {
+	if len(decayedList) == 0 {
 		return false
 	}
 
@@ -628,6 +625,15 @@ func (at *AutoTrader) factorQuantRollingCheck(broker fqBroker, targets *quantTar
 
 	rollingWeights := make(map[string]float64, len(acct.Positions)+len(targets.Weights))
 	surviving := map[string]bool{}
+	survivingNotional, released := 0.0, 0.0
+	for _, p := range acct.Positions {
+		if decayedMap[p.Symbol] {
+			released += p.Qty * p.Mark
+		} else {
+			survivingNotional += p.Qty * p.Mark
+		}
+	}
+	replacementGross := 0.0
 	for _, p := range acct.Positions {
 		if decayedMap[p.Symbol] || p.Mark <= 0 {
 			continue
@@ -645,17 +651,45 @@ func (at *AutoTrader) factorQuantRollingCheck(broker fqBroker, targets *quantTar
 		}
 		if rw := fqRound6(alpha * tw); rw != 0 {
 			rollingWeights[sym] = rw
+			replacementGross += math.Abs(rw) * budget
+		}
+	}
+	allowed := math.Min(released, math.Max(0, budget-survivingNotional))
+	if replacementGross > allowed {
+		for sym, w := range rollingWeights {
+			if !surviving[sym] {
+				rollingWeights[sym] = fqTrunc6(w * allowed / replacementGross)
+			}
 		}
 	}
 
 	rollingTargets := *targets
-	rollingTargets.Weights = rollingWeights
+	// Close decayed risk first. A failed close must not fund new exposure.
+	closeWeights := make(map[string]float64)
+	for sym, w := range rollingWeights {
+		if surviving[sym] {
+			closeWeights[sym] = w
+		}
+	}
+	rollingTargets.Weights = closeWeights
 	rep := fqRunRebalance(broker, &rollingTargets, planCfg)
+	if rep.Err == nil && rep.failedCount() == 0 {
+		rollingTargets.Weights = rollingWeights
+		opened := fqRunRebalance(broker, &rollingTargets, planCfg)
+		opened.Results = append(rep.Results, opened.Results...)
+		rep = opened
+	}
 	rep.Regime = regimeInfo
 	if rep.Err != nil {
 		return false
 	}
 	at.factorQuantProtectReport(broker, rep)
+	if rep.failedCount() == 0 {
+		at.fq.mu.Lock()
+		at.fq.lastRollingAsOf = targets.AsOf
+		at.fq.mu.Unlock()
+		at.fqSkipSeen("rolling|" + targets.AsOf)
+	}
 	rollDec := fqDecision{
 		Rebalance: true,
 		Code:      "rolling_rebalance",

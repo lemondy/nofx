@@ -767,3 +767,30 @@ func TestFQTieredDrawdownScale(t *testing.T) {
 		t.Fatalf("RiskStatus DrawdownScale = %v, want 0.40", scale)
 	}
 }
+
+func TestFQRollingFailedCloseRetriesAndCapsReplacement(t *testing.T) {
+	at, f, b := fqRiskTrader(t, "rolling-retry-cap")
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.DailyLossPct = fqPtr(0)
+	at.factorQuantTick(b, fqDay("2026-11-01"))
+	f.pos["NEWUSDT:long"] = &fakePos{"NEWUSDT", fqSideLong, 98, 100}
+	f.pos["XUSDT:long"] = &fakePos{"XUSDT", fqSideLong, 2, 100}
+	cfg.TargetsPath = fqWriteTargetsMap(t, t.TempDir(), "crypto", "2026-11-01", 3, map[string]float64{"NEWUSDT": .5, "YUSDT": .5}, map[string]float64{"NEWUSDT": .9, "XUSDT": .1, "YUSDT": .95}, nil)
+	f.failClose["XUSDT"] = true
+	at.factorQuantTick(b, fqDay("2026-11-02"))
+	if at.fq.lastRollingAsOf != "" {
+		t.Fatal("failed rolling marked complete")
+	}
+	f.failClose["XUSDT"] = false
+	at.factorQuantTick(b, fqDay("2026-11-02").Add(5*time.Minute))
+	if _, ok := f.pos["XUSDT:long"]; ok {
+		t.Fatal("failed decay exit not retried")
+	}
+	gross := 0.0
+	for _, p := range f.pos {
+		gross += p.qty * 100
+	}
+	if gross > 10000.01 {
+		t.Fatalf("replacement exceeded budget: %g", gross)
+	}
+}
