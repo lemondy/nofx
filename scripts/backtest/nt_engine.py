@@ -181,19 +181,24 @@ class CarryConfig:
 
     market: str = "crypto"  # 'crypto' | 'us' | 'none'
     funding_rates: dict[str, dict[Any, float]] = field(default_factory=dict)
-    funding_multiplier: float = 3.0  # 3 x 8h settlements per UTC day for Binance futures
+    default_funding_rate: float = 0.0  # fallback per-8h funding rate when symbol/date is missing
+    funding_multiplier: float = 3.0  # 3 x 8h settlements per UTC day for crypto perps
     us_short_borrow_annual: float = 0.005
     us_margin_finance_annual: float = 0.05
 
 
+EIGHT_HOURS_NS = 8 * 3_600 * 1_000_000_000
+ONE_DAY_NS = 24 * 3_600 * 1_000_000_000
+
+
 class CarryFundingModule(SimulationModule):
-    """Native NautilusTrader SimulationModule for daily crypto funding and US borrow/margin carry."""
+    """Native NautilusTrader SimulationModule for 8h crypto funding and US overnight carry."""
 
     def __init__(self, carry: CarryConfig, currency: Currency) -> None:
         super().__init__(SimulationModuleConfig())
         self.carry = carry
         self.currency = currency
-        self.last_day = None
+        self._last_ts_ns: int | None = None
         self.total_carry_paid = 0.0
         self.funding_paid = 0.0
         self.borrow_paid = 0.0
@@ -204,11 +209,18 @@ class CarryFundingModule(SimulationModule):
     def process(self, ts_now: int) -> None:
         if self.carry.market == "none":
             return
-        day = pd.Timestamp(ts_now, tz="UTC").date()
-        if self.last_day == day:
+        if self._last_ts_ns is None:
+            self._last_ts_ns = ts_now
             return
-        elapsed = (day - self.last_day).days if self.last_day is not None else 1
-        self.last_day = day
+        if ts_now <= self._last_ts_ns:
+            return
+
+        step_ns = EIGHT_HOURS_NS if self.carry.market == "crypto" else ONE_DAY_NS
+        first_slot = ((self._last_ts_ns // step_ns) + 1) * step_ns
+        if first_slot > ts_now:
+            self._last_ts_ns = ts_now
+            return
+        self._last_ts_ns = ts_now
 
         positions = self.exchange.cache.positions_open()
         if not positions:
@@ -235,20 +247,31 @@ class CarryFundingModule(SimulationModule):
             upnl = pos.unrealized_pnl(Price(px, self.exchange.instruments[pos.instrument_id].price_precision))
             equity += upnl.as_double()
 
+        slots = range(first_slot, ts_now + 1, step_ns)
         cost = 0.0
         if self.carry.market == "crypto":
-            for sym, val in signed_notionals.items():
-                if val == 0.0:
-                    continue
-                rates = self.carry.funding_rates.get(sym, {})
-                self.observations += 1
-                if day in rates:
-                    self.covered += 1
-                rate = float(rates.get(day, 0.0))
-                fee = val * rate * self.carry.funding_multiplier
-                cost += fee
-                self.funding_paid += fee
+            per_slot_mult = self.carry.funding_multiplier / 3.0
+            for slot_ns in slots:
+                slot_ts = pd.Timestamp(slot_ns, tz="UTC")
+                slot_day = slot_ts.date()
+                for sym, val in signed_notionals.items():
+                    if val == 0.0:
+                        continue
+                    rates = self.carry.funding_rates.get(sym, {})
+                    self.observations += 1
+                    if slot_ts in rates:
+                        rate = float(rates[slot_ts])
+                        self.covered += 1
+                    elif slot_day in rates:
+                        rate = float(rates[slot_day])
+                        self.covered += 1
+                    else:
+                        rate = float(self.carry.default_funding_rate)
+                    fee = val * rate * per_slot_mult
+                    cost += fee
+                    self.funding_paid += fee
         elif self.carry.market == "us":
+            elapsed = len(slots)
             long_notional = 0.0
             for sym, val in signed_notionals.items():
                 if val < 0.0:
@@ -274,7 +297,7 @@ class CarryFundingModule(SimulationModule):
         )
 
     def reset(self) -> None:
-        self.last_day = None
+        self._last_ts_ns = None
         self.total_carry_paid = 0.0
         self.funding_paid = 0.0
         self.borrow_paid = 0.0
@@ -288,12 +311,16 @@ def compute_metrics(
     *,
     periods_per_year: int = 252,
     rf: float = 0.0,
+    initial_capital: float | None = None,
 ) -> dict[str, float]:
     """Compute standardized portfolio risk/return statistics using QuantStats."""
     eq = pd.Series(equity, dtype=float).dropna()
+    has_cap = initial_capital is not None and math.isfinite(float(initial_capital)) and float(initial_capital) > 0.0
+    base_cap = float(initial_capital) if has_cap else (float(eq.iloc[0]) if len(eq) > 0 else 0.0)
     if len(eq) < 2:
+        tot = float(eq.iloc[-1] / base_cap - 1.0) if (len(eq) == 1 and base_cap > 0) else 0.0
         return {
-            "total_return": 0.0,
+            "total_return": tot,
             "cagr": 0.0,
             "sharpe": 0.0,
             "sortino": 0.0,
@@ -309,10 +336,19 @@ def compute_metrics(
     import warnings
 
     qs = _quantstats_stats()
-    returns = eq.pct_change().dropna()
+    eq_stats = eq
+    if has_cap and abs(float(eq.iloc[0]) - base_cap) > 1e-9:
+        step = (eq.index[1] - eq.index[0]) if len(eq) >= 2 else pd.Timedelta(days=1)
+        if step <= pd.Timedelta(0):
+            step = pd.Timedelta(days=1)
+        anchor = pd.Series([base_cap], index=pd.DatetimeIndex([eq.index[0] - step]), dtype=float)
+        eq_stats = pd.concat([anchor, eq])
+
+    returns = eq_stats.pct_change().dropna()
+    total_ret = float(eq.iloc[-1] / base_cap - 1.0) if base_cap > 0 else 0.0
     if returns.empty or (returns == 0).all():
         return {
-            "total_return": float(eq.iloc[-1] / eq.iloc[0] - 1.0) if eq.iloc[0] > 0 else 0.0,
+            "total_return": total_ret,
             "cagr": 0.0,
             "sharpe": 0.0,
             "sortino": 0.0,
@@ -332,8 +368,7 @@ def compute_metrics(
         except Exception:
             return float(default)
 
-    total_ret = float(eq.iloc[-1] / eq.iloc[0] - 1.0) if eq.iloc[0] > 0 else 0.0
-    mdd = _safe(qs.max_drawdown, eq, default=0.0)
+    mdd = _safe(qs.max_drawdown, eq_stats, default=0.0)
     cagr_val = _safe(qs.cagr, returns, rf=rf, periods=periods_per_year, default=0.0)
     sharpe_val = _safe(qs.sharpe, returns, rf=rf, periods=periods_per_year, default=0.0)
     sortino_val = _safe(qs.sortino, returns, rf=rf, periods=periods_per_year, default=0.0)
@@ -377,6 +412,7 @@ class _PortfolioTargetStrategy(Strategy):
         close_mark_quotes_ns: set[int],
         execution: str,
         initial_capital: float,
+        close_mark_bar_ns: dict[int, int] | None = None,
     ) -> None:
         super().__init__()
         self.venue = venue
@@ -387,6 +423,7 @@ class _PortfolioTargetStrategy(Strategy):
         self.expected_bars_by_ns = expected_bars_by_ns
         self.expected_quotes_by_ns = expected_quotes_by_ns
         self._close_mark_quotes_ns = close_mark_quotes_ns
+        self._close_mark_bar_ns = close_mark_bar_ns or {}
         self.execution = execution
         self.initial_capital = float(initial_capital)
 
@@ -395,7 +432,7 @@ class _PortfolioTargetStrategy(Strategy):
         self._last_close: dict[str, float] = {}
         self._last_open: dict[str, float] = {}
         self._pending_targets: dict[str, float] | None = None
-        self._pending_close_mark_ns: int | None = None
+        self._pending_close_targets: dict[str, float] | None = None
 
         self.equity_curve: list[tuple[pd.Timestamp, float]] = []
         self.fills_log: list[dict[str, Any]] = []
@@ -406,8 +443,7 @@ class _PortfolioTargetStrategy(Strategy):
     def on_start(self) -> None:
         for sym, bt in self.bar_types.items():
             self.subscribe_bars(bt)
-            if self.execution == "next_open":
-                self.subscribe_quote_ticks(self.instruments[sym].id)
+            self.subscribe_quote_ticks(self.instruments[sym].id)
 
     def _current_equity(self) -> float:
         account = self.portfolio.account(self.venue)
@@ -491,9 +527,11 @@ class _PortfolioTargetStrategy(Strategy):
 
         # In next_open mode, we have morning QuoteTicks (open_ts, 00:00:00)
         # and evening closing mark QuoteTicks (close_mark_ts, 23:59:59).
+        # In close mode, we have post-exec closing mark QuoteTicks at ts + 2ns.
         if ts in self._close_mark_quotes_ns:
             if cnt == expected:
-                self._record_equity(ts)
+                mark_ns = self._close_mark_bar_ns.get(ts, ts)
+                self._record_equity(mark_ns)
         else:
             self._last_open[sym] = 0.5 * (tick.bid_price.as_double() + tick.ask_price.as_double())
             if cnt == expected and self._pending_targets is not None:
@@ -510,13 +548,13 @@ class _PortfolioTargetStrategy(Strategy):
             self._pending_targets = None
             self._execute_weights(targets, use_open_px=True)
 
-    def on_bar(self, bar: Bar) -> None:
-        # In close-execution mode, any fills submitted on the previous bar settled immediately
-        # after that bar's on_bar returned; record that bar's settled equity before processing today.
-        if self._pending_close_mark_ns is not None and bar.ts_init != self._pending_close_mark_ns:
-            self._record_equity(self._pending_close_mark_ns)
-            self._pending_close_mark_ns = None
+    def _on_close_exec(self, event) -> None:
+        if self._pending_close_targets is not None:
+            targets = self._pending_close_targets
+            self._pending_close_targets = None
+            self._execute_weights(targets, use_open_px=False)
 
+    def on_bar(self, bar: Bar) -> None:
         sym = bar.bar_type.instrument_id.symbol.value
         self._last_close[sym] = bar.close.as_double()
         ts = bar.ts_init
@@ -526,17 +564,22 @@ class _PortfolioTargetStrategy(Strategy):
             return
 
         if self.execution == "close":
+            # Delay close rebalance by 1ns so CarryFundingModule.process(ts) settles
+            # existing positions held over (prev_ts, ts] BEFORE close fills mutate holdings;
+            # closing QuoteTicks at ts + 2ns then advance the clock and record close equity.
             if ts in self.targets_by_ns:
-                self._execute_weights(self.targets_by_ns[ts], use_open_px=False)
-            self._pending_close_mark_ns = ts
+                self._pending_close_targets = self.targets_by_ns[ts]
+                self.clock.set_time_alert_ns(
+                    f"close-exec-{ts}",
+                    ts + 1,
+                    self._on_close_exec,
+                )
         else:
             if ts in self.targets_by_ns:
                 self._pending_targets = self.targets_by_ns[ts]
 
     def on_stop(self) -> None:
-        if self._pending_close_mark_ns is not None:
-            self._record_equity(self._pending_close_mark_ns)
-            self._pending_close_mark_ns = None
+        pass
 
     def on_order_filled(self, event) -> None:
         comm = event.commission.as_double() if event.commission is not None else 0.0
@@ -640,6 +683,7 @@ def run_portfolio(
     bar_types: dict[str, BarType] = {}
     all_data: list[Any] = []
     close_mark_quotes_ns: set[int] = set()
+    close_mark_bar_ns: dict[int, int] = {}
 
     for sym in sorted(frames):
         raw = frames[sym]
@@ -706,6 +750,22 @@ def run_portfolio(
             qdf_close.index.name = "timestamp"
             all_data.extend(QuoteTickDataWrangler(inst).process(qdf_close))
             close_mark_quotes_ns.update(int(t.value) for t in close_idx)
+        else:
+            close_idx = df.index + pd.to_timedelta(2, unit="ns")
+            close_vals = df["close"].to_numpy()
+            qdf_close = pd.DataFrame(
+                {
+                    "bid_price": close_vals,
+                    "ask_price": close_vals,
+                },
+                index=close_idx,
+            )
+            qdf_close.index.name = "timestamp"
+            all_data.extend(QuoteTickDataWrangler(inst).process(qdf_close))
+            for bar_ts, quote_ts in zip(df.index, close_idx):
+                q_ns = int(quote_ts.value)
+                close_mark_quotes_ns.add(q_ns)
+                close_mark_bar_ns[q_ns] = int(bar_ts.value)
 
     if not instruments:
         engine.dispose()
@@ -745,6 +805,7 @@ def run_portfolio(
         close_mark_quotes_ns=close_mark_quotes_ns,
         execution=execution,
         initial_capital=initial_capital,
+        close_mark_bar_ns=close_mark_bar_ns,
     )
     engine.add_strategy(strat)
     engine.run()
@@ -753,7 +814,7 @@ def run_portfolio(
     eq_series = pd.Series([v for _, v in strat.equity_curve], index=eq_index, dtype=float)
     eq_series = eq_series[~eq_series.index.duplicated(keep="last")].sort_index()
 
-    metrics = compute_metrics(eq_series, periods_per_year=ppy)
+    metrics = compute_metrics(eq_series, periods_per_year=ppy, initial_capital=initial_capital)
     analyzer = engine.portfolio.analyzer
     nt_stats = {
         "pnls": analyzer.get_performance_stats_pnls(currency=currency),
@@ -802,6 +863,7 @@ class _SignalBracketStrategy(Strategy):
         slippage: float = 0.0,
         taker_fee: float = 0.0,
         open_ns_by_close_ns: dict[int, int] | None = None,
+        bars_by_open_quote_ns: dict[int, tuple[float, float, float]] | None = None,
     ) -> None:
         super().__init__()
         self.inst = instrument
@@ -811,6 +873,7 @@ class _SignalBracketStrategy(Strategy):
         self.slippage = float(slippage)
         self.taker_fee = float(taker_fee)
         self.open_ns_by_close_ns = open_ns_by_close_ns or {}
+        self.bars_by_open_quote_ns = bars_by_open_quote_ns or {}
 
         self.sign = 1 if tr["side"] == "long" else -1
         self.mode = rules.get("force_mode") or tr["mode"]
@@ -956,6 +1019,27 @@ class _SignalBracketStrategy(Strategy):
                     tags=["time"],
                 )
                 self.submit_order(close_ord)
+                return
+
+        # Enforce conservative SL-first tie-breaking symmetrically for Long and Short when an
+        # intrabar range touches active SL (any gap-open TP at bar.open already matched on this
+        # opening QuoteTick before on_quote_tick was invoked).
+        if (
+            not self.closing
+            and self.active_sl_order is not None
+            and not self.active_sl_order.is_closed
+            and self.active_tp_orders
+        ):
+            ohl = self.bars_by_open_quote_ns.get(tick.ts_init)
+            if ohl is not None:
+                _, bar_high, bar_low = ohl
+                sl_px = self.active_sl_order.trigger_price.as_double()
+                sl_touched = (bar_low <= sl_px) if self.sign > 0 else (bar_high >= sl_px)
+                if sl_touched:
+                    for tp_ord in self.active_tp_orders:
+                        if tp_ord is not None and not tp_ord.is_closed:
+                            self.cancel_order(tp_ord)
+                    self.active_tp_orders = []
 
     def on_bar(self, bar: Bar) -> None:
         prev_ns = self.last_bar.ts_init if self.last_bar is not None else None
@@ -1168,6 +1252,12 @@ def run_signal_trade(
         open_quote_ns.append(o_ns)
     open_idx = pd.to_datetime(open_quote_ns, unit="ns", utc=True)
     open_vals = df["open"].to_numpy()
+    high_vals = df["high"].to_numpy()
+    low_vals = df["low"].to_numpy()
+    bars_by_open_quote_ns = {
+        int(o_ns): (float(open_vals[i]), float(high_vals[i]), float(low_vals[i]))
+        for i, o_ns in enumerate(open_quote_ns)
+    }
     qdf_open = pd.DataFrame({"bid_price": open_vals, "ask_price": open_vals}, index=open_idx)
     qdf_open.index.name = "timestamp"
     open_quotes = QuoteTickDataWrangler(inst).process(qdf_open)
@@ -1208,6 +1298,7 @@ def run_signal_trade(
         slippage=slippage,
         taker_fee=commission,
         open_ns_by_close_ns=open_ns_by_close_ns,
+        bars_by_open_quote_ns=bars_by_open_quote_ns,
     )
     engine.add_strategy(strat)
     engine.run()

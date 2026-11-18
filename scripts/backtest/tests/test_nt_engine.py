@@ -116,19 +116,38 @@ class TestNautilusPortfolioEngine(unittest.TestCase):
         self.assertEqual(res["fill_count"], 1)
         self.assertEqual(len(res["equity"]), 3)
         self.assertAlmostEqual(res["fills"][0]["price"], 100.0, places=6)
-        # Entered 100 shares at 100.0 close on Day 0, fee = 10.0, final close = 121.0 -> 12,090.0
-        self.assertAlmostEqual(float(res["equity"].iloc[-1]), 12_090.0, places=2)
+        # Entered 100 shares at 100.0 close on Day 0, fee = 10.0:
+        # Day 0 EOD = 9,990.0; Day 1 EOD = 10,990.0; Day 2 EOD = 12,090.0
+        self.assertAlmostEqual(float(res["equity"].iloc[0]), 9_990.0, places=2)
+        self.assertAlmostEqual(float(res["equity"].iloc[1]), 10_990.0, places=2)
+        self.assertAlmostEqual(float(res["equity"].iloc[2]), 12_090.0, places=2)
+        self.assertAlmostEqual(res["metrics"]["total_return"], 0.2090, places=4)
+
+        # Mutating future bar (Day 2 close) must NEVER change Day 0 or Day 1 close-mode equity
+        aapl_mut = _daily_frame([100.0, 100.0, 110.0], [100.0, 110.0, 500.0])
+        res_mut = run_portfolio(
+            {"AAPL": aapl_mut},
+            targets,
+            market="us",
+            initial_capital=10_000.0,
+            execution="close",
+            commission=0.001,
+            slippage=0.0,
+        )
+        self.assertAlmostEqual(float(res_mut["equity"].iloc[0]), float(res["equity"].iloc[0]), places=6)
+        self.assertAlmostEqual(float(res_mut["equity"].iloc[1]), float(res["equity"].iloc[1]), places=6)
 
     def test_carry_funding_module_crypto_and_us(self):
         btc = _daily_frame([100.0, 100.0, 100.0], [100.0, 100.0, 100.0])
-        targets = pd.DataFrame({"BTC": [1.0]}, index=[btc.index[0]])
+        # Case A: Open Day 1 morning (00:00+1ns), close Day 2 morning (00:00+1ns) = exact 24h hold
+        # Crosses d1 08:00, d1 16:00, d2 00:00 -> 3 settlements = $30.0
+        targets_24h = pd.DataFrame({"BTC": [1.0, 0.0]}, index=[btc.index[0], btc.index[1]])
         d1 = btc.index[1].date()
         d2 = btc.index[2].date()
-        # Funding rate = 0.001 per 8h => 0.003 per day on $10,000 long => $30/day on d2 (after Day 1 fill)
         carry = CarryConfig(market="crypto", funding_rates={"BTC": {d1: 0.001, d2: 0.001}}, funding_multiplier=3.0)
-        res = run_portfolio(
+        res_24h = run_portfolio(
             {"BTC": btc},
-            targets,
+            targets_24h,
             market="crypto",
             initial_capital=10_000.0,
             execution="next_open",
@@ -136,9 +155,80 @@ class TestNautilusPortfolioEngine(unittest.TestCase):
             slippage=0.0,
             carry=carry,
         )
-        # Filled Day 1 morning -> carried overnight into Day 2 -> 1 funding charge of 30.0
-        self.assertAlmostEqual(res["carry"]["funding_paid"], 30.0, places=2)
-        self.assertAlmostEqual(float(res["equity"].iloc[-1]), 9970.0, places=2)
+        self.assertAlmostEqual(res_24h["carry"]["funding_paid"], 30.0, places=2)
+        self.assertAlmostEqual(float(res_24h["equity"].iloc[-1]), 9970.0, places=2)
+
+        # Case B: Open Day 1 morning (00:00+1ns) and hold through Day 2 EOD (23:59:59) = 5 x 8h settlements
+        # (d1 08:00, 16:00 + d2 00:00, 08:00, 16:00) -> $50.0 (and Day 1 alone already settles $20.0, not $0!)
+        targets_hold = pd.DataFrame({"BTC": [1.0]}, index=[btc.index[0]])
+        res_hold = run_portfolio(
+            {"BTC": btc},
+            targets_hold,
+            market="crypto",
+            initial_capital=10_000.0,
+            execution="next_open",
+            commission=0.0,
+            slippage=0.0,
+            carry=CarryConfig(market="crypto", funding_rates={"BTC": {d1: 0.001, d2: 0.001}}, funding_multiplier=3.0),
+        )
+        self.assertAlmostEqual(float(res_hold["equity"].iloc[1]), 9980.0, places=2)
+        self.assertAlmostEqual(res_hold["carry"]["funding_paid"], 50.0, places=2)
+        self.assertAlmostEqual(float(res_hold["equity"].iloc[-1]), 9950.0, places=2)
+
+        # Case C: Multi-day data gap (Day 1 -> Day 4, skipping 2 days) settles all intermediate 8h slots
+        idx_gap = pd.DatetimeIndex(["2025-01-01", "2025-01-02", "2025-01-05"], tz="UTC")
+        btc_gap = pd.DataFrame(
+            {"open": [100.0, 100.0, 100.0], "high": [101.0, 101.0, 101.0], "low": [99.0, 99.0, 99.0], "close": [100.0, 100.0, 100.0], "volume": [1e6, 1e6, 1e6]},
+            index=idx_gap,
+        )
+        res_gap = run_portfolio(
+            {"BTC": btc_gap},
+            pd.DataFrame({"BTC": [1.0]}, index=[idx_gap[0]]),
+            market="crypto",
+            initial_capital=10_000.0,
+            execution="next_open",
+            commission=0.0,
+            slippage=0.0,
+            carry=CarryConfig(market="crypto", default_funding_rate=0.001, funding_multiplier=3.0),
+        )
+        # Jan 2 (08,16) + Jan 3 (00,08,16) + Jan 4 (00,08,16) + Jan 5 (00,08,16) = 11 settlements = $110.0
+        self.assertAlmostEqual(res_gap["carry"]["funding_paid"], 110.0, places=2)
+
+    def test_close_mode_funding_settles_before_rebalance_fills(self):
+        btc = _daily_frame([100.0, 100.0], [100.0, 100.0])
+        carry_cfg = dict(market="crypto", default_funding_rate=0.001, funding_multiplier=3.0)
+
+        # Case 1: Enter 100% long at Day 0 close, exit to 0% at Day 1 close -> held 24h -> 3 slots = $30.0
+        res_exit = run_portfolio(
+            {"BTC": btc},
+            pd.DataFrame({"BTC": [1.0, 0.0]}, index=[btc.index[0], btc.index[1]]),
+            market="crypto",
+            initial_capital=10_000.0,
+            execution="close",
+            commission=0.0,
+            slippage=0.0,
+            carry=CarryConfig(**carry_cfg),
+        )
+        self.assertAlmostEqual(res_exit["carry"]["funding_paid"], 30.0, places=2)
+        self.assertEqual(list(res_exit["equity"].index), list(btc.index))
+        self.assertAlmostEqual(float(res_exit["equity"].iloc[0]), 10_000.0, places=2)
+        self.assertAlmostEqual(float(res_exit["equity"].iloc[1]), 9_970.0, places=2)
+
+        # Case 2: Flat on Day 0 close, enter 100% long at Day 1 close -> held 0h over (Day 0, Day 1] -> $0.0
+        res_enter = run_portfolio(
+            {"BTC": btc},
+            pd.DataFrame({"BTC": [0.0, 1.0]}, index=[btc.index[0], btc.index[1]]),
+            market="crypto",
+            initial_capital=10_000.0,
+            execution="close",
+            commission=0.0,
+            slippage=0.0,
+            carry=CarryConfig(**carry_cfg),
+        )
+        self.assertAlmostEqual(res_enter["carry"]["funding_paid"], 0.0, places=2)
+        self.assertEqual(list(res_enter["equity"].index), list(btc.index))
+        self.assertAlmostEqual(float(res_enter["equity"].iloc[0]), 10_000.0, places=2)
+        self.assertAlmostEqual(float(res_enter["equity"].iloc[1]), 10_000.0, places=2)
 
     def test_prelisting_asset_ignored_without_corruption(self):
         # IPO lists on Day 2; prior NaNs must not trigger phantom orders or NaN equity
@@ -283,6 +373,49 @@ class TestNautilusSignalBracket(unittest.TestCase):
         self.assertEqual(res["how"], "sl")
         self.assertAlmostEqual(res["entry_price"], 100.1, places=3)
         self.assertLess(res["r"], -0.9)
+
+    def test_dual_touch_bar_enforces_sl_first_symmetrically_long_and_short(self):
+        # Bar 0 signal, Bar 1 enters cleanly @ 100.0 (no SL/TP touch), Bar 2 touches BOTH SL and TP!
+        bars_dual = self._bars(
+            [
+                [100.0, 100.0, 100.0, 100.0],
+                [100.0, 100.5, 99.5, 100.0],
+                [100.0, 110.0, 90.0, 100.0],
+            ]
+        )
+        t0 = int(bars_dual.index[0].timestamp() * 1000)
+        tr_long = {
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "kind": "mkt",
+            "mode": "quick",
+            "t0_ms": t0,
+            "start_ms": t0,
+            "reference": 100.0,
+            "limit_valid_min": 45,
+            "sl": 95.0,
+            "tp": 105.0,
+            "atr_pct": 1.0,
+        }
+        tr_short = {
+            "symbol": "BTCUSDT",
+            "side": "short",
+            "kind": "mkt",
+            "mode": "quick",
+            "t0_ms": t0,
+            "start_ms": t0,
+            "reference": 100.0,
+            "limit_valid_min": 45,
+            "sl": 105.0,
+            "tp": 95.0,
+            "atr_pct": 1.0,
+        }
+        r_long = run_signal_trade(bars_dual, tr_long, self._base_rules(), commission=0.0, slippage=0.0)
+        r_short = run_signal_trade(bars_dual, tr_short, self._base_rules(), commission=0.0, slippage=0.0)
+        self.assertEqual(r_long["how"], "sl")
+        self.assertEqual(r_short["how"], "sl")
+        self.assertAlmostEqual(r_long["r"], -1.0, places=6)
+        self.assertAlmostEqual(r_short["r"], -1.0, places=6)
 
     def test_breakeven_trailing_and_time_horizon(self):
         # Bar 0 signal, Bar 1 entry=100 & rallies to 104 (+0.8R vs sl=95 -> risk=5), arming be_off=0.1 (100.5).
