@@ -198,6 +198,10 @@ func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *Time
 		}
 	}
 
+	ema20, ema50 := emaSeries(klines, 20), emaSeries(klines, 50)
+	ema12, ema26 := emaSeries(klines, 12), emaSeries(klines, 26)
+	rsi7, rsi14 := rsiSeries(klines, 7), rsiSeries(klines, 14)
+
 	for i := start; i < len(klines); i++ {
 		// Store full OHLCV kline data
 		data.Klines = append(data.Klines, KlineBar{
@@ -215,30 +219,26 @@ func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *Time
 
 		// Calculate EMA20 for each point
 		if i >= 19 {
-			ema20 := calculateEMA(klines[:i+1], 20)
-			data.EMA20Values = append(data.EMA20Values, ema20)
+			data.EMA20Values = append(data.EMA20Values, ema20[i])
 		}
 
 		// Calculate EMA50 for each point
 		if i >= 49 {
-			ema50 := calculateEMA(klines[:i+1], 50)
-			data.EMA50Values = append(data.EMA50Values, ema50)
+			data.EMA50Values = append(data.EMA50Values, ema50[i])
 		}
 
 		// Calculate MACD for each point
 		if i >= 25 {
-			macd := calculateMACD(klines[:i+1])
+			macd := ema12[i] - ema26[i]
 			data.MACDValues = append(data.MACDValues, macd)
 		}
 
 		// Calculate RSI for each point
 		if i >= 7 {
-			rsi7 := calculateRSI(klines[:i+1], 7)
-			data.RSI7Values = append(data.RSI7Values, rsi7)
+			data.RSI7Values = append(data.RSI7Values, rsi7[i])
 		}
 		if i >= 14 {
-			rsi14 := calculateRSI(klines[:i+1], 14)
-			data.RSI14Values = append(data.RSI14Values, rsi14)
+			data.RSI14Values = append(data.RSI14Values, rsi14[i])
 		}
 
 		// Calculate Bollinger Bands (period 20, std dev multiplier 2)
@@ -593,4 +593,61 @@ func getExecutionKlines(symbol, interval, exchange string, limit int) ([]Kline, 
 		return nil, fmt.Errorf("Binance execution klines unavailable (CoinAnk: %v; Binance: %v)", err, fallbackErr)
 	}
 	return k, nil
+}
+
+// emaSeries preserves the SMA seed and operation order of calculateEMA.
+func emaSeries(ks []Kline, p int) []float64 {
+	out := make([]float64, len(ks))
+	sum, ema := 0.0, 0.0
+	for i, k := range ks {
+		if i < p {
+			sum += k.Close
+			if i == p-1 {
+				ema = sum / float64(p)
+			}
+		} else {
+			ema = (k.Close-ema)*(2.0/float64(p+1)) + ema
+		}
+		if i >= p-1 {
+			out[i] = ema
+		}
+	}
+	return out
+}
+
+// rsiSeries applies the same Wilder recurrence once across the history.
+func rsiSeries(ks []Kline, p int) []float64 {
+	out := make([]float64, len(ks))
+	gain, loss := 0.0, 0.0
+	for i := 1; i < len(ks); i++ {
+		change := ks[i].Close - ks[i-1].Close
+		if i <= p {
+			if change > 0 {
+				gain += change
+			} else {
+				loss += -change
+			}
+			if i == p {
+				gain /= float64(p)
+				loss /= float64(p)
+			}
+		} else if change > 0 {
+			gain = (gain*float64(p-1) + change) / float64(p)
+			loss = (loss * float64(p-1)) / float64(p)
+		} else {
+			gain = (gain * float64(p-1)) / float64(p)
+			loss = (loss*float64(p-1) + (-change)) / float64(p)
+		}
+		if i >= p {
+			switch {
+			case gain == 0 && loss == 0:
+				out[i] = 50
+			case loss == 0:
+				out[i] = 100
+			default:
+				out[i] = 100 - (100 / (1 + gain/loss))
+			}
+		}
+	}
+	return out
 }
