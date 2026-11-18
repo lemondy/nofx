@@ -55,7 +55,7 @@ th{color:var(--mut);font-weight:600}
 <body>
 <div class="wrap">
 <h1>量化研究记录</h1>
-<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-11-16。</p>
+<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-11-18。</p>
 
 <div class="sum" id="sum"></div>
 
@@ -70,6 +70,58 @@ th{color:var(--mut);font-weight:600}
 </div>
 
 <div id="log">
+
+<div class="day">2026-11-18</div>
+
+<article data-v="no" data-id="crypto-llm-cost-gating-s1">
+<h2><code>crypto_llm</code> AI 调用降频与事件门控省费机制（G1 全阻断跳过 / G2 15m 静默，K=10..11） <span class="tag t-no">S1 fewer_trades（K=10..11，placebo 50.7% / 51.6% &lt; 90%）· G1 0/410 误杀开仓 · 定位 Go ai_charges 虚计 4,729 次</span><span class="dom">加密 · crypto_llm · AI 成本门控 &amp; 账务审计</span></h2>
+<p class="k">思路：承接 AlphaIllusion P5 审计结论（AI 调用成本吞噬净利），在严格预注册（<code>PREREG_SHA256 6bed6419...</code>）下检验两项因果门控：<b>G1</b>（K=10，<code>candidate_verdicts</code> 全 <code>blocked</code> 时跳过 LLM，省 $0.01/次）与 <b>G2</b>（K=11，G1 + 15m <code>BTCUSDT 1h</code> 低波静默冷却）；对照组为各交易员内 2,000 次同跳过率随机抽取。</p>
+<ul>
+<li><b>主队列 <code>pooled-6-paper</code></b>（8,670 次真实 LLM 周期，410 笔匹配交易，<code>coverage_error=0.0049</code>，25 UTC 日 / 5 周）：基线交易净利 +$16.11，真实 AI 成本 -$86.70，扣 AI 费真实净收益 <b>-$70.59</b>。</li>
+<li><b>G1（K=10，全候选 <code>blocked</code> 跳过）</b>：跳过 <code>4,216 / 8,670</code>（48.63%）调用省 <b>+$42.16</b>，误杀 <b>0 / 410（0.0%）</b>开仓（<code>mac-nofx</code> post-10/10 同样 0/96 误杀，省 $6.76），真实日增量 +$1.6864 ± $0.3513/天（<code>z=4.8009</code>，<code>dev +1.1708</code> / <code>holdout +2.1623</code>）；但因随机跳过 48.63% 同样省 $42.16 且基线单笔净利近零，安慰剂均值 $1.6863/天（<code>placebo_pct=50.7% &lt; 90%</code>）按冻结规则判 <code>fewer_trades</code>，且跳过周期包含 <code>213 / 380</code> 次 <code>ai_close</code> 主动平仓。</li>
+<li><b>G2（K=11，G1 + 15m 静默降频）</b>：跳过 <code>6,094 / 8,670</code>（70.29%）调用省 +$60.94，但错失 <code>110 / 410</code>（26.83%）开仓（-$17.02），<code>z=0.3853</code>（<code>SE=$4.5594/天</code>），<code>holdout=-$5.8397/天</code>（<code>placebo_pct=51.6%</code>）淘汰。</li>
+<li><b>系统级 Bug 定位</b>：<code>trader/auto_trader_loop.go:223-227</code> 在 <code>aiDecision != nil</code> 时无条件写入 <code>ai_charges</code>，把 <code>kernel/engine_analysis.go:215</code> 零耗时 <code>Regime skip</code> 一并计费；<code>mac-nofx</code> 7,863 次真实 LLM 调用被记账 12,592 笔（$121.524），虚增约 <b>4,729 次幽灵成本</b>。</li>
+</ul>
+<p><b>结论：</b>G2 明确淘汰；G1 零误伤开仓砍掉近半无效调用但跨 213 次 <code>ai_close</code> 且未击败同比例随机减半，不直接改动实盘或上 S2。可先独立修复 Go <code>ai_charges</code> 未过滤 <code>ai_request_duration_ms &gt; 0</code> 的记账失真；另已将 <code>dsr_audit.py</code> 接入 <code>scripts/factor_mining/run_nightly.sh</code> 作只读夜间质检门控。</p>
+<p class="src">来源：<code>docs/research/2026-11-18-crypto-llm-cost-gating-s1-study.md</code> · <code>docs/research/2026-11-18-crypto-llm-cost-gating-s1-prereg.md</code> · <code>scripts/backtest/crypto_llm_cost_gating_study.py</code></p>
+</article>
+
+<article data-v="no" data-id="ltw-crypto-factors-s1">
+<h2>Common Risk Factors in Cryptocurrency（Liu, Tsyvinski &amp; Wu 2022, NBER w25882）样本外复现与 fq_crypto 增量 S1 检验 <span class="tag t-no">S1 fail（fq_crypto K=15, z=0.7102 &lt; 1.0）· 安慰剂 95.0%，回撤收窄但 78 周功效不足 · 不改实盘</span><span class="dom">加密 · factor_quant + 外部论文 · 横截面动量 / 三因子定价</span></h2>
+<p class="k">思路：LTW (2022) 提出加密货币截面存在 9 个显著异象，且 <code>(CMKT, CSMB, CMOM)</code> 三因子模型中的 3 周动量 <code>r21</code>（CMOM）在大市值池稳健。严格预注册（<code>PREREG_SHA256 4eb43cf0...</code>）在 NAS MariaDB <code>crypto_klines</code>（100 个永续日线，2020–2026）与 NautilusTrader 1.222.0 上完成：(A) 9 异象样本外复现；(B1) 现行 h=3 7 因子基线对 LTW 三因子的 HAC 跨越回归；(B2) E 类增量：<code>50% 现行 7 因子 + 50% r21</code> 等权混合（K=15）对比基线，并配 200 次 <code>r21</code> 随机截面置换安慰剂。</p>
+<ul>
+<li><b>Part A（2020–2026 严格样本外，每周调仓 <code>next_open</code> 5bp+3bp，2,437 天）</b>：<code>SIZE_EW</code>（−ADV20）Sharpe 1.066（t=2.75，2020–2022 1.401 → 2023–2026 0.742）、<code>PRC_EW</code> 0.953、<code>MAXDPRC_21_EW</code> 0.977；短期动量 <code>r7</code> 失效（Sharpe 0.147），而 3 周动量 <code>r21</code> 在大流动性半池（<code>above_median_ADV20</code>，年化 +21.38%，Sharpe 0.694）大幅跑赢小流动性半池（+0.94%，Sharpe 0.229），复现出 LTW 的市值异质性。</li>
+<li><b>Part B1（1,630 天跨越检验，NW HAC 7 滞后）</b>：现行 <code>fq_crypto</code> h=3 7 因子基线 B 对 LTW 三因子回归年化 α=+20.78%（t=1.744），R²=0.2485，β<sub>CMKT</sub>=−0.2392（t=−13.57），β<sub>CSMB</sub>=−0.0116（t=−0.19），β<sub>CMOM</sub>=−0.1105（t=−1.89），证实 <code>r21</code> 与现行 7 因子信息正交互补。</li>
+<li><b>Part B2（S1 <code>fq_crypto</code> K=15，E 类，z<sub>K</sub>=2.9352）</b>：val（365d）C1 总收益 +43.30% / Sharpe 1.365 / MaxDD −14.63%（vs B +30.06% / 1.017 / −19.72%）；holdout（180d）C1 −12.39% / MaxDD −19.51% / 波动 24.81%（vs B −18.79% / −27.69% / 40.57%）。200 次随机截面置换安慰剂达 <b>95.0% 分位</b>（安慰剂均差 −0.0000964 vs C1 +0.0002675/日），但周聚类 Δ=+0.0002675 ± 0.0003767，<b>z=0.7102 &lt; 1.0</b>，按冻结规则判 fail 并写入 <code>ledger.jsonl</code> K=15。</li>
+</ul>
+<p><b>结论：</b>LTW (2022) 的规模效应与“大流动性币动量更强”结构在 2020–2026 永续池仍可复现；<code>r21</code> 与现有 7 因子混合能在两窗口同步收窄回撤（MaxDD 收窄 5–8 pp）并击败 95% 随机置换，但受限于 78 周样本高波动差 SE（≈13.8%/yr），统计显著性仅 <code>z=0.7102</code> 未过预注册门槛，已诚实记账 <code>fail</code> 淘汰，不开设 S2 亦不改动实盘。</p>
+<p class="src">来源：<code>docs/research/2026-11-18-ltw-crypto-factors-s1-study.md</code> · <code>docs/research/2026-11-18-ltw-crypto-factors-s1-prereg.md</code> · <code>scripts/backtest/ltw_crypto_study.py</code></p>
+</article>
+
+<article data-v="no" data-id="deflated-sharpe-ratio-audit">
+<h2>Deflated Sharpe Ratio（Bailey &amp; López de Prado 2014）与 nofx 因子库多重检验审计 <span class="tag t-no">方法复现成立（误差 0.0）· 暴露 zoo 挖掘前端无 DSR 门控：加密 h=3 DSR=0.0067（N_eff=5341.7）</span><span class="dom">加密 + 美股 · 外部论文 · 多重检验 / 研究可靠性</span></h2>
+<p class="k">思路：Bailey &amp; López de Prado (2014) 提出结合有效独立试次数 <code>N_eff = ρ̂ + (1−ρ̂)M</code>、截面 Sharpe 方差与非正态偏度/峰度惩罚的 Deflated Sharpe Ratio（DSR）。对照审计 <code>quantjourney.py:deflated_sharpe</code>、<code>history.jsonl</code> 真实总评估试次 <code>M</code>（加密 20,125/周期、美股 21,003/周期）与留存 crypto/us zoo（13,733 / 233 因子）、<code>ledger.jsonl</code> S1 门槛，并用 NAS MariaDB <code>crypto_klines</code> + NautilusTrader 1.222.0（含 8h 永续资金费率）重放现行生产 <code>fq_crypto</code> h=3 与 h=7 主链。</p>
+<ul>
+<li>代码对账：<code>quantjourney.deflated_sharpe</code> 与论文 Eq.(1)–(2) 误差为 0.0，但 <code>factor_mining/evaluate.py</code> 与 <code>ensemble.py</code> 从未调用它，也未计算真实总试次 <code>M</code>、<code>N_eff</code> 或验证期 SR 方差。</li>
+<li>全量挖掘真实自由度（Eq. 8–9，<code>history.jsonl</code> 原始评估试次 + 留存月度 IC 相关均值）：加密 h=1（<code>M=20,125 [留存 9,117], ρ̂=0.4045 → N_eff=11,985.7, val DSR=0.0011</code>）、h=3（<code>M=20,125 [留存 4,425], ρ̂=0.7346 → N_eff=5,341.7, val SR=0.02975 vs SR₀=0.1978, val DSR=0.0334</code>）、h=7（<code>M=20,125 [留存 191], ρ̂=0.7523 → N_eff=4,985.1, val DSR=0.0016</code>）；美股 h=5（<code>M=21,003 [留存 192], ρ̂=0.8829 → N_eff=2,459.5, mean val SR=−0.195</code>）、h=10（<code>M=21,003 [留存 41], ρ̂=0.8864 → N_eff=2,386.4, mean val SR=−0.375</code>）。</li>
+<li>NAS MariaDB + NautilusTrader 重放（<code>val+holdout</code> 542 天，<code>next_open</code>，5bp 费 + 3bp 滑点 + 8h 永续资金费率）：现行 h=3（7 因子）总收益 −2.39%（QuantStats Sharpe 0.123, MaxDD −40.58%, 期峰度 3.88 / 日峰度 7.41，累计资金费支出 $7,251.2），计入 <code>N_eff=5,341.7</code> 后 <b>DSR=0.0067</b>（z=−2.47）；h=7（<code>f_8dd9bbca</code>）总收益 −6.36%（Sharpe −0.066），<b>DSR=0.0000</b>（z=−4.61）。</li>
+<li>账本对比：<code>ledger.jsonl</code> 当前 S1 Bonferroni <code>z_K</code>（<code>fq_crypto</code> K=15 为 2.9352）严于独立 EVT 门槛（1.7707），系统漏洞主要在挖掘前端累计 20,000+/周期的无惩罚搜索。</li>
+</ul>
+<p><b>结论：</b>定位当前 <code>fq_crypto</code> 模拟/样本外表现平庸的核心原因：挖掘前端缺少基于真实总试次 <code>N_eff</code>、永续资金费率与非正态峰度的 DSR 质检门控。已将 <code>dsr_audit.py</code> 接入 <code>run_nightly.sh</code> 作为 ensemble 产出后的强制只读质检（<code>DSR(N_eff) ≥ 0.95</code>），实盘与冻结 <code>evaluate.py</code> 不做自动修改。</p>
+<p class="src">来源：<code>docs/research/2026-11-18-deflated-sharpe-ratio-assessment.md</code> · <code>scripts/backtest/dsr_audit.py</code> · <code>scripts/backtest/tests/test_dsr_audit.py</code></p>
+</article>
+
+<article data-v="no" data-id="alpha-illusion-audit">
+<h2>AlphaIllusion（Ye 等 2026, arXiv:2605.16895）LLM 交易幻觉评估与 nofx 实盘路径审计 <span class="tag t-no">审计实证成立（不改实盘）· ECE=0.2462 · 手续费吞噬全库 67.9% 毛利、AI 成本再侵蚀净利</span><span class="dom">加密 + 美股 · 外部论文 · LLM 校准与推理成本审计</span></h2>
+<p class="k">思路：AlphaIllusion 指出 LLM 交易面临六大部署陷阱（P1 记忆泄露、P2 标的池错配、P3 反事实空档、P4 认知过度自信、P5 Token/交易费吞噬收益、P6 Lo 2002 短期夏普标准误）。使用只读审计脚本直接检验 <code>data/data.db</code>（945 笔已平仓按 <code>net_pnl = realized_pnl - fee</code> 真实扣费口径、双键 <code>(trader_id, entry_order_id)</code> 匹配决策与 <code>ai_charges</code>）及 Go 内核 <code>MinConfidence</code> 硬门控。</p>
+<ul>
+<li><b>P4 认知过度自信验证</b>：Go 端当前用自报 confidence 做开仓硬门控（加密 <code>min_confidence≥70–75</code>；美股 <code>kernel/stockengine/validate.go</code> 硬编码 <code>MinEntryConfidence=80</code>）。515 笔匹配平仓实证 <b>ECE(10-bin)=0.2462</b>，平均自报胜率 73.36% vs 真实扣费胜率 48.74%，Spearman 相关近零（ρ(conf, win)=+0.0262, ρ(conf, R)=+0.0231）；主力 <code>[70, 75)</code> 403 笔扣费净亏 −$46.98，<code>confidence≥80</code> 的 14 笔胜率仅 35.71%、净亏 −$27.98。</li>
+<li><b>P5 费与推理成本拖累 + P6 Lo(2002) 标准误</b>：全库 945 笔毛盈亏 +$410.75，扣交易所手续费 $278.73 后净利仅剩 +$132.02；<code>mac-nofx</code>（82 天，464 笔）毛利 +$201.85 → 扣费净利 +$174.87 → 再扣账面 AI 费 $121.99 后<b>真净利仅剩 +$52.87</b>（吞噬 69.8% 费后净利；剔除 Regime skip 幽灵记账后真实 LLM 调用仍耗约 45%），年化 SR=4.229 ± 2.135（95% CI [0.044, 8.415]）。S2 因子 ensemble 对照费后 +$25.02 扣 AI 费变 −$37.58，候选 −$89.63 变为 −$157.66。</li>
+<li><b>P2 标的池与 P3 漏斗</b>：<code>crypto_alt</code> 853 笔扣费净赚 +$665.09，<code>crypto_major</code> 61 笔 −$431.16，<code>tokenized_us_etf</code> 31 笔扣费胜率 22.58%、avgR −0.2481、净亏 −$102.31；全库决策动作中 <code>wait+hold</code> 占 98.6%。</li>
+</ul>
+<p><b>结论：</b>审计证实 P2/P4/P5/P6 均在 <code>nofx</code> 真实存在。后续建议在 <code>crypto_llm/us_llm</code> 另立 S1 试验：降频砍掉无效 <code>wait</code> 轮询省 Token 费，并消融未经校准的 <code>MinConfidence=80</code> 硬截断。本轮零修改实盘配置。</p>
+<p class="src">来源：<code>docs/research/2026-11-18-alpha-illusion-assessment.md</code> · <code>scripts/backtest/alpha_illusion_audit.py</code> · <code>scripts/backtest/tests/test_alpha_illusion_audit.py</code></p>
+</article>
 
 <div class="day">2026-11-15</div>
 

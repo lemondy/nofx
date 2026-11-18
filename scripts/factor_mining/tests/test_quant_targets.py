@@ -344,7 +344,7 @@ class USMomentumTests(unittest.TestCase):
                                  env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stderr)
             commands = calls.read_text().splitlines()
-            self.assertEqual(len(commands), 5)
+            self.assertEqual(len(commands), 6)
             self.assertTrue(all('run_mining' in c for c in commands[:2]))
             # US mining is paused by default: only a fetch-only pass runs, even with 0 retries.
             self.assertIn('--market us --fetch-only', commands[1])
@@ -354,6 +354,7 @@ class USMomentumTests(unittest.TestCase):
                                           f'--perp-map {perp_map} --write')
             self.assertIn('--rule volscale', commands[3])
             self.assertIn('promotion.report', commands[4])
+            self.assertIn('scripts.backtest.dsr_audit', commands[5])
             log = (Path(root) / 'fm/nightly.log').read_text()
             for expected in ('crypto exited non-zero', 'us mining paused', 'us fetch-only failed',
                              'targets test failure', 'us momentum targets exited non-zero', 'promotion ran'):
@@ -373,10 +374,11 @@ class USMomentumTests(unittest.TestCase):
                                  env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stderr)
             commands = calls.read_text().splitlines()
-            self.assertEqual(len(commands), 5)
+            self.assertEqual(len(commands), 6)
             self.assertIn('--market us --mutations', commands[1])
             self.assertIn('--perp-map /x/perps.json --write', commands[2])
             self.assertIn('--perp-map /x/perps.json --rule volscale --write', commands[3])
+            self.assertIn('scripts.backtest.dsr_audit', commands[5])
             self.assertNotIn('us mining paused', (Path(root) / 'fm/nightly.log').read_text())
 
 
@@ -607,13 +609,14 @@ class USVolscaleTests(unittest.TestCase):
                                  env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stderr)
             commands = calls.read_text().splitlines()
-            self.assertEqual(len(commands), 5)
+            self.assertEqual(len(commands), 6)
             perp_map = f'{root}/fm/../cache/usstock_symbols.json'
             self.assertEqual(commands[2], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm '
                                           f'--perp-map {perp_map} --write')
             self.assertEqual(commands[3], f'-m scripts.factor_mining.quant_targets --market us --root {root}/fm '
                                           f'--perp-map {perp_map} --rule volscale --write')
             self.assertIn('promotion.report', commands[4])
+            self.assertIn('scripts.backtest.dsr_audit', commands[5])
             log = (Path(root) / 'fm/nightly.log').read_text()
             for expected in ('volscale test failure', 'us volscale targets exited non-zero', 'promotion ran'):
                 self.assertIn(expected, log)

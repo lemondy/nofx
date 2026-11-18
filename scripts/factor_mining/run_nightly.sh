@@ -91,3 +91,9 @@ done
     "$AR_PYTHON" -m scripts.promotion.report || \
         echo "promotion report exited non-zero"
 ) >> "$FM_LOG" 2>&1
+(
+    echo "=== dsr quality audit $(date '+%Y-%m-%d %H:%M:%S') ==="
+    "$AR_PYTHON" -m scripts.backtest.dsr_audit --root "$FM_ROOT" \
+        --out-json "$FM_ROOT/dsr_audit.json" --out-md "$FM_ROOT/dsr_audit.md" || \
+        echo "dsr quality audit exited non-zero"
+) >> "$FM_LOG" 2>&1

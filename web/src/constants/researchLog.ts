@@ -30,6 +30,84 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'crypto-llm-cost-gating-s1',
+    date: '2026-11-18',
+    title: 'crypto_llm AI 调用降频与事件门控省费机制（G1 全阻断跳过 / G2 15m 静默，K=10..11）',
+    domain: '加密 · crypto_llm · AI 推理成本门控 & 账务审计',
+    verdict: 'none',
+    verdictText:
+      'S1 判 fewer_trades（crypto_llm K=10..11，placebo_pct=50.7% / 51.6% < 90%）· G1 跳过 48.63% 调用且 0/410 误杀开仓，但含 213 次 ai_close 延后边界 · 发现 Go ai_charges 虚计 4,729 次幽灵调用',
+    idea: '承接 AlphaIllusion P5 审计结论（mac-nofx 真实 AI 调用成本吞噬大量费后净利），在严格预注册（PREREG_SHA256 6bed6419...）下检验两项因果门控：G1（K=10，candidate_verdicts 全 blocked 时跳过 LLM，省 $0.01/次）与 G2（K=11，G1 + 15m 低波 BTCUSDT 1h 静默冷却）；对照组为各交易员内部 2,000 次同跳过率随机抽取。',
+    bullets: [
+      '主队列 pooled-6-paper（8,670 次真实 LLM 周期，410 笔匹配交易，coverage_error=0.0049，25 UTC 日 / 5 周）：基线交易净利 +$16.11，真实 AI 成本 -$86.70，扣 AI 费真实净收益 -$70.59。',
+      'G1（K=10，全候选 blocked 跳过）：跳过 4,216/8,670（48.63%）调用省 +$42.16，误杀 0/410（0.0%）开仓（mac-nofx post-10/10 同样 0/96 误杀，省 $6.76），总净增量 +$1.6864 ± $0.3513/天（z=4.8009，dev +1.1708 / holdout +2.1623）；因随机跳过 48.63% 同样省 $42.16 且基线单笔净利近零，安慰剂均值 $1.6863/天（placebo_pct=50.7% < 90%）判 fewer_trades；同时跳过周期涵盖 213/380 次 ai_close 主动平仓。',
+      'G2（K=11，G1 + 15m 静默降频）：跳过 6,094/8,670（70.29%）调用省 +$60.94，但错失 110/410（26.83%）开仓（-$17.02），z=0.3853（SE=$4.5594/天），holdout=-$5.8397/天（placebo_pct=51.6%），判 fewer_trades 淘汰。',
+      '系统级 Bug 定位：trader/auto_trader_loop.go:223-227 在 aiDecision != nil 时无条件写 ai_charges，将 kernel/engine_analysis.go:215 零耗时 Regime skip 一并计费；mac-nofx 7,863 次真实 LLM 调用却被记账 12,592 笔（$121.524），虚增约 4,729 次幽灵成本。',
+    ],
+    conclusion:
+      'G2 明确淘汰；G1 虽能零误伤开仓地砍掉近半数“全 blocked 巡检调用”，但当前样本期基线平均交易净利近零导致随机减半同样省费，且跳过 213 次 ai_close 的平仓时序未做盘口价格重放，不直接改实盘或上 S2。先期可直接修复 Go 端 ai_charges 未过滤 ai_request_duration_ms > 0 的记账失真；另外已同步将 dsr_audit.py 接入 scripts/factor_mining/run_nightly.sh 作为只读夜间过拟合质检门控。',
+    source:
+      'docs/research/2026-11-18-crypto-llm-cost-gating-s1-study.md · docs/research/2026-11-18-crypto-llm-cost-gating-s1-prereg.md · scripts/backtest/crypto_llm_cost_gating_study.py',
+  },
+  {
+    id: 'ltw-crypto-factors-s1',
+    date: '2026-11-18',
+    title: 'Common Risk Factors in Cryptocurrency（Liu, Tsyvinski & Wu 2022, NBER w25882）样本外复现与 fq_crypto 增量 S1 检验',
+    domain: '加密 · factor_quant + 外部论文 · 横截面动量 / 三因子定价',
+    verdict: 'none',
+    verdictText:
+      'S1 fail（fq_crypto K=15, z=0.7102 < 1.0, z_K=2.9352）· 安慰剂 95.0%（非稀释幻觉），回撤与前向波动率改善但 78 周统计功效不足 · 不开 S2、不改实盘',
+    idea: 'LTW (2022) 提出加密货币截面存在 9 个显著异象，且 (CMKT, CSMB, CMOM) 三因子定价模型中的 3 周动量 r21（CMOM）在大市值池表现稳健。严格预注册（PREREG_SHA256 4eb43cf0...）在 NAS MariaDB crypto_klines（100 个永续日线，2020–2026）与 NautilusTrader 1.222.0 上完成：(A) 9 异象样本外复现；(B1) 现行 h=3 7 因子基线对 LTW 三因子的 HAC 跨越回归；(B2) E 类增量：50% 现行 7 因子 + 50% r21 等权混合（K=15）对比基线，并配 200 次 r21 随机截面置换安慰剂。',
+    bullets: [
+      'Part A（2020–2026 严格样本外，每周调仓 next_open 5bp+3bp，2,437 天）：SIZE_EW（−ADV20）Sharpe 1.066（t=2.75，2020–2022 1.401 → 2023–2026 0.742）、PRC_EW 0.953、MAXDPRC_21_EW 0.977；短期动量 r7 失效（Sharpe 0.147），而 3 周动量 r21 在大流动性半池（above_median_ADV20，年化 +21.38%，Sharpe 0.694）大幅跑赢小流动性半池（+0.94%，Sharpe 0.229），复现出 LTW 的市值异质性。',
+      'Part B1（1,630 天跨越检验，NW HAC 7 滞后）：现行 fq_crypto h=3 7 因子基线 B 对 LTW 三因子回归年化 α=+20.78%（t=1.744），R²=0.2485，β_CMKT=−0.2392（t=−13.57），β_CSMB=−0.0116（t=−0.19），β_CMOM=−0.1105（t=−1.89），证实 r21 与现行 7 因子信息正交互补。',
+      'Part B2（S1 fq_crypto K=15，E 类，z_K=2.9352）：val（365d）C1 总收益 +43.30% / Sharpe 1.365 / MaxDD −14.63%（vs B +30.06% / 1.017 / −19.72%）；holdout（180d）C1 −12.39% / MaxDD −19.51% / 波动 24.81%（vs B −18.79% / −27.69% / 40.57%）。虽然 200 次随机截面置换安慰剂达 95.0% 分位（安慰剂均差 −0.0000964 vs C1 +0.0002675/日），但周聚类 Δ=+0.0002675 ± 0.0003767，z=0.7102 < 1.0，按冻结规则判 fail 并记录至 evolution ledger K=15。',
+    ],
+    conclusion:
+      'LTW (2022) 的规模效应与“大流动性币动量更强”结构在 2020–2026 永续池仍可复现；r21 与现有 7 因子混合能在两个窗口同步压缩回撤（MaxDD 收窄 5–8 pp）并击败 95% 随机置换，但受限于 78 周样本高波动差 SE（≈13.8%/yr），统计显著性仅 z=0.7102 未过预注册门槛，已诚实记账 fail 淘汰，不开设 S2 亦不改动实盘。',
+    source:
+      'docs/research/2026-11-18-ltw-crypto-factors-s1-study.md · docs/research/2026-11-18-ltw-crypto-factors-s1-prereg.md · scripts/backtest/ltw_crypto_study.py',
+  },
+  {
+    id: 'deflated-sharpe-ratio-audit',
+    date: '2026-11-18',
+    title: 'Deflated Sharpe Ratio（Bailey & López de Prado 2014）与 `nofx` 因子库多重检验审计',
+    domain: '加密 + 美股 · 外部论文 · 多重检验 / 研究可靠性',
+    verdict: 'none',
+    verdictText:
+      '方法复现成立（quantjourney 误差 0.0）· 暴露 zoo 挖掘前端无 DSR 门控：加密 h=3 NT 验证+前向 DSR=0.0067（N_eff=5341.7）· 仅诊断不改实盘',
+    idea: 'Bailey & López de Prado (2014) 提出结合有效独立试次数 N_eff = ρ̂ + (1−ρ̂)M、截面 Sharpe 方差与非正态偏度/峰度惩罚的 Deflated Sharpe Ratio（DSR）。对照审计 quantjourney.py:deflated_sharpe、history.jsonl 真实总评估试次 M（加密 20,125/周期、美股 21,003/周期）与留存 crypto/us zoo（13,733 / 233 因子）、ledger.jsonl S1 门槛，并用 NAS MariaDB crypto_klines + NautilusTrader 1.222.0（含 8h 永续资金费率）重放现行生产 fq_crypto h=3 与 h=7 主链。',
+    bullets: [
+      '代码对账：quantjourney.deflated_sharpe 与论文 Eq.(1)–(2) 误差为 0.0，但 factor_mining/evaluate.py 与 ensemble.py 从未调用它，也未计算真实总试次 M、N_eff 或验证期 SR 方差。',
+      '全量挖掘真实自由度（Eq. 8–9，history.jsonl 原始评估试次 + 留存月度 IC 相关均值）：加密 h=1（M=20,125 [留存 9,117], ρ̂=0.4045 → N_eff=11,985.7, val DSR=0.0011）、h=3（M=20,125 [留存 4,425], ρ̂=0.7346 → N_eff=5,341.7, val SR=0.02975 vs SR₀=0.1978, val DSR=0.0334）、h=7（M=20,125 [留存 191], ρ̂=0.7523 → N_eff=4,985.1, val DSR=0.0016）；美股 h=5（M=21,003 [留存 192], ρ̂=0.8829 → N_eff=2,459.5, mean val SR=−0.195）、h=10（M=21,003 [留存 41], ρ̂=0.8864 → N_eff=2,386.4, mean val SR=−0.375），印证美股纯量价公式库高度同质与枯竭。',
+      'NAS MariaDB + NautilusTrader 重放（val+holdout 542 天，next_open，5bp 费 + 3bp 滑点 + 8h 永续资金费率）：现行 h=3（7 因子）总收益 −2.39%（QuantStats Sharpe 0.123, MaxDD −40.58%, 期峰度 3.88 / 日峰度 7.41，累计资金费支出 $7,251.2），单次尝试 DSR=0.5663，计入 N_eff=5,341.7 后 DSR=0.0067（z=−2.47）；h=7（f_8dd9bbca）总收益 −6.36%（Sharpe −0.066, MaxDD −42.32%），DSR(N_eff)=0.0000（z=−4.61）。',
+      '账本对比：ledger.jsonl 当前 S1 Bonferroni z_K（fq_crypto K=15 为 2.9352）严于独立 EVT 极值门槛（1.7707），系统真正漏洞在 S0/挖掘准入前端累计 20,000+/周期的无惩罚搜索。',
+    ],
+    conclusion:
+      '定位当前 fq_crypto 模拟/样本外表现平庸的核心原因：挖掘前端缺少基于真实总试次 N_eff、永续资金费率与非正态峰度的 DSR 质检门控。已将 dsr_audit.py 接入 run_nightly.sh 作为 ensemble 产出后的强制只读质检（要求 DSR(N_eff) ≥ 0.95 才视为统计过线），实盘与冻结 evaluate.py 不做自动修改。',
+    source:
+      'docs/research/2026-11-18-deflated-sharpe-ratio-assessment.md · scripts/backtest/dsr_audit.py · scripts/backtest/tests/test_dsr_audit.py',
+  },
+  {
+    id: 'alpha-illusion-audit',
+    date: '2026-11-18',
+    title: 'AlphaIllusion（Ye 等 2026, arXiv:2605.16895）LLM 交易幻觉评估与 `nofx` 实盘路径审计',
+    domain: '加密 + 美股 · 外部论文 · LLM 校准与推理成本审计',
+    verdict: 'none',
+    verdictText:
+      '审计实证成立（不改实盘）· data.db 515 笔决策 ECE=0.2462（自报胜率与真实 R 近零相关）· 手续费吞噬全库 67.9% 毛利、AI 成本再侵蚀净利',
+    idea: 'AlphaIllusion 指出 LLM 交易面临六大部署陷阱（P1 记忆泄露、P2 标的池错配、P3 反事实空档、P4 认知过度自信、P5 Token/交易费吞噬收益、P6 Lo 2002 短期夏普标准误）。使用只读审计脚本直接检验 data/data.db（945 笔已平仓按 net_pnl = realized_pnl - fee 真实扣费口径、双键 (trader_id, entry_order_id) 匹配决策与 ai_charges）及 Go 内核 MinConfidence 硬门控。',
+    bullets: [
+      'P4 认知过度自信验证：Go 端当前用自报 confidence 做开仓硬门控（加密 min_confidence≥70–75；美股 kernel/stockengine/validate.go 硬编码 MinEntryConfidence=80）。515 笔匹配平仓实证 ECE(10-bin)=0.2462，平均自报胜率 73.36% vs 真实扣费胜率 48.74%（高估 +24.6 pp），Spearman 相关近零（ρ(conf, win)=+0.0262, ρ(conf, R)=+0.0231）；主力 [70, 75) 403 笔扣费净亏 −$46.98，confidence≥80 的 14 笔胜率仅 35.71%、净亏 −$27.98，劣于 [75, 80) 档（51.61%, +$97.92）。',
+      'P5 费与推理成本拖累 + P6 Lo(2002) 窗口标准误：全库 945 笔毛利 +$410.75，扣交易所手续费 $278.73 后净利仅剩 +$132.02；mac-nofx（82 天，464 笔）毛利 +$201.85 → 扣交易所费 $26.98 净利 +$174.87 → 再扣账面 AI 费 $121.99 后真净利仅剩 +$52.87（吞噬 69.8% 费后净利；剔除 Regime skip 幽灵记账后真实 LLM 调用仍耗约 45%）；日历日年化 SR=4.229 ± 2.135（95% CI [0.044, 8.415]）。S2 因子 ensemble 对照费后净利 +$25.02 扣 AI 费 $62.60 变 −$37.58，候选 −$89.63 扣 $68.03 变为 −$157.66；16–29 天模拟盘 SE(SR)=3.5–4.8，CI 全跨 0。',
+      'P2 标的池拆解（945 笔）与 P3 漏斗：crypto_alt 853 笔扣费净赚 +$665.09（mac-nofx 423 笔 avgR +0.1230），crypto_major 61 笔 −$431.16，tokenized_us_etf 31 笔扣费胜率 22.58%、avgR −0.2481、净亏 −$102.31；全库决策动作中 wait+hold 占 98.6%，大量 AI Token 消耗在无效轮询。',
+    ],
+    conclusion:
+      '审计证实 P2/P4/P5/P6 均在 nofx 真实存在。后续建议在 crypto_llm/us_llm 另立 S1 试验：(1) 事件/波动门控降频砍掉无效 wait 轮询（省 P5 Token 费）；(2) 消融或用经验胜率替代未经校准的 MinConfidence=80 硬截断。本轮零修改实盘与策略配置。',
+    source:
+      'docs/research/2026-11-18-alpha-illusion-assessment.md · scripts/backtest/alpha_illusion_audit.py · scripts/backtest/tests/test_alpha_illusion_audit.py',
+  },
+  {
     id: 'size-tier-split-s1-audit',
     date: '2026-11-15',
     title: '全线交易员/数据源大小盘拆分可行性审计与增量 S1 检验（crypto_llm / fq_crypto / fq_us）',
