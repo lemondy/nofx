@@ -576,7 +576,13 @@ func resolveBatchConflicts(in []Decision) []Decision {
 	seen := make(map[string]bool, len(in))
 	dedup := make([]Decision, 0, len(in))
 	for _, d := range in {
-		key := market.Normalize(d.Symbol) + "|" + d.Action
+		action := d.Action
+		if isOpenLong(action) {
+			action = "open_long"
+		} else if isOpenShort(action) {
+			action = "open_short"
+		}
+		key := market.Normalize(d.Symbol) + "|" + action
 		if seen[key] {
 			logger.Warnf("⚠️  [BatchConflict] duplicate %s %s dropped (first one kept)", d.Symbol, d.Action)
 			continue
