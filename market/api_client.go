@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"nofx/hook"
 	"nofx/market/bnweight"
@@ -115,18 +116,30 @@ func parseKline(kr KlineResponse) (Kline, error) {
 		return kline, fmt.Errorf("invalid kline data")
 	}
 
-	// Parse each field
-	kline.OpenTime = int64(kr[0].(float64))
-	kline.Open, _ = strconv.ParseFloat(kr[1].(string), 64)
-	kline.High, _ = strconv.ParseFloat(kr[2].(string), 64)
-	kline.Low, _ = strconv.ParseFloat(kr[3].(string), 64)
-	kline.Close, _ = strconv.ParseFloat(kr[4].(string), 64)
-	kline.Volume, _ = strconv.ParseFloat(kr[5].(string), 64)
-	kline.CloseTime = int64(kr[6].(float64))
-	kline.QuoteVolume, _ = strconv.ParseFloat(kr[7].(string), 64)
-	kline.Trades = int(kr[8].(float64))
-	kline.TakerBuyBaseVolume, _ = strconv.ParseFloat(kr[9].(string), 64)
-	kline.TakerBuyQuoteVolume, _ = strconv.ParseFloat(kr[10].(string), 64)
+	values := make([]float64, 11)
+	for i := range values {
+		var err error
+		switch v := kr[i].(type) {
+		case float64:
+			values[i] = v
+		case string:
+			values[i], err = strconv.ParseFloat(v, 64)
+		default:
+			return kline, fmt.Errorf("invalid kline field %d type", i)
+		}
+		if err != nil || math.IsNaN(values[i]) || math.IsInf(values[i], 0) {
+			return kline, fmt.Errorf("invalid kline field %d", i)
+		}
+	}
+	for _, i := range []int{0, 6, 8} {
+		if values[i] < 0 || values[i] >= float64(math.MaxInt64) || math.Trunc(values[i]) != values[i] {
+			return kline, fmt.Errorf("invalid integer field %d", i)
+		}
+	}
+	if values[5] < 0 || values[7] < 0 || values[9] < 0 || values[10] < 0 || values[2] < values[3] {
+		return kline, fmt.Errorf("invalid OHLCV")
+	}
+	kline = Kline{OpenTime: int64(values[0]), Open: values[1], High: values[2], Low: values[3], Close: values[4], Volume: values[5], CloseTime: int64(values[6]), QuoteVolume: values[7], Trades: int(values[8]), TakerBuyBaseVolume: values[9], TakerBuyQuoteVolume: values[10]}
 
 	return kline, nil
 }
