@@ -259,8 +259,6 @@ func calculateTimeframeSeries(klines []Kline, timeframe string, count int) *Time
 	// quote the same band.
 	if closed := closedKlines(klines, timeframe); len(closed) > 14 {
 		data.ATR14 = calculateATR(closed, 14)
-	} else {
-		data.ATR14 = calculateATR(klines, 14)
 	}
 
 	return data

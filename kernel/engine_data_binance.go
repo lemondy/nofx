@@ -308,6 +308,7 @@ func binanceLongShortMetrics(symbol string) (longShortMetrics, error) {
 
 var (
 	btcClosesMu      sync.Mutex
+	btcClosesTimes   []int64
 	btcClosesCache   []float64 // 1h closes ONLY
 	btcClosesFetched time.Time
 	// 2026-10-03 review P0: the 4h helper originally shared this cache with
@@ -319,11 +320,21 @@ var (
 
 // binanceBTC1hCloses returns the last `limit` closed 1h BTC closes (cached 5 min).
 func binanceBTC1hCloses(limit int) []float64 {
+	closes, _ := binanceBTC1hSeries(limit)
+	return closes
+}
+
+func binanceBTC1hSeries(limit int) ([]float64, []int64) {
+	sampled := binanceNow()
 	btcClosesMu.Lock()
-	if len(btcClosesCache) >= limit && time.Since(btcClosesFetched) < 5*time.Minute {
+	if len(btcClosesCache) >= limit && sampled.Sub(btcClosesFetched) < 5*time.Minute && sampled.Truncate(time.Hour).Equal(btcClosesFetched.Truncate(time.Hour)) {
 		out := btcClosesCache[len(btcClosesCache)-limit:]
+		var times []int64
+		if len(btcClosesTimes) == len(btcClosesCache) {
+			times = btcClosesTimes[len(btcClosesTimes)-limit:]
+		}
 		btcClosesMu.Unlock()
-		return out
+		return out, times
 	}
 	btcClosesMu.Unlock()
 
@@ -331,21 +342,28 @@ func binanceBTC1hCloses(limit int) []float64 {
 	defer cancel()
 	var candles [][]interface{}
 	if err := binanceGetFn(ctx, "/fapi/v1/klines?symbol=BTCUSDT&interval=1h&limit="+strconv.Itoa(limit+1), &candles); err != nil {
-		return nil
+		return nil, nil
 	}
 	closes := make([]float64, 0, len(candles))
+	times := make([]int64, 0, len(candles))
 	for i := 0; i < len(candles)-1; i++ { // drop the forming candle
+		if len(candles[i]) < 5 {
+			continue
+		}
 		if c, ok := candles[i][4].(string); ok {
 			if v, err := strconv.ParseFloat(c, 64); err == nil {
 				closes = append(closes, v)
+				t, _ := candles[i][0].(float64)
+				times = append(times, int64(t))
 			}
 		}
 	}
 	btcClosesMu.Lock()
 	btcClosesCache = closes
-	btcClosesFetched = time.Now()
+	btcClosesTimes = times
+	btcClosesFetched = sampled
 	btcClosesMu.Unlock()
-	return closes
+	return closes, times
 }
 
 type binanceOIObservation struct {
@@ -890,8 +908,9 @@ var (
 )
 
 func binanceBTC4hCloses(limit int) []float64 {
+	sampled := binanceNow()
 	readCache := func() []float64 {
-		if len(btc4hClosesCache) >= limit && time.Since(btc4hClosesFetched) < 5*time.Minute {
+		if len(btc4hClosesCache) >= limit && binanceNow().Sub(btc4hClosesFetched) < 5*time.Minute && binanceNow().Truncate(4*time.Hour).Equal(btc4hClosesFetched.Truncate(4*time.Hour)) {
 			out := make([]float64, limit)
 			copy(out, btc4hClosesCache[len(btc4hClosesCache)-limit:])
 			return out
@@ -946,7 +965,7 @@ func binanceBTC4hCloses(limit int) []float64 {
 	}
 	btcClosesMu.Lock()
 	btc4hClosesCache = closes
-	btc4hClosesFetched = time.Now()
+	btc4hClosesFetched = sampled
 	btcClosesMu.Unlock()
 	out := closes
 	if len(out) > limit {

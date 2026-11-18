@@ -121,6 +121,10 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 
 	// For hyperliquid exchange, also use Hyperliquid API
 	useHyperliquidAPI := isXyzAsset || strings.ToLower(exchange) == "hyperliquid"
+	shortTF := "3m"
+	if useHyperliquidAPI {
+		shortTF = "5m"
+	}
 
 	// Get 3-minute K-line data (or 5-minute for xyz assets as 3m may not be available)
 	shortObservedAt := time.Now()
@@ -226,7 +230,7 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	if len(klines3m) > 0 {
 		last := &klines3m[len(klines3m)-1]
 		bar := KlineBar{Time: last.OpenTime, Open: last.Open, High: last.High, Low: last.Low, Close: last.Close}
-		if applyLivePrice(&bar, "3m", currentPrice) {
+		if applyLivePrice(&bar, shortTF, currentPrice) {
 			last.Open, last.High, last.Low, last.Close = bar.Open, bar.High, bar.Low, bar.Close
 		}
 	}
@@ -240,14 +244,8 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	closedMACD, closedRSI7, closedTF := calculateClosedIndicators(klines3m, closedTF, shortObservedAt)
 
 	// Calculate price change percentage
-	// 1-hour price change = price from 20 3-minute K-lines ago
-	priceChange1h := 0.0
-	if len(klines3m) >= 21 { // Need at least 21 K-lines (current + 20 previous)
-		price1hAgo := klines3m[len(klines3m)-21].Close
-		if price1hAgo > 0 {
-			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
-		}
-	}
+	// Look back a full hour using the actual short-bar duration.
+	priceChange1h := calculatePriceChangeByBars(klines3m, shortTF, 60, currentPrice)
 
 	// Keep the previous-boundary value only as a logged short-history fallback.
 	priceChange4h := 0.0
@@ -288,9 +286,9 @@ func GetWithExchangeAndPrice(symbol, exchange string, livePrice float64) (*Data,
 	// the whole family — the cap degenerated to the fixed 8% and the floor
 	// never enforced (09-16 AKEUSDT: a healthy 11.45% structural stop was
 	// rejected by the degenerate 8% cap the prompt never promised).
-	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h, klines1d)
+	TimeframeData := executionTimeframeData(klines3m, klines1h, klines4h, klines1d, shortTF)
 	for tf, observedAt := range map[string]time.Time{
-		"3m": shortObservedAt, "15m": shortObservedAt,
+		shortTF: shortObservedAt, "15m": shortObservedAt,
 		"1h": observed1h, "4h": observed4h, "1d": observed1d,
 	} {
 		if td := TimeframeData[tf]; td != nil {
@@ -1268,10 +1266,14 @@ func isStaleData(klines []Kline, symbol string) bool {
 // ATR ≈ 8× a quiet 15m's) — the supply-zone gate then rejected anchors the
 // prompt-side suppression had blessed on real 15m data, every cycle
 // (2026-09-19 BTCUSDT loop).
-func executionTimeframeData(klines3m, klines1h, klines4h, klines1d []Kline) map[string]*TimeframeSeriesData {
+func executionTimeframeData(klines3m, klines1h, klines4h, klines1d []Kline, shortTimeframe ...string) map[string]*TimeframeSeriesData {
+	shortTF := "3m"
+	if len(shortTimeframe) > 0 {
+		shortTF = shortTimeframe[0]
+	}
 	tf := map[string]*TimeframeSeriesData{}
 	if len(klines3m) > 0 {
-		tf["3m"] = calculateTimeframeSeries(klines3m, "3m", len(klines3m))
+		tf[shortTF] = calculateTimeframeSeries(klines3m, shortTF, len(klines3m))
 		// 100×3m bars ≈ 20×15m buckets — enough for ATR14 and the swing-pivot
 		// scan; computeTFSignal drops the trailing forming bucket natively.
 		if k15 := aggregateKlines(klines3m, 15*time.Minute); len(k15) > 0 {

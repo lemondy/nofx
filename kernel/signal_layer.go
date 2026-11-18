@@ -624,6 +624,7 @@ type SignalOptions struct {
 	LongShortAccountRatio  *float64   // global accounts long/short
 	TopTraderPositionRatio *float64   // top traders' position long/short
 	TakerBuySellRatio      *float64   // taker buy/sell volume ratio
+	BtcTimes               []int64    // matching candle open times; absent for legacy injected series
 	BtcCloses              []float64  // closed 1h BTC closes for correlation/beta
 	// BtcTrendCloses: cached TRUE-4h BTC closes for the long-side BTC
 	// filter (btc4hShape). Separate from BtcCloses so the correlation
@@ -768,6 +769,18 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	if data.CurrentPrice <= 0 {
 		return nil, fmt.Errorf("invalid price %.8f", data.CurrentPrice)
 	}
+	if data.TimeframeData["3m"] == nil && data.TimeframeData["5m"] != nil {
+		if opt.PrimaryTF == "3m" {
+			opt.PrimaryTF = "5m"
+		}
+		configured := append([]string(nil), opt.ConfiguredTimeframes...)
+		for i, tf := range configured {
+			if tf == "3m" {
+				configured[i] = "5m"
+			}
+		}
+		opt.ConfiguredTimeframes = configured
+	}
 	now := snapshotNow(data, opt.Now)
 	// Limit-entry anchor offset (percent). Strategy-configurable via
 	// risk_control.limit_entry_offset_*; ATR-scaled with a fixed fallback —
@@ -824,6 +837,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 	// Closed 1h closes (for BTC correlation) and the primary TF's settlement
 	// age (for the freshness marker).
 	var sym1hCloses []float64
+	var sym1hTimes []int64
 	var primarySettlementAge float64
 	for _, tf := range tfs {
 		tfData := data.TimeframeData[tf]
@@ -840,6 +854,9 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		}
 		if tf == "1h" {
 			sym1hCloses = closedCloses(tfData, now, tfDuration(tf))
+			for _, bar := range ClosedKlines(tfData, now, tfDuration(tf)) {
+				sym1hTimes = append(sym1hTimes, bar.Time)
+			}
 		}
 		if tf == opt.PrimaryTF || (opt.PrimaryTF == "" && primarySettlementAge == 0) {
 			closes := closedCloses(tfData, now, tfDuration(tf))
@@ -1005,7 +1022,7 @@ func ComputeSymbolSignals(symbol string, data *market.Data, opt SignalOptions) (
 		sig.TraderHistory = opt.TraderHistory
 	}
 	if len(opt.BtcCloses) > 0 && len(sym1hCloses) > 0 {
-		sig.BTC = btcCorrelation(sym1hCloses, opt.BtcCloses)
+		sig.BTC = btcCorrelation(sym1hCloses, opt.BtcCloses, sym1hTimes, opt.BtcTimes)
 	}
 	fresh := &DataFreshness{SettlementAgeSeconds: primarySettlementAge}
 	if opt.VendorStalenessPct != nil {
@@ -3190,7 +3207,7 @@ func ClosedKlines(tfData *market.TimeframeSeriesData, now time.Time, dur time.Du
 	}
 	now = timeframeNow(tfData, now)
 	kl := tfData.Klines
-	if len(kl) > 0 && time.UnixMilli(kl[len(kl)-1].Time).Add(dur).After(now) {
+	for len(kl) > 0 && time.UnixMilli(kl[len(kl)-1].Time).Add(dur).After(now) {
 		kl = kl[:len(kl)-1]
 	}
 	return kl
@@ -3232,8 +3249,36 @@ func closedIndicatorBars(tfData *market.TimeframeSeriesData, now time.Time, dur 
 }
 
 // btcCorrelation computes Pearson correlation and beta of hourly returns
-// (symbol vs BTC), aligning both series from the most recent closed bar.
-func btcCorrelation(symCloses, btcCloses []float64) *BTCCorrelation {
+// (symbol vs BTC), matching return intervals when timestamps are available.
+// Legacy injected closes without timestamps retain suffix alignment.
+func btcCorrelation(symCloses, btcCloses []float64, times ...[]int64) *BTCCorrelation {
+	if len(times) == 2 && len(times[1]) > 0 {
+		if len(times[0]) != len(symCloses) || len(times[1]) != len(btcCloses) {
+			return nil
+		}
+		type interval struct{ start, end int64 }
+		btcReturns := map[interval]float64{}
+		for i := 1; i < len(btcCloses); i++ {
+			if btcCloses[i-1] > 0 {
+				btcReturns[interval{times[1][i-1], times[1][i]}] = btcCloses[i]/btcCloses[i-1] - 1
+			}
+		}
+		var rs, rb []float64
+		for i := 1; i < len(symCloses); i++ {
+			if symCloses[i-1] > 0 {
+				if r, ok := btcReturns[interval{times[0][i-1], times[0][i]}]; ok {
+					rs = append(rs, symCloses[i]/symCloses[i-1]-1)
+					rb = append(rb, r)
+				}
+			}
+		}
+		if len(rs) > 71 {
+			rs = rs[len(rs)-71:]
+			rb = rb[len(rb)-71:]
+		}
+		return btcReturnCorrelation(rs, rb)
+	}
+
 	n := len(symCloses)
 	if len(btcCloses) < n {
 		n = len(btcCloses)
@@ -3255,7 +3300,11 @@ func btcCorrelation(symCloses, btcCloses []float64) *BTCCorrelation {
 			rb = append(rb, btc[i]/btc[i-1]-1)
 		}
 	}
-	if len(rs) < minReturns {
+	return btcReturnCorrelation(rs, rb)
+}
+
+func btcReturnCorrelation(rs, rb []float64) *BTCCorrelation {
+	if len(rs) < 20 {
 		return nil
 	}
 	var ms, mb float64

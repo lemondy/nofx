@@ -1821,7 +1821,7 @@ func (e *StrategyEngine) computeCoinSignalForSide(data *market.Data, quantData *
 		opt.TopTraderPositionRatio = m.TopPosRatio
 		opt.TakerBuySellRatio = m.TakerBuySell
 	}
-	opt.BtcCloses = binanceBTC1hCloses(72)
+	opt.BtcCloses, opt.BtcTimes = binanceBTC1hSeries(72)
 	if data.VendorStalenessPct != nil {
 		v := *data.VendorStalenessPct
 		opt.VendorStalenessPct = &v
