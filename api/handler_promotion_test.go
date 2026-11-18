@@ -58,7 +58,11 @@ func TestPromotionReportUnavailable(t *testing.T) {
 			if data != "missing" {
 				writeFactorMiningTestFile(t, dir, "report.json", data)
 			}
-			assertFactorMiningJSON(t, promotionTestGet(t, r, "").Body.Bytes(), `{"pairs":[],"generated_at":null}`)
+			want := `{"pairs":[],"generated_at":null}`
+			if data != "missing" {
+				want = `{"pairs":[],"generated_at":null,"errors":{"report":"invalid_or_unreadable"}}`
+			}
+			assertFactorMiningJSON(t, promotionTestGet(t, r, "").Body.Bytes(), want)
 		})
 	}
 	if count := strings.Count(logs.String(), "Invalid JSON in"); count != 4 {
@@ -71,7 +75,7 @@ func TestPromotionReportUnavailable(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "report.json"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	assertFactorMiningJSON(t, promotionTestGet(t, r, "").Body.Bytes(), `{"pairs":[],"generated_at":null}`)
+	assertFactorMiningJSON(t, promotionTestGet(t, r, "").Body.Bytes(), `{"pairs":[],"generated_at":null,"errors":{"report":"read_failed"}}`)
 }
 
 func TestPromotionReportSizeLimit(t *testing.T) {
@@ -80,7 +84,7 @@ func TestPromotionReportSizeLimit(t *testing.T) {
 	r := promotionTestRouter()
 	oversized := `{"padding":"` + strings.Repeat("x", promotionMaxFileSize) + `"}`
 	writeFactorMiningTestFile(t, dir, "report.json", oversized)
-	assertFactorMiningJSON(t, promotionTestGet(t, r, "").Body.Bytes(), `{"pairs":[],"generated_at":null}`)
+	assertFactorMiningJSON(t, promotionTestGet(t, r, "").Body.Bytes(), `{"pairs":[],"generated_at":null,"errors":{"report":"too_large"}}`)
 	atLimit := `{"padding":"` + strings.Repeat("x", promotionMaxFileSize-len(`{"padding":""}`)) + `"}`
 	writeFactorMiningTestFile(t, dir, "report.json", atLimit)
 	if got := promotionTestGet(t, r, "").Body.String(); got != atLimit {

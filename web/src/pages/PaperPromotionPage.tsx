@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Badge, Card, EmptyState } from '../components/ui'
 import {
   L,
@@ -321,11 +321,12 @@ export default function PaperPromotionPage({ language }: { language: string }) {
   const [failed, setFailed] = useState(false)
   const [refresh, setRefresh] = useState(0)
 
+  const reqSeqRef = useRef(0)
   useEffect(() => {
     let active = true
     let timer: number | undefined
     const controller = new AbortController()
-    const load = async () => {
+    const load = async (seq: number) => {
       try {
         const response = await fetch('/api/promotion/report', {
           headers: getAuthHeaders(),
@@ -333,19 +334,22 @@ export default function PaperPromotionPage({ language }: { language: string }) {
         })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = (await response.json()) as PromotionReport | null
-        if (active) {
+        if (active && seq === reqSeqRef.current) {
           setReport(data)
-          setFailed(false)
+          setFailed(Boolean((data as { errors?: unknown } | null)?.errors))
         }
       } catch {
-        if (active) setFailed(true)
+        if (active && seq === reqSeqRef.current) setFailed(true)
       } finally {
-        if (active) setLoading(false)
+        if (active && seq === reqSeqRef.current) setLoading(false)
       }
     }
     const tick = async () => {
-      if (!document.hidden) await load()
-      if (active) timer = window.setTimeout(tick, 30_000)
+      window.clearTimeout(timer)
+      const seq = ++reqSeqRef.current
+      if (!document.hidden) await load(seq)
+      if (active && seq === reqSeqRef.current)
+        timer = window.setTimeout(tick, 30_000)
     }
     const onVisible = () => {
       if (!document.hidden) {
@@ -357,6 +361,7 @@ export default function PaperPromotionPage({ language }: { language: string }) {
     void tick()
     return () => {
       active = false
+      ++reqSeqRef.current
       controller.abort()
       window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisible)

@@ -61,7 +61,27 @@ func (s *Server) handlePromotionReport(c *gin.Context) {
 		data = nil
 	}
 	if data == nil {
+		if code := reportReadFailure(path, promotionMaxFileSize); code != "" {
+			c.JSON(http.StatusOK, gin.H{"pairs": []any{}, "generated_at": nil, "errors": gin.H{"report": code}})
+			return
+		}
 		data = []byte(`{"pairs":[],"generated_at":null}`)
 	}
 	c.Data(http.StatusOK, "application/json; charset=utf-8", data)
+}
+
+// reportReadFailure is called only after a reader failed. Missing files are an
+// expected initial state; existing unreadable/corrupt reports are explicit errors.
+func reportReadFailure(path string, maxSize int64) string {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil || info.IsDir() {
+		return "read_failed"
+	}
+	if info.Size() > maxSize {
+		return "too_large"
+	}
+	return "invalid_or_unreadable"
 }

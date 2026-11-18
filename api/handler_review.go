@@ -27,11 +27,30 @@ func (s *Server) getJournalTrader(c *gin.Context) (string, bool) {
 	return traderID, true
 }
 
+// reviewPagination bounds all review reads before accessing storage.
+func reviewPagination(c *gin.Context) (int, int, bool) {
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if err != nil || limit <= 0 {
+		SafeBadRequest(c, "limit must be a positive integer")
+		return 0, 0, false
+	}
+	offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if err != nil || offset < 0 {
+		SafeBadRequest(c, "offset must be a non-negative integer")
+		return 0, 0, false
+	}
+	return min(limit, 500), offset, true
+}
+
 // handleJournalList GET /api/review/journal
 // Query: ?trader_id=&limit=&offset=&symbol=&review_status=
 func (s *Server) handleJournalList(c *gin.Context) {
 	traderID, ok := s.getJournalTrader(c)
 	if !ok {
+		return
+	}
+	limit, offset, valid := reviewPagination(c)
+	if !valid {
 		return
 	}
 	// Classify legacy rows on first read after deploy (NULL ai_managed) —
@@ -41,8 +60,6 @@ func (s *Server) handleJournalList(c *gin.Context) {
 	} else if n > 0 {
 		logger.Infof("🤖 journal ownership backfilled: %d rows classified (AI vs manual)", n)
 	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
 	entries, total, err := s.store.TradeJournal().List(traderID, limit, offset,
 		c.Query("symbol"), c.Query("review_status"))
@@ -345,7 +362,10 @@ func (s *Server) handleRuleCheckLogs(c *gin.Context) {
 	if !ok {
 		return
 	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, _, valid := reviewPagination(c)
+	if !valid {
+		return
+	}
 	logs, err := s.store.Rule().ListCheckLogs(traderID, limit)
 	if err != nil {
 		SafeInternalError(c, "list rule check logs", err)

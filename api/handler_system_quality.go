@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"gorm.io/gorm"
 	"math"
 	"net/http"
 	"sort"
@@ -71,19 +73,12 @@ func (s *Server) handleSystemQuality(c *gin.Context) {
 		return
 	}
 	// Ownership: the trader must belong to the caller.
-	traders, err := s.store.Trader().ListAll()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list traders"})
+	owned, err := s.store.Trader().GetForUser(userID, traderID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		SafeInternalError(c, "load trader", err)
 		return
 	}
-	owned := false
-	for _, t := range traders {
-		if t.ID == traderID && t.UserID == userID {
-			owned = true
-			break
-		}
-	}
-	if !owned {
+	if owned == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Trader not found for this user"})
 		return
 	}

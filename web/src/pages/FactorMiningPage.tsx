@@ -82,26 +82,30 @@ export default function FactorMiningPage({ language }: { language: string }) {
   const [horizonSel, setHorizonSel] = useState<string | null>(null)
   const [noteOpen, setNoteOpen] = useState(false)
   const aliveRef = useRef(true)
+  const reqSeqRef = useRef(0)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (seq: number) => {
     const [ov, rn] = await Promise.allSettled([
       fetchJSON<FactorMiningOverview | null>('/api/factor-mining/overview'),
       fetchJSON<FactorMiningRun[] | null>('/api/factor-mining/runs?limit=50'),
     ])
-    if (!aliveRef.current) return
+    if (!aliveRef.current || seq !== reqSeqRef.current) return
     if (ov.status === 'fulfilled') {
       setOverview(ov.value ?? null)
-      setFailed(false)
+      setFailed(Boolean((ov.value as { errors?: unknown } | null)?.errors))
     } else {
       setFailed(true)
     }
     if (rn.status === 'fulfilled') {
       const v = rn.value as
         | FactorMiningRun[]
-        | { runs?: FactorMiningRun[] }
+        | { runs?: FactorMiningRun[]; errors?: unknown }
         | null
+      if (!Array.isArray(v) && v?.errors) setFailed(true)
       const list = Array.isArray(v) ? v : (v?.runs ?? [])
       setRuns(Array.isArray(list) ? list : [])
+    } else {
+      setFailed(true)
     }
     setLoading(false)
   }, [])
@@ -111,15 +115,18 @@ export default function FactorMiningPage({ language }: { language: string }) {
     aliveRef.current = true
     let timer: number | undefined
     const schedule = () => {
+      window.clearTimeout(timer)
       timer = window.setTimeout(tick, POLL_MS)
     }
     const tick = async () => {
+      window.clearTimeout(timer)
+      const seq = ++reqSeqRef.current
       if (typeof document !== 'undefined' && document.hidden) {
         schedule()
         return
       }
-      await load()
-      if (aliveRef.current) schedule()
+      await load(seq)
+      if (aliveRef.current && seq === reqSeqRef.current) schedule()
     }
     const onVisible = () => {
       if (!document.hidden) {
@@ -131,6 +138,7 @@ export default function FactorMiningPage({ language }: { language: string }) {
     void tick()
     return () => {
       aliveRef.current = false
+      ++reqSeqRef.current
       if (timer) window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
