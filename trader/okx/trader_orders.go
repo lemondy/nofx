@@ -11,8 +11,7 @@ import (
 
 // OpenLong opens long position
 func (t *OKXTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// Cancel old orders
-	t.CancelAllOrders(symbol)
+	// Preserve existing protection when opening.
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
@@ -94,8 +93,7 @@ func (t *OKXTrader) OpenLong(symbol string, quantity float64, leverage int) (map
 
 // OpenShort opens short position
 func (t *OKXTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// Cancel old orders
-	t.CancelAllOrders(symbol)
+	// Preserve existing protection when opening.
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {

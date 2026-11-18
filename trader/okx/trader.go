@@ -269,7 +269,7 @@ func (t *OKXTrader) convertSymbolBack(instId string) string {
 	return instId
 }
 
-// FormatQuantity formats quantity (converts base asset quantity to contract count)
+// FormatQuantity rounds base asset quantity to the venue contract lot, returning base units.
 func (t *OKXTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	inst, err := t.getInstrument(symbol)
 	if err != nil {
@@ -284,7 +284,7 @@ func (t *OKXTrader) FormatQuantity(symbol string, quantity float64) (string, err
 	if err != nil {
 		return "", err
 	}
-	return t.formatSize(sz, inst), nil
+	return strconv.FormatFloat(sz*inst.CtVal, 'f', -1, 64), nil
 }
 
 // formatSize formats contract size

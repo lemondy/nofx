@@ -23,10 +23,6 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 		return nil, err
 	}
 	var placement map[string]interface{}
-	// First cancel all pending orders for this coin
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel old pending orders: %v", err)
-	}
 
 	// Check if this is an xyz dex asset
 	isXyz := strings.HasPrefix(coin, "xyz:")
@@ -99,10 +95,6 @@ func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage 
 		return nil, err
 	}
 	var placement map[string]interface{}
-	// First cancel all pending orders for this coin
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel old pending orders: %v", err)
-	}
 
 	// Check if this is an xyz dex asset
 	isXyz := strings.HasPrefix(coin, "xyz:")

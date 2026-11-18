@@ -43,9 +43,6 @@ func (t *GateTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
 func (t *GateTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
 	symbol = t.convertSymbol(symbol)
 
-	// Cancel old orders first
-	t.CancelAllOrders(symbol)
-
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
 		return nil, fmt.Errorf("failed to set leverage: %w", err)
@@ -100,9 +97,6 @@ func (t *GateTrader) OpenLong(symbol string, quantity float64, leverage int) (ma
 // OpenShort opens a short position
 func (t *GateTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
 	symbol = t.convertSymbol(symbol)
-
-	// Cancel old orders first
-	t.CancelAllOrders(symbol)
 
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
@@ -524,7 +518,7 @@ func (t *GateTrader) FormatQuantity(symbol string, quantity float64) (string, er
 	if quantoMultiplier > 0 {
 		// Calculate number of contracts
 		numContracts := quantity / quantoMultiplier
-		return fmt.Sprintf("%.0f", math.Floor(numContracts)), nil
+		return strconv.FormatFloat(math.Floor(numContracts)*quantoMultiplier, 'f', -1, 64), nil
 	}
 
 	return fmt.Sprintf("%.4f", quantity), nil
