@@ -76,6 +76,40 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
+func urlPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+// lanAllowed keeps explicit LAN endpoints compatible while requiring opt-in for DNS names.
+func lanAllowed(host, port string, ip net.IP) bool {
+	if !ip.IsPrivate() {
+		return true
+	}
+	allow := strings.TrimSpace(os.Getenv("NOFX_LAN_ALLOWLIST"))
+	if allow == "" {
+		return net.ParseIP(host) != nil
+	}
+	for _, entry := range strings.Split(allow, ",") {
+		entry = strings.TrimSpace(entry)
+		if _, block, err := net.ParseCIDR(entry); err == nil && block.Contains(ip) {
+			return true
+		}
+		if allowedIP := net.ParseIP(entry); allowedIP != nil && allowedIP.Equal(ip) {
+			return true
+		}
+		if h, p, err := net.SplitHostPort(entry); err == nil && strings.EqualFold(h, host) && p == port {
+			return true
+		}
+	}
+	return false
+}
+
 // lookupIPAddr is swappable in tests.
 var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
 	return net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -166,7 +200,7 @@ func ValidateURL(rawURL string) error {
 		// If DNS resolution fails, we still need to check if it's an IP address directly
 		ip := net.ParseIP(host)
 		if ip != nil {
-			if isPrivateIP(ip) {
+			if isPrivateIP(ip) || !lanAllowed(host, urlPort(parsedURL), ip) {
 				return &SSRFError{URL: rawURL, Reason: "resolves to private IP address"}
 			}
 			return nil // It's a valid public IP
@@ -192,7 +226,7 @@ func ValidateURL(rawURL string) error {
 
 	// Check all resolved IPs
 	for _, ipAddr := range ips {
-		if isPrivateIP(ipAddr.IP) {
+		if isPrivateIP(ipAddr.IP) || !lanAllowed(host, urlPort(parsedURL), ipAddr.IP) {
 			return &SSRFError{URL: rawURL, Reason: fmt.Sprintf("resolves to private IP: %s", ipAddr.IP)}
 		}
 	}
@@ -239,18 +273,18 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 			// private-IP check (the real destination is resolved remotely by
 			// the proxy, so dial-time DNS validation cannot apply anyway).
 			if !proxyHosts[host] {
-				ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+				ips, err := lookupIPAddr(ctx, host)
 				if err != nil {
 					return nil, err
+				}
+				_, port, splitErr := net.SplitHostPort(addr)
+				if splitErr != nil {
+					return nil, splitErr
 				}
 				for _, ip := range ips {
-					if isPrivateIP(ip.IP) {
+					if isPrivateIP(ip.IP) || !lanAllowed(host, port, ip.IP) {
 						return nil, fmt.Errorf("SSRF protection: private IP %s", ip.IP)
 					}
-				}
-				_, port, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, err
 				}
 				var dialErr error
 				for _, ip := range ips {
@@ -280,6 +314,28 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 				return fmt.Errorf("too many redirects")
 			}
 
+			// A public-origin chain may never acquire access to a LAN destination.
+			if len(via) > 0 {
+				originIP := net.ParseIP(via[0].URL.Hostname())
+				if originIP == nil || !originIP.IsPrivate() {
+					host := req.URL.Hostname()
+					ips := []net.IPAddr{}
+					if ip := net.ParseIP(host); ip != nil {
+						ips = append(ips, net.IPAddr{IP: ip})
+					} else {
+						var err error
+						ips, err = lookupIPAddr(req.Context(), host)
+						if err != nil {
+							return fmt.Errorf("SSRF protection: redirect DNS failed: %w", err)
+						}
+					}
+					for _, ip := range ips {
+						if ip.IP.IsPrivate() {
+							return fmt.Errorf("SSRF protection: public redirect to LAN blocked")
+						}
+					}
+				}
+			}
 			// Validate the redirect URL
 			if err := ValidateURL(req.URL.String()); err != nil {
 				return fmt.Errorf("SSRF protection: redirect blocked - %w", err)
