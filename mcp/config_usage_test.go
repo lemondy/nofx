@@ -72,7 +72,7 @@ func TestConfig_MaxRetries_IsUsed(t *testing.T) {
 
 func TestConfig_Temperature_IsUsed(t *testing.T) {
 	mockHTTP := NewMockHTTPClient()
-	mockHTTP.SetSuccessResponse("AI response")
+	mockHTTP.Response = "data: {\"choices\":[{\"delta\":{\"content\":\"AI response\"}}]}\ndata: [DONE]\n"
 	mockLogger := NewMockLogger()
 
 	customTemperature := 0.8

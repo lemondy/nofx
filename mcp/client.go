@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"nofx/logger"
 	"nofx/security"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,8 @@ const (
 )
 
 var (
-	DefaultTimeout = 120 * time.Second
+	DefaultTimeout        = 120 * time.Second
+	streamRetryableStatus = regexp.MustCompile(`\b5[0-9]{2}\b`)
 
 	MaxRetryTimes = 2
 
@@ -457,6 +459,19 @@ func (client *Client) IsRetryableError(err error) bool {
 	// Case-insensitive matching: Go's http errors read "Client.Timeout exceeded"
 	// while context errors read "context deadline exceeded".
 	errStr := strings.ToLower(err.Error())
+	if strings.Contains(errStr, "stream interrupted:") {
+		return true
+	}
+	if strings.Contains(errStr, "upstream stream error:") {
+		if streamRetryableStatus.MatchString(errStr) {
+			return true
+		}
+		for _, marker := range []string{"429", "overloaded", "rate_limit", "rate limit", "server_error", "internal_error"} {
+			if strings.Contains(errStr, marker) {
+				return true
+			}
+		}
+	}
 	for _, retryable := range client.Cfg.RetryableErrors {
 		if strings.Contains(errStr, strings.ToLower(retryable)) {
 			return true
@@ -802,6 +817,7 @@ func parseSSEStream(body io.Reader, onChunk func(string), onLine func(), onTrunc
 	var reasoning strings.Builder
 	model, receivedChars := "unknown", 0
 	truncated := false
+	completed := false
 	defer func() {
 		if truncated && onTruncated != nil {
 			onTruncated(model, receivedChars)
@@ -815,16 +831,18 @@ func parseSSEStream(body io.Reader, onChunk func(string), onLine func(), onTrunc
 		}
 
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
 		if data == "[DONE]" {
+			completed = true
 			break
 		}
 
 		var chunk struct {
-			Model   string `json:"model"`
+			Error   json.RawMessage `json:"error"`
+			Model   string          `json:"model"`
 			Choices []struct {
 				Delta struct {
 					Content          string `json:"content"`
@@ -840,6 +858,14 @@ func parseSSEStream(body io.Reader, onChunk func(string), onLine func(), onTrunc
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed chunks
+		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			return "", fmt.Errorf("upstream stream error: %s", chunk.Error)
+		}
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				completed = true
+			}
 		}
 		if chunk.Model != "" {
 			model = chunk.Model
@@ -877,6 +903,10 @@ func parseSSEStream(body io.Reader, onChunk func(string), onLine func(), onTrunc
 
 	if err := scanner.Err(); err != nil {
 		return accumulated.String(), fmt.Errorf("stream interrupted: %w", err)
+	}
+
+	if !completed {
+		return "", fmt.Errorf("stream interrupted: unexpected EOF before completion")
 	}
 
 	// Content-only fallback: if the model produced reasoning but no final

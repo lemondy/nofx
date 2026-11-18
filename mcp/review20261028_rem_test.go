@@ -34,7 +34,7 @@ func TestReview20261028RemStreamTruncationWarnings(t *testing.T) {
 		{"empty truncated", remSSEChunk("", "", "length"), "", 0, true},
 		{"duplicate finish", remSSEChunk("ok", "", "length") + remSSEChunk("", "", "length"), "ok", 2, true},
 		{"normal stop", remSSEChunk("正常", "", "stop"), "正常", 2, false},
-		{"no finish metadata", remSSEChunk("ok", "", ""), "ok", 2, false},
+		{"no finish metadata", remSSEChunk("ok", "", "") + "data: [DONE]\n", "ok", 2, false},
 	} {
 		for _, requestStream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/request=%v", tc.name, requestStream), func(t *testing.T) {
