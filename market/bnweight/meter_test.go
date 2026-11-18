@@ -529,3 +529,41 @@ func TestWithPriorityOverridesClientPriority(t *testing.T) {
 		t.Fatalf("override not accounted as Normal: %+v", s.Totals)
 	}
 }
+
+func TestConcurrentReservationSurvivesEarlierResponse(t *testing.T) {
+	m := NewMeter()
+	started := make(chan struct{}, 2)
+	release := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	var mu sync.Mutex
+	next := 0
+	rt := m.Wrap(rtFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		i := next
+		next++
+		mu.Unlock()
+		started <- struct{}{}
+		<-release[i]
+		h := http.Header{}
+		h.Set(HeaderUsedWeight1M, []string{"100", "105"}[i])
+		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}), Critical)
+	done := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			req, _ := http.NewRequest("GET", "https://fapi.binance.com/fapi/v1/klines?limit=500", nil)
+			rt.RoundTrip(req)
+			done <- struct{}{}
+		}()
+		<-started
+	}
+	close(release[0])
+	<-done
+	if got := m.Snapshot().EffectiveUsed; got != 105 {
+		t.Errorf("lost pending weight: %d want 105", got)
+	}
+	close(release[1])
+	<-done
+	if got := m.Snapshot().EffectiveUsed; got != 105 {
+		t.Errorf("completion miscount: %d", got)
+	}
+}

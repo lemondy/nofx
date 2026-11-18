@@ -143,6 +143,7 @@ type Meter struct {
 	usedAt     time.Time // when it was observed
 	ownAtObs   int       // own estimated weight this minute when it was observed
 	ownMinute  time.Time
+	inflight   int // reservations whose RoundTrip has not returned
 	ownWeight  int // own estimated weight sent in ownMinute
 
 	cooldownUntil  time.Time
@@ -268,6 +269,16 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	resp, err := t.base.RoundTrip(req)
+	t.m.mu.Lock()
+	if bucket == BucketIP1M {
+		t.m.inflight -= weight
+	}
+	// Completion and observation share the lock, so no new response can erase
+	// another request's outstanding reservation between these operations.
+	if err == nil {
+		t.m.observeWeightLocked(resp, t.m.now())
+	}
+	t.m.mu.Unlock()
 	if err == nil {
 		t.m.observe(resp, prio, endpoint)
 	}
@@ -413,6 +424,7 @@ func (m *Meter) recordLocked(now time.Time, prio Priority, endpoint string, weig
 	m.rollOwnLocked(now)
 	if bucket == BucketIP1M {
 		m.ownWeight += weight
+		m.inflight += weight
 	}
 	m.events = append(m.events, event{t: now, endpoint: endpoint, weight: weight, prio: prio, bucket: bucket})
 	if int(prio) >= 0 && int(prio) < len(m.total) {
@@ -437,22 +449,9 @@ func (m *Meter) trimLocked(now time.Time) {
 	}
 }
 
-// observe reads the used-weight header and reacts to 429/418.
+// observe reacts to 429/418 after reservation completion and header accounting.
 func (m *Meter) observe(resp *http.Response, prio Priority, endpoint string) {
 	now := m.now()
-	if v := resp.Header.Get(HeaderUsedWeight1M); v != "" {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
-			m.mu.Lock()
-			m.rollOwnLocked(now)
-			if !m.usedAt.IsZero() && m.usedAt.Truncate(time.Minute).Equal(now.Truncate(time.Minute)) && n < m.usedWeight {
-				n = m.usedWeight // monotonic within a minute; a late response must not rewind it
-			}
-			m.usedWeight = n
-			m.usedAt = now
-			m.ownAtObs = m.ownWeight
-			m.mu.Unlock()
-		}
-	}
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == 418 {
 		m.startCooldown(now, resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After"), now), prio, endpoint)
 	}
@@ -640,5 +639,19 @@ func (m *Meter) reportLoop() {
 			continue // idle
 		}
 		logger.Info(m.SummaryLine())
+	}
+}
+
+func (m *Meter) observeWeightLocked(resp *http.Response, now time.Time) {
+	if v := resp.Header.Get(HeaderUsedWeight1M); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			m.rollOwnLocked(now)
+			if !m.usedAt.IsZero() && m.usedAt.Truncate(time.Minute).Equal(now.Truncate(time.Minute)) && n < m.usedWeight {
+				n = m.usedWeight // monotonic within a minute; a late response must not rewind it
+			}
+			m.usedWeight = n
+			m.usedAt = now
+			m.ownAtObs = m.ownWeight - m.inflight
+		}
 	}
 }
