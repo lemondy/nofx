@@ -80,6 +80,7 @@ type fqFuturesBroker struct {
 	longStopPct  float64 // 0 = no stop
 	shortStopPct float64 // 0 = no stop
 	levSet       map[string]bool
+	stops        map[string]float64
 	peaks        map[string]float64 // sym:side -> favorable peak mark
 	entries      map[string]float64 // sym:side -> last seen entry price
 }
@@ -115,6 +116,7 @@ func (b *fqFuturesBroker) clearPeak(sym, side string) {
 	key := sym + ":" + side
 	delete(b.peaks, key)
 	delete(b.entries, key)
+	delete(b.stops, key)
 }
 
 func (b *fqFuturesBroker) resolveStop(sym, side string, entry, mark, pct float64) (stop float64, trailing bool) {
@@ -127,7 +129,14 @@ func (b *fqFuturesBroker) resolveStop(sym, side string, entry, mark, pct float64
 	} else {
 		fq = &store.FactorQuantConfig{Market: store.FactorQuantMarketCrypto}
 	}
-	return fqComputeAdaptiveStopPrice(sym, side, entry, mark, peak, pct, fq, asOf)
+	stop, trailing = fqComputeAdaptiveStopPrice(sym, side, entry, mark, peak, pct, fq, asOf)
+	if b.at != nil {
+		return b.at.fqRatchetStop(sym, side, stop), trailing
+	}
+	if b.stops == nil {
+		b.stops = map[string]float64{}
+	}
+	return fqRatchetStopMap(b.stops, sym, side, stop), trailing
 }
 
 func fqFloat(m map[string]interface{}, keys ...string) float64 {
@@ -320,10 +329,10 @@ func (b *fqFuturesBroker) placeStop(sym, side string) fqStopResult {
 			} else {
 				_, err = b.t.CloseShort(sym, 0)
 			}
-			b.clearPeak(sym, side)
 			if err != nil {
 				res.Err = fmt.Sprintf("%s止损价已越过，市价平仓失败：%v", label, err)
 			} else {
+				b.clearPeak(sym, side)
 				res.Exited = true
 				res.Note = "止损价已越过，已市价平仓"
 			}
@@ -346,6 +355,7 @@ func (b *fqFuturesBroker) ensureStops() []fqStopResult {
 	if err != nil {
 		return []fqStopResult{{Err: err.Error()}}
 	}
+	b.prunePeaks(acct.Positions)
 	var out []fqStopResult
 	for _, p := range acct.Positions {
 		res := b.placeStop(p.Symbol, p.Side)
@@ -360,7 +370,11 @@ func (b *fqFuturesBroker) ensureStops() []fqStopResult {
 // whose unrealized high-water mark has entered the Chandelier trailing zone.
 func (b *fqFuturesBroker) ratchetTrailingStops() []fqStopResult {
 	acct, err := b.Account()
-	if err != nil || len(acct.Positions) == 0 {
+	if err != nil {
+		return nil
+	}
+	b.prunePeaks(acct.Positions)
+	if len(acct.Positions) == 0 {
 		return nil
 	}
 	var out []fqStopResult
@@ -648,7 +662,23 @@ func (b *fqStockBroker) ensureStops() []fqStopResult {
 	}
 	fq := at.config.StrategyConfig.FactorQuantConfig
 	open, err := at.store.StockPaper().ListOpen(at.id)
-	if err != nil || len(open) == 0 {
+	if err != nil {
+		return nil
+	}
+	active := make(map[string]bool)
+	for _, p := range open {
+		if p != nil {
+			side := fqSideLong
+			if p.EffectiveSide() == store.StockPaperShort {
+				side = fqSideShort
+			}
+			active[p.Symbol+":"+side] = true
+		}
+	}
+	at.fq.mu.Lock()
+	fqPrunePeakMaps(at.fq.peaks, at.fq.entries, at.fq.stops, active)
+	at.fq.mu.Unlock()
+	if len(open) == 0 {
 		return nil
 	}
 	now := b.now()
@@ -681,6 +711,7 @@ func (b *fqStockBroker) ensureStops() []fqStopResult {
 		}
 		peak := at.fqUpdatePeakMark(p.Symbol, side, p.AvgPrice, mark)
 		stop, _ := fqComputeAdaptiveStopPrice(p.Symbol, side, p.AvgPrice, mark, peak, pct, fq, asOf)
+		stop = at.fqRatchetStop(p.Symbol, side, stop)
 		if stop <= 0 {
 			continue
 		}
@@ -695,10 +726,10 @@ func (b *fqStockBroker) ensureStops() []fqStopResult {
 				fill := mark * (1 + b.slipBps/10000)
 				_, _, _, cerr = led.ReduceSideWithFee(at.id, p.Symbol, store.StockPaperShort, 0, fill, b.shortFeeBps, now, "factor_quant_stop")
 			}
-			at.fqClearPeakMark(p.Symbol, side)
 			if cerr != nil {
 				res.Err = fmt.Sprintf("止损（%s）止损价已越过，市价平仓失败：%v", fqStopSideLabel(side), cerr)
 			} else {
+				at.fqClearPeakMark(p.Symbol, side)
 				res.Exited = true
 				res.Note = "止损价已越过，已市价平仓"
 			}
@@ -876,3 +907,26 @@ type fqPlanConfig struct {
 // compile-time guard: the crypto broker only ever wraps the paper simulator
 // when built by newFactorQuantBroker (see auto_trader_factor_quant.go).
 var _ fqFuturesTrader = (*paper.PaperFuturesTrader)(nil)
+
+func fqPrunePeakMaps(peaks, entries, stops map[string]float64, active map[string]bool) {
+	for key := range peaks {
+		if !active[key] {
+			delete(peaks, key)
+			delete(entries, key)
+			delete(stops, key)
+		}
+	}
+}
+func (b *fqFuturesBroker) prunePeaks(positions []fqPosition) {
+	active := make(map[string]bool, len(positions))
+	for _, p := range positions {
+		active[p.Symbol+":"+p.Side] = true
+	}
+	if b.at != nil {
+		b.at.fq.mu.Lock()
+		defer b.at.fq.mu.Unlock()
+		fqPrunePeakMaps(b.at.fq.peaks, b.at.fq.entries, b.at.fq.stops, active)
+	} else {
+		fqPrunePeakMaps(b.peaks, b.entries, b.stops, active)
+	}
+}

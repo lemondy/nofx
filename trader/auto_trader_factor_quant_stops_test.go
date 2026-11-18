@@ -32,9 +32,13 @@ func TestFuturesBrokerRefreshesBothStopsAfterEveryFill(t *testing.T) {
 				if res.failed() || res.StopExited {
 					t.Fatalf("%s: %+v", tc.kind, res)
 				}
-				fqNear(t, res.StopPrice, tc.entry*factor, tc.kind+" stop")
+				wantStop := tc.entry * factor
+				if side == fqSideShort {
+					wantStop = 120
+				} // increases must retain the tighter stop
+				fqNear(t, res.StopPrice, wantStop, tc.kind+" stop")
 				fqNear(t, f.pos["XUSDT:"+side].qty, tc.remaining, tc.kind+" quantity")
-				want := fmt.Sprintf("stop XUSDT %s %.8g @%.8g", strings.ToUpper(side), tc.remaining, tc.entry*factor)
+				want := fmt.Sprintf("stop XUSDT %s %.8g @%.8g", strings.ToUpper(side), tc.remaining, wantStop)
 				if f.calls[len(f.calls)-1] != want {
 					t.Fatalf("%s: want %q, calls=%v", tc.kind, want, f.calls)
 				}
@@ -288,5 +292,63 @@ func TestFactorQuantPaperLongAndShortStopsTriggerForRemainingQuantity(t *testing
 				t.Fatalf("stale stop=%+v %v", orders, err)
 			}
 		})
+	}
+}
+
+func TestFQFailedStopExitRetainsPeak(t *testing.T) {
+	for _, side := range []string{fqSideLong, fqSideShort} {
+		f := newFakeFutures(10000, map[string]float64{"XUSDT": 100})
+		f.pos["XUSDT:"+side] = &fakePos{"XUSDT", side, 5, 100}
+		b := newFQFuturesBroker(f, 3, .2, .2)
+		b.updatePeak("XUSDT", side, 100, 150)
+		if side == fqSideShort {
+			b.updatePeak("XUSDT", side, 100, 50)
+			f.prices["XUSDT"] = 125
+		} else {
+			f.prices["XUSDT"] = 75
+		}
+		peak := b.peaks["XUSDT:"+side]
+		f.failClose["XUSDT"] = true
+		r := b.placeStop("XUSDT", side)
+		if r.Err == "" || b.peaks["XUSDT:"+side] != peak {
+			t.Fatalf("failed exit lost peak: %+v peaks=%v", r, b.peaks)
+		}
+		f.failClose["XUSDT"] = false
+		if r = b.placeStop("XUSDT", side); !r.Exited || len(b.peaks) != 0 {
+			t.Fatalf("retry: %+v peaks=%v", r, b.peaks)
+		}
+	}
+}
+
+func TestFQStopNeverLoosens(t *testing.T) {
+	for _, side := range []string{fqSideLong, fqSideShort} {
+		b := newFQFuturesBroker(newFakeFutures(10000, nil), 3, .2, .2)
+		first, _ := b.resolveStop("XUSDT", side, 100, 100, .1)
+		second, _ := b.resolveStop("XUSDT", side, 100, 100, .2)
+		if (side == fqSideLong && second < first) || (side == fqSideShort && second > first) {
+			t.Fatalf("%s loosened %g -> %g", side, first, second)
+		}
+		b.clearPeak("XUSDT", side)
+		reset, _ := b.resolveStop("XUSDT", side, 100, 100, .2)
+		if reset == first {
+			t.Fatalf("stop not reset after close")
+		}
+	}
+}
+
+func TestFQStopResetsAfterExternalCloseAndFlip(t *testing.T) {
+	f := newFakeFutures(10000, map[string]float64{"XUSDT": 100})
+	f.pos["XUSDT:long"] = &fakePos{"XUSDT", fqSideLong, 2, 100}
+	b := newFQFuturesBroker(f, 3, .1, .2)
+	b.ensureStops()
+	delete(f.pos, "XUSDT:long")
+	f.pos["XUSDT:short"] = &fakePos{"XUSDT", fqSideShort, 2, 100}
+	b.ensureStops()
+	delete(f.pos, "XUSDT:short")
+	f.pos["XUSDT:long"] = &fakePos{"XUSDT", fqSideLong, 2, 100}
+	b.longStopPct = .2
+	out := b.ensureStops()
+	if len(out) != 1 || out[0].Price != 80 {
+		t.Fatalf("old position stop survived flip: %+v", out)
 	}
 }

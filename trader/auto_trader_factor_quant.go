@@ -49,6 +49,7 @@ type factorQuantRuntime struct {
 	targetsRule     string
 	targetsHorizon  int
 	regime          *fqRegimeInfo
+	stops           map[string]float64 // sym:side -> tightest protective stop
 	peaks           map[string]float64 // sym:side -> favorable peak mark price
 	entries         map[string]float64 // sym:side -> entry price at peak anchor
 	ddScale         float64            // tiered drawdown capital multiplier (0 = unset -> 1.0)
@@ -98,6 +99,7 @@ func (at *AutoTrader) fqClearPeakMark(sym, side string) {
 		key := sym + ":" + side
 		delete(at.fq.peaks, key)
 		delete(at.fq.entries, key)
+		delete(at.fq.stops, key)
 	}
 }
 
@@ -1156,4 +1158,23 @@ func (at *AutoTrader) fqRunStatus(state *store.FactorQuantState) *FactorQuantRun
 	}
 	out.RetryAsOf, out.RetryAttempts = state.RetryAsOf, state.RetryAttempts
 	return out
+}
+
+// fqRatchetStopMap retains the tightest stop until a confirmed full close.
+func fqRatchetStopMap(stops map[string]float64, sym, side string, candidate float64) float64 {
+	key := sym + ":" + side
+	old := stops[key]
+	if old > 0 && (candidate <= 0 || (side == fqSideLong && old > candidate) || (side == fqSideShort && old < candidate)) {
+		return old
+	}
+	stops[key] = candidate
+	return candidate
+}
+func (at *AutoTrader) fqRatchetStop(sym, side string, candidate float64) float64 {
+	at.fq.mu.Lock()
+	defer at.fq.mu.Unlock()
+	if at.fq.stops == nil {
+		at.fq.stops = map[string]float64{}
+	}
+	return fqRatchetStopMap(at.fq.stops, sym, side, candidate)
 }
