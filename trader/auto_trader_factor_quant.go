@@ -54,6 +54,21 @@ type factorQuantRuntime struct {
 	entries         map[string]float64 // sym:side -> entry price at peak anchor
 	ddScale         float64            // tiered drawdown capital multiplier (0 = unset -> 1.0)
 	lastRollingAsOf string             // last intermediate as_of evaluated for rolling exit
+
+	// UI read-only cache for US paper ledger (coalesces /account, /positions,
+	// /risk-status bursts so switching to a US factor_quant trader fetches live
+	// quotes once instead of 3x). Rebalance ticks still call broker.Account()
+	// directly, and fills invalidate this cache immediately.
+	uiAcctMu       sync.Mutex
+	uiAcctInFlight *fqUIAccountCall
+	uiAcctSnap     *fqAccount
+	uiAcctAt       time.Time
+}
+
+type fqUIAccountCall struct {
+	done chan struct{}
+	acct *fqAccount
+	err  error
 }
 
 func fqTrackPeakMap(peaks, entries map[string]float64, sym, side string, entry, mark float64) float64 {
@@ -1042,17 +1057,71 @@ func fqLeverageOf(fq *store.FactorQuantConfig) int {
 
 // ------------------------------------------------------------ API readers (US ledger)
 
+const fqUIAccountTTL = 15 * time.Second
+
+func (at *AutoTrader) fqInvalidateUIAccountCache() {
+	at.fq.uiAcctMu.Lock()
+	at.fq.uiAcctSnap = nil
+	at.fq.uiAcctAt = time.Time{}
+	at.fq.uiAcctMu.Unlock()
+}
+
+func cloneFQAccount(src *fqAccount) *fqAccount {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	cp.Positions = append([]fqPosition(nil), src.Positions...)
+	return &cp
+}
+
+// factorQuantUSAccountForUI coalesces concurrent UI reads (/account, /positions,
+// /risk-status) and reuses a short-lived snapshot so switching to a US
+// factor_quant trader does not launch 3 parallel quote storms. Rebalance ticks
+// continue calling broker.Account() directly, and fills invalidate this cache.
+func (at *AutoTrader) factorQuantUSAccountForUI() (*fqAccount, error) {
+	now := at.fqClock()
+	at.fq.uiAcctMu.Lock()
+	if at.fq.uiAcctSnap != nil && !at.fq.uiAcctAt.IsZero() && now.Sub(at.fq.uiAcctAt) < fqUIAccountTTL {
+		snap := cloneFQAccount(at.fq.uiAcctSnap)
+		at.fq.uiAcctMu.Unlock()
+		return snap, nil
+	}
+	if at.fq.uiAcctInFlight != nil {
+		call := at.fq.uiAcctInFlight
+		at.fq.uiAcctMu.Unlock()
+		<-call.done
+		return cloneFQAccount(call.acct), call.err
+	}
+	call := &fqUIAccountCall{done: make(chan struct{})}
+	at.fq.uiAcctInFlight = call
+	at.fq.uiAcctMu.Unlock()
+
+	broker, err := at.newFactorQuantBroker()
+	var acct *fqAccount
+	if err == nil {
+		acct, err = broker.Account()
+	}
+	call.acct, call.err = acct, err
+
+	at.fq.uiAcctMu.Lock()
+	if err == nil && acct != nil {
+		at.fq.uiAcctSnap = cloneFQAccount(acct)
+		at.fq.uiAcctAt = at.fqClock()
+	}
+	at.fq.uiAcctInFlight = nil
+	at.fq.uiAcctMu.Unlock()
+	close(call.done)
+	return cloneFQAccount(acct), err
+}
+
 // factorQuantUSAccountInfo is GetAccountInfo for the US paper ledger (the
 // shared futures reader would look at the unused paper futures account).
 func (at *AutoTrader) factorQuantUSAccountInfo() (map[string]interface{}, error) {
 	if at.store == nil {
 		return nil, fmt.Errorf("no store")
 	}
-	broker, err := at.newFactorQuantBroker()
-	if err != nil {
-		return nil, err
-	}
-	st, err := broker.Account()
+	st, err := at.factorQuantUSAccountForUI()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get paper ledger: %w", err)
 	}
@@ -1085,11 +1154,7 @@ func (at *AutoTrader) factorQuantUSPositions() ([]map[string]interface{}, error)
 	if at.store == nil {
 		return nil, fmt.Errorf("no store")
 	}
-	broker, err := at.newFactorQuantBroker()
-	if err != nil {
-		return nil, err
-	}
-	st, err := broker.Account()
+	st, err := at.factorQuantUSAccountForUI()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get paper positions: %w", err)
 	}

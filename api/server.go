@@ -11,6 +11,7 @@ import (
 	"nofx/logger"
 	"nofx/manager"
 	"nofx/store"
+	"nofx/trader"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,9 @@ type Server struct {
 	traderOpsMu               sync.Mutex
 	fundsSyncMu               sync.Mutex
 	fundsSync                 map[string]*fundsSyncState
+	uiAccountCache            uiReadCache[map[string]interface{}]
+	uiPositionsCache          uiReadCache[[]map[string]interface{}]
+	uiRiskStatusCache         uiReadCache[trader.RiskStatus]
 	router                    *gin.Engine
 	traderManager             *manager.TraderManager
 	store                     *store.Store

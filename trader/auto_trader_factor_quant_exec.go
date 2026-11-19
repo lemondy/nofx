@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nofx/logger"
@@ -430,25 +431,56 @@ func (b *fqStockBroker) Account() (*fqAccount, error) {
 		return nil, fmt.Errorf("读取美股模拟持仓失败：%w", err)
 	}
 	out := &fqAccount{}
-	marketValue := 0.0
-	for _, p := range open {
-		// Refresh the mark so equity snapshots between rebalances move with the
-		// market; a failed quote falls back to the last cached / average price.
-		side := fqSideLong
+	marks := make([]float64, len(open))
+	sides := make([]string, len(open))
+	for i, p := range open {
 		if p.EffectiveSide() == store.StockPaperShort {
-			side = fqSideShort
+			sides[i] = fqSideShort
+		} else {
+			sides[i] = fqSideLong
 		}
-		mark, _ := b.PriceForSide(p.Symbol, side)
-		if mark <= 0 {
-			if side == fqSideShort {
-				mark = at.stock.perpPrice(p.Symbol)
-			} else {
-				mark = at.stock.price(p.Symbol)
-			}
+	}
+	if len(open) > 0 {
+		const fqQuoteConcurrency = 6
+		workers := len(open)
+		if workers > fqQuoteConcurrency {
+			workers = fqQuoteConcurrency
 		}
-		if mark <= 0 {
-			mark = p.AvgPrice
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range jobs {
+					p := open[idx]
+					side := sides[idx]
+					// Refresh the mark so equity snapshots between rebalances move with the
+					// market; a failed quote falls back to the last cached / average price.
+					mark, _ := b.PriceForSide(p.Symbol, side)
+					if mark <= 0 {
+						if side == fqSideShort {
+							mark = at.stock.perpPrice(p.Symbol)
+						} else {
+							mark = at.stock.price(p.Symbol)
+						}
+					}
+					if mark <= 0 {
+						mark = p.AvgPrice
+					}
+					marks[idx] = mark
+				}
+			}()
 		}
+		for i := range open {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+	}
+	marketValue := 0.0
+	for i, p := range open {
+		side, mark := sides[i], marks[i]
 		b.applyFunding(p, mark, false)
 		out.Positions = append(out.Positions, fqPosition{Symbol: p.Symbol, Side: side, Qty: p.Quantity, Entry: p.AvgPrice, Mark: mark})
 		out.Exposure += p.Quantity * mark
@@ -588,6 +620,7 @@ func (b *fqStockBroker) Place(o fqOrder) fqResult {
 			res.Err = err.Error()
 			return res
 		}
+		at.fqInvalidateUIAccountCache()
 		res.OK, res.FillQty, res.FillPrice, res.Fee, res.Note = true, o.Qty, fill, fee, note
 		return res
 	}
@@ -604,6 +637,7 @@ func (b *fqStockBroker) Place(o fqOrder) fqResult {
 	if o.CloseAll {
 		at.fqClearPeakMark(o.Symbol, fqSideLong)
 	}
+	at.fqInvalidateUIAccountCache()
 	res.OK, res.FillQty, res.FillPrice, res.Fee, res.Note = true, o.Qty, fill, fee, note
 	return res
 }
@@ -648,6 +682,7 @@ func (b *fqStockBroker) placeShort(o fqOrder) fqResult {
 		res.Err = err.Error()
 		return res
 	}
+	at.fqInvalidateUIAccountCache()
 	res.OK, res.FillQty, res.FillPrice, res.Fee = true, o.Qty, fill, fee
 	res.Note = fmt.Sprintf("模拟永续账本成交（滑点 %.4g bp，手续费 %.4g bp）", b.slipBps, b.shortFeeBps)
 	return res
