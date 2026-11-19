@@ -8,6 +8,7 @@ import (
 	"nofx/market"
 	"nofx/store"
 	"nofx/telemetry"
+	"sync"
 	"time"
 )
 
@@ -118,9 +119,25 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	if at.isFactorQuantUS() { // factor_quant US: bStock paper ledger, not the futures simulator
 		return at.factorQuantUSAccountInfo()
 	}
-	balance, err := at.trader.GetBalance()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get balance: %w", err)
+	var (
+		balance   map[string]interface{}
+		balErr    error
+		positions []map[string]interface{}
+		posErr    error
+		wg        sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		balance, balErr = at.trader.GetBalance()
+	}()
+	go func() {
+		defer wg.Done()
+		positions, posErr = at.trader.GetPositions()
+	}()
+	wg.Wait()
+	if balErr != nil {
+		return nil, fmt.Errorf("failed to get balance: %w", balErr)
 	}
 
 	// Get account fields
@@ -147,10 +164,8 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		totalEquity = totalWalletBalance + totalUnrealizedProfit
 	}
 
-	// Get positions to calculate total margin
-	positions, err := at.trader.GetPositions()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get positions: %w", err)
+	if posErr != nil {
+		return nil, fmt.Errorf("failed to get positions: %w", posErr)
 	}
 
 	totalMarginUsed := 0.0

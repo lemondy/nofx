@@ -137,6 +137,11 @@ type PaperFuturesTrader struct {
 	// reads inside readRetryCooldown serve the cached ledger instead of paying
 	// the HTTP timeout again.
 	advFailAt time.Time
+	// readAdvMu/readAdvInFlight coalesce concurrent read-path advances (e.g.
+	// /account, /positions, /risk-status arriving together after readFreshWindow)
+	// so only one live market fetch runs instead of N cascading retries.
+	readAdvMu       sync.Mutex
+	readAdvInFlight *readAdvanceCall
 
 	// Funding (all guarded by mu). The cache only ever grows by fetched events;
 	// the watermark that prevents double charges is in the persisted positions.
@@ -795,25 +800,65 @@ const (
 	readStaleLimit = 30 * time.Minute
 )
 
+type readAdvanceCall struct {
+	done chan struct{}
+	err  error
+}
+
 // advanceForRead is Advance for read-only account queries (balance, positions,
 // orders, summary). Reads reuse the cached ledger while the last successful
-// advance is younger than readFreshWindow. A failed market sync logs and serves
-// the cached ledger within readStaleLimit of the last successful advance, and
+// advance is younger than readFreshWindow. Concurrent stale reads share a
+// single in-flight advance rather than issuing redundant venue fetches that
+// contend on the ledger version. A failed market sync logs and serves the
+// cached ledger within readStaleLimit of the last successful advance, and
 // further attempts are suppressed for readRetryCooldown. Explicit Advance calls
 // and background order sync bypass the freshness window. Reads that advance
 // settle cached funding events but never fetch funding from the venue.
 func (p *PaperFuturesTrader) advanceForRead() error {
+	if p.readIsFreshOrCooling(p.cfg.Now()) {
+		return nil
+	}
+	p.readAdvMu.Lock()
+	if p.readAdvInFlight != nil {
+		call := p.readAdvInFlight
+		p.readAdvMu.Unlock()
+		<-call.done
+		return call.err
+	}
 	now := p.cfg.Now()
+	if p.readIsFreshOrCooling(now) {
+		p.readAdvMu.Unlock()
+		return nil
+	}
+	call := &readAdvanceCall{done: make(chan struct{})}
+	p.readAdvInFlight = call
+	p.readAdvMu.Unlock()
+
+	err := p.runReadAdvance(now)
+	call.err = err
+
+	p.readAdvMu.Lock()
+	p.readAdvInFlight = nil
+	p.readAdvMu.Unlock()
+	close(call.done)
+	return err
+}
+
+func (p *PaperFuturesTrader) readIsFreshOrCooling(now time.Time) bool {
 	p.mu.Lock()
 	lastOK, failAt := p.s.LastAdvance, p.advFailAt
 	p.mu.Unlock()
 	age := now.Sub(lastOK)
 	if age < readFreshWindow {
-		return nil
+		return true
 	}
 	if !failAt.IsZero() && now.Sub(failAt) < readRetryCooldown && age <= readStaleLimit {
-		return nil
+		return true
 	}
+	return false
+}
+
+func (p *PaperFuturesTrader) runReadAdvance(now time.Time) error {
 	err := p.advance(now, false)
 	if err == nil {
 		p.mu.Lock()
@@ -821,13 +866,16 @@ func (p *PaperFuturesTrader) advanceForRead() error {
 		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Lock()
+	age := now.Sub(p.s.LastAdvance)
+	name := p.displayName
+	if age <= readStaleLimit {
+		p.advFailAt = now
+	}
+	p.mu.Unlock()
 	if age > readStaleLimit {
 		return err
 	}
-	p.mu.Lock()
-	p.advFailAt = now
-	name := p.displayName
-	p.mu.Unlock()
 	logger.Warnf("paper read [%s]: market sync failed, serving cached ledger (%s old): %v", name, age.Round(time.Second), err)
 	return nil
 }

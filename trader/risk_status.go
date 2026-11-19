@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"nofx/kernel"
@@ -133,11 +134,22 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 		return at.factorQuantRiskStatus()
 	}
 	out := RiskStatus{GeneratedAt: time.Now().UTC(), InitialBalance: at.initialBalance}
-	if balance, err := at.trader.GetBalance(); err == nil {
-		out.Equity = gridAccountEquity(balance)
-	} else {
-		out.EquityUnknown = true
-	}
+	var (
+		balance   map[string]interface{}
+		balErr    error
+		positions []map[string]interface{}
+		posErr    error
+		fetchWG   sync.WaitGroup
+	)
+	fetchWG.Add(2)
+	go func() {
+		defer fetchWG.Done()
+		balance, balErr = at.trader.GetBalance()
+	}()
+	go func() {
+		defer fetchWG.Done()
+		positions, posErr = at.trader.GetPositions()
+	}()
 	if at.config.StrategyConfig != nil {
 		rc := at.config.StrategyConfig.RiskControl
 		out.DailyLossCapPct = rc.EffectiveDailyMaxLossPct()
@@ -185,6 +197,12 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	} else if baseline, ok := at.inheritDailyBaseline(today); ok {
 		out.DayStartEquity = baseline
 	}
+	fetchWG.Wait()
+	if balErr == nil {
+		out.Equity = gridAccountEquity(balance)
+	} else {
+		out.EquityUnknown = true
+	}
 	if out.DayStartEquity > 0 && out.Equity > 0 {
 		out.DailyLossPct = (out.DayStartEquity - out.Equity) / out.DayStartEquity * 100
 	}
@@ -219,7 +237,7 @@ func (at *AutoTrader) RiskStatus() RiskStatus {
 	sort.Slice(out.Pending, func(i, j int) bool { return out.Pending[i].PlacedAt.Before(out.Pending[j].PlacedAt) })
 
 	out.Positions = []PositionRStatus{}
-	if positions, err := at.trader.GetPositions(); err == nil {
+	if posErr == nil {
 		for _, pos := range positions {
 			symbol, _ := pos["symbol"].(string)
 			side, _ := pos["side"].(string)

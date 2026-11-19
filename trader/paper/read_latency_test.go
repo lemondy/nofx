@@ -166,3 +166,39 @@ func TestReadsReuseFreshAdvance(t *testing.T) {
 		t.Fatalf("read past freshness window made %d total market calls, want 6", calls)
 	}
 }
+
+func TestAdvanceForReadCoalescesConcurrentStaleReads(t *testing.T) {
+	p, _, f := setup(t, Config{})
+	for _, sym := range []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"} {
+		_, err := p.OpenLong(sym, 1, 10)
+		must(t, err)
+	}
+	market := &readLatencyMarket{source: f, delay: 40 * time.Millisecond}
+	p.price = market
+	f.step(readFreshWindow+time.Second, 105)
+
+	const readers = 6
+	var wg sync.WaitGroup
+	errs := make([]error, readers)
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			if idx%2 == 0 {
+				_, errs[idx] = p.GetBalance()
+			} else {
+				_, errs[idx] = p.GetPositions()
+			}
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("reader %d failed: %v", i, err)
+		}
+	}
+	// 3 symbols * (1 Price + 1 Candles1m) = 6 market calls total across all 6 concurrent readers.
+	if calls, _ := market.stats(); calls != 6 {
+		t.Fatalf("6 concurrent stale reads made %d market calls, want 6 (single coalesced advance)", calls)
+	}
+}

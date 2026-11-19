@@ -16,7 +16,7 @@ import (
 // trader's own 15 s cache; this gives the per-symbol order read the same
 // treatment. The trading loop does NOT use this cache (it reads the exchange
 // directly), so protection logic never sees stale orders.
-const openOrdersUITTL = 10 * time.Second
+const openOrdersUITTL = 15 * time.Second
 
 type openOrdersEntry struct {
 	orders []trader.OpenOrder

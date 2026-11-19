@@ -4,10 +4,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"nofx/logger"
 	"nofx/market"
 	nofxstore "nofx/store"
+	"nofx/trader"
 
 	"github.com/gin-gonic/gin"
 )
@@ -138,6 +141,16 @@ func (s *Server) handleStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func markStaleHeaders(c *gin.Context, stale bool, cachedAt time.Time) {
+	if !stale {
+		return
+	}
+	c.Header("X-NOFX-Stale", "1")
+	if !cachedAt.IsZero() {
+		c.Header("X-NOFX-Cached-At", cachedAt.UTC().Format(time.RFC3339))
+	}
+}
+
 // handleRiskStatus returns the trader's program-enforced risk state for the
 // dashboard (2026-10-07 review F1). Read-only.
 func (s *Server) handleRiskStatus(c *gin.Context) {
@@ -146,12 +159,27 @@ func (s *Server) handleRiskStatus(c *gin.Context) {
 		SafeBadRequest(c, "Invalid trader ID")
 		return
 	}
-	trader, err := s.traderManager.GetTrader(traderID)
+	tr, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
 		SafeNotFound(c, "Trader")
 		return
 	}
-	c.JSON(http.StatusOK, trader.RiskStatus())
+	rs, stale, cachedAt, err := s.uiRiskStatusCache.get(
+		c.Request.Context(),
+		traderID,
+		uiReadSoftWait,
+		uiRiskStaleTTL,
+		func(v trader.RiskStatus) bool { return !v.EquityUnknown && !v.PositionsUnknown },
+		func() (trader.RiskStatus, error) {
+			return tr.RiskStatus(), nil
+		},
+	)
+	if err != nil {
+		SafeInternalError(c, "Get risk status", err)
+		return
+	}
+	markStaleHeaders(c, stale, cachedAt)
+	c.JSON(http.StatusOK, rs)
 }
 
 // handleAccount Account information
@@ -162,21 +190,32 @@ func (s *Server) handleAccount(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
+	tr, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
 		SafeNotFound(c, "Trader")
 		return
 	}
 
-	logger.Infof("📊 Received account info request [%s]", trader.GetName())
-	account, err := trader.GetAccountInfo()
+	logger.Infof("📊 Received account info request [%s]", tr.GetName())
+	account, stale, cachedAt, err := s.uiAccountCache.get(
+		c.Request.Context(),
+		traderID,
+		uiReadSoftWait,
+		uiReadStaleTTL,
+		nil,
+		func() (map[string]interface{}, error) {
+			return tr.GetAccountInfo()
+		},
+	)
 	if err != nil {
 		SafeInternalError(c, "Get account info", err)
 		return
 	}
 
-	logger.Infof("✓ Returning account info [%s]: equity=%.2f, available=%.2f, pnl=%.2f (%.2f%%)",
-		trader.GetName(),
+	markStaleHeaders(c, stale, cachedAt)
+	logger.Infof("✓ Returning account info [%s] (stale=%v): equity=%.2f, available=%.2f, pnl=%.2f (%.2f%%)",
+		tr.GetName(),
+		stale,
 		account["total_equity"],
 		account["available_balance"],
 		account["total_pnl"],
@@ -184,51 +223,82 @@ func (s *Server) handleAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, account)
 }
 
-// handlePositions Position list
-func (s *Server) handlePositions(c *gin.Context) {
-	_, traderID, err := s.getTraderFromQuery(c)
-	if err != nil {
-		SafeBadRequest(c, "Invalid trader ID")
+var uiFetchOpenOrders = uiOpenOrdersFor
+
+// attachPositionProtectionOrders enriches open positions with their resting
+// exchange SL/TP/limit orders concurrently across unique symbols (bounded
+// worker pool) so a trader with N positions pays ~1 RTT instead of N serial RTTs.
+func attachPositionProtectionOrders(traderID string, tr *trader.AutoTrader, positions []map[string]interface{}) {
+	if len(positions) == 0 || (tr != nil && tr.IsStockStrategy()) {
 		return
 	}
-
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
-		SafeNotFound(c, "Trader")
+	seen := make(map[string]struct{}, len(positions))
+	symbols := make([]string, 0, len(positions))
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		if symbol == "" {
+			continue
+		}
+		if _, ok := seen[symbol]; !ok {
+			seen[symbol] = struct{}{}
+			symbols = append(symbols, symbol)
+		}
+	}
+	if len(symbols) == 0 {
 		return
 	}
+	type orderFetchResult struct {
+		orders []trader.OpenOrder
+		err    error
+	}
+	results := make([]orderFetchResult, len(symbols))
+	const positionsOrdersConcurrency = 6
+	workers := len(symbols)
+	if workers > positionsOrdersConcurrency {
+		workers = positionsOrdersConcurrency
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				orders, err := uiFetchOpenOrders(traderID, symbols[idx], tr)
+				results[idx] = orderFetchResult{orders: orders, err: err}
+			}
+		}()
+	}
+	for i := range symbols {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
 
-	positions, err := trader.GetPositions()
-	if err != nil {
-		SafeInternalError(c, "Get positions", err)
-		return
+	bySymbol := make(map[string]orderFetchResult, len(symbols))
+	for i, sym := range symbols {
+		bySymbol[sym] = results[i]
 	}
 
-	// Attach each position's resting exchange orders (user request 09-27):
-	// the SL/TP algo legs and any pending entry limit, read LIVE from the
-	// exchange — the DB/memory echoes drift (09-13: the watchdog had to
-	// reseed stops from exchange orders after a restart). Fail-open: a
-	// failed order query renders the position without protection info
-	// rather than failing the whole endpoint.
 	for _, pos := range positions {
 		symbol, _ := pos["symbol"].(string)
 		side, _ := pos["side"].(string)
-		if symbol == "" || trader.IsStockStrategy() { // us_stock positions carry their own protection
+		if symbol == "" {
 			continue
 		}
-		orders, err := uiOpenOrdersFor(traderID, symbol, trader)
-		if err != nil {
+		res := bySymbol[symbol]
+		if res.err != nil {
 			// F17 (2026-10-01 review): a FAILED query used to `continue`,
 			// which renders identically to "no protection orders" — the
 			// frontend cannot distinguish 缺失 from 未知. Mark the position
 			// with protection_error=true so the UI can show an explicit
 			// unknown badge.
-			logger.Warnf("⚠️ [positions] open orders query failed for %s: %v", symbol, err)
+			logger.Warnf("⚠️ [positions] open orders query failed for %s: %v", symbol, res.err)
 			pos["protection"] = map[string]interface{}{"protection_error": true}
 			continue
 		}
 		protection := map[string]interface{}{}
-		for _, o := range orders {
+		for _, o := range res.orders {
 			// Hedge mode keys orders by positionSide; one-way mode reports
 			// BOTH — accept both, plus the empty edge, so one-way accounts
 			// still see their legs.
@@ -256,7 +326,49 @@ func (s *Server) handlePositions(c *gin.Context) {
 		}
 		pos["protection"] = protection
 	}
+}
 
+// handlePositions Position list
+func (s *Server) handlePositions(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		SafeBadRequest(c, "Invalid trader ID")
+		return
+	}
+
+	tr, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		SafeNotFound(c, "Trader")
+		return
+	}
+
+	positions, stale, cachedAt, err := s.uiPositionsCache.get(
+		c.Request.Context(),
+		traderID,
+		uiReadSoftWait,
+		uiReadStaleTTL,
+		nil,
+		func() ([]map[string]interface{}, error) {
+			posList, fetchErr := tr.GetPositions()
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+			// Attach each position's resting exchange orders (user request 09-27):
+			// the SL/TP algo legs and any pending entry limit, read LIVE from the
+			// exchange — the DB/memory echoes drift (09-13: the watchdog had to
+			// reseed stops from exchange orders after a restart). Fail-open: a
+			// failed order query renders the position without protection info
+			// rather than failing the whole endpoint.
+			attachPositionProtectionOrders(traderID, tr, posList)
+			return posList, nil
+		},
+	)
+	if err != nil {
+		SafeInternalError(c, "Get positions", err)
+		return
+	}
+
+	markStaleHeaders(c, stale, cachedAt)
 	c.JSON(http.StatusOK, positions)
 }
 
