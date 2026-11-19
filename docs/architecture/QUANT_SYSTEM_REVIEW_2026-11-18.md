@@ -9,7 +9,7 @@
 
 ## 1. 总体结论
 
-NOFX 在双轨架构（LLM 信号内核 + `factor_quant` 程序化纸面交易）与研究治理（预注册、只追加演化账本 $K$ 校正、S1/S2/S3 增量晋级、NautilusTrader + QuantStats 统一回测底座）上具备清晰的工程边界。本轮多模型异构交叉审查共定位 **23 项有精确源码位置与最小反例支撑的问题**（含 2 项 P0、12 项 P1、9 项 P2/性能项），其中 **20 项仓库内代码/契约/统计口径问题已全部完成 TDD 修复并通过全栈回归验证**，其余 **3 项属于运行环境/运维治理边界项**（按约定保持只读不触碰运行资产，保留运维清单）。
+NOFX 在双轨架构（LLM 信号内核 + `factor_quant` 程序化纸面交易）与研究治理（预注册、只追加演化账本 $K$ 校正、S1/S2/S3 增量晋级、NautilusTrader + QuantStats 统一回测底座）上具备清晰的工程边界。本轮多模型异构交叉审查共定位 **23 项有精确源码位置与最小反例支撑的问题**（含 2 项 P0、12 项 P1、9 项 P2/性能项），其中 **20 项仓库内代码/契约/统计口径问题已全部完成 TDD 修复并通过全栈回归验证**，其余 **3 项运行环境/运维治理项也已按用户授权于 2026-11-19 完成改造并平滑重启服务进程**。
 
 ---
 
@@ -58,13 +58,14 @@ NOFX 在双轨架构（LLM 信号内核 + `factor_quant` 程序化纸面交易�
 
 ---
 
-## 3. 运行时与治理遗留清单（只读边界内未自动触碰项）
+## 3. 运行时与治理运维项（2026-11-19 已按授权全部完成改造）
 
-以下 3 项涉及仓库外系统目录或线上运行态数据库，按本轮安全边界仅做只读核实与运维建议，不在代码提交中自动篡改：
+以下 3 项外部环境与运行态治理项已于 2026-11-19 完成落地并平滑重启服务进程：
 
-1. **#3 · S2 在跑交易员与新默认开关隔离（运维确认项）**：`store/strategy_factor_quant.go` 中 4 项新机制（`regime_tilt`、`rolling_exit`、`vol_adaptive_stop`、`drawdown_scale`）在指针为 `nil` 时默认开启。若重启线上进程使 `fq-us-momentum-ls-v1`（S2 观察期内）加载新二进制前仍希望保持原始 S2 规则冻结，需在策略配置 JSON 显式写入对应 `false`，或开启新版本交易员 ID 对照。
-2. **#4 · `launchd` 夜间因子挖掘指向仓库外副本（运维迁移项）**：`~/Library/LaunchAgents/com.nofx.factor-mining.plist` 当前仍指向 `~/workspace/nofx-autoresearch/scripts/factor_mining/run_nightly.sh`（无 `.git`）。建议运维窗口内将其 `ProgramArguments` 与 `WorkingDirectory` 统一切回主仓库 `/Users/zhangyun/workspace/nofx`，使 `dsr_audit` 第 6 步及最新修复在夜间任务生效。
-3. **本机磁盘快照归档（可选运维项）**：`data/` 下存在历史 `data.db.bak-*` 冷备份文件；按 `AGENTS.md` 磁盘约定，可在停机维护窗口迁移至 NAS `/Volumes/homes/liz/nofx_data`（热库 `data/data.db` 与 `data/evolution/ledger.jsonl` 保持在本地盘）。
+1. **#3 · S2 在跑美股配对交易员默认开关隔离（已完成）**：先备份目标策略记录至 `/Volumes/homes/liz/nofx_data/archive/db_backups/strategies-fq-pre-ops-20261119.json`，随后在 `data/data.db` 的 `strategies` 表中为冻结 S2 美股配对策略 `07e61255-0a89-48ff-a473-811952879629`（`因子量化-美股（程序化模拟）`，对照）与 `403819be-3660-4217-9945-b7ea8a6c81bf`（`因子量化-美股-波动率缩放（模拟）`，候选）的 `factor_quant_config` 显式写入 `regime_tilt: false`、`rolling_exit: false`、`vol_adaptive_stop: false`、`drawdown_scale: false`。重启新二进制后，美股对照日志已确认回到 28 天周期 `too_soon` 状态；加密 `factor_quant`（非 S2 冻结配对）保留默认开启。
+2. **#4 · `launchd` 夜间因子挖掘切回主仓库（已完成）**：先备份原配置为 `~/Library/LaunchAgents/com.nofx.factor-mining.plist.bak-20261119-pre-mainrepo`，将 `ProgramArguments[1]` 更新为 `/Users/zhangyun/workspace/nofx/scripts/factor_mining/run_nightly.sh`、`WorkingDirectory` 更新为 `/Users/zhangyun/workspace/nofx`，通过 `plutil -lint`、`sh -n` 校验并使用 `launchctl bootout` + `bootstrap` 重载生效。
+3. **本机历史数据库快照归档至 NAS（已完成）**：将本地 `data/data.db.bak-*` 共 13 个历史冷备快照（总计约 6.5 GB）逐个经 SHA256 校验迁移至 `/Volumes/homes/liz/nofx_data/archive/db_backups/` 后清理本地副本；热库 `data/data.db` 与账本 `data/evolution/ledger.jsonl` 保持在本地盘不动。
+4. **服务编译与平滑重启（已完成）**：备份旧二进制至 `/Volumes/homes/liz/nofx_data/archive/binaries/nofx.bak-20261119-pre-review-fix`，重新编译 `./nofx` 与前端 `web/dist`，优雅停止旧进程并沿用原 `HTTPS_PROXY` 环境拉起新后端进程（`127.0.0.1:8080/api/health` 返回 HTTP 200，前端 `127.0.0.1:3000` 返回 HTTP 200）。
 
 ---
 

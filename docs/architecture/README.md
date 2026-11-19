@@ -330,15 +330,13 @@ The full chain (mining → S1 → S2 → live) is under "Research & Backtesting 
 
 ## Known Issues & Technical Debt (Updated 2026-11-19)
 
-> All 20 in-repo code, contract, and statistical defects identified in the 2026-11-18/19 deep review (including `nt_engine` close-mode lookahead & carry settlement order, multi-venue open-entry cancellation of opposite protective orders, `factor_quant` between-rebalance drawdown trimming & monotonic Chandelier stops, SSE stream drop handling, SSRF DNS-rebinding/redirect protection, `risk_status` unknown-state alerts, and regime-skip phantom AI charges) have been fixed on `dev` — see [QUANT_SYSTEM_REVIEW_2026-11-18.md](QUANT_SYSTEM_REVIEW_2026-11-18.md). Only still-open architectural debt and operational items remain below.
+> All 23 issues identified in the 2026-11-18/19 deep review (20 in-repo code/contract/statistical fixes plus 3 operational items: S2 US pair switch isolation, `launchd` nightly job migration back to the main repo, and archival of historical `data.db.bak-*` snapshots to NAS) are now resolved — see [QUANT_SYSTEM_REVIEW_2026-11-18.md](QUANT_SYSTEM_REVIEW_2026-11-18.md). Only still-open architectural debt remains below.
 
 ### P1 (correctness / security / governance)
 
 1. **Railway keys not persistent** (`railway/start.sh:10-15`): when `RSA_PRIVATE_KEY`/`DATA_ENCRYPTION_KEY` are not set in platform env, they are randomly generated per boot and not persisted → after a restart every encrypted exchange API key fails to decrypt and traders silently fail to load. Contrast the root `start.sh:142-146`, which writes back to .env.
 2. **indodax selectable for AI futures strategies** (`trader/auto_trader.go:476`): SetStopLoss/SetTakeProfit/OpenShort hard-error → an "open → unprotected → protection failure → emergency close" loop. Should reject adapters without a stop-loss API at construction time, like `factorQuantGuard`.
-3. **Runtime isolation between active S2 traders and newly defaulted switches** (ops check): the four `factor_quant` switches (`regime_tilt`/`rolling_exit`/`vol_adaptive_stop`/`drawdown_scale`) default on when unset; before restarting live processes onto the new binary, explicitly persist `false` on `fq-us-momentum-ls-v1` (or spawn a separate trader ID) if the original S2 rules must remain frozen.
-4. **The launchd nightly job runs an out-of-repo copy** (`~/Library/LaunchAgents/com.nofx.factor-mining.plist` points to `~/workspace/nofx-autoresearch`, no .git): repoint the plist to `/Users/zhangyun/workspace/nofx` during an ops window so main-repo fixes (incl. step-6 `dsr_audit`) take effect nightly.
-5. **Frontend triple-track routing** (`web/src/App.tsx:182-227`): a mounted-but-unused BrowserRouter + hand-rolled routing + local `useNavigate`, with the route map duplicated in 4 places; `ChartWithOrders*.tsx` (836 lines) and `PageNotFound.tsx` are unreferenced dead code.
+3. **Frontend triple-track routing** (`web/src/App.tsx:182-227`): a mounted-but-unused BrowserRouter + hand-rolled routing + local `useNavigate`, with the route map duplicated in 4 places; `ChartWithOrders*.tsx` (836 lines) and `PageNotFound.tsx` are unreferenced dead code.
 
 ### P2 (design flaws, selected)
 

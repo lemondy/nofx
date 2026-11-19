@@ -328,15 +328,13 @@ nofx/
 
 ## 已知问题与技术债（2026-11-19 更新）
 
-> 2026-11-18/19 深度审查发现的 20 项仓库内代码/契约/统计缺陷（含 `nt_engine` close 模式净值与资金费时序、多所开仓误撤对向保护单、`factor_quant` 非调仓期回撤即时减仓与棘轮止损、SSE 断流误抢救、SSRF DNS 重绑定、风控未知态假绿、regime-skip 幽灵计费等）已全部修复并合入 `dev`，详见 [QUANT_SYSTEM_REVIEW_2026-11-18.md](QUANT_SYSTEM_REVIEW_2026-11-18.md)。以下仅保留当前仍未关闭的架构债与运维边界项。
+> 2026-11-18/19 深度审查发现的 23 项问题（20 项仓库内代码/契约/统计缺陷 + 3 项运维治理项：S2 美股配对开关隔离、`launchd` 夜间任务切回主仓库、历史 `data.db.bak-*` 快照归档至 NAS）已全部完成修复并生效，详见 [QUANT_SYSTEM_REVIEW_2026-11-18.md](QUANT_SYSTEM_REVIEW_2026-11-18.md)。以下仅保留当前仍未关闭的架构债。
 
 ### P1（正确性 / 安全 / 治理）
 
 1. **Railway 密钥不持久**（`railway/start.sh:10-15`）：`RSA_PRIVATE_KEY`/`DATA_ENCRYPTION_KEY` 未在平台 env 设置时每次启动随机生成且不持久 → 重启后所有加密的交易所 API key 无法解密，trader 静默加载失败。对比根目录 `start.sh:142-146` 是写回 .env 的。
 2. **indodax 适配器可被选为 AI 合约策略**（`trader/auto_trader.go:476`）：SetStopLoss/SetTakeProfit/OpenShort 硬报错 → 开仓后"裸奔 → 保护失败 → 紧急平仓"循环。应在构造期仿照 `factorQuantGuard` 拒绝无止损 API 的适配器。
-3. **S2 在跑交易员与新默认开关的运行态隔离**（运维确认项）：`factor_quant` 四项增强开关（`regime_tilt`/`rolling_exit`/`vol_adaptive_stop`/`drawdown_scale`）在配置未显式赋值时默认开启；重启加载新二进制前，若需冻结 `fq-us-momentum-ls-v1` 的原始 S2 规则，应在 DB 策略配置中显式写入 `false` 或分立新交易员 ID 对照。
-4. **launchd 夜间任务运行仓库外代码副本**（`~/Library/LaunchAgents/com.nofx.factor-mining.plist` 指向 `~/workspace/nofx-autoresearch`，无 .git）：主仓库修复（含第 6 步 `dsr_audit`）需将 launchd plist 切回主仓库 `/Users/zhangyun/workspace/nofx` 后方可在夜间任务生效。
-5. **前端路由三轨制**（`web/src/App.tsx:182-227`）：BrowserRouter 空挂 + 手写路由 + 局部 `useNavigate` 并存，路由映射表 4 处重复；`ChartWithOrders*.tsx`（836 行）、`PageNotFound.tsx` 为无引用死代码。
+3. **前端路由三轨制**（`web/src/App.tsx:182-227`）：BrowserRouter 空挂 + 手写路由 + 局部 `useNavigate` 并存，路由映射表 4 处重复；`ChartWithOrders*.tsx`（836 行）、`PageNotFound.tsx` 为无引用死代码。
 
 ### P2（设计缺陷，摘选）
 
