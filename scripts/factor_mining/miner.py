@@ -639,12 +639,16 @@ class Miner:
             store.write_zoo(store_market, output, self.root)
             stage('ensemble')
             ensemble = build_ensemble(market, retained, panels, targets, splits, cfg,
-                                      values_cache=values_cache)
+                                      values_cache=values_cache,
+                                      all_factors=retained,
+                                      horizons_meta=output.get('horizons'))
             store.write_ensemble(store_market, ensemble, self.root)
             try:
                 from .live_scores import export_live_scores
                 selected_ids = None
-                if options.enabled(options.GREEDY_ENSEMBLE):
+                if (options.enabled(options.GREEDY_ENSEMBLE)
+                        or options.enabled(options.IC_DEDUP)
+                        or options.enabled(options.DSR_GATE)):
                     # Live reference scores must use exactly the ensemble.json factors.
                     selected_ids = {int(h): v['factor_ids'] for h, v in ensemble['horizons'].items() if v}
                 if tier == 'all':
