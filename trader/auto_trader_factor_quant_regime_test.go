@@ -794,3 +794,70 @@ func TestFQRollingFailedCloseRetriesAndCapsReplacement(t *testing.T) {
 		t.Fatalf("replacement exceeded budget: %g", gross)
 	}
 }
+
+func TestFQAdaptiveStopUSFollowFileHorizon(t *testing.T) {
+	root := t.TempDir()
+	dailyDir := filepath.Join(root, "daily")
+	start := fqDay("2026-08-01")
+	const nDays = 60
+	asOf := start.AddDate(0, 0, nDays-1).Format(factorDateFmt)
+
+	// ~2.0% daily vol US stock:
+	//   h=5  => 2.5 * 0.02 * sqrt(5)  ~ 11.2% (clamped to [6%, 18%])
+	//   h=28 => 2.5 * 0.02 * sqrt(28) ~ 26.5% (clamped to [12%, 30%])
+	closes := make([]float64, nDays)
+	for d := 0; d < nDays; d++ {
+		if d%2 == 0 {
+			closes[d] = 100.0 * 1.01
+		} else {
+			closes[d] = 100.0 * 0.99
+		}
+	}
+	fqWriteDailyJSON(t, dailyDir, "NVDA.json", start, closes)
+	path := fqWriteTargetsMap(t, root, "us", asOf, 28, map[string]float64{"NVDABUSDT": 0.5}, map[string]float64{"NVDABUSDT": 0.95}, nil)
+
+	// Follow-file config: Horizon == 0.
+	cfgFollow := &store.FactorQuantConfig{Market: store.FactorQuantMarketUS, Horizon: 0, TargetsPath: path}
+
+	// Explicit 5d fallback (when targetHorizon omitted) should stay tight (~11.2% -> ~88.8).
+	stop5, _ := fqComputeAdaptiveStopPrice("NVDABUSDT", fqSideLong, 100, 100, 100, 0.20, cfgFollow, asOf)
+	if stop5 < 85.0 || stop5 > 92.0 {
+		t.Fatalf("fallback h=5 stop = %v, want in [85, 92]", stop5)
+	}
+
+	// Passing loaded targetHorizon=28 widens stop to ~26.5% (~73.5) within [12%, 30%].
+	stop28, _ := fqComputeAdaptiveStopPrice("NVDABUSDT", fqSideLong, 100, 100, 100, 0.20, cfgFollow, asOf, 28)
+	if stop28 < 70.0 || stop28 > 78.0 {
+		t.Fatalf("follow-file h=28 stop = %v, want in [70, 78]", stop28)
+	}
+
+	// End-to-end US paper trader with Horizon=0 and targets.horizon=28: a -15% dip must NOT stop out.
+	quotes := map[string]float64{"NVDABUSDT": 100}
+	fqStubUS(t, quotes)
+	st := fqTestStore(t)
+	at := fqPaperTrader(t, st, "fq-us-h28-stop", "us", &paperTestPrices{mark: 100})
+	cfg := at.config.StrategyConfig.FactorQuantConfig
+	cfg.Horizon = 0
+	cfg.USFeeBps, cfg.USSlippageBps = fqPtr(0), fqPtr(0)
+	cfg.TargetsPath = path
+	b, err := at.newFactorQuantBroker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := start.AddDate(0, 0, nDays)
+	at.fqNow = func() time.Time { return day }
+	at.factorQuantTick(b, day)
+
+	if gotH := at.fqTargetsHorizon(); gotH != 28 {
+		t.Fatalf("fqTargetsHorizon() = %d, want 28", gotH)
+	}
+
+	// Drop 15% (to 85): would have stopped out under old h=5 (~88.8), must stay open under h=28 (~73.5).
+	quotes["NVDABUSDT"] = 85
+	at.factorQuantTick(b, day.Add(5*time.Minute))
+	open, _ := st.StockPaper().ListOpen(at.id)
+	if len(open) != 1 {
+		t.Fatalf("expected NVDABUSDT still open after -15%% dip under h=28 stop, got %+v", open)
+	}
+}
+

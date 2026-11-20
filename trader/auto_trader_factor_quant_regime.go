@@ -905,12 +905,13 @@ func fqCalcATR14(bars []fqDailyBar) (float64, bool) {
 // fqComputeAdaptiveStopPrice resolves a position's protective stop price.
 // When VolAdaptiveStop is active:
 //  1. Initial stop distance adapts to 30-day realized volatility (2.5 * sigma30 * sqrt(H)),
-//     clamped to [8%, 28%] for crypto ([6%, 18%] for US), scaled proportionally to basePct/0.20,
-//     falling back to basePct when daily bars are unavailable.
+//     clamped to [8%, 28%] for crypto ([6%, 18%] for US when H<=5, scaled by sqrt(H/5) up
+//     to [12%, 30%] for longer US horizons such as 28d momentum), scaled proportionally to
+//     basePct/0.20, falling back to basePct when daily bars are unavailable.
 //  2. Once peak favorable excursion reaches >= max(stopPct, 15%), a Chandelier trailing stop
 //     ratchets from peakMark by 2.0 * ATR14 (or 50% of unrealized profit when ATR14 is unavailable),
 //     locking in profit without ever loosening the stop.
-func fqComputeAdaptiveStopPrice(sym, side string, entry, mark, peakMark, basePct float64, fq *store.FactorQuantConfig, asOf string) (stopPrice float64, trailing bool) {
+func fqComputeAdaptiveStopPrice(sym, side string, entry, mark, peakMark, basePct float64, fq *store.FactorQuantConfig, asOf string, targetHorizon ...int) (stopPrice float64, trailing bool) {
 	if basePct <= 0 || entry <= 0 {
 		return 0, false
 	}
@@ -926,6 +927,9 @@ func fqComputeAdaptiveStopPrice(sym, side string, entry, mark, peakMark, basePct
 			market = store.FactorQuantMarketCrypto
 		}
 		h := fq.EffectiveHorizon()
+		if h <= 0 && len(targetHorizon) > 0 && targetHorizon[0] > 0 {
+			h = targetHorizon[0]
+		}
 		if h <= 0 {
 			h = 3
 			if market == store.FactorQuantMarketUS {
@@ -943,6 +947,11 @@ func fqComputeAdaptiveStopPrice(sym, side string, entry, mark, peakMark, basePct
 					minPct, maxPct := 0.08*scale, 0.28*scale
 					if market == store.FactorQuantMarketUS {
 						minPct, maxPct = 0.06*scale, 0.18*scale
+						if h > 5 {
+							horScale := math.Sqrt(float64(h) / 5.0)
+							minPct = math.Min(0.12*scale, minPct*horScale)
+							maxPct = math.Min(0.30*scale, maxPct*horScale)
+						}
 					}
 					if maxPct >= 0.95 {
 						maxPct = 0.95

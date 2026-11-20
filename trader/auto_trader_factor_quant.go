@@ -124,6 +124,12 @@ func (at *AutoTrader) fqTargetsAsOf() string {
 	return at.fq.targetsAsOf
 }
 
+func (at *AutoTrader) fqTargetsHorizon() int {
+	at.fq.mu.Lock()
+	defer at.fq.mu.Unlock()
+	return at.fq.targetsHorizon
+}
+
 // IsFactorQuantStrategy reports whether this trader runs the factor_quant strategy.
 func (at *AutoTrader) IsFactorQuantStrategy() bool {
 	sc := at.config.StrategyConfig
