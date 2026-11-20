@@ -124,13 +124,15 @@ func (b *fqFuturesBroker) resolveStop(sym, side string, entry, mark, pct float64
 	peak := b.updatePeak(sym, side, entry, mark)
 	var fq *store.FactorQuantConfig
 	var asOf string
+	var targetHorizon int
 	if b.at != nil && b.at.IsFactorQuantStrategy() {
 		fq = b.at.config.StrategyConfig.FactorQuantConfig
 		asOf = b.at.fqTargetsAsOf()
+		targetHorizon = b.at.fqTargetsHorizon()
 	} else {
 		fq = &store.FactorQuantConfig{Market: store.FactorQuantMarketCrypto}
 	}
-	stop, trailing = fqComputeAdaptiveStopPrice(sym, side, entry, mark, peak, pct, fq, asOf)
+	stop, trailing = fqComputeAdaptiveStopPrice(sym, side, entry, mark, peak, pct, fq, asOf, targetHorizon)
 	if b.at != nil {
 		return b.at.fqRatchetStop(sym, side, stop), trailing
 	}
@@ -745,7 +747,7 @@ func (b *fqStockBroker) ensureStops() []fqStopResult {
 			continue
 		}
 		peak := at.fqUpdatePeakMark(p.Symbol, side, p.AvgPrice, mark)
-		stop, _ := fqComputeAdaptiveStopPrice(p.Symbol, side, p.AvgPrice, mark, peak, pct, fq, asOf)
+		stop, _ := fqComputeAdaptiveStopPrice(p.Symbol, side, p.AvgPrice, mark, peak, pct, fq, asOf, at.fqTargetsHorizon())
 		stop = at.fqRatchetStop(p.Symbol, side, stop)
 		if stop <= 0 {
 			continue
