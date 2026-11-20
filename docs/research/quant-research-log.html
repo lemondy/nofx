@@ -55,7 +55,7 @@ th{color:var(--mut);font-weight:600}
 <body>
 <div class="wrap">
 <h1>量化研究记录</h1>
-<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-11-18。</p>
+<p class="sub">nofx 已尝试 / 回测 / 验证过的量化思路，按时间倒序，类似发版记录。最后更新 2026-11-20。</p>
 
 <div class="sum" id="sum"></div>
 
@@ -70,6 +70,33 @@ th{color:var(--mut);font-weight:600}
 </div>
 
 <div id="log">
+
+<div class="day">2026-11-20</div>
+
+<article data-v="no" data-id="fq-us-resmom-decrowd-s1">
+<h2><code>fq_us</code> 残差动量（K=12）与相关性去拥挤加权（K=13）S1 检验及 <code>B_volscale</code> 独立复核 <span class="tag t-no">S1 K=12/13 均 fail（H1 z=-0.045, placebo 0.0%；H2 z=-0.400, placebo 50.0%）· B_volscale 三池占优</span><span class="dom">美股 · factor_quant · 截面动量 / 去拥挤 S1</span></h2>
+<p class="k">思路：针对美股 12-1 截面多空动量基线 <code>mom_ls_invvol_v1</code> 的 Beta 崩盘与板块拥挤问题，在严格预注册（<code>PREREG_SHA256 4955dd20...</code>）与统一 <code>scripts/backtest/nt_engine.py</code>（NautilusTrader 1.222.0 + US carry，同期修复默认 <code>RiskEngine</code> 100/s 限速导致 S&amp;P 500 调仓静默拒单的缺陷）下，于 D3（S&amp;P 500 498 主集）、D2（bStock 90 可部署池）与 D1（2006–2011 崩盘压力池）检验 <b>H1</b>（K=12 残差动量）与 <b>H2</b>（K=13 60d 正相关去拥挤），并交叉复核现行冻结 S2 候选 <code>B_volscale</code>。</p>
+<ul>
+<li><b>D3 主集（175 期，2012-11 至 2026-10）</b>：<code>B_base</code> -6.39%（Sharpe -0.012, MaxDD -30.30%, 手续费 $10,819）；<b>H1（K=12）</b> -5.57%（Sharpe -0.043, MaxDD -23.26%），但手续费暴增近 3 倍（<b>$29,627</b>, 51,890 笔），配对期均差 <code>-0.87 bps/期</code>（<code>half1 +8.97</code> / <code>half2 -10.60</code>），<code>z=-0.045</code>（vs <code>z_12=2.865</code>），30 次随机置换 Beta 安慰剂均值 <code>+6.35 bps/期</code>，实际 H1 处 <b>0.0% 分位（0/30）</b>，判 <b>fail</b>。</li>
+<li><b>H2（K=13，60d 相关性去拥挤）</b>：多/空 <code>N_eff</code> 仅温和提升 <code>3.35/3.67 → 3.62/3.90</code>，总收益 -7.01%（Sharpe -0.021, MaxDD -29.95%），配对期均差 <code>-0.54 bps/期</code>（<code>half1 -1.10</code> / <code>half2 +0.01</code>），<code>z=-0.400</code>（vs <code>z_13=2.891</code>），30 次随机重排惩罚系数安慰剂均值 <code>-0.62 bps/期</code>，处 <b>50.0% 分位</b>，判 <b>fail</b>（因两者主门 <code>z&lt;1.0</code> 已锁定 <code>fail</code>，安慰剂在 <code>n=30</code> 无效早停并在账本披露 <code>prereg_placebo_n=200</code>）。</li>
+<li><b>D2（bStock 90，62 期）与 D1（2006–2011，69 期）</b>：H1 剔除 SPY Beta 在高 Beta 成长主导的 D2 灾难性失效（<b>-40.61%</b>, Sharpe -0.691, MaxDD -47.35%, <code>z=-2.792</code>）；虽在 D1 2009 崩盘期收窄回撤（-35.75% → -13.74%）但成本近 3 倍；H2 在 D2/D1 均微弱拖累。</li>
+<li><b><code>B_volscale</code>（现冻结 S2 候选 <code>490f8b28...</code>）三池占优</b>：D3 唯一正收益 <b>+9.68%</b>（Sharpe +0.141, MaxDD 减半至 <b>-15.77%</b>, <code>+7.94 bps/期, z=+1.316</code>）；D2 +124.06%（<b>Sharpe 0.960 / Calmar 0.878</b> 全场第一, MaxDD -20.28%）；D1 崩盘期 MaxDD -21.22%（<code>+26.44 bps/期, z=+1.436</code>）且成本更低（$3,624）。</li>
+</ul>
+<p><b>结论：</b>H1（K=12）与 H2（K=13）均已诚实落账 <code>ledger.jsonl</code> 判 <code>fail</code>，不修改 <code>quant_targets.py</code>；严格保留冻结中的 <code>fq_us</code> S2 对照组（<code>1025e717</code> vs <code>490f8b28</code>，<code>2026-12-01</code> 启动）。同步修复 Go 美股随动文件 <code>horizon=0</code> 止损缩放 Bug 与 <code>nt_engine</code> 100/s 限速缺陷。</p>
+<p class="src">来源：<code>docs/research/2026-11-20-fq-us-resmom-decrowd-s1-report.md</code> · <code>docs/research/2026-11-20-fq-us-resmom-decrowd-s1-prereg.md</code> · <code>scripts/backtest/fq_us_resmom_decrowd_study.py</code></p>
+</article>
+
+<article data-v="part" data-id="fq-crypto-squeeze-cooldown-s1">
+<h2><code>fq_crypto</code> PR #121 四开关消融与 K=16 空头防轧空保护包（1/σ² + 轧空禁空 + 10日冷却） <span class="tag t-part">S1 K=16 fail（z=-0.270）· 消融定位关闭 vol_adaptive_stop 收益/Calmar 翻倍</span><span class="dom">加密 · factor_quant · 风控开关消融 &amp; 空头防轧空 S1</span></h2>
+<p class="k">思路：在 <code>scripts/backtest/nt_engine.py</code>（NautilusTrader 1.222.0 + 8h 真实币安资金费率 + 原生 <code>STOP_MARKET</code>）上完成：(1) PR #121 四开关（<code>regime_tilt</code>、<code>rolling_exit</code>、<code>vol_adaptive_stop</code>、<code>drawdown_scale</code>）单加/留一消融；(2) 预注册 S1（<code>fq_crypto K=16</code>，<code>PREREG_SHA256 c4d5478e...</code>）：检验空头防轧空三件套 <b>C1</b> 相对固定 ±20% 止损基线的增量，配 200 次匹配随机安慰剂。</p>
+<ul>
+<li><b>PR #121 四开关消融（534d 合并）</b>：<code>B0_no_stops</code> -27.21%（MaxDD -42.94%）；<code>B_S20</code> -9.13%（Sharpe -0.096, MaxDD -31.65%）；<code>ALL4_live_paper</code> +5.40%（Sharpe +0.270, MaxDD -18.95%, Calmar 0.193, 380次止损）。</li>
+<li><b>留一归因</b>：<code>regime_tilt</code> 为第一保护项（去掉跌至 -16.27%, Sharpe -0.490）；<code>rolling_exit</code> 为第二正贡献（去掉跌至 -5.33%，仅增 $627 手续费却增厚 +$10,730 净利）；<code>drawdown_scale</code> 压低 MaxDD 7.33pp；唯一拖累项为 <code>vol_adaptive_stop</code> —— 关闭它（<b><code>ALL4 - vol_adaptive</code></b>）后合并收益翻倍（<b>+5.40% → +10.97%</b>），Sharpe +0.270 → +0.416，Calmar <b>0.193 → 0.389</b>（全场最高），holdout +14.75%（Sharpe +1.168, 胜率 55.43%），MaxDD 几乎不变（-18.97%），止损减少 105 次。</li>
+<li><b>S1 K=16（C1 vs B_S20，<code>z_16=2.955</code>）</b>：合并收益 -13.41% vs -9.13%，日均差 <code>-0.783 bps/d</code>（<code>val -0.033</code> / <code>holdout -2.322</code>），<code>z=-0.270</code>，200 次安慰剂 68.0% 分位，判 <b>fail</b> 并记账 <code>ledger K=16</code>。组件归因显示 10 日冷却 <code>C1c</code> 强烈负贡献（<code>-4.334 bps/d, z=-1.764</code>，错失轧空止损后的均值回归下跌）。</li>
+</ul>
+<p><b>结论：</b>否决 C1 三件套不落代码。消融建议（待用户审批）：关闭 <code>fq_crypto</code> 模拟盘 <code>vol_adaptive_stop</code>（回退固定 20% 止损），保留 <code>regime_tilt + rolling_exit + drawdown_scale</code>；并已在 <code>factor_mining/ensemble.py</code> 落地 opt-in <code>FM_IC_DEDUP</code> 与 <code>FM_DSR_GATE</code>。</p>
+<p class="src">来源：<code>docs/research/2026-11-20-fq-crypto-squeeze-cooldown-s1-report.md</code> · <code>docs/research/2026-11-20-fq-crypto-squeeze-cooldown-s1-prereg.md</code> · <code>scripts/backtest/fq_crypto_squeeze_cooldown_study.py</code></p>
+</article>
 
 <div class="day">2026-11-18</div>
 

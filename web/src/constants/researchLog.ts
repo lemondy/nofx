@@ -30,6 +30,46 @@ export const RESEARCH_METHOD_NOTE =
 
 export const RESEARCH_LOG: ResearchEntry[] = [
   {
+    id: 'fq-us-resmom-decrowd-s1',
+    date: '2026-11-20',
+    title: 'fq_us 残差动量（K=12）与相关性去拥挤加权（K=13）S1 检验及 B_volscale 独立复核',
+    domain: '美股 · factor_quant · 截面动量 / 去拥挤 S1',
+    verdict: 'none',
+    verdictText:
+      'S1 K=12/13 均 fail（H1 z=-0.045, placebo 0.0%, D2 暴跌 -40.61%；H2 z=-0.400, placebo 50.0%）· 独立 NT 回放再次确认现行 S2 候选 B_volscale 三池占优',
+    idea: '针对美股 12-1 截面多空动量基线 mom_ls_invvol_v1 的 Beta 崩盘与板块拥挤问题，在严格预注册（PREREG_SHA256 4955dd20...）与统一 NautilusTrader 1.222.0 + US carry 引擎下（同期修复 NT 默认 RiskEngine 100/s 限速导致 S&P 500 调仓静默拒单的缺陷），在 D3（S&P 500 498，主集）、D2（bStock 90，可部署池）与 D1（2006–2011 崩盘压力池）上检验 H1（K=12，Blitz 2011 残差动量）与 H2（K=13，60d 正相关惩罚去拥挤），并交叉复核冻结中的 B_volscale。',
+    bullets: [
+      'D3 主集（175 个 20 交易日调仓期，2012-11 至 2026-10）：B_base -6.39%（Sharpe -0.012, MaxDD -30.30%, 手续费 $10,819）；H1（K=12）总收益 -5.57%（Sharpe -0.043, MaxDD -23.26%），但换手/手续费暴增近 3 倍（$29,627, 51,890 笔），配对期均差 -0.87 bps/期（half1 +8.97 / half2 -10.60），z=-0.045（vs z_12=2.865），30 次随机置换 Beta 安慰剂均值 +6.35 bps/期，实际 H1 仅 0.0% 分位（0/30），判 fail。',
+      'H2（K=13，60d 相关性去拥挤）：多/空 N_eff 仅温和提升 3.35/3.67 → 3.62/3.90，总收益 -7.01%（Sharpe -0.021, MaxDD -29.95%），配对期均差 -0.54 bps/期（half1 -1.10 / half2 +0.01），z=-0.400（vs z_13=2.891），30 次随机重排惩罚系数安慰剂均值 -0.62 bps/期，实际 H2 处于 50.0% 分位（与噪声无异），判 fail（因两者主门 z<1.0 已确定性锁定 fail，安慰剂在 n=30 无效早停并在账本如实披露 prereg_placebo_n=200）。',
+      'D2（bStock 90 可部署池，62 期）与 D1（2006–2011，69 期）：H1 剔除 SPY Beta 在现代高 Beta 成长主线主导的 D2 上灾难性失效（-40.61%, Sharpe -0.691, MaxDD -47.35%, z=-2.792），虽在 D1 2009 崩盘期将 MaxDD 从 -35.75% 压至 -13.74% 但手续费近 3 倍（$10,834 vs $4,103）；H2 在 D2（+129.40% vs +130.97%）与 D1（-32.13% vs -31.76%）均微弱拖累。',
+      'B_volscale（现冻结 S2 候选 490f8b28...）在独立 NautilusTrader 1.222.0 回放中全面占优：D3 唯一正收益 +9.68%（Sharpe +0.141, MaxDD 减半至 -15.77%, +7.94 bps/期, z=+1.316）；D2 +124.06%（Sharpe 0.960 / Calmar 0.878 全场第一，MaxDD -20.28%）；D1 崩盘期 MaxDD -21.22%（+26.44 bps/期, z=+1.436）且手续费更低（$3,624）。',
+    ],
+    conclusion:
+      'H1（K=12）与 H2（K=13）均已诚实落账 data/evolution/ledger.jsonl 判 fail，不修改 quant_targets.py；严格保留冻结中的 fq_us S2 对照组（1025e717 B_base vs 490f8b28 B_volscale，2026-12-01 启动）。同步修复的 Go 美股随动文件 horizon=0 止损缩放 Bug 与 nt_engine 100/s 限速缺陷均已通过竞态/单测验证。',
+    source:
+      'docs/research/2026-11-20-fq-us-resmom-decrowd-s1-report.md · docs/research/2026-11-20-fq-us-resmom-decrowd-s1-prereg.md · scripts/backtest/fq_us_resmom_decrowd_study.py',
+  },
+  {
+    id: 'fq-crypto-squeeze-cooldown-s1',
+    date: '2026-11-20',
+    title: 'fq_crypto PR #121 四开关消融与 K=16 空头防轧空保护包（1/σ² + 轧空禁空 + 10日冷却）',
+    domain: '加密 · factor_quant · 风控开关消融 & 空头防轧空 S1',
+    verdict: 'partial',
+    verdictText:
+      'S1 K=16 fail（z=-0.270, placebo 68.0%，10日冷却 -4.33 bps/d 反伤）· 但四开关消融发现关闭 vol_adaptive_stop 后合并收益翻倍（+5.40% → +10.97%）、Calmar 翻倍（0.193 → 0.389）',
+    idea: '基于 2026-11-19 对 fq_crypto 的高 ROI 诊断，在 scripts/backtest/nt_engine.py（NautilusTrader 1.222.0 + 8h 真实币安资金费率 + 原生 STOP_MARKET 盘中止损）上并行完成：(1) 非-K 描述性诊断：PR #121 四开关（regime_tilt、rolling_exit、vol_adaptive_stop、drawdown_scale）的单加与留一消融；(2) 严格预注册 S1（fq_crypto K=16，PREREG_SHA256 c4d5478e...）：检验空头防轧空三件套 C1（全状态 1/σ² 空头加权 + ret3≥P90 或 vol5/vol30≥2x 禁空 + 10日同向止损冷却）相对固定 ±20% 止损基线的增量，配 200 次匹配随机安慰剂。',
+    bullets: [
+      'PR #121 四开关消融（val 360d + holdout 176d = 534d 合并）：无止损 B0 -27.21%（MaxDD -42.94%）；固定 ±20% 止损 B_S20 -9.13%（Sharpe -0.096, MaxDD -31.65%）；当前线上四开 ALL4_live_paper +5.40%（Sharpe +0.270, MaxDD -18.95%, Calmar 0.193, 380次止损）。',
+      '留一消融定位正负贡献：regime_tilt 是第一保护项（去掉后跌至 -16.27%, Sharpe -0.490）；rolling_exit 是第二正贡献（去掉后跌至 -5.33%, Sharpe -0.044，仅增 $627 手续费却增厚 +$10,730 净利，推翻高换手磨损担忧）；drawdown_scale 压缩 MaxDD 7.33pp（-26.28% → -18.95%）；唯一净拖累项是 vol_adaptive_stop —— 关闭它（ALL4_minus_vol_adaptive）后合并收益从 +5.40% 翻倍至 +10.97%，Sharpe +0.270 → +0.416，Calmar 0.193 → 0.389（全场最高），holdout +14.75%（Sharpe +1.168, 胜率 55.43%），MaxDD 几乎不变（-18.97%），止损减少 105 次（380 → 275）。',
+      'S1 K=16（C1 vs B_S20，z_16=2.955）：合并收益 -13.41% vs -9.13%，配对日均差 -0.783 bps/d（val -0.033 / holdout -2.322 bps/d），z=-0.270，200 次匹配随机安慰剂 68.0% 分位，判 fail 并记账 ledger K=16。',
+      '组件归因：10日止损冷却 C1c 是主要负贡献（-4.334 bps/d, z=-1.764, 合并 -28.70%, MaxDD -43.42%）—— 山寨币轧空打止损后常立即均值回归下跌，强制禁空 10 天错失最佳回落段；C1a（1/σ²）中性（+0.018 bps/d, z=0.016）；C1b（轧空过滤）在 holdout 反转失效（val +1.722 / holdout -1.993 bps/d）。',
+    ],
+    conclusion:
+      '明确否决 C1 三件套（10日冷却、全状态 1/σ²、ret3/vol5 禁空过滤）不落代码、不改实盘。同时四开关消融给出清晰的高 ROI 配置建议（待用户审批）：关闭 fq_crypto 模拟盘的 vol_adaptive_stop（回退固定 20% 保护止损），保留 regime_tilt + rolling_exit + drawdown_scale；并已在 factor_mining/ensemble.py 落地 opt-in 的 FM_IC_DEDUP（训练期月度 IC 相关 <0.50 去重）与 FM_DSR_GATE（DSR(N_eff)≥0.95 门控）。',
+    source:
+      'docs/research/2026-11-20-fq-crypto-squeeze-cooldown-s1-report.md · docs/research/2026-11-20-fq-crypto-squeeze-cooldown-s1-prereg.md · scripts/backtest/fq_crypto_squeeze_cooldown_study.py',
+  },
+  {
     id: 'crypto-llm-cost-gating-s1',
     date: '2026-11-18',
     title: 'crypto_llm AI 调用降频与事件门控省费机制（G1 全阻断跳过 / G2 15m 静默，K=10..11）',
