@@ -281,6 +281,51 @@ class TestNautilusPortfolioEngine(unittest.TestCase):
         self.assertAlmostEqual(res["carry"]["financing_paid"], expected_fin, places=4)
         self.assertAlmostEqual(float(res["equity"].iloc[-1]), 10_000.0 - expected_borrow - expected_fin, places=2)
 
+    def test_large_universe_over_100_orders_not_throttled(self):
+        # 120 assets (60 long + 60 short) submitted in a single rebalance must all fill (no 100/s throttle).
+        frames = {f"S{i:03d}": _daily_frame([100.0, 100.0], [100.0, 100.0]) for i in range(120)}
+        idx0 = frames["S000"].index[0]
+        row = {f"S{i:03d}": (0.5 / 60 if i < 60 else -0.5 / 60) for i in range(120)}
+        targets = pd.DataFrame([row], index=[idx0])
+        res = run_portfolio(
+            frames,
+            targets,
+            market="us",
+            initial_capital=100_000.0,
+            execution="close",
+            commission=0.0,
+            slippage=0.0,
+        )
+        self.assertEqual(res["fill_count"], 120)
+        buys = [f for f in res["fills"] if f["side"] == "BUY"]
+        sells = [f for f in res["fills"] if f["side"] == "SELL"]
+        self.assertEqual(len(buys), 60)
+        self.assertEqual(len(sells), 60)
+
+    def test_portfolio_engine_session_bit_for_bit_parity(self):
+        from scripts.backtest.nt_engine import PortfolioEngineSession
+
+        aapl = _daily_frame([100.0, 102.0, 101.0, 105.0], [100.5, 102.5, 101.5, 105.5])
+        msft = _daily_frame([200.0, 198.0, 202.0, 199.0], [201.0, 199.0, 203.0, 200.0])
+        frames = {"AAPL": aapl, "MSFT": msft}
+        t1 = pd.DataFrame({"AAPL": [0.5], "MSFT": [-0.5]}, index=[aapl.index[0]])
+        t2 = pd.DataFrame({"AAPL": [-0.5], "MSFT": [0.5]}, index=[aapl.index[0]])
+        carry = CarryConfig(market="us", us_short_borrow_annual=0.005, us_margin_finance_annual=0.05)
+
+        ref1 = run_portfolio(frames, t1, market="us", execution="close", commission=0.001, carry=carry)
+        ref2 = run_portfolio(frames, t2, market="us", execution="close", commission=0.001, carry=carry)
+
+        with PortfolioEngineSession(frames, market="us", execution="close", commission=0.001, carry=carry) as sess:
+            s1 = sess.run(t1)
+            s2 = sess.run(t2)
+            s1_again = sess.run(t1)
+
+        pd.testing.assert_series_equal(s1["equity"], ref1["equity"])
+        pd.testing.assert_series_equal(s2["equity"], ref2["equity"])
+        pd.testing.assert_series_equal(s1_again["equity"], ref1["equity"])
+        self.assertAlmostEqual(s1_again["carry"]["borrow_paid"], ref1["carry"]["borrow_paid"], places=10)
+        self.assertEqual(s1_again["fill_count"], ref1["fill_count"])
+
 
 class TestNautilusSignalBracket(unittest.TestCase):
     def _bars(self, ohlc):
@@ -549,6 +594,89 @@ class TestNautilusCliAndAdapters(unittest.TestCase):
         self.assertEqual(parsed.engine, "nautilus")
         parsed_parity = ap.parse_args(["nt-parity", "--benchmark", "us_long"])
         self.assertEqual(parsed_parity.benchmark, "us_long")
+
+
+class TestPortfolioRiskOverlay(unittest.TestCase):
+    def _make_df(self, rows: list[tuple[str, float, float, float, float]]) -> pd.DataFrame:
+        idx = pd.DatetimeIndex([pd.Timestamp(r[0], tz="UTC") for r in rows])
+        return pd.DataFrame(
+            {"open": [r[1] for r in rows], "high": [r[2] for r in rows],
+             "low": [r[3] for r in rows], "close": [r[4] for r in rows],
+             "volume": [10_000.0] * len(rows)},
+            index=idx,
+        )
+
+    def test_short_stop_loss_and_cooldown(self):
+        from scripts.backtest.nt_engine import PortfolioRiskOverlay, run_portfolio
+
+        # Day 0: signal short A (-0.5) & long B (+0.5)
+        # Day 1: opens @ 100, then A spikes to high=130 -> 20% short stop triggers @ 120!
+        # Day 3: rebalance signals short A (-0.5) again, but 10d cooldown blocks A!
+        rows_a = [
+            ("2025-01-01", 100, 101, 99, 100),
+            ("2025-01-02", 100, 130, 99, 128),
+            ("2025-01-03", 128, 130, 125, 128),
+            ("2025-01-04", 128, 130, 125, 128),
+            ("2025-01-05", 128, 160, 125, 155),
+            ("2025-01-06", 155, 156, 154, 155),
+        ]
+        rows_b = [
+            ("2025-01-01", 100, 101, 99, 100),
+            ("2025-01-02", 100, 101, 99, 100),
+            ("2025-01-03", 100, 101, 99, 100),
+            ("2025-01-04", 100, 101, 99, 100),
+            ("2025-01-05", 100, 101, 99, 100),
+            ("2025-01-06", 100, 101, 99, 100),
+        ]
+        frames = {"A": self._make_df(rows_a), "B": self._make_df(rows_b)}
+        tgt = pd.DataFrame(
+            {"A": [-0.5, -0.5], "B": [0.5, 0.5]},
+            index=pd.DatetimeIndex([pd.Timestamp("2025-01-01", tz="UTC"), pd.Timestamp("2025-01-04", tz="UTC")]),
+        )
+        overlay = PortfolioRiskOverlay(
+            long_stop_pct=0.20,
+            short_stop_pct=0.20,
+            stop_cooldown_days=10,
+            cooldown_redistribute=False,
+        )
+        res = run_portfolio(frames, tgt, market="crypto", commission=0.0, slippage=0.0, risk_overlay=overlay)
+        self.assertGreaterEqual(res["risk_stats"]["stop_loss_count"], 1)
+        self.assertGreaterEqual(res["risk_stats"]["cooldown_block_count"], 1)
+        # Because A was blocked on 2025-01-05, the spike from 128 -> 155 must NOT cause another stop-loss.
+        self.assertEqual(res["risk_stats"]["stop_loss_count"], 1)
+
+    def test_drawdown_scale_and_rolling_exit(self):
+        from scripts.backtest.nt_engine import PortfolioRiskOverlay, run_portfolio
+
+        rows_a = [
+            ("2025-01-01", 100, 101, 99, 100),
+            ("2025-01-02", 100, 101, 99, 100),
+            ("2025-01-03", 100, 101, 99, 100),
+            ("2025-01-04", 100, 101, 99, 100),
+            ("2025-01-05", 100, 101, 99, 100),
+        ]
+        rows_b = [
+            ("2025-01-01", 100, 101, 99, 100),
+            ("2025-01-02", 100, 101, 99, 100),
+            ("2025-01-03", 100, 105, 99, 104),
+            ("2025-01-04", 104, 110, 103, 108),
+            ("2025-01-05", 108, 110, 107, 109),
+        ]
+        frames = {"A": self._make_df(rows_a), "B": self._make_df(rows_b)}
+        # Scheduled rebalance only on Jan 1 (hold A long +0.5)
+        tgt = pd.DataFrame({"A": [0.5], "B": [0.0]}, index=pd.DatetimeIndex([pd.Timestamp("2025-01-01", tz="UTC")]))
+        # On Jan 2 (intermediate day), A decays to pct=0.20 (<0.50), B is new top (weight=0.60).
+        d2 = pd.Timestamp("2025-01-02").date()
+        overlay = PortfolioRiskOverlay(
+            horizon=3,
+            rolling_exit=True,
+            daily_pct={d2: {"A": 0.20, "B": 0.95}},
+            daily_targets={d2: {"B": 0.60}},
+        )
+        res = run_portfolio(frames, tgt, market="crypto", commission=0.0, slippage=0.0, risk_overlay=overlay)
+        self.assertEqual(res["risk_stats"]["rolling_exit_count"], 1)
+        # B rallied from 100 -> 109 after rolling replacement on Jan 3 open!
+        self.assertGreater(res["equity"].iloc[-1], 100_000.0)
 
 
 if __name__ == "__main__":

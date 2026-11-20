@@ -26,7 +26,7 @@ from nautilus_trader.backtest.config import SimulationModuleConfig
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FillModel, MakerTakerFeeModel
 from nautilus_trader.backtest.modules import SimulationModule
-from nautilus_trader.config import LoggingConfig
+from nautilus_trader.config import LoggingConfig, RiskEngineConfig
 from nautilus_trader.model.book import OrderBook
 from nautilus_trader.model.currencies import USD, USDT
 from nautilus_trader.model.data import Bar, BarType, BookOrder, QuoteTick
@@ -38,6 +38,7 @@ from nautilus_trader.model.enums import (
     OrderSide,
     OrderType,
     TimeInForce,
+    TriggerType,
 )
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, TraderId, Venue
 from nautilus_trader.model.instruments import CryptoPerpetual, Equity, Instrument
@@ -396,6 +397,172 @@ def _to_utc_index(idx: pd.Index) -> pd.DatetimeIndex:
     return dt_idx.tz_convert("UTC")
 
 
+@dataclass(frozen=True)
+class PortfolioRiskOverlay:
+    """Optional native NautilusTrader portfolio risk overlays (exact Go factor_quant parity).
+
+    All fields default to disabled so callers omitting ``risk_overlay`` get identical behavior.
+    """
+
+    long_stop_pct: float = 0.0
+    short_stop_pct: float = 0.0
+    vol_adaptive_stop: bool = False
+    horizon: int = 3
+    drawdown_scale: bool = False
+    stop_cooldown_days: int = 0
+    cooldown_redistribute: bool = True
+    max_name_weight: float = 0.10
+    rolling_exit: bool = False
+    # Causal per-date maps keyed by UTC date/Timestamp (normalized UTC midnight).
+    daily_pct: dict[Any, dict[str, float]] = field(default_factory=dict)
+    daily_targets: dict[Any, dict[str, float]] = field(default_factory=dict)
+    daily_excluded: dict[Any, set[str]] = field(default_factory=dict)
+    vol30: dict[Any, dict[str, float]] = field(default_factory=dict)
+    atr14: dict[Any, dict[str, float]] = field(default_factory=dict)
+
+
+def _fq_drawdown_scale(dd: float) -> float:
+    """Exact parity with Go fqDrawdownScale."""
+    if dd >= 0.20:
+        return 0.25
+    if dd >= 0.15:
+        return 0.40
+    if dd >= 0.10:
+        return 0.70
+    return 1.0
+
+
+def _fq_adaptive_stop_price(
+    *,
+    side: str,
+    entry: float,
+    mark: float,
+    peak_mark: float,
+    base_pct: float,
+    market: str,
+    horizon: int,
+    vol_adaptive: bool,
+    vol30: float | None,
+    atr14: float | None,
+) -> tuple[float, bool]:
+    """Exact parity with Go fqComputeAdaptiveStopPrice."""
+    if base_pct <= 0 or entry <= 0:
+        return 0.0, False
+    stop_pct = float(base_pct)
+    if vol_adaptive and vol30 is not None and math.isfinite(vol30) and vol30 > 0:
+        scale = base_pct / 0.20 if base_pct > 0 else 1.0
+        h = horizon if horizon > 0 else (5 if market == "us" else 3)
+        raw_pct = 2.5 * vol30 * math.sqrt(float(h)) * scale
+        min_pct, max_pct = 0.08 * scale, 0.28 * scale
+        if market == "us":
+            min_pct, max_pct = 0.06 * scale, 0.18 * scale
+            if h > 5:
+                hor_scale = math.sqrt(float(h) / 5.0)
+                min_pct = min(0.12 * scale, min_pct * hor_scale)
+                max_pct = min(0.30 * scale, max_pct * hor_scale)
+        max_pct = min(max_pct, 0.95)
+        stop_pct = max(min_pct, min(max_pct, raw_pct))
+
+    init_stop = entry * (1.0 - stop_pct) if side == "long" else entry * (1.0 + stop_pct)
+    if not vol_adaptive:
+        return init_stop, False
+
+    trigger_pct = max(stop_pct, 0.15)
+    has_atr = atr14 is not None and math.isfinite(atr14) and atr14 > 0
+    if side == "long":
+        pm = max(peak_mark, entry, mark)
+        fav = (pm - entry) / entry
+        if fav >= trigger_pct:
+            gain = pm - entry
+            trail_dist = 0.50 * gain
+            if has_atr:
+                trail_dist = max(0.25 * gain, min(0.60 * gain, 2.0 * float(atr14)))
+            trail_stop = pm - trail_dist
+            if trail_stop > init_stop:
+                return trail_stop, True
+    else:
+        pm = entry if (peak_mark <= 0 or peak_mark > entry) else peak_mark
+        if mark > 0 and mark < pm:
+            pm = mark
+        fav = (entry - pm) / entry
+        if fav >= trigger_pct:
+            gain = entry - pm
+            trail_dist = 0.50 * gain
+            if has_atr:
+                trail_dist = max(0.25 * gain, min(0.60 * gain, 2.0 * float(atr14)))
+            trail_stop = pm + trail_dist
+            if trail_stop < init_stop:
+                return trail_stop, True
+    return init_stop, False
+
+
+def _filter_cooldown_weights(
+    weights: dict[str, float],
+    day: Any,
+    cooldown_until: dict[tuple[str, str], Any],
+    *,
+    redistribute: bool,
+    max_name_weight: float,
+) -> tuple[dict[str, float], int]:
+    """Zero out symbols under active same-side stop-loss cooldown, optionally rescaling same-leg survivors."""
+    if not cooldown_until:
+        return dict(weights), 0
+    out: dict[str, float] = {}
+    blocked = 0
+    long_orig = sum(w for w in weights.values() if w > 0)
+    short_orig = sum(-w for w in weights.values() if w < 0)
+    for sym, w in weights.items():
+        if w > 0 and cooldown_until.get((sym, "long")) is not None and day < cooldown_until[(sym, "long")]:
+            blocked += 1
+            continue
+        if w < 0 and cooldown_until.get((sym, "short")) is not None and day < cooldown_until[(sym, "short")]:
+            blocked += 1
+            continue
+        out[sym] = w
+    if blocked == 0 or not redistribute:
+        return out, blocked
+
+    def _rescale_leg(sign: float, target_gross: float) -> None:
+        if target_gross <= 0:
+            return
+        leg = {s: abs(w) for s, w in out.items() if (w > 0 if sign > 0 else w < 0)}
+        if not leg:
+            return
+        rem = target_gross
+        active = list(leg.keys())
+        new_w: dict[str, float] = {}
+        while active and rem > 1e-12:
+            tot = sum(leg[s] for s in active)
+            if tot <= 0:
+                break
+            over = []
+            for s in active:
+                cand = leg[s] / tot * rem
+                if cand >= max_name_weight - 1e-12:
+                    over.append(s)
+            if not over:
+                for s in active:
+                    new_w[s] = leg[s] / tot * rem
+                break
+            for s in over:
+                new_w[s] = max_name_weight
+            rem = max(0.0, rem - len(over) * max_name_weight)
+            active = [s for s in active if s not in over]
+        for s, val in new_w.items():
+            out[s] = sign * val
+
+    _rescale_leg(1.0, long_orig)
+    _rescale_leg(-1.0, short_orig)
+    return out, blocked
+
+
+def _normalize_date_map(raw: dict[Any, Any]) -> dict[Any, Any]:
+    out: dict[Any, Any] = {}
+    for k, v in raw.items():
+        out[pd.Timestamp(k).date()] = v
+    return out
+
+
 class _PortfolioTargetStrategy(Strategy):
     """Cross-sectional target-weight portfolio strategy running inside NautilusTrader."""
 
@@ -413,12 +580,15 @@ class _PortfolioTargetStrategy(Strategy):
         execution: str,
         initial_capital: float,
         close_mark_bar_ns: dict[int, int] | None = None,
+        market: str = "crypto",
+        risk_overlay: PortfolioRiskOverlay | None = None,
     ) -> None:
         super().__init__()
         self.venue = venue
         self.currency = currency
         self.instruments = instruments
         self.bar_types = bar_types
+        self._bt_to_sym: dict[BarType, str] = {bt: sym for sym, bt in bar_types.items()}
         self.targets_by_ns = targets_by_ns
         self.expected_bars_by_ns = expected_bars_by_ns
         self.expected_quotes_by_ns = expected_quotes_by_ns
@@ -426,6 +596,8 @@ class _PortfolioTargetStrategy(Strategy):
         self._close_mark_bar_ns = close_mark_bar_ns or {}
         self.execution = execution
         self.initial_capital = float(initial_capital)
+        self.market = market
+        self.risk = risk_overlay
 
         self._bar_counts: dict[int, int] = {}
         self._quote_counts: dict[int, int] = {}
@@ -433,12 +605,36 @@ class _PortfolioTargetStrategy(Strategy):
         self._last_open: dict[str, float] = {}
         self._pending_targets: dict[str, float] | None = None
         self._pending_close_targets: dict[str, float] | None = None
+        self._pending_is_rolling = False
+        self._pending_signal_day: Any = None
+
+        # Risk overlay runtime state
+        self._daily_pct = _normalize_date_map(risk_overlay.daily_pct) if risk_overlay else {}
+        self._daily_targets = _normalize_date_map(risk_overlay.daily_targets) if risk_overlay else {}
+        self._daily_excluded = _normalize_date_map(risk_overlay.daily_excluded) if risk_overlay else {}
+        self._vol30 = _normalize_date_map(risk_overlay.vol30) if risk_overlay else {}
+        self._atr14 = _normalize_date_map(risk_overlay.atr14) if risk_overlay else {}
+        self._peak_equity = float(initial_capital)
+        self._applied_dd_scale = 1.0
+        self._active_stops: dict[str, Any] = {}  # sym -> Order
+        self._stop_order_ids: dict[Any, tuple[str, str]] = {}  # client_order_id -> (sym, side)
+        self._pos_entry: dict[str, float] = {}
+        self._pos_side: dict[str, str] = {}
+        self._pos_peak: dict[str, float] = {}
+        self._pos_stop: dict[str, float] = {}
+        self._cooldown_until: dict[tuple[str, str], Any] = {}
+        self._last_signal_day: Any = None
+        self._ever_rebalanced = False
 
         self.equity_curve: list[tuple[pd.Timestamp, float]] = []
         self.fills_log: list[dict[str, Any]] = []
         self.commission_total = 0.0
         self.turnover_total = 0.0
         self.bankrupt = False
+        self.stop_loss_count = 0
+        self.rolling_exit_count = 0
+        self.cooldown_block_count = 0
+        self.dd_trim_count = 0
 
     def on_start(self) -> None:
         for sym, bt in self.bar_types.items():
@@ -459,9 +655,153 @@ class _PortfolioTargetStrategy(Strategy):
         eq = self._current_equity()
         if eq <= 0 or not math.isfinite(eq):
             self.bankrupt = True
+        elif eq > self._peak_equity:
+            self._peak_equity = eq
         self.equity_curve.append((pd.Timestamp(ts_ns, tz="UTC"), float(eq)))
 
-    def _execute_weights(self, target_weights: dict[str, float], use_open_px: bool) -> None:
+    def _has_stops(self) -> bool:
+        return self.risk is not None and (self.risk.long_stop_pct > 0 or self.risk.short_stop_pct > 0)
+
+    def _cancel_stop(self, sym: str) -> None:
+        ord_obj = self._active_stops.pop(sym, None)
+        if ord_obj is not None and not ord_obj.is_closed:
+            self.cancel_order(ord_obj)
+
+    def _cancel_all_stops(self) -> None:
+        for sym in list(self._active_stops.keys()):
+            self._cancel_stop(sym)
+
+    def _current_dd_scale(self, equity: float) -> float:
+        if self.risk is None or not self.risk.drawdown_scale:
+            return 1.0
+        if equity > self._peak_equity:
+            self._peak_equity = equity
+        if self._peak_equity <= 0:
+            return 1.0
+        dd = max(0.0, (self._peak_equity - equity) / self._peak_equity)
+        return _fq_drawdown_scale(dd)
+
+    def _sync_protective_stops(self, signal_day: Any, use_open_px: bool) -> None:
+        if not self._has_stops() or self.risk is None or self.bankrupt:
+            return
+        vol_map = self._vol30.get(signal_day, {}) if signal_day is not None else {}
+        atr_map = self._atr14.get(signal_day, {}) if signal_day is not None else {}
+
+        for sym, inst in self.instruments.items():
+            net_qty = float(self.portfolio.net_position(inst.id))
+            step = float(inst.size_increment.as_double())
+            if abs(net_qty) < max(step * 0.5, 1e-8):
+                self._cancel_stop(sym)
+                self._pos_entry.pop(sym, None)
+                self._pos_side.pop(sym, None)
+                self._pos_peak.pop(sym, None)
+                self._pos_stop.pop(sym, None)
+                continue
+
+            side = "long" if net_qty > 0 else "short"
+            base_pct = self.risk.long_stop_pct if side == "long" else self.risk.short_stop_pct
+            if base_pct <= 0:
+                self._cancel_stop(sym)
+                continue
+
+            px = self._last_open.get(sym) if use_open_px else self._last_close.get(sym)
+            if px is None or px <= 0:
+                px = self._last_close.get(sym) or self._last_open.get(sym)
+            if px is None or px <= 0:
+                continue
+
+            # Resolve entry price from Nautilus open position if available.
+            entry = self._pos_entry.get(sym)
+            open_positions = self.cache.positions_open(venue=self.venue, instrument_id=inst.id)
+            if open_positions:
+                avg_px = float(open_positions[-1].avg_px_open)
+                if avg_px > 0 and math.isfinite(avg_px):
+                    entry = avg_px
+            if entry is None or entry <= 0:
+                entry = px
+
+            prev_side = self._pos_side.get(sym)
+            prev_entry = self._pos_entry.get(sym, 0.0)
+            if prev_side != side or (prev_entry > 0 and abs(prev_entry - entry) / max(entry, 1e-9) > 0.05):
+                self._pos_peak[sym] = entry
+                self._pos_stop.pop(sym, None)
+            self._pos_entry[sym] = entry
+            self._pos_side[sym] = side
+
+            peak = self._pos_peak.get(sym, entry)
+            if side == "long":
+                peak = max(peak, entry, px)
+            else:
+                peak = min(peak, entry, px) if peak > 0 else min(entry, px)
+            self._pos_peak[sym] = peak
+
+            stop_px, _ = _fq_adaptive_stop_price(
+                side=side,
+                entry=entry,
+                mark=px,
+                peak_mark=peak,
+                base_pct=base_pct,
+                market=self.market,
+                horizon=self.risk.horizon,
+                vol_adaptive=self.risk.vol_adaptive_stop,
+                vol30=vol_map.get(sym),
+                atr14=atr_map.get(sym),
+            )
+            if stop_px <= 0 or not math.isfinite(stop_px):
+                continue
+
+            # Ratchet: never loosen protective stop while holding same side.
+            prev_stop = self._pos_stop.get(sym)
+            if prev_stop is not None:
+                if side == "long":
+                    stop_px = max(prev_stop, stop_px)
+                else:
+                    stop_px = min(prev_stop, stop_px)
+            floor_px = float(inst.price_increment.as_double())
+            stop_px = max(stop_px, floor_px)
+
+            # Avoid immediate invalid trigger on same tick if price already crossed stop.
+            if (side == "long" and stop_px >= px) or (side == "short" and stop_px <= px):
+                continue
+
+            qty_obj = inst.make_qty(abs(net_qty))
+            if qty_obj.as_double() <= 0:
+                continue
+
+            existing = self._active_stops.get(sym)
+            if (
+                existing is not None
+                and not existing.is_closed
+                and prev_stop is not None
+                and abs(stop_px - prev_stop) <= max(floor_px, 1e-8)
+                and abs(float(existing.quantity.as_double()) - qty_obj.as_double()) <= max(step * 0.5, 1e-8)
+            ):
+                continue
+
+            self._cancel_stop(sym)
+            self._pos_stop[sym] = stop_px
+            exit_side = OrderSide.SELL if side == "long" else OrderSide.BUY
+            sl_order = self.order_factory.stop_market(
+                instrument_id=inst.id,
+                order_side=exit_side,
+                quantity=qty_obj,
+                trigger_price=inst.make_price(stop_px),
+                reduce_only=True,
+                tags=["stop_loss"],
+            )
+            self._active_stops[sym] = sl_order
+            self._stop_order_ids[sl_order.client_order_id] = (sym, side)
+            self.submit_order(sl_order)
+
+    def _execute_weights(
+        self,
+        target_weights: dict[str, float],
+        use_open_px: bool,
+        *,
+        exec_day: Any = None,
+        is_rolling: bool = False,
+        signal_day: Any = None,
+    ) -> None:
         if self.bankrupt:
             return
         equity = self._current_equity()
@@ -469,13 +809,33 @@ class _PortfolioTargetStrategy(Strategy):
             self.bankrupt = True
             target_weights = {}
 
+        if self._has_stops():
+            self._cancel_all_stops()
+
+        eff_weights = dict(target_weights)
+        if self.risk is not None and not self.bankrupt:
+            if self.risk.stop_cooldown_days > 0 and exec_day is not None and not is_rolling:
+                eff_weights, blocked = _filter_cooldown_weights(
+                    eff_weights,
+                    exec_day,
+                    self._cooldown_until,
+                    redistribute=self.risk.cooldown_redistribute,
+                    max_name_weight=self.risk.max_name_weight,
+                )
+                self.cooldown_block_count += blocked
+            if self.risk.drawdown_scale and not is_rolling:
+                dd_scale = self._current_dd_scale(equity)
+                self._applied_dd_scale = dd_scale
+                if dd_scale < 1.0:
+                    eff_weights = {s: w * dd_scale for s, w in eff_weights.items()}
+
         # Include all currently held symbols so zeroed positions are liquidated.
         held_syms = {
             sym
             for sym, inst in self.instruments.items()
             if abs(float(self.portfolio.net_position(inst.id))) > 0.0
         }
-        all_syms = sorted(set(target_weights) | held_syms)
+        all_syms = sorted(set(eff_weights) | held_syms)
         if not all_syms:
             return
 
@@ -489,7 +849,7 @@ class _PortfolioTargetStrategy(Strategy):
                 continue
 
             cur_qty = float(self.portfolio.net_position(inst.id))
-            tgt_w = float(target_weights.get(sym, 0.0)) if not self.bankrupt else 0.0
+            tgt_w = float(eff_weights.get(sym, 0.0)) if not self.bankrupt else 0.0
             if not math.isfinite(tgt_w):
                 tgt_w = 0.0
             tgt_qty = (tgt_w * equity) / px
@@ -518,8 +878,123 @@ class _PortfolioTargetStrategy(Strategy):
             )
             self.submit_order(order)
 
+        if self._has_stops():
+            self._last_signal_day = signal_day or exec_day
+            self._sync_stops_use_open = use_open_px
+            self._ever_rebalanced = True
+
+    def _on_sync_stops(self, event) -> None:
+        self._sync_protective_stops(self._last_signal_day, use_open_px=getattr(self, "_sync_stops_use_open", True))
+
+    def _build_rolling_exit_weights(self, day: Any) -> dict[str, float] | None:
+        """Exact parity with Go factorQuantRollingCheck on intermediate days."""
+        if self.risk is None or not self.risk.rolling_exit or not self._ever_rebalanced:
+            return None
+        pct_map = self._daily_pct.get(day)
+        tgt_map = self._daily_targets.get(day)
+        if not pct_map or not tgt_map:
+            return None
+        excl_set = self._daily_excluded.get(day, set())
+
+        equity = self._current_equity()
+        if equity <= 0 or not math.isfinite(equity):
+            return None
+        dd_scale = self._current_dd_scale(equity)
+        budget = equity * dd_scale
+        if budget <= 0:
+            return None
+
+        decayed: set[str] = set()
+        held_info: list[tuple[str, str, float, float]] = []
+        for sym, inst in self.instruments.items():
+            net_qty = float(self.portfolio.net_position(inst.id))
+            step = float(inst.size_increment.as_double())
+            if abs(net_qty) < max(step * 0.5, 1e-8):
+                continue
+            px = self._last_close.get(sym)
+            if px is None or px <= 0:
+                continue
+            side = "long" if net_qty > 0 else "short"
+            held_info.append((sym, side, abs(net_qty), px))
+            has_pct = sym in pct_map
+            pct = pct_map.get(sym, 0.5)
+            tw = float(tgt_map.get(sym, 0.0))
+            is_excl = sym in excl_set
+            if side == "long":
+                is_decayed = is_excl or tw < 0 or (not has_pct and tw <= 0) or (has_pct and pct < 0.50)
+            else:
+                is_decayed = is_excl or tw > 0 or (not has_pct and tw >= 0) or (has_pct and pct > 0.50)
+            if is_decayed:
+                decayed.add(sym)
+
+        if not decayed:
+            return None
+
+        h = max(2, int(self.risk.horizon))
+        alpha = 1.0 / float(h)
+        rolling_weights: dict[str, float] = {}
+        surviving: set[str] = set()
+        surviving_notional = 0.0
+        released = 0.0
+        for sym, side, qty, px in held_info:
+            notional = qty * px
+            if sym in decayed:
+                released += notional
+            else:
+                surviving_notional += notional
+                surviving.add(sym)
+                cur_w = (notional / equity) * (1.0 if side == "long" else -1.0)
+                rolling_weights[sym] = cur_w
+
+        replacement_gross = 0.0
+        for sym, tw in tgt_map.items():
+            if tw == 0 or sym in surviving:
+                continue
+            if self.risk.stop_cooldown_days > 0:
+                c_side = "long" if tw > 0 else "short"
+                until = self._cooldown_until.get((sym, c_side))
+                if until is not None and day < until:
+                    continue
+            rw = alpha * float(tw) * dd_scale
+            if rw != 0:
+                rolling_weights[sym] = rw
+                replacement_gross += abs(rw) * equity
+
+        allowed = min(released, max(0.0, budget - surviving_notional))
+        if replacement_gross > allowed and replacement_gross > 0:
+            ratio = allowed / replacement_gross
+            for sym in list(rolling_weights.keys()):
+                if sym not in surviving:
+                    rolling_weights[sym] *= ratio
+
+        self.rolling_exit_count += 1
+        self._applied_dd_scale = dd_scale
+        return rolling_weights
+
+    def _build_dd_trim_weights(self) -> dict[str, float] | None:
+        """Trim existing exposure if equity entered a deeper drawdown tier between rebalances."""
+        if self.risk is None or not self.risk.drawdown_scale or not self._ever_rebalanced:
+            return None
+        equity = self._current_equity()
+        if equity <= 0 or not math.isfinite(equity):
+            return None
+        new_scale = self._current_dd_scale(equity)
+        if new_scale >= self._applied_dd_scale - 1e-9:
+            return None
+        ratio = new_scale / max(self._applied_dd_scale, 1e-9)
+        trimmed: dict[str, float] = {}
+        for sym, inst in self.instruments.items():
+            net_qty = float(self.portfolio.net_position(inst.id))
+            px = self._last_close.get(sym)
+            if abs(net_qty) > 1e-8 and px is not None and px > 0:
+                trimmed[sym] = (net_qty * px / equity) * ratio
+        if not trimmed:
+            return None
+        self._applied_dd_scale = new_scale
+        self.dd_trim_count += 1
+        return trimmed
+
     def on_quote_tick(self, tick: QuoteTick) -> None:
-        sym = tick.instrument_id.symbol.value
         ts = tick.ts_init
         cnt = self._quote_counts.get(ts, 0) + 1
         self._quote_counts[ts] = cnt
@@ -533,29 +1008,58 @@ class _PortfolioTargetStrategy(Strategy):
                 mark_ns = self._close_mark_bar_ns.get(ts, ts)
                 self._record_equity(mark_ns)
         else:
+            sym = tick.instrument_id.symbol.value
             self._last_open[sym] = 0.5 * (tick.bid_price.as_double() + tick.ask_price.as_double())
             if cnt == expected and self._pending_targets is not None:
                 # Delay by 1ns so CarryFundingModule.process(open_ts) settles overnight positions first.
+                self._pending_exec_day = pd.Timestamp(ts, tz="UTC").date()
                 self.clock.set_time_alert_ns(
                     f"open-exec-{ts}",
                     ts + 1,
                     self._on_open_exec,
                 )
+                if self._has_stops():
+                    self.clock.set_time_alert_ns(
+                        f"sync-stops-{ts}",
+                        ts + 2,
+                        self._on_sync_stops,
+                    )
 
     def _on_open_exec(self, event) -> None:
         if self._pending_targets is not None:
             targets = self._pending_targets
+            is_rolling = self._pending_is_rolling
+            sig_day = self._pending_signal_day
+            exec_day = getattr(self, "_pending_exec_day", sig_day)
             self._pending_targets = None
-            self._execute_weights(targets, use_open_px=True)
+            self._pending_is_rolling = False
+            self._pending_signal_day = None
+            self._execute_weights(
+                targets,
+                use_open_px=True,
+                exec_day=exec_day,
+                is_rolling=is_rolling,
+                signal_day=sig_day,
+            )
 
     def _on_close_exec(self, event) -> None:
         if self._pending_close_targets is not None:
             targets = self._pending_close_targets
+            is_rolling = self._pending_is_rolling
+            sig_day = self._pending_signal_day
             self._pending_close_targets = None
-            self._execute_weights(targets, use_open_px=False)
+            self._pending_is_rolling = False
+            self._pending_signal_day = None
+            self._execute_weights(
+                targets,
+                use_open_px=False,
+                exec_day=sig_day,
+                is_rolling=is_rolling,
+                signal_day=sig_day,
+            )
 
     def on_bar(self, bar: Bar) -> None:
-        sym = bar.bar_type.instrument_id.symbol.value
+        sym = self._bt_to_sym.get(bar.bar_type) or bar.bar_type.instrument_id.symbol.value
         self._last_close[sym] = bar.close.as_double()
         ts = bar.ts_init
         cnt = self._bar_counts.get(ts, 0) + 1
@@ -563,12 +1067,20 @@ class _PortfolioTargetStrategy(Strategy):
         if cnt != self.expected_bars_by_ns.get(ts):
             return
 
+        bar_day = pd.Timestamp(ts, tz="UTC").date()
+        if self.risk is not None:
+            eq = self._current_equity()
+            if eq > self._peak_equity and math.isfinite(eq):
+                self._peak_equity = eq
+
         if self.execution == "close":
             # Delay close rebalance by 1ns so CarryFundingModule.process(ts) settles
             # existing positions held over (prev_ts, ts] BEFORE close fills mutate holdings;
             # closing QuoteTicks at ts + 2ns then advance the clock and record close equity.
             if ts in self.targets_by_ns:
                 self._pending_close_targets = self.targets_by_ns[ts]
+                self._pending_is_rolling = False
+                self._pending_signal_day = bar_day
                 self.clock.set_time_alert_ns(
                     f"close-exec-{ts}",
                     ts + 1,
@@ -577,6 +1089,24 @@ class _PortfolioTargetStrategy(Strategy):
         else:
             if ts in self.targets_by_ns:
                 self._pending_targets = self.targets_by_ns[ts]
+                self._pending_is_rolling = False
+                self._pending_signal_day = bar_day
+                self._ever_rebalanced = True
+            elif self.risk is not None:
+                roll_w = self._build_rolling_exit_weights(bar_day)
+                if roll_w is not None:
+                    self._pending_targets = roll_w
+                    self._pending_is_rolling = True
+                    self._pending_signal_day = bar_day
+                else:
+                    trim_w = self._build_dd_trim_weights()
+                    if trim_w is not None:
+                        self._pending_targets = trim_w
+                        self._pending_is_rolling = True
+                        self._pending_signal_day = bar_day
+                    elif self._has_stops() and self.risk.vol_adaptive_stop:
+                        # Update Chandelier trailing stop ratchets from closing marks for next day.
+                        self._sync_protective_stops(bar_day, use_open_px=False)
 
     def on_stop(self) -> None:
         pass
@@ -586,6 +1116,20 @@ class _PortfolioTargetStrategy(Strategy):
         notional = event.last_px.as_double() * event.last_qty.as_double()
         self.commission_total += comm
         self.turnover_total += notional
+        reason = "rebalance"
+        stop_meta = self._stop_order_ids.pop(event.client_order_id, None)
+        if stop_meta is not None:
+            reason = "stop_loss"
+            sym, side = stop_meta
+            self.stop_loss_count += 1
+            self._active_stops.pop(sym, None)
+            self._pos_entry.pop(sym, None)
+            self._pos_side.pop(sym, None)
+            self._pos_peak.pop(sym, None)
+            self._pos_stop.pop(sym, None)
+            if self.risk is not None and self.risk.stop_cooldown_days > 0:
+                fill_day = pd.Timestamp(event.ts_event, tz="UTC").date()
+                self._cooldown_until[(sym, side)] = fill_day + timedelta(days=int(self.risk.stop_cooldown_days))
         self.fills_log.append(
             {
                 "symbol": event.instrument_id.symbol.value,
@@ -594,9 +1138,301 @@ class _PortfolioTargetStrategy(Strategy):
                 "price": event.last_px.as_double(),
                 "notional": notional,
                 "commission": comm,
+                "reason": reason,
                 "ts": pd.Timestamp(event.ts_event, tz="UTC").isoformat(),
             }
         )
+
+
+class PortfolioEngineSession:
+    """Reusable NautilusTrader BacktestEngine session over fixed market data.
+
+    Pre-loads instruments, bars, quotes, and optional ``CarryFundingModule`` once,
+    then supports multiple independent ``run(targets, risk_overlay=...)`` calls via
+    native ``engine.reset()`` + ``engine.clear_strategies()`` with bit-for-bit parity.
+    """
+
+    def __init__(
+        self,
+        frames: dict[str, pd.DataFrame],
+        *,
+        market: str = "crypto",
+        initial_capital: float = DEFAULT_CAPITAL,
+        execution: str = "next_open",
+        commission: float = 0.0005,
+        slippage: float = 0.0,
+        leverage: float = 10.0,
+        carry: CarryConfig | None = None,
+        fractional: bool = True,
+        periods_per_year: int | None = None,
+        log_level: str = "ERROR",
+    ) -> None:
+        if execution not in ("next_open", "close"):
+            raise ValueError(f"Unsupported execution mode: {execution}")
+        if not frames:
+            raise ValueError("frames cannot be empty")
+        if initial_capital <= 0 or not math.isfinite(initial_capital):
+            raise ValueError("initial_capital must be positive and finite")
+        if commission < 0 or slippage < 0:
+            raise ValueError("commission and slippage must be non-negative")
+
+        self.market = market
+        self.initial_capital = float(initial_capital)
+        self.execution = execution
+        self.currency = USDT if market == "crypto" else USD
+        venue_name = "BINANCE" if market == "crypto" else "EQUITY"
+        self.venue = Venue(venue_name)
+        self.ppy = periods_per_year or (365 if market == "crypto" else 252)
+
+        self.modules: list[SimulationModule] = []
+        if carry is not None and carry.market != "none":
+            self.modules.append(CarryFundingModule(carry, self.currency))
+
+        fill_model = (
+            PctSlippageFillModel(slippage_pct=slippage, prob_fill_on_limit=0.0)
+            if execution == "close"
+            else FillModel(prob_fill_on_limit=0.0, prob_slippage=0.0)
+        )
+
+        self.engine = BacktestEngine(
+            BacktestEngineConfig(
+                trader_id=TraderId("NOFX-BT-001"),
+                logging=LoggingConfig(log_level=log_level),
+                risk_engine=RiskEngineConfig(
+                    bypass=True,
+                    max_order_submit_rate="100000/00:00:01",
+                    max_order_modify_rate="100000/00:00:01",
+                ),
+            )
+        )
+        self.engine.add_venue(
+            venue=self.venue,
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=self.currency,
+            starting_balances=[Money(self.initial_capital, self.currency)],
+            default_leverage=Decimal(str(leverage)),
+            book_type=BookType.L1_MBP,
+            fill_model=fill_model,
+            fee_model=MakerTakerFeeModel(),
+            modules=self.modules or None,
+            bar_execution=True,
+            reject_stop_orders=False,
+        )
+
+        self.bar_offset_ns = (23 * 3600 + 59 * 60 + 58) * 1_000_000_000 if execution == "next_open" else 0
+        close_mark_offset_ns = (23 * 3600 + 59 * 60 + 59) * 1_000_000_000 if execution == "next_open" else 0
+
+        self.instruments: dict[str, Instrument] = {}
+        self.bar_types: dict[str, BarType] = {}
+        all_data: list[Any] = []
+        self.close_mark_quotes_ns: set[int] = set()
+        self.close_mark_bar_ns: dict[int, int] = {}
+
+        for sym in sorted(frames):
+            raw = frames[sym]
+            if raw.empty:
+                continue
+            df = raw[["open", "high", "low", "close"]].copy()
+            df["volume"] = raw["volume"] if "volume" in raw.columns else 1_000_000.0
+            df = df.astype(float)
+            valid = (
+                np.isfinite(df[["open", "high", "low", "close"]]).all(axis=1)
+                & (df[["open", "high", "low", "close"]] > 0).all(axis=1)
+            )
+            df = df.loc[valid].copy()
+            if df.empty:
+                continue
+            df["high"] = np.maximum(df["high"], df[["open", "close"]].max(axis=1))
+            df["low"] = np.minimum(df["low"], df[["open", "close"]].min(axis=1))
+            df["volume"] = np.where(np.isfinite(df["volume"]) & (df["volume"] > 0), df["volume"], 1_000_000.0)
+            df.index = _to_utc_index(df.index)
+            df = df.sort_index()
+
+            prec = _infer_price_precision(df[["open", "high", "low", "close"]].to_numpy().ravel())
+            inst = make_instrument(
+                sym,
+                self.venue,
+                market=market,
+                price_precision=prec,
+                maker_fee=commission,
+                taker_fee=commission,
+                fractional=fractional,
+            )
+            self.engine.add_instrument(inst)
+            self.instruments[sym] = inst
+
+            bt = BarType.from_str(f"{sym}.{venue_name}-1-DAY-LAST-EXTERNAL")
+            self.bar_types[sym] = bt
+
+            bar_df = df.copy()
+            if self.bar_offset_ns:
+                bar_df.index = bar_df.index + pd.to_timedelta(self.bar_offset_ns, unit="ns")
+            bars = BarDataWrangler(bt, inst).process(bar_df)
+            all_data.extend(bars)
+
+            if execution == "next_open":
+                qdf_open = pd.DataFrame(
+                    {
+                        "bid_price": df["open"] * (1.0 - slippage),
+                        "ask_price": df["open"] * (1.0 + slippage),
+                    },
+                    index=df.index,
+                )
+                qdf_open.index.name = "timestamp"
+                all_data.extend(QuoteTickDataWrangler(inst).process(qdf_open))
+
+                close_idx = df.index + pd.to_timedelta(close_mark_offset_ns, unit="ns")
+                close_vals = df["close"].to_numpy()
+                qdf_close = pd.DataFrame(
+                    {
+                        "bid_price": close_vals,
+                        "ask_price": close_vals,
+                    },
+                    index=close_idx,
+                )
+                qdf_close.index.name = "timestamp"
+                all_data.extend(QuoteTickDataWrangler(inst).process(qdf_close))
+                self.close_mark_quotes_ns.update(int(t.value) for t in close_idx)
+            else:
+                close_idx = df.index + pd.to_timedelta(2, unit="ns")
+                close_vals = df["close"].to_numpy()
+                qdf_close = pd.DataFrame(
+                    {
+                        "bid_price": close_vals,
+                        "ask_price": close_vals,
+                    },
+                    index=close_idx,
+                )
+                qdf_close.index.name = "timestamp"
+                all_data.extend(QuoteTickDataWrangler(inst).process(qdf_close))
+                for bar_ts, quote_ts in zip(df.index, close_idx):
+                    q_ns = int(quote_ts.value)
+                    self.close_mark_quotes_ns.add(q_ns)
+                    self.close_mark_bar_ns[q_ns] = int(bar_ts.value)
+
+        if not self.instruments:
+            self.engine.dispose()
+            raise ValueError("No valid instrument data found")
+
+        self.expected_bars_by_ns: dict[int, int] = {}
+        self.expected_quotes_by_ns: dict[int, int] = {}
+        for d in all_data:
+            if isinstance(d, Bar):
+                self.expected_bars_by_ns[d.ts_init] = self.expected_bars_by_ns.get(d.ts_init, 0) + 1
+            else:
+                self.expected_quotes_by_ns[d.ts_init] = self.expected_quotes_by_ns.get(d.ts_init, 0) + 1
+
+        all_data.sort(key=lambda d: d.ts_init)
+        self.engine.add_data(all_data)
+        self._has_run = False
+        self._disposed = False
+
+    def run(
+        self,
+        targets: pd.DataFrame,
+        *,
+        risk_overlay: PortfolioRiskOverlay | None = None,
+        compute_full_metrics: bool = True,
+    ) -> dict[str, Any]:
+        if self._disposed:
+            raise RuntimeError("PortfolioEngineSession has been disposed")
+        if self._has_run:
+            self.engine.reset()
+            self.engine.clear_strategies()
+        for cm in self.modules:
+            if hasattr(cm, "reset"):
+                cm.reset()
+
+        tgt_idx = _to_utc_index(targets.index)
+        targets_by_ns: dict[int, dict[str, float]] = {}
+        for row_ts, (_, row) in zip(tgt_idx, targets.iterrows()):
+            close_ns = int(row_ts.value) + self.bar_offset_ns
+            clean = {
+                str(col): float(val)
+                for col, val in row.items()
+                if str(col) in self.instruments and math.isfinite(float(val))
+            }
+            targets_by_ns[close_ns] = clean
+
+        strat = _PortfolioTargetStrategy(
+            venue=self.venue,
+            currency=self.currency,
+            instruments=self.instruments,
+            bar_types=self.bar_types,
+            targets_by_ns=targets_by_ns,
+            expected_bars_by_ns=self.expected_bars_by_ns,
+            expected_quotes_by_ns=self.expected_quotes_by_ns,
+            close_mark_quotes_ns=self.close_mark_quotes_ns,
+            execution=self.execution,
+            initial_capital=self.initial_capital,
+            close_mark_bar_ns=self.close_mark_bar_ns,
+            market=self.market,
+            risk_overlay=risk_overlay,
+        )
+        self.engine.add_strategy(strat)
+        self.engine.run()
+        self._has_run = True
+
+        eq_index = pd.DatetimeIndex([t.normalize() if self.execution == "next_open" else t for t, _ in strat.equity_curve])
+        eq_series = pd.Series([v for _, v in strat.equity_curve], index=eq_index, dtype=float)
+        eq_series = eq_series[~eq_series.index.duplicated(keep="last")].sort_index()
+
+        if compute_full_metrics:
+            metrics = compute_metrics(eq_series, periods_per_year=self.ppy, initial_capital=self.initial_capital)
+            analyzer = self.engine.portfolio.analyzer
+            nt_stats = {
+                "pnls": analyzer.get_performance_stats_pnls(currency=self.currency),
+                "returns": analyzer.get_performance_stats_returns(),
+                "general": analyzer.get_performance_stats_general(),
+            }
+        else:
+            metrics = {}
+            nt_stats = {}
+
+        carry_stats = {}
+        if self.modules:
+            cm = self.modules[0]
+            carry_stats = {
+                "total_carry_paid": cm.total_carry_paid,
+                "funding_paid": cm.funding_paid,
+                "borrow_paid": cm.borrow_paid,
+                "financing_paid": cm.financing_paid,
+                "observations": cm.observations,
+                "covered": cm.covered,
+            }
+
+        risk_stats = {
+            "stop_loss_count": strat.stop_loss_count,
+            "rolling_exit_count": strat.rolling_exit_count,
+            "cooldown_block_count": strat.cooldown_block_count,
+            "dd_trim_count": strat.dd_trim_count,
+        }
+
+        return {
+            "engine": "nautilus_trader",
+            "equity": eq_series,
+            "metrics": metrics,
+            "nt_stats": nt_stats,
+            "fills": strat.fills_log,
+            "fill_count": len(strat.fills_log),
+            "commission": strat.commission_total,
+            "turnover": strat.turnover_total,
+            "carry": carry_stats,
+            "risk_stats": risk_stats,
+            "bankrupt": strat.bankrupt,
+        }
+
+    def close(self) -> None:
+        if not self._disposed:
+            self._disposed = True
+            self.engine.dispose()
+
+    def __enter__(self) -> "PortfolioEngineSession":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
 
 def run_portfolio(
@@ -610,6 +1446,7 @@ def run_portfolio(
     slippage: float = 0.0,
     leverage: float = 10.0,
     carry: CarryConfig | None = None,
+    risk_overlay: PortfolioRiskOverlay | None = None,
     fractional: bool = True,
     periods_per_year: int | None = None,
     log_level: str = "ERROR",
@@ -629,225 +1466,24 @@ def run_portfolio(
         ``'close'`` fills at bar ``t`` close ± slippage.
     carry:
         Optional ``CarryConfig`` settled via ``CarryFundingModule`` (Nautilus ``SimulationModule``).
+    risk_overlay:
+        Optional ``PortfolioRiskOverlay`` for native ``STOP_MARKET`` protective stops,
+        vol-adaptive Chandelier trailing, tiered drawdown scaling, stop cooldown, and rolling exit.
     """
-    if execution not in ("next_open", "close"):
-        raise ValueError(f"Unsupported execution mode: {execution}")
-    if not frames:
-        raise ValueError("frames cannot be empty")
-    if initial_capital <= 0 or not math.isfinite(initial_capital):
-        raise ValueError("initial_capital must be positive and finite")
-    if commission < 0 or slippage < 0:
-        raise ValueError("commission and slippage must be non-negative")
-
-    currency = USDT if market == "crypto" else USD
-    venue_name = "BINANCE" if market == "crypto" else "EQUITY"
-    venue = Venue(venue_name)
-    ppy = periods_per_year or (365 if market == "crypto" else 252)
-
-    modules: list[SimulationModule] = []
-    if carry is not None and carry.market != "none":
-        modules.append(CarryFundingModule(carry, currency))
-
-    fill_model = (
-        PctSlippageFillModel(slippage_pct=slippage, prob_fill_on_limit=0.0)
-        if execution == "close"
-        else FillModel(prob_fill_on_limit=0.0, prob_slippage=0.0)
-    )
-
-    engine = BacktestEngine(
-        BacktestEngineConfig(
-            trader_id=TraderId("NOFX-BT-001"),
-            logging=LoggingConfig(log_level=log_level),
-        )
-    )
-    engine.add_venue(
-        venue=venue,
-        oms_type=OmsType.NETTING,
-        account_type=AccountType.MARGIN,
-        base_currency=currency,
-        starting_balances=[Money(initial_capital, currency)],
-        default_leverage=Decimal(str(leverage)),
-        book_type=BookType.L1_MBP,
-        fill_model=fill_model,
-        fee_model=MakerTakerFeeModel(),
-        modules=modules or None,
-        bar_execution=True,
-        reject_stop_orders=False,
-    )
-
-    # In next_open mode: 00:00:00 open QuoteTick (+1ns carry/exec), 23:59:58 Bar, 23:59:59 close QuoteTick mark.
-    bar_offset_ns = (23 * 3600 + 59 * 60 + 58) * 1_000_000_000 if execution == "next_open" else 0
-    close_mark_offset_ns = (23 * 3600 + 59 * 60 + 59) * 1_000_000_000 if execution == "next_open" else 0
-
-    instruments: dict[str, Instrument] = {}
-    bar_types: dict[str, BarType] = {}
-    all_data: list[Any] = []
-    close_mark_quotes_ns: set[int] = set()
-    close_mark_bar_ns: dict[int, int] = {}
-
-    for sym in sorted(frames):
-        raw = frames[sym]
-        if raw.empty:
-            continue
-        df = raw[["open", "high", "low", "close"]].copy()
-        df["volume"] = raw["volume"] if "volume" in raw.columns else 1_000_000.0
-        df = df.astype(float)
-        valid = (
-            np.isfinite(df[["open", "high", "low", "close"]]).all(axis=1)
-            & (df[["open", "high", "low", "close"]] > 0).all(axis=1)
-        )
-        df = df.loc[valid].copy()
-        if df.empty:
-            continue
-        df["high"] = np.maximum(df["high"], df[["open", "close"]].max(axis=1))
-        df["low"] = np.minimum(df["low"], df[["open", "close"]].min(axis=1))
-        df["volume"] = np.where(np.isfinite(df["volume"]) & (df["volume"] > 0), df["volume"], 1_000_000.0)
-        df.index = _to_utc_index(df.index)
-        df = df.sort_index()
-
-        prec = _infer_price_precision(df[["open", "high", "low", "close"]].to_numpy().ravel())
-        inst = make_instrument(
-            sym,
-            venue,
-            market=market,
-            price_precision=prec,
-            maker_fee=commission,
-            taker_fee=commission,
-            fractional=fractional,
-        )
-        engine.add_instrument(inst)
-        instruments[sym] = inst
-
-        bt = BarType.from_str(f"{sym}.{venue_name}-1-DAY-LAST-EXTERNAL")
-        bar_types[sym] = bt
-
-        bar_df = df.copy()
-        if bar_offset_ns:
-            bar_df.index = bar_df.index + pd.to_timedelta(bar_offset_ns, unit="ns")
-        bars = BarDataWrangler(bt, inst).process(bar_df)
-        all_data.extend(bars)
-
-        if execution == "next_open":
-            qdf_open = pd.DataFrame(
-                {
-                    "bid_price": df["open"] * (1.0 - slippage),
-                    "ask_price": df["open"] * (1.0 + slippage),
-                },
-                index=df.index,
-            )
-            qdf_open.index.name = "timestamp"
-            all_data.extend(QuoteTickDataWrangler(inst).process(qdf_open))
-
-            close_idx = df.index + pd.to_timedelta(close_mark_offset_ns, unit="ns")
-            close_vals = df["close"].to_numpy()
-            qdf_close = pd.DataFrame(
-                {
-                    "bid_price": close_vals,
-                    "ask_price": close_vals,
-                },
-                index=close_idx,
-            )
-            qdf_close.index.name = "timestamp"
-            all_data.extend(QuoteTickDataWrangler(inst).process(qdf_close))
-            close_mark_quotes_ns.update(int(t.value) for t in close_idx)
-        else:
-            close_idx = df.index + pd.to_timedelta(2, unit="ns")
-            close_vals = df["close"].to_numpy()
-            qdf_close = pd.DataFrame(
-                {
-                    "bid_price": close_vals,
-                    "ask_price": close_vals,
-                },
-                index=close_idx,
-            )
-            qdf_close.index.name = "timestamp"
-            all_data.extend(QuoteTickDataWrangler(inst).process(qdf_close))
-            for bar_ts, quote_ts in zip(df.index, close_idx):
-                q_ns = int(quote_ts.value)
-                close_mark_quotes_ns.add(q_ns)
-                close_mark_bar_ns[q_ns] = int(bar_ts.value)
-
-    if not instruments:
-        engine.dispose()
-        raise ValueError("No valid instrument data found")
-
-    # Map rebalance target timestamps to exact close timestamp (in ns).
-    tgt_idx = _to_utc_index(targets.index)
-    targets_by_ns: dict[int, dict[str, float]] = {}
-    for row_ts, (_, row) in zip(tgt_idx, targets.iterrows()):
-        close_ns = int(row_ts.value) + bar_offset_ns
-        clean = {
-            str(col): float(val)
-            for col, val in row.items()
-            if str(col) in instruments and math.isfinite(float(val))
-        }
-        targets_by_ns[close_ns] = clean
-
-    expected_bars_by_ns: dict[int, int] = {}
-    expected_quotes_by_ns: dict[int, int] = {}
-    for d in all_data:
-        if isinstance(d, Bar):
-            expected_bars_by_ns[d.ts_init] = expected_bars_by_ns.get(d.ts_init, 0) + 1
-        else:
-            expected_quotes_by_ns[d.ts_init] = expected_quotes_by_ns.get(d.ts_init, 0) + 1
-
-    all_data.sort(key=lambda d: d.ts_init)
-    engine.add_data(all_data)
-
-    strat = _PortfolioTargetStrategy(
-        venue=venue,
-        currency=currency,
-        instruments=instruments,
-        bar_types=bar_types,
-        targets_by_ns=targets_by_ns,
-        expected_bars_by_ns=expected_bars_by_ns,
-        expected_quotes_by_ns=expected_quotes_by_ns,
-        close_mark_quotes_ns=close_mark_quotes_ns,
-        execution=execution,
+    with PortfolioEngineSession(
+        frames,
+        market=market,
         initial_capital=initial_capital,
-        close_mark_bar_ns=close_mark_bar_ns,
-    )
-    engine.add_strategy(strat)
-    engine.run()
-
-    eq_index = pd.DatetimeIndex([t.normalize() if execution == "next_open" else t for t, _ in strat.equity_curve])
-    eq_series = pd.Series([v for _, v in strat.equity_curve], index=eq_index, dtype=float)
-    eq_series = eq_series[~eq_series.index.duplicated(keep="last")].sort_index()
-
-    metrics = compute_metrics(eq_series, periods_per_year=ppy, initial_capital=initial_capital)
-    analyzer = engine.portfolio.analyzer
-    nt_stats = {
-        "pnls": analyzer.get_performance_stats_pnls(currency=currency),
-        "returns": analyzer.get_performance_stats_returns(),
-        "general": analyzer.get_performance_stats_general(),
-    }
-
-    carry_stats = {}
-    if modules:
-        cm = modules[0]
-        carry_stats = {
-            "total_carry_paid": cm.total_carry_paid,
-            "funding_paid": cm.funding_paid,
-            "borrow_paid": cm.borrow_paid,
-            "financing_paid": cm.financing_paid,
-            "observations": cm.observations,
-            "covered": cm.covered,
-        }
-
-    engine.dispose()
-
-    return {
-        "engine": "nautilus_trader",
-        "equity": eq_series,
-        "metrics": metrics,
-        "nt_stats": nt_stats,
-        "fills": strat.fills_log,
-        "fill_count": len(strat.fills_log),
-        "commission": strat.commission_total,
-        "turnover": strat.turnover_total,
-        "carry": carry_stats,
-        "bankrupt": strat.bankrupt,
-    }
+        execution=execution,
+        commission=commission,
+        slippage=slippage,
+        leverage=leverage,
+        carry=carry,
+        fractional=fractional,
+        periods_per_year=periods_per_year,
+        log_level=log_level,
+    ) as sess:
+        return sess.run(targets, risk_overlay=risk_overlay)
 
 
 class _SignalBracketStrategy(Strategy):
@@ -1270,6 +1906,11 @@ def run_signal_trade(
         BacktestEngineConfig(
             trader_id=TraderId("NOFX-SIG-001"),
             logging=LoggingConfig(log_level="ERROR"),
+            risk_engine=RiskEngineConfig(
+                bypass=True,
+                max_order_submit_rate="100000/00:00:01",
+                max_order_modify_rate="100000/00:00:01",
+            ),
         )
     )
     engine.add_venue(
